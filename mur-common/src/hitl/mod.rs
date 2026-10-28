@@ -13,6 +13,7 @@ pub mod label;
 mod opaque_shell;
 pub mod pin;
 pub mod signed_time;
+pub mod startup_waiver;
 pub mod tool_tier;
 
 pub use signed_time::{HITL_CLOCK_SKEW_SECS, TimeFault, check_answer_time, check_fresh};
@@ -111,6 +112,25 @@ impl Default for Unanswered {
 /// line today.
 pub fn tier_may_be_granted(tier: RiskTier) -> bool {
     matches!(tier, RiskTier::Read | RiskTier::Write)
+}
+
+/// May a one-boot startup override (`--no-hitl`) answer an ask for this tier?
+///
+/// Exhaustive on purpose: a new tier fails to compile here until someone
+/// decides. Not a range test — `RiskTier` orders `Spend` below `Destructive`,
+/// and `Spend`'s cost lands off the host and adds up per call, which nobody
+/// undoes by noticing later. `None` (unclassified) is refused too: the runtime
+/// reaches the gate with `None` for an undeclared MCP tool, so waiving it would
+/// waive whatever that tool really does. [`tier_may_be_granted`] is a separate,
+/// narrower question (a standing grant) and is not widened by this.
+pub fn tier_may_be_waived(tier: Option<RiskTier>) -> bool {
+    match tier {
+        Some(
+            RiskTier::Read | RiskTier::Write | RiskTier::NetworkEgress | RiskTier::Destructive,
+        ) => true,
+        Some(RiskTier::Spend | RiskTier::Privileged) => false,
+        None => false,
+    }
 }
 
 /// How far the agent carries a turn on its own before handing back.
