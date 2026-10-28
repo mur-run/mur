@@ -3,7 +3,7 @@
 use fs2::FileExt;
 use mur_common::LockFile;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
@@ -64,13 +64,26 @@ impl LockHandle {
         })
     }
 
+    /// The sentinel's contents, read through the locked handle itself.
+    fn held_sentinel_pid(&self) -> Option<String> {
+        let mut file = &self.sentinel;
+        file.seek(SeekFrom::Start(0)).ok()?;
+        let mut buf = String::new();
+        file.read_to_string(&mut buf).ok()?;
+        Some(buf)
+    }
+
     pub fn release(self) {
         // Erase our pid from the sentinel while we still hold its flock, so a
         // later reader can't mistake a reused pid for this runtime. Only when
         // it still names us: without flock support a newer instance may have
         // written its own pid here, and that one must survive.
-        if fs::read_to_string(sentinel_path(&self.path))
-            .is_ok_and(|s| s.trim() == std::process::id().to_string())
+        // Read through the handle that holds the lock: on Windows the lock is
+        // mandatory, so a fresh open of the sentinel can't read it (error 33)
+        // and this erase would silently never happen.
+        if self
+            .held_sentinel_pid()
+            .is_some_and(|s| s.trim() == std::process::id().to_string())
         {
             let _ = self.sentinel.set_len(0);
         }
@@ -210,8 +223,9 @@ mod tests {
         let path = td.path().join("running.lock");
         let handle = LockHandle::acquire(&path).unwrap();
         let sentinel = sentinel_path(&path);
+        // Through the handle: Windows won't let a second open read a locked file.
         assert_eq!(
-            fs::read_to_string(&sentinel).unwrap(),
+            handle.held_sentinel_pid().unwrap(),
             std::process::id().to_string()
         );
         handle.release();
@@ -224,8 +238,13 @@ mod tests {
         let path = td.path().join("running.lock");
         let handle = LockHandle::acquire(&path).unwrap();
         // No-flock filesystem: a newer instance overwrote the sentinel pid.
+        // Written through the held handle so this runs on Windows too, where
+        // a second open of the locked sentinel can't write it.
         let other = (std::process::id() + 1).to_string();
-        fs::write(sentinel_path(&path), &other).unwrap();
+        let mut file = &handle.sentinel;
+        file.set_len(0).unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(other.as_bytes()).unwrap();
         handle.release();
         assert_eq!(fs::read_to_string(sentinel_path(&path)).unwrap(), other);
     }
