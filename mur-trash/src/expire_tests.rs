@@ -546,3 +546,59 @@ fn retained_bytes_does_not_trust_a_replay_with_a_malformed_line() {
 
     assert!(retained_bytes(&home) >= body.len() as u64);
 }
+
+/// Review #2177 P2 (second pass): a malformed creation record older than the
+/// lookup window must keep forcing the disk fallback after an expiry pass.
+/// Expiry may not move the shared cursor past it, or the next replay would
+/// look exact and read the entry's bytes as free space.
+#[test]
+fn malformed_old_creation_stays_counted_after_expiry() {
+    use crate::detect::{Rule, TrashTarget};
+    use crate::trash::{TrashOutcome, trash_into};
+
+    let (_t, home) = home();
+    let age = i64::from(lookup_days(&deletion())) + 8;
+    let entry = trashed(&home, "lost.bin", age);
+    let body = vec![0u8; 2 * 1024 * 1024];
+    fs::write(entry.trash_path.as_ref().unwrap(), &body).unwrap();
+    let dir = ledger_dir(&home);
+    fs::create_dir_all(&dir).unwrap();
+    let day = Local::now().date_naive() - ChronoDuration::days(age);
+    fs::write(
+        dir.join(format!("{}.jsonl", day.format("%Y-%m-%d"))),
+        "{\"TrashCreated\":{\"entry\":{\"id\":\n",
+    )
+    .unwrap();
+    assert!(retained_bytes(&home) >= body.len() as u64);
+
+    expire_due(&home, &deletion(), Utc::now()).unwrap();
+    expire_due(&home, &deletion(), Utc::now()).unwrap();
+    let used = retained_bytes(&home);
+    assert!(
+        used >= body.len() as u64,
+        "malformed record became free space after expiry, got {used}"
+    );
+
+    // And the cap still holds: the 2 MiB already in the trash fills a 1 MiB cap.
+    let work = home.parent().unwrap().join("work");
+    fs::create_dir_all(&work).unwrap();
+    let f = work.join("f");
+    fs::write(&f, vec![0u8; 1024]).unwrap();
+    let cfg = DeletionConfig {
+        trash_max_mb: 1,
+        ..deletion()
+    };
+    let target = TrashTarget {
+        spelled: f.display().to_string(),
+        path: f,
+        rule: Rule::Rm {
+            recursive: false,
+            force: false,
+            empty_dirs: false,
+        },
+        segment: 0,
+        after_cd: Vec::new(),
+    };
+    let out = trash_into(&home, &[target], &cfg, Uuid::nil());
+    assert!(matches!(out[0], TrashOutcome::Evicted { .. }), "{out:?}");
+}

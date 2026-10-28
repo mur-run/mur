@@ -11,7 +11,10 @@
 //! replays the whole ledger. The cursor never moves later than
 //! [`lookup_days`] before today, so the CLI's window is always covered too.
 //! Nor does it move past a day file that could not be read (review #2176
-//! P2): its records were not seen, so they are not known to be settled. When
+//! P2): its records were not seen, so they are not known to be settled. The
+//! same holds for a day with a line that did not parse (review #2177 P2),
+//! which keeps [`retained_bytes`] measuring on disk for as long as that line
+//! is in the ledger. When
 //! the ledger directory itself cannot be listed the cursor is left untouched.
 //! And an incomplete scan deletes and records nothing: the unread day may hold
 //! the very `TrashExpired` that settles an entry, so acting on the partial
@@ -163,7 +166,14 @@ pub fn expire_due(
         }
     }
     // A day that could not be read may hold outstanding entries we never saw.
-    if let Some(first) = scan.unreadable_days.first() {
+    // So may a day with a line that did not parse (review #2177 P2): the cursor
+    // is shared with [`retained_bytes`], and moving it past a lost creation
+    // record would make the next usage replay look exact and count the entry
+    // as free space. Both lists are sorted, oldest first.
+    for first in [scan.unreadable_days.first(), scan.malformed_days.first()]
+        .into_iter()
+        .flatten()
+    {
         keep_from = keep_from.min(*first);
     }
     if scan.listing_failed {
