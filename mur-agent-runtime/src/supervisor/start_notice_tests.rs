@@ -111,6 +111,7 @@ fn a_marker_naming_a_gone_channel_is_replaced() {
 }
 
 fn record() -> OverrideRecord {
+    use mur_common::agent::OverrideFlags;
     OverrideRecord {
         nonce: "ovr-0123456789abcdef0123456789abcdef".into(),
         flags: OverrideFlags {

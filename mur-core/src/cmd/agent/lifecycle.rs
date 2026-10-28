@@ -742,6 +742,10 @@ pub fn cmd_status(name: &str) -> Result<()> {
     if let Some(line) = status_ssh_proxy::line_for(&mur_home.join("agents").join(name)) {
         println!("{line}");
     }
+    let lock_path = mur_home.join("agents").join(name).join("running.lock");
+    for line in status_override::lines_for(&mur_home, name, &lock_path) {
+        println!("{line}");
+    }
     if let Some(line) = super::secret::keychain_pending_line(
         &mur_home.join("agents").join(name),
         name,
@@ -1181,6 +1185,7 @@ fn is_unread(body: &str) -> bool {
         .unwrap_or(false)
 }
 
+mod status_override;
 mod status_refusal;
 mod status_ssh_proxy;
 

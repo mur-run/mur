@@ -14,6 +14,21 @@ pub struct OverrideFlags {
     pub full_perms: bool,
 }
 
+impl OverrideFlags {
+    /// The flags set, as the CLI spells them, in a fixed order. One list for
+    /// the runtime banner, `mur agent status` and the Hub badge.
+    pub fn cli_names(self) -> Vec<&'static str> {
+        [
+            (self.no_hitl, "--no-hitl"),
+            (self.net_unrestricted, "--net=unrestricted"),
+            (self.full_perms, "--full-perms"),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect()
+    }
+}
+
 /// An override this boot applied. Its `nonce` is the acknowledgement the
 /// writer is waiting for.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

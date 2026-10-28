@@ -9,7 +9,7 @@
 //! was busy; the log line and the status file already carry the same facts.
 
 use mur_channel::ChannelService;
-use mur_common::agent::{OverrideFlags, OverrideRecord, START_CHANNEL_FILE};
+use mur_common::agent::{OverrideRecord, START_CHANNEL_FILE};
 use mur_common::channel::{ChannelActor, EventKind};
 use mur_common::identity::AgentIdentity;
 use mur_common::ssh_proxy_status::SshProxyStatus;
@@ -89,20 +89,8 @@ pub(super) fn override_text(record: &OverrideRecord) -> String {
     format!(
         "⚠ startup override active ({}): {} — this boot only; restart without flags to end it",
         record.nonce,
-        flag_names(record.flags).join(", ")
+        record.flags.cli_names().join(", ")
     )
-}
-
-/// The flags as their CLI spelling, in a fixed order.
-pub fn flag_names(f: OverrideFlags) -> Vec<&'static str> {
-    [
-        (f.no_hitl, "--no-hitl"),
-        (f.net_unrestricted, "--net=unrestricted"),
-        (f.full_perms, "--full-perms"),
-    ]
-    .into_iter()
-    .filter_map(|(on, name)| on.then_some(name))
-    .collect()
 }
 
 /// Post the banner. Returns the channel id written to.
