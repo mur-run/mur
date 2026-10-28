@@ -28,6 +28,11 @@ pub struct PendingCall {
     /// gate's `remember` says — a `pre_tool_use` hook asked a question about
     /// this turn (B0 rule 4), not about the tool.
     pub one_shot: bool,
+    /// Where the ask came from, for the `--no-hitl` waiver. Carried on the
+    /// call because the headless path receives only `Vec<PendingCall>`.
+    /// `AskOrigin::default()` (no flag) is never waived, so a site that never
+    /// computed it fails closed.
+    pub origin: mur_common::hitl::startup_waiver::AskOrigin,
 }
 
 pub struct BatchGate<'a> {
@@ -236,9 +241,11 @@ pub fn pending(
     step_id: String,
     call: &crate::llm::ToolCallResult,
     risk: Option<mur_common::hitl::RiskTier>,
+    origin: mur_common::hitl::startup_waiver::AskOrigin,
 ) -> PendingCall {
     PendingCall {
         risk,
+        origin,
         call_id: call.call_id.clone(),
         step_id,
         action_hash: chat_action_hash(&call.tool_name, &call.input, agent),
@@ -261,6 +268,7 @@ mod tests {
             action_hash: format!("hash-{id}"),
             risk: None,
             one_shot: false,
+            origin: Default::default(),
         }
     }
 

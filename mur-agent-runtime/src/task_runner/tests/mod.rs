@@ -221,6 +221,7 @@ mod intent_gate;
 mod limits;
 mod live_reload;
 mod pre_tool_use_gate;
+mod startup_waiver;
 mod system_prompt;
 mod truncation;
 mod turn_track;

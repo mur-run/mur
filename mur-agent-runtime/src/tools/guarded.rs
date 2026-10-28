@@ -15,6 +15,7 @@ mod bash_ceiling;
 mod headless;
 pub(crate) mod hook_gate;
 mod intent_raise;
+mod startup_waiver;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,6 +61,9 @@ pub struct GuardedToolCall {
     /// #2175: the `pre_tool_use` gate hooks. `None` = no chain wired, so no
     /// hook rules apply — never "refuse everything".
     pub(crate) hooks: Option<hook_gate::HookGate>,
+    /// This boot's `--no-hitl`, if an accepted startup override asked for it.
+    /// Applied after the decision store — see `guarded/startup_waiver.rs`.
+    pub(crate) startup_waiver: Option<mur_common::hitl::startup_waiver::StartupWaiver>,
 }
 
 /// D2 / D2b: with the B1 sandbox not enforcing, the agent can read its own
@@ -174,6 +178,13 @@ impl GuardedToolCall {
                 step_id,
                 call,
                 approval_risk(&self.tools_policy, &call.tool_name, Some(&call.input)).max(lift),
+                crate::task_runner::ask_origin::ask_origin(
+                    &self.tools_policy,
+                    &call.tool_name,
+                    Some(&call.input),
+                    lift,
+                    hook_asks,
+                ),
             );
             p.one_shot = one_shot;
             pending.push(p);
@@ -209,6 +220,7 @@ impl GuardedToolCall {
             }
             return (out, step_ids);
         };
+        let remember = !self.one_shot_approvals.lock().await.contains(task_id);
         let gate = crate::hitl::batch::BatchGate {
             task_id,
             timeout: std::time::Duration::from_secs(self.hitl_timeout_secs as u64),
@@ -216,11 +228,12 @@ impl GuardedToolCall {
             notifier,
             store: self.decision_store.as_ref(),
             shim_trust: self.shim_trust.as_ref(),
-            remember: !self.one_shot_approvals.lock().await.contains(task_id),
+            remember,
             parking: None,
         };
         let (settled, ask) = gate.recall(pending).await;
         out.extend(settled);
+        let ask = self.apply_waiver(task_id, ask, remember, &mut out).await;
         for c in &ask {
             self.record_pending_ceiling(task_id, calls, c).await;
         }

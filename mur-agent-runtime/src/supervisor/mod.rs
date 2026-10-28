@@ -223,8 +223,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     //     BEFORE pin::verify so a refused boot cannot leave the file behind,
     //     and lock first so a duplicate boot exits before it can consume the
     //     override (see `lock_then_consume`). A refused boot exits holding
-    //     the flock; the kernel drops it with the process. Step 6 (merge)
-    //     lands with the first supported flag; `SUPPORTED` is all-false.
+    //     the flock; the kernel drops it with the process. `no_hitl` is
+    //     applied below as the runner's waiver; step 6 (profile merge) lands
+    //     with PR 4's flags.
     let lock_path = agent_home.join("running.lock");
     let (lock_handle, pending_override) = startup_override::lock_then_consume(
         &lock_path,
@@ -278,6 +279,10 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         approval_token,
         sandbox_record,
     } = seal::prepare_and_seal(&profile, &agent_home, &mur_home, &identity).await?;
+    // `Some` on every path that reaches here; `None` would mean no seal was
+    // attempted, which must not count as sealed. Every consumer below reads
+    // this one value, so they cannot disagree about the boot.
+    let enforcing = sandbox_record.as_ref().is_some_and(|r| r.enforcing);
     // 4. Hot-reloaded settings (profile.yaml hot fields + global limits),
     //    read per turn. Built after the seal: both stay readable.
     let live = crate::live_profile::LiveSettings::new(
@@ -362,13 +367,19 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             Some(writer.sender()),
             identity.clone(),
             secrets.clone(),
-            // `Some` on every path that reaches here; `None` would mean no
-            // seal was attempted, which must not count as sealed.
-            sandbox_record.as_ref().is_some_and(|r| r.enforcing),
+            enforcing,
             &boot_cfg,
         )
         .await?;
     runner.attach_live(live.clone());
+    // Before any transport starts, so no turn runs without it.
+    if let Some(w) = startup_override::waiver(&pending_override, enforcing) {
+        warn!(
+            nonce = w.nonce(),
+            "--no-hitl: default and clamp asks are waived this boot"
+        );
+        runner.attach_startup_waiver(w);
+    }
     mcp_pool.iter().for_each(|p| p.follow(live.profile.clone()));
     runner.clone().drain_egress_denied(denied_rx);
     // Before the first turn: tracks a killed predecessor never closed (#1909).
@@ -390,10 +401,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         model_switch,
         runtime_skills.clone(),
         secrets.clone(),
-        crate::hitl::authority::ApprovalAuthority::new(
-            approval_token,
-            sandbox_record.as_ref().is_some_and(|r| r.enforcing),
-        ),
+        crate::hitl::authority::ApprovalAuthority::new(approval_token, enforcing),
         egress_for_grants,
     ));
 

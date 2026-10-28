@@ -181,8 +181,20 @@ pub fn effective_tier(
     classify(tool_name, tool_input).max(declared.unwrap_or(RiskTier::Read))
 }
 
+/// Is this a spend/dispatch tool by nature? Matched on the leaf name, so an
+/// MCP prefix (`mcp__mur-tools__parallel_jobs`) cannot hide one.
+pub fn is_spend_tool(tool_name: &str) -> bool {
+    SPEND_TOOLS.contains(&leaf(tool_name))
+}
+
+/// The tier floor a spend tool carries whatever it declares: `Some(Spend)` for
+/// a spend tool, `None` otherwise. For callers that combine it with `max`.
+pub fn spend_floor(tool_name: &str) -> Option<RiskTier> {
+    is_spend_tool(tool_name).then_some(RiskTier::Spend)
+}
+
 pub fn classify(tool_name: &str, tool_input: Option<&Value>) -> RiskTier {
-    if SPEND_TOOLS.contains(&leaf(tool_name)) {
+    if is_spend_tool(tool_name) {
         return RiskTier::Spend;
     }
     if let Some(tier) = crate::hitl::builtin_tier::browser_tier(tool_name) {

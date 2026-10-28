@@ -58,6 +58,7 @@ impl GuardedToolCall {
                 None => undecided.push(c),
             }
         }
+        let undecided = self.apply_waiver(task_id, undecided, remember, out).await;
         if undecided.is_empty() {
             return;
         }

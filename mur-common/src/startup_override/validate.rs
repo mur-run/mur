@@ -14,10 +14,11 @@ pub const NONCE_PREFIX: &str = "ovr-";
 pub const NONCE_HEX_LEN: usize = 32;
 
 /// Flags this build can apply. A file asking for any other flag is rejected
-/// whole. PR 3 (`no_hitl`) and PR 4 (`net_unrestricted`, `full_perms`) each
-/// flip their field here once the relaxation behind it exists.
+/// whole. `no_hitl` is applied as the runtime's `StartupWaiver`; PR 4
+/// (`net_unrestricted`, `full_perms`) flips its fields once the relaxation
+/// behind them exists.
 pub const SUPPORTED: OverrideFlags = OverrideFlags {
-    no_hitl: false,
+    no_hitl: true,
     net_unrestricted: false,
     full_perms: false,
 };

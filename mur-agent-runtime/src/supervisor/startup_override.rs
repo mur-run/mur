@@ -10,6 +10,7 @@ use crate::lock_file::{LockError, LockHandle};
 
 use chrono::{DateTime, Utc};
 use mur_common::agent::{OverrideRecord, OverrideRejection};
+use mur_common::hitl::startup_waiver::StartupWaiver;
 use mur_common::permissions::{AuditEvent, GrantStore};
 use mur_common::startup_override::claim::{self, ClaimAs, Claimed};
 use tracing::{info, warn};
@@ -110,6 +111,16 @@ pub(super) fn consume_at_boot(
             warn!(reason = %rejection.reason, "startup override rejected; applying nothing");
             reject(agent_home, now, rejection)
         }
+    }
+}
+
+/// This boot's `--no-hitl` waiver: only for an accepted override that asked
+/// for it, and only on a sealed boot — `finish_after_seal` reports an unsealed
+/// boot's override as rejected, and what is reported rejected is never applied.
+pub(super) fn waiver(pending: &Pending, enforcing: bool) -> Option<StartupWaiver> {
+    match pending {
+        Pending::Accepted(record) if enforcing => StartupWaiver::from_record(record),
+        _ => None,
     }
 }
 
