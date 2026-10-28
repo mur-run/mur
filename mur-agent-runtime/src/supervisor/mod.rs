@@ -247,8 +247,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // 2c. Startup override step 6: merge the boundary fields into the
     //     in-memory profile only — after the pin (which checks the file) and
     //     before the seal (which must be built from the merged value).
-    let on_disk = profile.inner.clone();
-    let merged = startup_override::merge_into(&pending_override, &mut profile.inner.entitlements);
+    let merged = startup_override::merge_into(&pending_override, &mut profile.inner);
 
     // 3. Warn on loose entitlements
     for w in detect_warnings(&profile.inner) {
@@ -287,13 +286,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // attempted, which must not count as sealed. Every consumer below reads
     // this one value, so they cannot disagree about the boot.
     let enforcing = sandbox_record.as_ref().is_some_and(|r| r.enforcing);
-    // Step 8: an unsealed boot reports the override rejected, so it must not
-    // keep the relaxation either.
-    startup_override::revert_if_unsealed(&merged, enforcing, &mut profile.inner.entitlements);
-    let (on_disk, override_changes) = match merged {
-        Some((_, changes)) if enforcing => (Some(on_disk), changes),
-        _ => (None, Vec::new()),
-    };
+    // Override step 8: an unsealed boot drops the relaxation it reports rejected.
+    let (on_disk, override_changes) =
+        startup_override::settle(merged, enforcing, &mut profile.inner);
     // 4. Hot-reloaded settings (profile.yaml hot fields + global limits),
     //    read per turn. Built after the seal: both stay readable. The merged
     //    profile is the base reloads layer onto (spec step 7); cold drift is
@@ -605,11 +600,18 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         lock_transports,
         sandbox_record,
         pending_override,
-        override_changes,
+        override_changes.clone(),
         &agent_home,
     );
     write_lock(&lock_path, &lock)?;
     info!("agent {} ({}) ready", profile.inner.name, profile.inner.id);
+    let signer = start_notice::Signer {
+        mur_home: &mur_home,
+        agent: &profile.inner.name,
+        identity: &identity,
+        key_version: profile.inner.identity.key_version,
+    };
+    startup_override::post_banner(&signer, lock.startup_override.as_ref(), &override_changes);
 
     // 8c. C4 — cron scheduler. Always spawned, even with no entries: it
     //     re-reads `lifecycle.schedule` from the live profile every
@@ -685,38 +687,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         info!(name = %profile.inner.name, "spawned BridgeBeacon (30 s heartbeat)");
     }
 
-    // 8b. Companion subsystem (Phase 1.1 M5.7).
-    //     Returns None when profile.companion.enabled is false — zero-cost path.
-    let companion_clock =
-        Arc::new(crate::companion::clock::SystemClock) as Arc<dyn crate::companion::clock::Clock>;
-    if let Some(llm) = llm_for_companion {
-        let companion = match crate::companion::Companion::new(
-            &profile.inner,
-            &agent_home,
-            companion_clock,
-            llm,
-        ) {
-            Ok(Some(c)) => Some(c),
-            Ok(None) => None,
-            Err(e) => {
-                warn!(error = %e, "companion init failed; continuing without companion");
-                None
-            }
-        };
-        if let Some(c) = companion {
-            let handle = c.clone_handle();
-            transport_tasks.push(tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-                // First tick fires immediately — we want to wait 60s before the first.
-                interval.tick().await;
-                loop {
-                    interval.tick().await;
-                    handle.run_tick().await;
-                }
-            }));
-        }
-    } else if profile.inner.companion.enabled {
-        warn!("companion is enabled but no LLM provider is configured; companion disabled");
+    // 8b. Companion subsystem (Phase 1.1 M5.7) — see `bootstrap::spawn_companion`.
+    if let Some(t) = bootstrap::spawn_companion(&profile.inner, &agent_home, llm_for_companion) {
+        transport_tasks.push(t);
     }
 
     // 9. Install signal handlers BEFORE spawning transports so SIGTERM

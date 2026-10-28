@@ -358,58 +358,54 @@ fn accepted(net: bool, full: bool) -> Pending {
     })
 }
 
-fn restricted_ent() -> mur_common::agent::Entitlements {
-    let mut e = mur_common::AgentProfile::default_for_tests().entitlements;
-    e.network.outbound.mode = mur_common::agent::NetworkOutboundMode::Restricted;
-    e
+fn restricted_profile() -> mur_common::AgentProfile {
+    let mut p = mur_common::AgentProfile::default_for_tests();
+    p.entitlements.network.outbound.mode = mur_common::agent::NetworkOutboundMode::Restricted;
+    p
 }
 
 #[test]
 fn only_an_accepted_override_merges() {
-    for p in [
+    for pending in [
         Pending::None,
         Pending::Rejected(mur_common::agent::OverrideRejection {
             nonce: None,
             reason: "x".into(),
         }),
     ] {
-        let mut e = restricted_ent();
-        let before = e.clone();
-        assert!(merge_into(&p, &mut e).is_none());
-        assert_eq!(e, before);
+        let mut p = restricted_profile();
+        let before = p.clone();
+        assert!(merge_into(&pending, &mut p).is_none());
+        assert_eq!(p, before);
     }
 }
 
 #[test]
-fn an_accepted_override_merges_and_keeps_the_pinned_copy() {
-    let mut e = restricted_ent();
-    let before = e.clone();
-    let (pinned, changes) = merge_into(&accepted(true, false), &mut e).unwrap();
-    assert_eq!(pinned, before);
+fn a_sealed_boot_keeps_the_relaxation_and_the_file_as_diff_base() {
+    let mut p = restricted_profile();
+    let before = p.clone();
+    let merged = merge_into(&accepted(true, false), &mut p);
     assert_eq!(
-        e.network.outbound.mode,
+        p.entitlements.network.outbound.mode,
         mur_common::agent::NetworkOutboundMode::Unrestricted
     );
+    let relaxed = p.clone();
+    let (on_disk, changes) = settle(merged, true, &mut p);
+    assert_eq!(p, relaxed);
+    assert_eq!(on_disk, Some(before));
     assert_eq!(changes.len(), 1);
 }
 
 #[test]
 fn an_unsealed_boot_withdraws_the_relaxation() {
-    let mut e = restricted_ent();
-    let before = e.clone();
-    let merged = merge_into(&accepted(true, true), &mut e);
-    assert_ne!(e, before);
-    assert!(revert_if_unsealed(&merged, false, &mut e));
-    assert_eq!(e, before, "reported rejected means never applied");
-}
-
-#[test]
-fn a_sealed_boot_keeps_the_relaxation() {
-    let mut e = restricted_ent();
-    let merged = merge_into(&accepted(true, true), &mut e);
-    let relaxed = e.clone();
-    assert!(!revert_if_unsealed(&merged, true, &mut e));
-    assert_eq!(e, relaxed);
+    let mut p = restricted_profile();
+    let before = p.clone();
+    let merged = merge_into(&accepted(true, true), &mut p);
+    assert_ne!(p, before);
+    let (on_disk, changes) = settle(merged, false, &mut p);
+    assert_eq!(p, before, "reported rejected means never applied");
+    assert_eq!(on_disk, None);
+    assert!(changes.is_empty());
 }
 
 #[test]
