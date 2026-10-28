@@ -10,6 +10,9 @@
 //! replays every day file from there, and a missing or unreadable cursor
 //! replays the whole ledger. The cursor never moves later than
 //! [`lookup_days`] before today, so the CLI's window is always covered too.
+//! Nor does it move past a day file that could not be read (review #2176
+//! P2): its records were not seen, so they are not known to be settled. When
+//! the ledger directory itself cannot be listed the cursor is left untouched.
 
 use std::collections::HashSet;
 use std::io;
@@ -70,12 +73,13 @@ pub fn expire_due(
 ) -> anyhow::Result<ExpireReport> {
     let dir = ledger_dir(agent_home);
     let cursor_path = expiry_cursor_path(agent_home);
-    let events = Ledger::<ActionEvent>::scan_since(&dir, read_cursor(&cursor_path));
+    let scan = Ledger::<ActionEvent>::scan_since(&dir, read_cursor(&cursor_path));
+    let events = &scan.events;
     let today = now.with_timezone(&Local).date_naive();
     let floor = today - chrono::Duration::days(lookup_days(deletion).into());
 
     let settled = settled_ids(events.iter().map(|(_, e)| e));
-    let outstanding = outstanding(&events, &settled);
+    let outstanding = outstanding(events, &settled);
     let mut report = ExpireReport::default();
     let mut keep_from = floor;
 
@@ -104,7 +108,14 @@ pub fn expire_due(
             keep_from = keep_from.min(*day);
         }
     }
-    if let Err(e) = write_cursor(&cursor_path, keep_from) {
+    // A day that could not be read may hold outstanding entries we never saw.
+    if let Some(first) = scan.unreadable_days.first() {
+        keep_from = keep_from.min(*first);
+    }
+    if scan.listing_failed {
+        // Whole days may be missing: no basis to move the cursor at all.
+        tracing::warn!(dir = %dir.display(), "ledger listing incomplete; trash expiry cursor kept");
+    } else if let Err(e) = write_cursor(&cursor_path, keep_from) {
         // Not fatal: a stale cursor only means a longer replay next pass.
         tracing::warn!(path = %cursor_path.display(), error = %e, "trash expiry cursor not saved");
     }

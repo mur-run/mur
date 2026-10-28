@@ -82,7 +82,7 @@ impl<E: Serialize + DeserializeOwned> Ledger<E> {
         for date in dates {
             let p = day_path(base_dir, date);
             if p.exists() {
-                read_day(&p, |e| out.push(Ok(e)));
+                let _ = read_day(&p, |e| out.push(Ok(e)));
             }
         }
         out
@@ -94,25 +94,71 @@ impl<E: Serialize + DeserializeOwned> Ledger<E> {
     /// Unlike [`Self::scan_days`] the window is not tied to today, so a reader
     /// that must not lose old records (trash expiry, #2174) can resume from a
     /// day it chose. Files not named `YYYY-MM-DD.jsonl` and malformed lines are
-    /// skipped.
-    pub fn scan_since(base_dir: &Path, since: Option<NaiveDate>) -> Vec<(NaiveDate, E)> {
-        let Ok(dir) = fs::read_dir(base_dir) else {
-            return Vec::new();
+    /// skipped. Read failures are NOT silent: the result says which days could
+    /// not be read in full and whether the directory listing itself failed, so
+    /// a caller that checkpoints progress can tell a complete replay from one
+    /// that missed records (review #2176 P2).
+    pub fn scan_since(base_dir: &Path, since: Option<NaiveDate>) -> DayScan<E> {
+        let mut scan = DayScan {
+            events: Vec::new(),
+            unreadable_days: Vec::new(),
+            listing_failed: false,
         };
-        let mut days: Vec<NaiveDate> = dir
-            .filter_map(|d| d.ok()?.file_name().into_string().ok())
-            .filter_map(|name| {
-                let stem = name.strip_suffix(".jsonl")?;
-                NaiveDate::parse_from_str(stem, DAY_FORMAT).ok()
-            })
-            .filter(|day| since.is_none_or(|s| *day >= s))
-            .collect();
-        days.sort();
-        let mut out = Vec::new();
-        for day in days {
-            read_day(&day_path(base_dir, day), |e| out.push((day, e)));
+        let dir = match fs::read_dir(base_dir) {
+            Ok(dir) => dir,
+            // No ledger yet: an empty but complete replay.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return scan,
+            Err(e) => {
+                tracing::warn!("ledger {} not listable: {e}", base_dir.display());
+                scan.listing_failed = true;
+                return scan;
+            }
+        };
+        let mut days = Vec::new();
+        for item in dir {
+            let Ok(item) = item else {
+                scan.listing_failed = true;
+                continue;
+            };
+            let Ok(name) = item.file_name().into_string() else {
+                continue;
+            };
+            let Some(day) = name
+                .strip_suffix(".jsonl")
+                .and_then(|stem| NaiveDate::parse_from_str(stem, DAY_FORMAT).ok())
+            else {
+                continue;
+            };
+            if since.is_none_or(|s| day >= s) {
+                days.push(day);
+            }
         }
-        out
+        days.sort();
+        for day in days {
+            if !read_day(&day_path(base_dir, day), |e| scan.events.push((day, e))) {
+                scan.unreadable_days.push(day);
+            }
+        }
+        scan
+    }
+}
+
+/// Result of [`Ledger::scan_since`].
+#[derive(Debug)]
+pub struct DayScan<E> {
+    /// Every well-formed event read, oldest day first, with its file's day.
+    pub events: Vec<(NaiveDate, E)>,
+    /// Days whose file could not be opened or read to the end; their records
+    /// may be missing from `events`.
+    pub unreadable_days: Vec<NaiveDate>,
+    /// The directory listing failed, so whole days may be missing.
+    pub listing_failed: bool,
+}
+
+impl<E> DayScan<E> {
+    /// True when every matching day file was read to the end.
+    pub fn is_complete(&self) -> bool {
+        !self.listing_failed && self.unreadable_days.is_empty()
     }
 }
 
@@ -122,13 +168,27 @@ fn day_path(base_dir: &Path, day: NaiveDate) -> PathBuf {
     base_dir.join(format!("{}.jsonl", day.format(DAY_FORMAT)))
 }
 
-/// Feed every well-formed event in one day file to `push`.
-fn read_day<E: DeserializeOwned>(p: &Path, mut push: impl FnMut(E)) {
-    let Ok(f) = fs::File::open(p) else {
-        return;
+/// Feed every well-formed event in one day file to `push`. Returns false
+/// when the file could not be opened or a line could not be read (an I/O
+/// error, not a malformed record), i.e. records may have been missed.
+fn read_day<E: DeserializeOwned>(p: &Path, mut push: impl FnMut(E)) -> bool {
+    let f = match fs::File::open(p) {
+        Ok(f) => f,
+        Err(err) => {
+            tracing::warn!("ledger {} not readable: {err}", p.display());
+            return false;
+        }
     };
+    let mut complete = true;
     for (i, line) in BufReader::new(f).lines().enumerate() {
-        let Ok(line) = line else { continue };
+        let line = match line {
+            Ok(line) => line,
+            Err(err) => {
+                tracing::warn!("ledger {}:{} read failed: {err}", p.display(), i + 1);
+                complete = false;
+                continue;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -143,6 +203,7 @@ fn read_day<E: DeserializeOwned>(p: &Path, mut push: impl FnMut(E)) {
             }
         }
     }
+    complete
 }
 
 #[cfg(test)]
@@ -236,12 +297,14 @@ mod tests {
         std::fs::write(tmp.path().join("notes.jsonl"), "garbage\n").unwrap();
 
         let all = Ledger::<TestEvent>::scan_since(tmp.path(), None);
+        assert!(all.is_complete());
+        let all = all.events;
         let ns: Vec<u32> = all.iter().map(|(_, e)| e.n).collect();
         assert_eq!(ns, vec![1, 2, 3], "every day file, oldest first");
         assert_eq!(all[0].0, today - chrono::Duration::days(400));
 
         let since = today - chrono::Duration::days(40);
-        let recent = Ledger::<TestEvent>::scan_since(tmp.path(), Some(since));
+        let recent = Ledger::<TestEvent>::scan_since(tmp.path(), Some(since)).events;
         let ns: Vec<u32> = recent.iter().map(|(_, e)| e.n).collect();
         assert_eq!(ns, vec![2, 3], "start day inclusive");
     }
@@ -249,6 +312,26 @@ mod tests {
     #[test]
     fn scan_since_missing_dir_is_empty() {
         let tmp = TempDir::new().unwrap();
-        assert!(Ledger::<TestEvent>::scan_since(&tmp.path().join("nope"), None).is_empty());
+        let scan = Ledger::<TestEvent>::scan_since(&tmp.path().join("nope"), None);
+        assert!(scan.events.is_empty());
+        assert!(scan.is_complete(), "no ledger yet is complete, not failed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_since_reports_an_unreadable_day() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let day = Local::now().date_naive() - chrono::Duration::days(100);
+        let p = day_path(tmp.path(), day);
+        std::fs::write(&p, "{\"msg\":\"m\",\"n\":1}\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let scan = Ledger::<TestEvent>::scan_since(tmp.path(), None);
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        if scan.events.len() == 1 {
+            return; // running as root: permissions do not block reads
+        }
+        assert!(!scan.is_complete());
+        assert_eq!(scan.unreadable_days, vec![day]);
     }
 }

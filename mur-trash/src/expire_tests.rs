@@ -68,6 +68,7 @@ fn record_on_day(home: &Path, age_days: i64, event: &ActionEvent) {
 
 fn expired_records(home: &Path) -> Vec<Uuid> {
     Ledger::<ActionEvent>::scan_since(&ledger_dir(home), None)
+        .events
         .into_iter()
         .filter_map(|(_, e)| match e {
             ActionEvent::TrashExpired { entry_id } => Some(entry_id),
@@ -355,4 +356,41 @@ fn unreadable_cursor_replays_everything() {
     let report = expire_due(&home, &deletion(), Utc::now()).unwrap();
 
     assert_eq!(report.expired, vec![entry.id]);
+}
+
+/// Review #2176 P2: an old day file unreadable during one pass must not let
+/// the cursor skip it; once access is restored a later pass expires its entry.
+#[cfg(unix)]
+#[test]
+fn unreadable_day_file_is_not_skipped_by_the_cursor() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_t, home) = home();
+    let entry = trashed(&home, "old.txt", 100);
+    record_on_day(
+        &home,
+        100,
+        &ActionEvent::TrashCreated {
+            entry: entry.clone(),
+        },
+    );
+    let day = Local::now().date_naive() - ChronoDuration::days(100);
+    let day_file = ledger_dir(&home).join(format!("{}.jsonl", day.format("%Y-%m-%d")));
+
+    fs::set_permissions(&day_file, fs::Permissions::from_mode(0o000)).unwrap();
+    let first = expire_due(&home, &deletion(), Utc::now()).unwrap();
+    fs::set_permissions(&day_file, fs::Permissions::from_mode(0o644)).unwrap();
+    if first.expired == vec![entry.id] {
+        return; // running as root: permissions do not block reads
+    }
+    assert_eq!(first, ExpireReport::default(), "entry unseen this pass");
+    let cursor = fs::read_to_string(expiry_cursor_path(&home)).unwrap();
+    assert!(
+        cursor.trim() <= day.format("%Y-%m-%d").to_string().as_str(),
+        "cursor pinned at or before the unreadable day, got {cursor}"
+    );
+
+    let second = expire_due(&home, &deletion(), Utc::now()).unwrap();
+    assert_eq!(second.expired, vec![entry.id]);
+    assert!(fs::symlink_metadata(entry.trash_path.as_ref().unwrap()).is_err());
+    assert_eq!(expired_records(&home), vec![entry.id]);
 }
