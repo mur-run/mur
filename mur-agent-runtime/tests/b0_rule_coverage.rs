@@ -16,7 +16,42 @@
 //! automated check can — only that the mapping is not stale. It is an index,
 //! not a proof.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+use mur_common::agent::OverrideFlags;
+use mur_common::startup_override::SUPPORTED;
+
+/// The startup-override flags that relax a B0 rule. `--no-hitl` is absent on
+/// purpose: it waives the HITL prompt, not a B0 rule, and rule 4 still asks
+/// under it.
+#[derive(Clone, Copy, Debug)]
+enum Flag {
+    NetUnrestricted,
+    FullPerms,
+}
+
+impl Flag {
+    /// The flag as `OverrideFlags` carries it, so a rename on either side
+    /// breaks this file instead of drifting silently.
+    fn as_flags(self) -> OverrideFlags {
+        let mut f = OverrideFlags::default();
+        match self {
+            Flag::NetUnrestricted => f.net_unrestricted = true,
+            Flag::FullPerms => f.full_perms = true,
+        }
+        f
+    }
+}
+
+/// Whether a startup override may relax a rule for one boot (spec
+/// §Boundary). Every rule declares one, so a new rule cannot become
+/// relaxable by omission.
+#[derive(Clone, Copy, Debug)]
+enum OverrideStance {
+    Relaxable(Flag),
+    NeverRelaxable,
+}
 
 /// One B0 rule and the files that cover it.
 struct RuleCoverage {
@@ -29,6 +64,8 @@ struct RuleCoverage {
     /// Why the owners are what they are — especially when they are not the
     /// `b0_ruleN_*.rs` file a reader would expect.
     note: &'static str,
+    /// What a startup override may do to this rule.
+    startup_override: OverrideStance,
 }
 
 const COVERAGE: &[RuleCoverage] = &[
@@ -37,18 +74,21 @@ const COVERAGE: &[RuleCoverage] = &[
         enforces: "write_file/edit_file into the launch chain or an fs.deny root -> Deny",
         owners: &["mur-agent-runtime/tests/b0_rule1_fs_confinement.rs"],
         note: "",
+        startup_override: OverrideStance::Relaxable(Flag::FullPerms),
     },
     RuleCoverage {
         rule: 2,
         enforces: "network.* against outbound mode Off / Restricted allow_hosts",
         owners: &["mur-agent-runtime/tests/b0_rule2_network_allowlist.rs"],
         note: "",
+        startup_override: OverrideStance::Relaxable(Flag::NetUnrestricted),
     },
     RuleCoverage {
         rule: 3,
         enforces: "prior role:tool messages wrapped as <untrusted_tool_result>",
         owners: &["mur-agent-runtime/tests/b0_rule3_spotlight_tool_results.rs"],
         note: "",
+        startup_override: OverrideStance::NeverRelaxable,
     },
     RuleCoverage {
         rule: 4,
@@ -62,30 +102,35 @@ const COVERAGE: &[RuleCoverage] = &[
                side-effect test IS rule 4, and the card-import and Track C3 \
                share tests drive the same turn-flag through their own sources. \
                This is the entry #809 read as a gap.",
+        startup_override: OverrideStance::NeverRelaxable,
     },
     RuleCoverage {
         rule: 5,
         enforces: "process.spawn / shell against entitlements.processes.spawn",
         owners: &["mur-agent-runtime/tests/b0_rule5_spawn_deny.rs"],
         note: "",
+        startup_override: OverrideStance::Relaxable(Flag::FullPerms),
     },
     RuleCoverage {
         rule: 6,
         enforces: "install-time MCP binary SHA-256 pin refuses startup on drift",
         owners: &["mur-agent-runtime/tests/b0_rule6_mcp_pin.rs"],
         note: "",
+        startup_override: OverrideStance::NeverRelaxable,
     },
     RuleCoverage {
         rule: 7,
         enforces: "outbound message body scanned for credential patterns",
         owners: &["mur-agent-runtime/tests/b0_rule7_secret_prefilter.rs"],
         note: "",
+        startup_override: OverrideStance::NeverRelaxable,
     },
     RuleCoverage {
         rule: 8,
         enforces: "memory.* tool results redacted before persistence",
         owners: &["mur-agent-runtime/tests/b0_rule8_memory_redaction.rs"],
         note: "",
+        startup_override: OverrideStance::NeverRelaxable,
     },
     RuleCoverage {
         rule: 9,
@@ -97,6 +142,7 @@ const COVERAGE: &[RuleCoverage] = &[
         note: "Covered by unit tests INSIDE the writer (`redact_envelope`), not \
                by a file under tests/. A tests/-only survey misses it entirely, \
                which is how #809 recorded it as deferred and untested.",
+        startup_override: OverrideStance::NeverRelaxable,
     },
     RuleCoverage {
         rule: 10,
@@ -107,12 +153,14 @@ const COVERAGE: &[RuleCoverage] = &[
                first-use-remember, M3.8 always-prompt-after-untrusted); each is \
                covered under its own rule. A test for rule 10 would be a \
                category error, not a missing test.",
+        startup_override: OverrideStance::NeverRelaxable,
     },
     RuleCoverage {
         rule: 11,
         enforces: "MCP binary signature verified at startup",
         owners: &["mur-agent-runtime/tests/b0_rule11_mcp_signature.rs"],
         note: "",
+        startup_override: OverrideStance::NeverRelaxable,
     },
     RuleCoverage {
         rule: 12,
@@ -120,6 +168,7 @@ const COVERAGE: &[RuleCoverage] = &[
         owners: &["mur-agent-runtime/tests/companion_gating.rs"],
         note: "Enforced by the M2.x companion subsystem, so its owner sits with \
                the companion tests rather than under a b0_ name.",
+        startup_override: OverrideStance::NeverRelaxable,
     },
 ];
 
@@ -186,4 +235,34 @@ fn all_twelve_rules_are_accounted_for() {
         seen, expected,
         "B0 has twelve rules; the coverage map must list each exactly once"
     );
+}
+
+/// Only rules 1, 2 and 5 may be relaxed by a startup override; everything
+/// else — spotlighting, rule 4, the MCP pin and signature, the credential and
+/// redaction scans — holds under every flag. Widening this set is a security
+/// decision and has to be made here, on purpose.
+#[test]
+fn only_rules_1_2_and_5_are_relaxable() {
+    let relaxable: BTreeSet<u8> = COVERAGE
+        .iter()
+        .filter(|c| matches!(c.startup_override, OverrideStance::Relaxable(_)))
+        .map(|c| c.rule)
+        .collect();
+    assert_eq!(relaxable, BTreeSet::from([1, 2, 5]));
+}
+
+/// A rule may only name a flag this build can actually apply.
+#[test]
+fn every_relaxing_flag_is_supported() {
+    for c in COVERAGE {
+        if let OverrideStance::Relaxable(flag) = c.startup_override {
+            let f = flag.as_flags();
+            assert!(
+                (!f.net_unrestricted || SUPPORTED.net_unrestricted)
+                    && (!f.full_perms || SUPPORTED.full_perms),
+                "rule {} is relaxable by {flag:?}, which this build does not support",
+                c.rule
+            );
+        }
+    }
 }
