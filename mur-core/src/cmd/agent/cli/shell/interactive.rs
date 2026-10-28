@@ -35,6 +35,38 @@ const PIPED_OPT_OUTS: &[(&[&str], &str)] = &[
     (&["mur", "code-nav", "setup", "--wizard"], "--yes"),
 ];
 
+/// `mur agent start|restart` asks the person to type the agent name only when
+/// it carries a startup-override flag; a plain start never prompts, so a
+/// prefix entry would hand over the terminal for nothing. `--confirm` is the
+/// scripted confirmation and keeps the piped path.
+const OVERRIDE_COMMANDS: &[&[&str]] = &[&["mur", "agent", "start"], &["mur", "agent", "restart"]];
+
+/// The override flags, as typed. `--net` also takes `--net=<mode>`.
+const OVERRIDE_FLAGS: &[&str] = &[
+    "--no-hitl",
+    "--net",
+    "--full-perms",
+    "--dangerously-skip-all",
+];
+
+/// The scripted confirmation for an override start (never `--yes`).
+const OVERRIDE_OPT_OUT: &str = "--confirm";
+
+fn is_override_flag(token: &str) -> bool {
+    let name = token.split_once('=').map_or(token, |(name, _)| name);
+    OVERRIDE_FLAGS.contains(&name)
+}
+
+/// Whether `tokens` is an override start / restart that will prompt.
+fn needs_override_confirmation(tokens: &[&str]) -> bool {
+    OVERRIDE_COMMANDS.iter().any(|prefix| {
+        tokens.len() >= prefix.len() && tokens[..prefix.len()] == **prefix && {
+            let rest = &tokens[prefix.len()..];
+            rest.iter().any(|t| is_override_flag(t)) && !rest.contains(&OVERRIDE_OPT_OUT)
+        }
+    })
+}
+
 /// Whether `cmd` must be run with the terminal handed over.
 ///
 /// Deliberately conservative: only a plain leading match. A pipeline or a
@@ -48,10 +80,11 @@ pub fn needs_terminal(cmd: &str) -> bool {
     let opted_out = PIPED_OPT_OUTS
         .iter()
         .any(|(prefix, flag)| starts_with(prefix) && tokens[prefix.len()..].contains(flag));
-    !opted_out
+    let prefixed = !opted_out
         && INTERACTIVE_PREFIXES
             .iter()
-            .any(|prefix| starts_with(prefix))
+            .any(|prefix| starts_with(prefix));
+    prefixed || needs_override_confirmation(&tokens)
 }
 
 /// `!mur fleet review …` and `!mur fleet review-resume …` are attended and
@@ -159,6 +192,30 @@ mod tests {
         // It is not mistaken for an attended review (that goes to /review).
         assert_eq!(review_redirect("mur fleet review-setup"), None);
         assert!(!needs_terminal("mur fleet review --main a --reviewer b t"));
+    }
+
+    #[test]
+    fn override_start_needs_the_terminal() {
+        assert!(needs_terminal("mur agent start pm --no-hitl"));
+        assert!(needs_terminal("mur agent restart pm --net=unrestricted"));
+        assert!(needs_terminal("mur agent restart pm --net unrestricted"));
+        assert!(needs_terminal("mur agent start  pm  --full-perms"));
+        assert!(needs_terminal("mur agent start --dangerously-skip-all pm"));
+    }
+
+    #[test]
+    fn plain_or_confirmed_start_stays_piped() {
+        assert!(!needs_terminal("mur agent start pm"));
+        assert!(!needs_terminal("mur agent restart pm"));
+        assert!(!needs_terminal("mur agent restart --all"));
+        assert!(!needs_terminal("mur agent start pm --no-hitl --confirm"));
+        assert!(!needs_terminal(
+            "mur agent restart pm --confirm --full-perms"
+        ));
+        // Look-alikes are not override flags.
+        assert!(!needs_terminal("mur agent start pm --network"));
+        assert!(!needs_terminal("mur agent status pm --no-hitl"));
+        assert!(!needs_terminal("true && mur agent start pm --no-hitl"));
     }
 
     #[test]

@@ -65,7 +65,7 @@ Before changing anything that pins, verifies, or launches an MCP server, read `d
 - `tracing` for structured logging; enable with `RUST_LOG=debug`
 - Plans and specs live in `docs/superpowers/` — a gitignored local clone of the private mur-docs repository; commit them there, never here. `scripts/setup-internal-docs.sh [--all-worktrees]` clones it and links it in (new worktrees need a rerun). OpenSpec change specs in `docs/openspec/changes/` (gitignored, local only).
 - Unified Channel v3a–v4a (signed events, HITL gate, mobile sync): runtime-overview.md.
-- murmur runs `!command` with stdin = null, so any command that reads stdin (prompts, "press Enter") gets EOF and fails. A command that needs the real terminal must be added to `INTERACTIVE_PREFIXES` in `mur-core/src/cmd/agent/cli/shell/interactive.rs`; matches are routed through the `/login` terminal handover instead. Currently `mur browser auth`, `mur deep-research secret`, `mur agent turn undo`, `mur channel repair`, and `mur fleet review-setup` (unless `--no-interactive`, via `PIPED_OPT_OUTS`).
+- murmur runs `!command` with stdin = null, so any command that reads stdin (prompts, "press Enter") gets EOF and fails. A command that needs the real terminal must be added to `INTERACTIVE_PREFIXES` in `mur-core/src/cmd/agent/cli/shell/interactive.rs`; matches are routed through the `/login` terminal handover instead. Currently `mur browser auth`, `mur deep-research secret`, `mur agent turn undo`, `mur channel repair`, `mur fleet review-setup` (unless `--no-interactive`, via `PIPED_OPT_OUTS`), and `mur agent start|restart` only when it carries a startup-override flag (unless `--confirm`; flag-aware matcher, not a prefix).
 
 ## Release Process
 
