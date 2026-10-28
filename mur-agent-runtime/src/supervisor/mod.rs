@@ -279,6 +279,10 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         approval_token,
         sandbox_record,
     } = seal::prepare_and_seal(&profile, &agent_home, &mur_home, &identity).await?;
+    // `Some` on every path that reaches here; `None` would mean no seal was
+    // attempted, which must not count as sealed. Every consumer below reads
+    // this one value, so they cannot disagree about the boot.
+    let enforcing = sandbox_record.as_ref().is_some_and(|r| r.enforcing);
     // 4. Hot-reloaded settings (profile.yaml hot fields + global limits),
     //    read per turn. Built after the seal: both stay readable.
     let live = crate::live_profile::LiveSettings::new(
@@ -363,15 +367,12 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             Some(writer.sender()),
             identity.clone(),
             secrets.clone(),
-            // `Some` on every path that reaches here; `None` would mean no
-            // seal was attempted, which must not count as sealed.
-            sandbox_record.as_ref().is_some_and(|r| r.enforcing),
+            enforcing,
             &boot_cfg,
         )
         .await?;
     runner.attach_live(live.clone());
     // Before any transport starts, so no turn runs without it.
-    let enforcing = sandbox_record.as_ref().is_some_and(|r| r.enforcing);
     if let Some(w) = startup_override::waiver(&pending_override, enforcing) {
         warn!(
             nonce = w.nonce(),
@@ -400,10 +401,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         model_switch,
         runtime_skills.clone(),
         secrets.clone(),
-        crate::hitl::authority::ApprovalAuthority::new(
-            approval_token,
-            sandbox_record.as_ref().is_some_and(|r| r.enforcing),
-        ),
+        crate::hitl::authority::ApprovalAuthority::new(approval_token, enforcing),
         egress_for_grants,
     ));
 
