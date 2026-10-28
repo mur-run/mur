@@ -121,15 +121,28 @@ fn rejects_malformed_nonce() {
     }
 }
 
+/// Every flag the schema has is applied by this build; the unsupported-flag
+/// check guards a field added later, before a build knows how to apply it.
 #[test]
-fn rejects_every_flag_this_build_does_not_support() {
-    for flag in ["net_unrestricted", "full_perms"] {
-        let mut v = file(0);
-        v[flag] = json!(true);
-        let r = rejected(&v);
-        assert_eq!(r.reason, format!("{REASON_UNSUPPORTED_FLAG_PREFIX}{flag}"));
-        assert_eq!(r.nonce.as_deref(), Some(NONCE));
-    }
+fn this_build_supports_every_flag_in_the_schema() {
+    assert_eq!(
+        SUPPORTED,
+        OverrideFlags {
+            no_hitl: true,
+            net_unrestricted: true,
+            full_perms: true,
+        }
+    );
+}
+
+#[test]
+fn accepts_net_unrestricted_and_full_perms() {
+    let mut v = file(0);
+    v["net_unrestricted"] = json!(true);
+    v["full_perms"] = json!(true);
+    let r = check(&v).expect("both are supported");
+    assert!(r.flags.net_unrestricted && r.flags.full_perms);
+    assert!(!r.flags.no_hitl);
 }
 
 #[test]

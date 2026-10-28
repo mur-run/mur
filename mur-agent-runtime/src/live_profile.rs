@@ -196,12 +196,22 @@ impl LiveProfile {
     /// `boot` is the profile the process started with — the base every reload
     /// overlays its hot fields onto, and the identity a reload must match.
     pub fn new(agent_home: &Path, boot: AgentProfile) -> Arc<Self> {
-        Self::build(agent_home, boot, None)
+        Self::build(agent_home, boot, None, None)
     }
 
-    fn build(agent_home: &Path, boot: AgentProfile, on_change: Option<OnChange>) -> Arc<Self> {
+    /// `on_disk` is the profile as `profile.yaml` had it at boot, when `boot`
+    /// differs from it (a startup override merged into memory). Cold-restart
+    /// drift is measured against it, so the override's own relaxation is not
+    /// reported as an edit waiting for a restart. `None` = `boot` is on disk.
+    fn build(
+        agent_home: &Path,
+        boot: AgentProfile,
+        on_disk: Option<AgentProfile>,
+        on_change: Option<OnChange>,
+    ) -> Arc<Self> {
         let pending_cold = Arc::new(Mutex::new(Vec::new()));
         let home = agent_home.to_path_buf();
+        let diff_base = on_disk.unwrap_or_else(|| boot.clone());
         let base = boot.clone();
         let pending = pending_cold.clone();
         let mcp_refusals = Arc::new(Mutex::new(mcp::Refusals::new()));
@@ -224,7 +234,7 @@ impl LiveProfile {
                 mur_common::limits::validate(l)?;
             }
             *pending.lock().unwrap_or_else(|e| e.into_inner()) =
-                AgentProfile::reload_diff(&base, &fresh).cold;
+                AgentProfile::reload_diff(&diff_base, &fresh).cold;
             let mut served = served.lock().unwrap_or_else(|e| e.into_inner());
             let mut out = base.with_hot_fields_over(&served, &fresh);
             let (entries, refused) = mcp::gate_entries(
@@ -343,6 +353,19 @@ impl LiveSettings {
         boot: AgentProfile,
         boot_limits: Limits,
     ) -> Arc<Self> {
+        Self::with_on_disk(agent_home, mur_home, boot, None, boot_limits)
+    }
+
+    /// [`Self::new`] for a boot whose in-memory profile is not the one on
+    /// disk: `on_disk` is what `profile.yaml` held, and is only the base cold
+    /// drift is measured against (see [`LiveProfile`]'s `build`).
+    pub fn with_on_disk(
+        agent_home: &Path,
+        mur_home: &Path,
+        boot: AgentProfile,
+        on_disk: Option<AgentProfile>,
+        boot_limits: Limits,
+    ) -> Arc<Self> {
         let state_path = agent_home.join(RELOAD_STATE_FILE);
         let me = Arc::new_cyclic(|weak: &std::sync::Weak<LiveSettings>| {
             let hook = |w: std::sync::Weak<LiveSettings>, p: PathBuf| -> OnChange {
@@ -356,6 +379,7 @@ impl LiveSettings {
                 profile: LiveProfile::build(
                     agent_home,
                     boot,
+                    on_disk,
                     Some(hook(weak.clone(), state_path.clone())),
                 ),
                 global_limits: live_global_limits(mur_home, boot_limits)

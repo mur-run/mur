@@ -28,11 +28,16 @@ pub(super) fn build_lock(
     lock_transports: LockTransports,
     sandbox_record: Option<mur_common::agent::SandboxRecord>,
     pending_override: super::startup_override::Pending,
+    override_changes: Vec<String>,
     agent_home: &Path,
 ) -> mur_common::LockFile {
     let enforcing = sandbox_record.as_ref().is_some_and(|r| r.enforcing);
-    let (startup_override, override_rejected) =
-        super::startup_override::finish_after_seal(pending_override, enforcing, agent_home);
+    let (startup_override, override_rejected) = super::startup_override::finish_after_seal(
+        pending_override,
+        enforcing,
+        override_changes,
+        agent_home,
+    );
     mur_common::LockFile {
         schema: 1,
         uuid: profile.inner.id.clone(),

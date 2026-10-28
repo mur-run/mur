@@ -1,4 +1,4 @@
-//! Boot steps 2–4 and 8–10 of the startup override (spec
+//! Boot steps 2–4, 6 and 8–10 of the startup override (spec
 //! `2026-10-25-startup-permission-overrides-design.md` §Runtime boot sequence).
 //!
 //! Nothing here ever fails the boot: every problem becomes "apply nothing"
@@ -9,10 +9,11 @@ use std::path::Path;
 use crate::lock_file::{LockError, LockHandle};
 
 use chrono::{DateTime, Utc};
-use mur_common::agent::{OverrideRecord, OverrideRejection};
+use mur_common::agent::{Entitlements, OverrideRecord, OverrideRejection};
 use mur_common::hitl::startup_waiver::StartupWaiver;
 use mur_common::permissions::{AuditEvent, GrantStore};
 use mur_common::startup_override::claim::{self, ClaimAs, Claimed};
+use mur_common::startup_override::merge;
 use tracing::{info, warn};
 
 /// Spec step 8 literal: the seal did not establish enforcement.
@@ -130,13 +131,53 @@ fn reject(agent_home: &Path, ts: DateTime<Utc>, rejection: OverrideRejection) ->
     Pending::Rejected(rejection)
 }
 
+/// Boot step 6: fold an accepted override's flags into the in-memory
+/// entitlements, after `pin::verify` and before the seal. Returns the
+/// entitlements as `profile.yaml` has them, for [`revert_if_unsealed`] and
+/// the reload diff base, plus the change summary for the audit (step 10).
+/// `None` when nothing was merged.
+pub(super) fn merge_into(
+    pending: &Pending,
+    ent: &mut Entitlements,
+) -> Option<(Entitlements, Vec<String>)> {
+    let Pending::Accepted(record) = pending else {
+        return None;
+    };
+    let pinned = ent.clone();
+    let changes = merge::apply(ent, record.flags);
+    for line in &changes {
+        warn!(nonce = %record.nonce, "startup override relaxes {line}");
+    }
+    Some((pinned, changes))
+}
+
+/// An unsealed boot reports its override as rejected (`unsealed`, step 8);
+/// what is reported rejected is never applied, so the in-memory entitlements
+/// go back to the pinned ones before B0, the live profile or the runner read
+/// them. Returns whether it reverted.
+pub(super) fn revert_if_unsealed(
+    merged: &Option<(Entitlements, Vec<String>)>,
+    enforcing: bool,
+    ent: &mut Entitlements,
+) -> bool {
+    match merged {
+        Some((pinned, _)) if !enforcing && ent != pinned => {
+            warn!("seal is not enforcing: startup override relaxation withdrawn");
+            *ent = pinned.clone();
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Boot steps 8–10. An accepted override on a boot whose seal is not
 /// enforcing is reported as rejected (`unsealed`), never as active. Together
 /// with `consume_at_boot` this writes one audit line per claimed file; it
-/// returns the two `LockFile` fields.
+/// returns the two `LockFile` fields. `changes` is [`merge_into`]'s summary.
 pub(super) fn finish_after_seal(
     pending: Pending,
     enforcing: bool,
+    changes: Vec<String>,
     agent_home: &Path,
 ) -> (Option<OverrideRecord>, Option<OverrideRejection>) {
     let ts = Utc::now();
@@ -164,6 +205,7 @@ pub(super) fn finish_after_seal(
                     nonce: record.nonce.clone(),
                     flags: record.flags,
                     confirmed_by: record.confirmed_by,
+                    changes,
                 },
             );
             (Some(record), None)

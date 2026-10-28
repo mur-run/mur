@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub mod claim;
 #[cfg(windows)]
 mod claim_windows;
+pub mod merge;
 pub mod timing;
 mod validate;
 pub use crate::agent::{OverrideFlags, OverrideRecord, OverrideRejection};

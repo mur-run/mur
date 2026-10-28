@@ -14,13 +14,14 @@ pub const NONCE_PREFIX: &str = "ovr-";
 pub const NONCE_HEX_LEN: usize = 32;
 
 /// Flags this build can apply. A file asking for any other flag is rejected
-/// whole. `no_hitl` is applied as the runtime's `StartupWaiver`; PR 4
-/// (`net_unrestricted`, `full_perms`) flips its fields once the relaxation
-/// behind them exists.
+/// whole. `no_hitl` is applied as the runtime's `StartupWaiver`;
+/// `net_unrestricted` and `full_perms` by [`super::merge::apply`] at boot
+/// step 6. Every field is `true` today; the check stays so a flag added to
+/// the schema is refused until a build knows how to apply it.
 pub const SUPPORTED: OverrideFlags = OverrideFlags {
     no_hitl: true,
-    net_unrestricted: false,
-    full_perms: false,
+    net_unrestricted: true,
+    full_perms: true,
 };
 
 pub const REASON_UNPARSEABLE: &str = "override rejected: unparseable";

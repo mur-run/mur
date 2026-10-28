@@ -224,8 +224,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     //     and lock first so a duplicate boot exits before it can consume the
     //     override (see `lock_then_consume`). A refused boot exits holding
     //     the flock; the kernel drops it with the process. `no_hitl` is
-    //     applied below as the runner's waiver; step 6 (profile merge) lands
-    //     with PR 4's flags.
+    //     applied below as the runner's waiver; the other flags at step 2c.
     let lock_path = agent_home.join("running.lock");
     let (lock_handle, pending_override) = startup_override::lock_then_consume(
         &lock_path,
@@ -245,6 +244,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // Past the refusal checks: a marker from an earlier refusal is stale, and
     // leaving it would stop the service manager respawning a later crash.
     mur_common::start_refusal::clear(&agent_home);
+    // 2c. Startup override step 6: merge the boundary fields into the
+    //     in-memory profile only — after the pin (which checks the file) and
+    //     before the seal (which must be built from the merged value).
+    let on_disk = profile.inner.clone();
+    let merged = startup_override::merge_into(&pending_override, &mut profile.inner.entitlements);
 
     // 3. Warn on loose entitlements
     for w in detect_warnings(&profile.inner) {
@@ -283,12 +287,22 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // attempted, which must not count as sealed. Every consumer below reads
     // this one value, so they cannot disagree about the boot.
     let enforcing = sandbox_record.as_ref().is_some_and(|r| r.enforcing);
+    // Step 8: an unsealed boot reports the override rejected, so it must not
+    // keep the relaxation either.
+    startup_override::revert_if_unsealed(&merged, enforcing, &mut profile.inner.entitlements);
+    let (on_disk, override_changes) = match merged {
+        Some((_, changes)) if enforcing => (Some(on_disk), changes),
+        _ => (None, Vec::new()),
+    };
     // 4. Hot-reloaded settings (profile.yaml hot fields + global limits),
-    //    read per turn. Built after the seal: both stay readable.
-    let live = crate::live_profile::LiveSettings::new(
+    //    read per turn. Built after the seal: both stay readable. The merged
+    //    profile is the base reloads layer onto (spec step 7); cold drift is
+    //    measured against the file.
+    let live = crate::live_profile::LiveSettings::with_on_disk(
         &agent_home,
         &mur_home,
         profile.inner.clone(),
+        on_disk,
         boot_global_limits.clone(),
     );
     // 4–4a. Telemetry writer, hook chain, skills — extracted to prepare_runtime.
@@ -591,6 +605,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         lock_transports,
         sandbox_record,
         pending_override,
+        override_changes,
         &agent_home,
     );
     write_lock(&lock_path, &lock)?;

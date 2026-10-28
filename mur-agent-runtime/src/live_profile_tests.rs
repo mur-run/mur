@@ -312,3 +312,74 @@ fn a_cold_mcp_edit_after_a_hot_one_keeps_the_hot_entry() {
             .contains(&"mcp_servers".to_string())
     );
 }
+
+/// A startup override merges into the in-memory profile only. A hot edit
+/// under it is served on top of the merged base (spec step 7), and the
+/// merge itself is not reported as a locked edit awaiting a restart.
+#[test]
+fn an_override_boot_keeps_its_relaxation_and_reports_no_false_cold_drift() {
+    use mur_common::agent::{NetworkOutboundMode, OverrideFlags};
+    let d = tempfile::tempdir().unwrap();
+    write(&d.path().join("profile.yaml"), FIXTURE);
+    let on_disk = crate::profile::Profile::load(d.path()).unwrap().inner;
+    let mut boot = on_disk.clone();
+    let flags = OverrideFlags {
+        net_unrestricted: true,
+        full_perms: true,
+        ..OverrideFlags::default()
+    };
+    mur_common::startup_override::merge::apply(&mut boot.entitlements, flags);
+    assert_ne!(boot.entitlements, on_disk.entitlements, "precondition");
+    let live = LiveSettings::with_on_disk(
+        d.path(),
+        d.path(),
+        boot.clone(),
+        Some(on_disk),
+        Default::default(),
+    );
+
+    write(
+        &d.path().join("profile.yaml"),
+        &with_line("limits: { deadline: 5m }"),
+    );
+    let p = live.profile.current();
+    assert_eq!(live.profile.generation(), 1);
+    assert_eq!(p.limits.as_ref().unwrap().deadline.as_deref(), Some("5m"));
+    assert_eq!(
+        p.entitlements.network.outbound.mode,
+        NetworkOutboundMode::Unrestricted,
+        "the reload layered onto the merged base"
+    );
+    assert_eq!(p.entitlements, boot.entitlements);
+    assert!(
+        live.profile.state().pending_cold_restart.is_empty(),
+        "{:?}",
+        live.profile.state().pending_cold_restart
+    );
+}
+
+/// Negative control for the test above: measured against the merged base,
+/// the same reload reports the override's own fields as cold drift.
+#[test]
+fn without_the_on_disk_base_the_merge_reads_as_cold_drift() {
+    use mur_common::agent::OverrideFlags;
+    let d = tempfile::tempdir().unwrap();
+    write(&d.path().join("profile.yaml"), FIXTURE);
+    let mut boot = crate::profile::Profile::load(d.path()).unwrap().inner;
+    let flags = OverrideFlags {
+        full_perms: true,
+        ..OverrideFlags::default()
+    };
+    mur_common::startup_override::merge::apply(&mut boot.entitlements, flags);
+    let live = LiveSettings::new(d.path(), d.path(), boot, Default::default());
+    write(
+        &d.path().join("profile.yaml"),
+        &with_line("limits: { deadline: 5m }"),
+    );
+    let _ = live.profile.current();
+    let cold = live.profile.state().pending_cold_restart;
+    assert!(
+        cold.iter().any(|p| p.starts_with("entitlements")),
+        "{cold:?}"
+    );
+}

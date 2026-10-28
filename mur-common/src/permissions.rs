@@ -84,6 +84,11 @@ pub enum AuditEvent {
         nonce: String,
         flags: crate::agent::OverrideFlags,
         confirmed_by: crate::startup_override::ConfirmedBy,
+        /// One line per entitlement field the merge changed (boot step 10's
+        /// before/after summary). Empty for `no_hitl` alone or a profile
+        /// already as relaxed as the flags ask.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        changes: Vec<String>,
     },
     /// A startup override this boot claimed and refused. `nonce` is `None`
     /// when the file could not be read or its nonce was not well formed.
