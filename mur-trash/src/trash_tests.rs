@@ -515,3 +515,47 @@ fn aged_out_creation_record_still_counts_toward_the_cap() {
         "{again:?}"
     );
 }
+
+/// Review #2177 P2: an unreadable historical ledger day must not make room
+/// for new trash; the entry it recorded still occupies the cap.
+#[cfg(unix)]
+#[test]
+fn unreadable_ledger_day_still_counts_toward_the_cap() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = home();
+    let cfg = DeletionConfig {
+        trash_max_mb: 1,
+        ..DeletionConfig::default()
+    };
+    let old = h.work.join("old");
+    fs::write(&old, vec![0u8; 900 * 1024]).unwrap();
+    let out = run(&h, &[target(old, RM)], &cfg);
+    assert!(matches!(out[0], TrashOutcome::Trashed { .. }), "{out:?}");
+
+    // Age the day file, then make it unreadable.
+    let dir = ledger_dir(&h.home);
+    let today = chrono::Local::now().date_naive();
+    let aged = dir.join(format!(
+        "{}.jsonl",
+        (today - chrono::Duration::days(5)).format("%Y-%m-%d")
+    ));
+    fs::rename(
+        dir.join(format!("{}.jsonl", today.format("%Y-%m-%d"))),
+        &aged,
+    )
+    .unwrap();
+    fs::set_permissions(&aged, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&aged).is_ok() {
+        fs::set_permissions(&aged, fs::Permissions::from_mode(0o644)).unwrap();
+        return; // running as root: permissions do not block reads
+    }
+
+    let new = h.work.join("new");
+    fs::write(&new, vec![0u8; 900 * 1024]).unwrap();
+    let again = run(&h, &[target(new, RM)], &cfg);
+    fs::set_permissions(&aged, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(
+        matches!(again[0], TrashOutcome::Evicted { cap_mb: 1, .. }),
+        "{again:?}"
+    );
+}

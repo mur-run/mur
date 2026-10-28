@@ -67,16 +67,32 @@ pub fn lookup_days(deletion: &DeletionConfig) -> u32 {
 /// still occupies the trash and must still count against the cap. The cursor
 /// never passes an outstanding entry, and without one the whole ledger is
 /// read, so nothing open is ever missed.
+///
+/// A replay that missed records is not taken as the usage (review #2177 P2):
+/// a day file that could not be read, a directory that could not be listed,
+/// or a line that did not parse may hide a `TrashCreated`, and a lost record
+/// would read as free space. Then the trash is measured on disk instead, as
+/// before, and the larger of the two figures is used.
 pub fn retained_bytes(agent_home: &Path) -> u64 {
-    let events = Ledger::<ActionEvent>::scan_since(
+    let scan = Ledger::<ActionEvent>::scan_since(
         &ledger_dir(agent_home),
         read_cursor(&expiry_cursor_path(agent_home)),
     );
-    let settled = settled_ids(events.iter().map(|(_, e)| e));
-    outstanding(&events, &settled)
+    let settled = settled_ids(scan.events.iter().map(|(_, e)| e));
+    let from_ledger = outstanding(&scan.events, &settled)
         .iter()
         .map(|(_, entry)| entry.file_size_bytes)
-        .fold(0u64, u64::saturating_add)
+        .fold(0u64, u64::saturating_add);
+    if scan.is_exact() {
+        return from_ledger;
+    }
+    tracing::warn!(
+        unreadable = ?scan.unreadable_days,
+        malformed = ?scan.malformed_days,
+        listing_failed = scan.listing_failed,
+        "ledger replay incomplete; measuring trash usage on disk"
+    );
+    from_ledger.max(crate::trash::tree_size(&trash_root(agent_home)))
 }
 
 /// What one expiry pass did.

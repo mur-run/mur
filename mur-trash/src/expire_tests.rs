@@ -500,3 +500,49 @@ fn retained_bytes_survives_a_shortened_retention() {
     assert!(report.expired.is_empty(), "still within its own retention");
     assert_eq!(retained_bytes(&home), 2048);
 }
+
+/// Review #2177 P2: a creation record in a day file that cannot be read must
+/// not read as free space; its bytes still on disk are counted.
+#[cfg(unix)]
+#[test]
+fn retained_bytes_does_not_trust_a_replay_with_an_unreadable_day() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_t, home) = home();
+    let mut old = trashed(&home, "old.bin", 10);
+    let body = vec![0u8; 64 * 1024];
+    fs::write(old.trash_path.as_ref().unwrap(), &body).unwrap();
+    old.file_size_bytes = body.len() as u64;
+    record_on_day(&home, 10, &ActionEvent::TrashCreated { entry: old });
+    let day = Local::now().date_naive() - ChronoDuration::days(10);
+    let day_file = ledger_dir(&home).join(format!("{}.jsonl", day.format("%Y-%m-%d")));
+    assert_eq!(retained_bytes(&home), body.len() as u64);
+
+    fs::set_permissions(&day_file, fs::Permissions::from_mode(0o000)).unwrap();
+    let used = retained_bytes(&home);
+    fs::set_permissions(&day_file, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(
+        used >= body.len() as u64,
+        "unreadable record must not become free space, got {used}"
+    );
+}
+
+/// Review #2177 P2: a malformed line may be a lost creation record, so the
+/// ledger sum is not trusted and the bytes on disk still count.
+#[test]
+fn retained_bytes_does_not_trust_a_replay_with_a_malformed_line() {
+    let (_t, home) = home();
+    let entry = trashed(&home, "kept.bin", 3);
+    let body = vec![0u8; 32 * 1024];
+    fs::write(entry.trash_path.as_ref().unwrap(), &body).unwrap();
+    let dir = ledger_dir(&home);
+    fs::create_dir_all(&dir).unwrap();
+    let day = Local::now().date_naive() - ChronoDuration::days(3);
+    // The creation record was torn: present on disk, unparseable.
+    fs::write(
+        dir.join(format!("{}.jsonl", day.format("%Y-%m-%d"))),
+        "{\"TrashCreated\":{\"entry\":{\"id\":\n",
+    )
+    .unwrap();
+
+    assert!(retained_bytes(&home) >= body.len() as u64);
+}
