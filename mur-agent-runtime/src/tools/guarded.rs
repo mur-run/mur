@@ -174,6 +174,13 @@ impl GuardedToolCall {
                 step_id,
                 call,
                 approval_risk(&self.tools_policy, &call.tool_name, Some(&call.input)).max(lift),
+                crate::task_runner::ask_origin::ask_origin(
+                    &self.tools_policy,
+                    &call.tool_name,
+                    Some(&call.input),
+                    lift,
+                    hook_asks,
+                ),
             );
             p.one_shot = one_shot;
             pending.push(p);
