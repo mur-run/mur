@@ -9,19 +9,8 @@ use uuid::Uuid;
 
 use super::resolve_mur_home;
 
-/// Days of ledger always replayed, even when retention is configured shorter.
-const MIN_LOOKUP_DAYS: u32 = 30;
-/// Slack past retention: covers day-file boundaries and a daemon that has not
-/// yet expired an entry whose retention just ran out.
-const LOOKUP_MARGIN_DAYS: u32 = 2;
-
-/// How far back the ledger must be replayed to see every entry still on disk.
-pub(super) fn lookup_days(deletion: &DeletionConfig) -> u32 {
-    deletion
-        .trash_retention_days
-        .max(MIN_LOOKUP_DAYS)
-        .saturating_add(LOOKUP_MARGIN_DAYS)
-}
+/// Shared with the daemon's expiry pass, so both see the same entries.
+pub(super) use mur_trash::lookup_days;
 
 pub fn cmd_trash_list(name: &str) -> Result<()> {
     let pipeline = pipeline_for(name)?;

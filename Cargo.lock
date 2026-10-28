@@ -6916,8 +6916,10 @@ dependencies = [
  "chrono",
  "libc",
  "mur-common",
+ "serde_json",
  "shell-words",
  "tempfile",
+ "tracing",
  "uuid",
 ]
 
