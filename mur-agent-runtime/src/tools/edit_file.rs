@@ -11,6 +11,9 @@ mod apply;
 mod hint;
 use apply::{apply_edits, parse_edits};
 
+/// The tool's registered name. B0 (#2181) and the registry key off this.
+pub const EDIT_FILE: &str = "edit_file";
+
 pub struct EditFileTool {
     pub session_cwd: SessionCwd,
     pub fs: FilesystemEntitlement,
@@ -51,12 +54,12 @@ impl EditFileTool {
 #[async_trait::async_trait]
 impl ToolExecutor for EditFileTool {
     fn name(&self) -> &str {
-        "edit_file"
+        EDIT_FILE
     }
 
     fn def(&self) -> ToolDef {
         ToolDef {
-            name: "edit_file".into(),
+            name: EDIT_FILE.into(),
             description: "Replace exact literal substrings in a UTF-8 text file (no regex). Either pass one edit as old_string/new_string, or several as `edits` (applied in order, each one seeing the result of the previous; all-or-nothing — if any edit fails nothing is written). Each old_string must match exactly once unless that edit sets expected_count to replace N known occurrences. Relative paths resolve against the shared session cwd (set by the bash tool's `cwd`); a `cd` inside a bash subprocess is NOT retained. Edits are checked against the agent's filesystem write entitlements."
                 .into(),
             input_schema: serde_json::json!({

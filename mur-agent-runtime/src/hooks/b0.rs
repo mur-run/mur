@@ -20,12 +20,13 @@
 //!   `after_untrusted_input` turn-flag.
 //! * `pre_tool_use` — most-specific gate first, then situational:
 //!   1. Rule 4 (M3.8) — turn-flag set + side-effect tool → AskUser.
-//!   2. Rule 1 (M7.1) — fs.write/delete/append/create outside
-//!      `agent_home` → AskUser.
+//!   2. Rule 1 (#2181) — `write_file`/`edit_file` into the launch chain
+//!      or an `fs.deny` root → Deny (the write scope is the tool's gate).
 //!   3. Rule 5 (M7.2) — process.spawn / shell with
 //!      `entitlements.processes.spawn.mode != Any` → Deny if argv[0]
 //!      not in allowed[].
-//!   4. Rule 2 (M7.3) — network.* with `outbound.mode == Off` → Deny;
+//!   4. Rule 2 (M7.3) — MCP browser/fetch tools (by leaf) and legacy
+//!      network.* with `outbound.mode == Off` → Deny;
 //!      `Restricted` + host not in allow_hosts → GrantStore lookup,
 //!      then AskUser on first use.
 //! * `on_message_send` — Rule 7 (M7.5) scans `view.body` for ~11
@@ -49,6 +50,9 @@ use mur_common::multimodal::ProvenanceLedger;
 use mur_common::permissions::{GrantDecision, GrantStore, ScopeKey};
 
 pub mod entry;
+mod tool_map;
+
+use tool_map::is_side_effect_tool;
 
 /// Turn-flag raised by `on_prompt_submit` when at least one untrusted
 /// multimodal artifact was attached to the current turn. Read by
@@ -442,35 +446,19 @@ impl Hook for B0SafetyHook {
                 }
             }
         }
-        // ── Rule 1: FS confinement (advisory). ───────────────────────────
-        // For fs.write / fs.delete / fs.append / fs.create on a path
-        // outside <agent_home>, ask the user. Read-only access is the
-        // OS picker's job (granted via tauri-plugin-fs's runtime open
-        // dialog), so we don't gate fs.read here.
-        if matches!(
-            call.name(),
-            "fs.write" | "fs.delete" | "fs.append" | "fs.create"
-        ) && let Some(path) = call.input.get("path").and_then(|v| v.as_str())
+        // ── Rule 1 (#2181): writes no grant can authorise → Deny. ────────
+        // `write_file` / `edit_file` into the launch chain or an explicit
+        // `fs.deny` root is refused here, before the approval prompt, with
+        // its own reason. The ordinary write scope is NOT this rule's job:
+        // `check_write_entitlement` refuses an ungranted path at execute,
+        // and asking a human first would be a prompt whose "allow" still
+        // ends in `path not write-entitled`.
+        if let Some((refusal, target)) =
+            tool_map::hard_refused_write(call, ctx.agent_home(), &ctx.entitlements().filesystem)
         {
-            let candidate = std::path::Path::new(path);
-            if !crate::hooks::b0_helpers::path_confined_to(candidate, ctx.agent_home()) {
-                let scope_key = ScopeKey {
-                    agent_id: ctx.agent_uuid.clone(),
-                    tool_name: format!("fs_outside_home::{}", call.name()),
-                    input_schema_hash: String::new(),
-                };
-                return Ok(Decision::AskUser {
-                    scope_key,
-                    prompt: format!(
-                        "`{}` is about to write at `{}`, which is outside the agent's \
-                         home directory. Allow this once?",
-                        call.name(),
-                        path,
-                    ),
-                    default: AskDefault::Deny,
-                    one_shot: false,
-                });
-            }
+            return Ok(Decision::Deny {
+                reason: format!("[{}] {}", refusal.code(), refusal.message(&target)),
+            });
         }
         // ── Rule 2 (M7.3): outbound network allowlist + GrantStore. ──────
         // Per-agent toggle via entitlements.network.outbound.mode:
@@ -482,28 +470,16 @@ impl Hook for B0SafetyHook {
         //       * GrantStore Deny  → bail with revoke instructions
         //       * no grant         → AskUser (default Deny)
         //
-        // We extract the host from the tool input's `url` field — the
-        // common shape across the network tool family. Adapt per-tool
-        // if a future tool surfaces a different field name.
-        const NET_TOOLS: &[&str] = &[
-            "network.http_get",
-            "network.http_post",
-            "network.tcp_connect",
-            "network.udp_send",
-            "network.dns_resolve",
-            "fetch", // common alias
-        ];
-        if NET_TOOLS.contains(&call.name()) {
+        // The target comes from `tool_map::outbound_url`: MCP browser /
+        // fetch tools matched on the leaf (`mcp__<server>__browser_navigate`)
+        // plus the legacy M7.3 names, all reading `url`.
+        if let Some(url) = tool_map::outbound_url(call) {
             let outbound = &ctx.entitlements().network.outbound;
-            let host = call
-                .input
-                .get("url")
-                .and_then(|v| v.as_str())
-                .and_then(|u| {
-                    url::Url::parse(u)
-                        .ok()
-                        .and_then(|p| p.host_str().map(|s| s.to_string()))
-                });
+            let host = url.and_then(|u| {
+                url::Url::parse(u)
+                    .ok()
+                    .and_then(|p| p.host_str().map(|s| s.to_string()))
+            });
 
             match outbound.mode {
                 mur_common::agent::NetworkOutboundMode::Unrestricted => {
@@ -620,25 +596,6 @@ impl Hook for B0SafetyHook {
             replace_output: Some(serde_json::Value::String(redacted)),
         })
     }
-}
-
-/// Side-effect tool name classifier. Errs on the safe side: better to
-/// ask once than to silently fire a deletion / spawn / egress.
-///
-/// The match list mirrors roadmap §4.3 step 9 (`delete*`, `spawn*`,
-/// `*.send`, `egress*`, `network.*`, `.write`, `.publish`).
-fn is_side_effect_tool(name: &str) -> bool {
-    let n = name.to_lowercase();
-    n.starts_with("delete")
-        || n.ends_with("delete")
-        || n.starts_with("spawn")
-        || n.ends_with("spawn")
-        || n.contains(".send")
-        || n.starts_with("send")
-        || n.starts_with("egress")
-        || n.starts_with("network.")
-        || n.contains(".write")
-        || n.contains(".publish")
 }
 
 #[cfg(test)]

@@ -46,6 +46,9 @@ pub(crate) fn augmented_path(current_path: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
+/// The tool's registered name. B0 (#2181) and the registry key off this.
+pub const BASH: &str = "bash";
+
 pub struct BashTool {
     /// Fallback base when no explicit `cwd` is supplied and the session base
     /// has not been overridden.
@@ -171,12 +174,12 @@ impl BashTool {
 #[async_trait::async_trait]
 impl ToolExecutor for BashTool {
     fn name(&self) -> &str {
-        "bash"
+        BASH
     }
 
     fn def(&self) -> ToolDef {
         ToolDef {
-            name: "bash".into(),
+            name: BASH.into(),
             description: format!(
                 "Run a bash shell command. Returns stdout, then stderr under `[stderr]`; a non-zero exit code appears in the output and is not an error. \
 Waits up to `timeout_secs` (default {DEFAULT_TIMEOUT_SECS}s, max {MAX_TIMEOUT_SECS}s) for the command to finish. If it is still running after that you get a `job_id` and the output so far — the command KEEPS RUNNING. \

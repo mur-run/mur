@@ -28,10 +28,18 @@ tracing layer / UX architecture / pre-existing in M2.x).
 The order of operations on a single tool call:
 
 1. `pre_tool_use` runs in this order, returning the FIRST hit:
-   1. Rule 1 — fs.write/delete/append/create outside agent_home → AskUser
-   2. Rule 5 — shell/spawn family + spawn.mode=Allowlist → Deny if argv[0] not in allowed[]
-   3. Rule 2 — network.* + Restricted mode + host not in allow_hosts → AskUser (after GrantStore lookup)
-   4. Rule 4 — `after_untrusted_input` flag set + side-effect tool → AskUser (M3.8)
+   1. Rule 4 — `after_untrusted_input` flag set + side-effect tool → AskUser (M3.8).
+      Built-ins are classified by their own name constants in
+      `hooks/b0/tool_map.rs`; a test fails when a new built-in is left out.
+   2. Rule 1 — `write_file` / `edit_file` into the launch chain or an `fs.deny`
+      root → Deny, tagged `[launch_chain]` or `[fs_deny]`. The ordinary write
+      scope is NOT this rule's: `check_write_entitlement` refuses an ungranted
+      path when the tool runs (#2181).
+   3. Rule 5 — shell/spawn family + spawn.mode=Allowlist → Deny if argv[0] not in allowed[]
+   4. Rule 2 — MCP browser/fetch tools matched on the leaf
+      (`mcp__<server>__browser_navigate`, reading `url`) and the legacy
+      `network.*` names + Restricted mode + host not in allow_hosts → AskUser
+      (after GrantStore lookup)
 2. `post_tool_use` runs Rule 8 if the call's name starts with `memory.`.
 3. `on_message_send` runs Rule 7 over `body`.
 4. `on_prompt_submit` runs Rule 3 (wrap prior tool messages) and the
