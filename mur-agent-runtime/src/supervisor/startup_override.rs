@@ -6,6 +6,8 @@
 
 use std::path::Path;
 
+use crate::lock_file::{LockError, LockHandle};
+
 use chrono::{DateTime, Utc};
 use mur_common::agent::{OverrideRecord, OverrideRejection};
 use mur_common::permissions::{AuditEvent, GrantStore};
@@ -27,6 +29,28 @@ pub(super) enum Pending {
     /// Already audited by `consume_at_boot`: `pin::refuse` can exit before
     /// `finish_after_seal` runs, so the audit line cannot wait for the seal.
     Rejected(OverrideRejection),
+}
+
+/// Take `running.lock`, then — only if it was ours — claim the override.
+///
+/// Order matters: two boots of one agent can overlap (launchd `KeepAlive`
+/// and a direct spawn), and the claim is a rename that only one of them wins.
+/// Claiming first let the boot that then lost the lock consume the file and
+/// exit `already running` with no audit line, so the surviving boot logged
+/// "not reapplied (one-shot)" for an override nobody applied. The claim
+/// cannot move after the seal instead (the overrides dir is read-only
+/// there), so the lock moves before it.
+pub(super) fn lock_then_consume(
+    lock_path: &Path,
+    mur_home: &Path,
+    agent_home: &Path,
+    agent: &str,
+    stop_timeout_secs: u64,
+    now: DateTime<Utc>,
+) -> Result<(LockHandle, Pending), LockError> {
+    let lock = LockHandle::acquire(lock_path)?;
+    let pending = consume_at_boot(mur_home, agent_home, agent, stop_timeout_secs, now);
+    Ok((lock, pending))
 }
 
 /// Boot steps 2–4. Call before `pin::verify`, so a boot that is later refused

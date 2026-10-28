@@ -74,7 +74,12 @@ impl LockHandle {
             return;
         }
         let _ = fs::remove_file(&self.path);
-        let _ = fs::remove_file(sentinel_path(&self.path));
+        // The sentinel stays. Unlinking it while we still hold the flock lets
+        // a booting supervisor that already opened it win the flock on an
+        // inode nobody else can see once we exit, while the next one creates
+        // a fresh file and locks that too — two runtimes on one home (#790).
+        // Its existence means nothing; only the flock does, and that goes
+        // when this handle drops. Same rule as `mur-daemon/src/lock.rs`.
     }
 }
 
@@ -184,6 +189,9 @@ mod tests {
         write_lock(&path, &lock_json(std::process::id())).unwrap();
         handle.release();
         assert!(!path.exists());
-        assert!(!sentinel_path(&path).exists());
+        assert!(
+            sentinel_path(&path).exists(),
+            "the sentinel is never unlinked; only its flock carries ownership"
+        );
     }
 }

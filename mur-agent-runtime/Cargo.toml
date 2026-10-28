@@ -171,6 +171,10 @@ criterion = { version = "0.5", default-features = false }
 # match mur-common's keyring dep so the mock-builder ABI matches what
 # mur_common::secret::keychain_get reads.
 keyring = { version = "3", default-features = false }
+# Hub-side `Supervisor::start` drives the boot-window race test
+# (`tests/hub_clear_boot_race.rs`) through the production clear path.
+# Dev-only: mur-gui-core does not depend on the runtime, so no cycle.
+mur-gui-core = { path = "../mur-gui-core" }
 
 [[bench]]
 name = "companion"
