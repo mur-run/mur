@@ -109,3 +109,58 @@ fn a_marker_naming_a_gone_channel_is_replaced() {
     assert_ne!(id, "no-such-channel");
     assert!(svc.exists(&id));
 }
+
+fn record() -> OverrideRecord {
+    use mur_common::agent::OverrideFlags;
+    OverrideRecord {
+        nonce: "ovr-0123456789abcdef0123456789abcdef".into(),
+        flags: OverrideFlags {
+            no_hitl: true,
+            net_unrestricted: false,
+            full_perms: true,
+        },
+        confirmed_by: mur_common::startup_override::ConfirmedBy::Tty,
+    }
+}
+
+#[test]
+fn the_override_banner_names_the_nonce_and_flags() {
+    assert_eq!(
+        override_text(&record()),
+        "⚠ startup override active (ovr-0123456789abcdef0123456789abcdef): \
+         --no-hitl, --full-perms — this boot only; restart without flags to end it"
+    );
+}
+
+#[test]
+fn the_override_banner_is_one_signed_note_per_nonce() {
+    let tmp = tempfile::tempdir().unwrap();
+    let identity = AgentIdentity::generate();
+    let signer = Signer {
+        mur_home: tmp.path(),
+        agent: "probe",
+        identity: &identity,
+        key_version: 1,
+    };
+    let changes = vec!["processes.spawn.mode: allowlist -> any".to_string()];
+    let ch = append_override(&signer, &record(), &changes).unwrap();
+    let svc = ChannelService::open(tmp.path()).unwrap();
+    let notes: Vec<_> = svc
+        .load_events(&ch)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == EventKind::Note)
+        .collect();
+    assert_eq!(notes.len(), 1);
+    let ev = &notes[0];
+    assert_eq!(ev.payload["notice"], STARTUP_OVERRIDE_NOTICE);
+    assert_eq!(ev.payload["nonce"], record().nonce);
+    assert_eq!(ev.payload["flags"]["full_perms"], true);
+    assert_eq!(ev.payload["changes"][0], changes[0]);
+    assert!(mur_channel::sign::verify_one(
+        &ch,
+        ev,
+        &identity.verifying_key_bytes(),
+        true
+    ));
+}

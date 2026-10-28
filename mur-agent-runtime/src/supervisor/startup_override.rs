@@ -1,4 +1,4 @@
-//! Boot steps 2–4 and 8–10 of the startup override (spec
+//! Boot steps 2–4, 6 and 8–10 of the startup override (spec
 //! `2026-10-25-startup-permission-overrides-design.md` §Runtime boot sequence).
 //!
 //! Nothing here ever fails the boot: every problem becomes "apply nothing"
@@ -9,10 +9,12 @@ use std::path::Path;
 use crate::lock_file::{LockError, LockHandle};
 
 use chrono::{DateTime, Utc};
+use mur_common::AgentProfile;
 use mur_common::agent::{OverrideRecord, OverrideRejection};
 use mur_common::hitl::startup_waiver::StartupWaiver;
 use mur_common::permissions::{AuditEvent, GrantStore};
 use mur_common::startup_override::claim::{self, ClaimAs, Claimed};
+use mur_common::startup_override::merge;
 use tracing::{info, warn};
 
 /// Spec step 8 literal: the seal did not establish enforcement.
@@ -130,13 +132,75 @@ fn reject(agent_home: &Path, ts: DateTime<Utc>, rejection: OverrideRejection) ->
     Pending::Rejected(rejection)
 }
 
+/// What boot step 6 merged: the profile as `profile.yaml` has it, and the
+/// change summary for the audit (step 10).
+#[derive(Debug)]
+pub(super) struct Merged {
+    on_disk: AgentProfile,
+    changes: Vec<String>,
+}
+
+/// Boot step 6: fold an accepted override's flags into the in-memory
+/// entitlements, after `pin::verify` and before the seal. `None` when there
+/// is no accepted override.
+pub(super) fn merge_into(pending: &Pending, profile: &mut AgentProfile) -> Option<Merged> {
+    let Pending::Accepted(record) = pending else {
+        return None;
+    };
+    let on_disk = profile.clone();
+    let changes = merge::apply(&mut profile.entitlements, record.flags);
+    for line in &changes {
+        warn!(nonce = %record.nonce, "startup override relaxes {line}");
+    }
+    Some(Merged { on_disk, changes })
+}
+
+/// After the seal. An unsealed boot reports its override as rejected
+/// (`unsealed`, step 8), and what is reported rejected is never applied, so
+/// the in-memory entitlements go back to the pinned ones before B0, the live
+/// profile or the runner read them.
+///
+/// Returns the reload diff base (`Some` only when a relaxation stays in
+/// force) and the change summary for [`finish_after_seal`].
+pub(super) fn settle(
+    merged: Option<Merged>,
+    enforcing: bool,
+    profile: &mut AgentProfile,
+) -> (Option<AgentProfile>, Vec<String>) {
+    match merged {
+        Some(m) if enforcing => (Some(m.on_disk), m.changes),
+        Some(m) => {
+            if profile.entitlements != m.on_disk.entitlements {
+                warn!("seal is not enforcing: startup override relaxation withdrawn");
+                profile.entitlements = m.on_disk.entitlements;
+            }
+            (None, Vec::new())
+        }
+        None => (None, Vec::new()),
+    }
+}
+
+/// Step 11: the banner on the agent's start channel. Best-effort, like
+/// every start notice: the lock and the audit line carry the same facts.
+pub(super) fn post_banner(
+    signer: &super::start_notice::Signer<'_>,
+    record: Option<&OverrideRecord>,
+    changes: &[String],
+) {
+    let Some(record) = record else { return };
+    if let Err(e) = super::start_notice::append_override(signer, record, changes) {
+        warn!(error = %e, "could not post the startup-override banner to the agent's channel");
+    }
+}
+
 /// Boot steps 8–10. An accepted override on a boot whose seal is not
 /// enforcing is reported as rejected (`unsealed`), never as active. Together
 /// with `consume_at_boot` this writes one audit line per claimed file; it
-/// returns the two `LockFile` fields.
+/// returns the two `LockFile` fields. `changes` is [`settle`]'s summary.
 pub(super) fn finish_after_seal(
     pending: Pending,
     enforcing: bool,
+    changes: Vec<String>,
     agent_home: &Path,
 ) -> (Option<OverrideRecord>, Option<OverrideRejection>) {
     let ts = Utc::now();
@@ -164,6 +228,7 @@ pub(super) fn finish_after_seal(
                     nonce: record.nonce.clone(),
                     flags: record.flags,
                     confirmed_by: record.confirmed_by,
+                    changes,
                 },
             );
             (Some(record), None)

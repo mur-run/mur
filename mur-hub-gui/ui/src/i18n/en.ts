@@ -192,6 +192,7 @@ export const en = {
   "perm.enforcement.advisory": "Running WITHOUT a kernel sandbox ({mode}). Only advisory hooks apply, so it can reach MORE than the grants below — restart it to try sealing again.",
   "perm.enforcement.enforcing": "Sandbox enforcing ({mode}).",
   "perm.drifted": "Grants have changed since this agent sealed: ✓ rows describe the profile as it is now, not as it was enforced. Restart to apply.",
+  "perm.relaxed": "Relaxed by startup override ({nonce}): {flags}. The rows above are the profile as written; this boot runs with what those flags open, until a plain restart.",
   "perm.runtime": "Runtime's own traffic",
   "perm.runtime.note": "In-process DNS guard + the B0 gate on network.* tools",
   "perm.outbound.off": "No outbound",

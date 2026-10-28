@@ -9,7 +9,7 @@
 //! was busy; the log line and the status file already carry the same facts.
 
 use mur_channel::ChannelService;
-use mur_common::agent::START_CHANNEL_FILE;
+use mur_common::agent::{OverrideRecord, START_CHANNEL_FILE};
 use mur_common::channel::{ChannelActor, EventKind};
 use mur_common::identity::AgentIdentity;
 use mur_common::ssh_proxy_status::SshProxyStatus;
@@ -76,6 +76,49 @@ pub(super) fn append_ssh_proxy(signer: &Signer<'_>, s: &SshProxyStatus) -> anyho
         }),
         // One event per start: the classification time identifies the start.
         Some(format!("ssh-proxy:{}", s.at_unix_ms)),
+    )?;
+    Ok(channel_id)
+}
+
+/// `payload.notice` value marking the startup-override banner (boot step 11).
+pub(super) const STARTUP_OVERRIDE_NOTICE: &str = "startup_override";
+
+/// The banner a person reads in `mur channel follow`, in the same words as
+/// the `⚠ override active` line in `mur agent status`.
+pub(super) fn override_text(record: &OverrideRecord) -> String {
+    format!(
+        "⚠ startup override active ({}): {} — this boot only; restart without flags to end it",
+        record.nonce,
+        record.flags.cli_names().join(", ")
+    )
+}
+
+/// Post the banner. Returns the channel id written to.
+pub(super) fn append_override(
+    signer: &Signer<'_>,
+    record: &OverrideRecord,
+    changes: &[String],
+) -> anyhow::Result<String> {
+    let svc = ChannelService::open(signer.mur_home)?;
+    let channel_id = start_channel(&svc, signer.mur_home, signer.agent)?;
+    svc.append_signed(
+        &channel_id,
+        signer.identity,
+        signer.key_version,
+        ChannelActor::Agent {
+            id: signer.agent.to_string(),
+        },
+        EventKind::Note,
+        serde_json::json!({
+            "notice": STARTUP_OVERRIDE_NOTICE,
+            "text": override_text(record),
+            "nonce": record.nonce,
+            "flags": record.flags,
+            "confirmed_by": record.confirmed_by,
+            "changes": changes,
+        }),
+        // One banner per override: the nonce is single-use.
+        Some(format!("startup-override:{}", record.nonce)),
     )?;
     Ok(channel_id)
 }

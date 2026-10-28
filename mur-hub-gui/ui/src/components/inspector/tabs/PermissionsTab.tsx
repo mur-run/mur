@@ -62,6 +62,11 @@ export function PermissionsTab({
         <Grants verb="read" list={v.filesystem.read} write={write} />
         <Grants verb="write" list={v.filesystem.write} write={write} />
         <Grants verb="deny" list={v.filesystem.deny} write={write} />
+        {v.relaxed_by_override && (
+          <p className="perm__note perm__note--attention">
+            {t("perm.relaxed", { nonce: v.relaxed_by_override.nonce, flags: v.relaxed_by_override.flags.join(", ") })}
+          </p>
+        )}
         {v.grants_drifted && <p className="perm__note perm__note--attention">{t("perm.drifted")}</p>}
       </Block>
 

@@ -439,3 +439,75 @@ fn a_dropped_linked_worktree_candidate_is_listed_with_its_reason() {
         }
     );
 }
+
+fn with_override(mut lock: LockFile, full_perms: bool) -> LockFile {
+    lock.startup_override = Some(mur_common::agent::OverrideRecord {
+        nonce: "ovr-0123456789abcdef0123456789abcdef".into(),
+        flags: mur_common::agent::OverrideFlags {
+            no_hitl: false,
+            net_unrestricted: false,
+            full_perms,
+        },
+        confirmed_by: mur_common::startup_override::ConfirmedBy::Tty,
+    });
+    lock
+}
+
+/// A seal built from the override-merged profile, as the runtime does.
+fn sealed_merged(profile: &mur_common::AgentProfile) -> SandboxRecord {
+    let mut merged = profile.clone();
+    mur_common::startup_override::merge::apply(
+        &mut merged.entitlements,
+        mur_common::agent::OverrideFlags {
+            full_perms: true,
+            ..Default::default()
+        },
+    );
+    sealed(&merged, vec![])
+}
+
+fn deny_profile() -> mur_common::AgentProfile {
+    let mut p = fs_profile(&[], &["/tmp/x"]);
+    p.entitlements.filesystem.deny = vec!["/tmp/x/keep".into()];
+    p
+}
+
+/// `--full-perms` resets fs.deny, so the sealed digest differs from the file
+/// by design. That is reported as the override, never as an edit.
+#[test]
+fn an_override_relaxation_is_not_reported_as_drift() {
+    let p = deny_profile();
+    let lock = with_override(lock_with(Some(sealed_merged(&p))), true);
+    let v = permissions_view(&p, Some(&lock));
+    assert!(!v.grants_drifted, "{v:?}");
+    let r = v.relaxed_by_override.expect("override shown");
+    assert_eq!(r.flags, vec!["--full-perms".to_string()]);
+    let out = paths_picture("mur", &p, Some(&lock), None);
+    assert!(out.contains("Relaxed by startup override (ovr-"), "{out}");
+    assert!(!out.contains("changed since this agent sealed"), "{out}");
+}
+
+/// Negative control: the same seal without an override on the lock is drift.
+#[test]
+fn the_same_seal_without_an_override_is_drift() {
+    let p = deny_profile();
+    let v = permissions_view(&p, Some(&lock_with(Some(sealed_merged(&p)))));
+    assert!(v.grants_drifted);
+    assert!(v.relaxed_by_override.is_none());
+}
+
+/// An edit made after an override boot is still drift, and both are shown.
+#[test]
+fn an_edit_under_an_override_is_still_drift() {
+    let p = deny_profile();
+    let lock = with_override(lock_with(Some(sealed_merged(&p))), true);
+    let mut edited = p.clone();
+    edited
+        .entitlements
+        .filesystem
+        .write
+        .push("/tmp/added-later".into());
+    let v = permissions_view(&edited, Some(&lock));
+    assert!(v.grants_drifted);
+    assert!(v.relaxed_by_override.is_some());
+}

@@ -28,11 +28,16 @@ pub(super) fn build_lock(
     lock_transports: LockTransports,
     sandbox_record: Option<mur_common::agent::SandboxRecord>,
     pending_override: super::startup_override::Pending,
+    override_changes: Vec<String>,
     agent_home: &Path,
 ) -> mur_common::LockFile {
     let enforcing = sandbox_record.as_ref().is_some_and(|r| r.enforcing);
-    let (startup_override, override_rejected) =
-        super::startup_override::finish_after_seal(pending_override, enforcing, agent_home);
+    let (startup_override, override_rejected) = super::startup_override::finish_after_seal(
+        pending_override,
+        enforcing,
+        override_changes,
+        agent_home,
+    );
     mur_common::LockFile {
         schema: 1,
         uuid: profile.inner.id.clone(),
@@ -171,4 +176,41 @@ pub(super) fn migrate_bundled_spawn_grant(agent_home: &Path, mur_home: &Path) {
     {
         tracing::warn!(error = %e, "could not migrate bundled mcp spawn grant");
     }
+}
+
+/// Boot step 8b: the companion subsystem (Phase 1.1 M5.7), ticking once a
+/// minute. `None` when the profile does not enable it (the zero-cost path),
+/// when no LLM provider is configured, or when init fails.
+pub(super) fn spawn_companion(
+    profile: &mur_common::agent::AgentProfile,
+    agent_home: &Path,
+    llm: Option<std::sync::Arc<dyn crate::llm::LlmClient>>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let Some(llm) = llm else {
+        if profile.companion.enabled {
+            tracing::warn!(
+                "companion is enabled but no LLM provider is configured; companion disabled"
+            );
+        }
+        return None;
+    };
+    let clock = std::sync::Arc::new(crate::companion::clock::SystemClock)
+        as std::sync::Arc<dyn crate::companion::clock::Clock>;
+    let companion = match crate::companion::Companion::new(profile, agent_home, clock, llm) {
+        Ok(c) => c?,
+        Err(e) => {
+            tracing::warn!(error = %e, "companion init failed; continuing without companion");
+            return None;
+        }
+    };
+    let handle = companion.clone_handle();
+    Some(tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        // First tick fires immediately — we want to wait 60s before the first.
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            handle.run_tick().await;
+        }
+    }))
 }
