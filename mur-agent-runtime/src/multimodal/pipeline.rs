@@ -9,18 +9,17 @@
 //! 3. Writes `<agent_home>/telemetry/inputs/{sha}.txt` carrying a
 //!    text-ish projection of the artifact (see module-level doc on
 //!    `super` for what we write per mime).
-//! 4. Appends a [`ProvenanceEntry`] (turn_id = 0 — the runtime stamps
-//!    the real turn before the next prompt) to
+//! 4. Appends a [`ProvenanceEntry`] (turn_id = 0, see below) to
 //!    `<agent_home>/telemetry/inputs.jsonl`.
 //! 5. Returns the sha and the ledger path so the caller can wire it
 //!    into the outbound A2A envelope.
 //!
 //! The 0-turn-id is a deliberate "stage now, claim later" pattern: the
 //! Telegram bridge ingests artifacts asynchronously w.r.t. the user
-//! agent's turn counter, so the user-agent-side B0 hook (M3.8) is
-//! responsible for promoting these entries into the current turn when
-//! it processes the wrapped envelope. The dedicated fixup is part of
-//! the M-c2.4.3 milestone (out-of-scope for the bridge itself).
+//! agent's turn counter, so it cannot know the turn. B0's
+//! `on_prompt_submit` claims every entry appended since the previous
+//! turn via `ProvenanceLedger::claim_new` (a byte cursor beside the
+//! ledger), so the stored turn id is informational only (#2175).
 
 use std::path::{Path, PathBuf};
 
@@ -68,8 +67,8 @@ pub fn process_artifact(bytes: &[u8], mime: &str, agent_home: &Path) -> Result<P
         source: source_for(mime),
         decoder_version: decoder_for(mime),
         ocr_engine_version: ocr_for(mime),
-        // Bridge ingest happens out-of-turn; the user-agent-side hook
-        // promotes this entry into its real turn before reading.
+        // Bridge ingest happens out-of-turn; B0 claims the entry on the
+        // next turn by ledger cursor, not by this id (#2175).
         turn_id: 0,
         recorded_at: Utc::now(),
     };
@@ -131,8 +130,8 @@ pub fn process_share_text(
         source: format!("share:{channel_source}"),
         decoder_version: "share/v0".into(),
         ocr_engine_version: None,
-        // Same out-of-turn convention as `process_artifact`: the user
-        // agent's B0 hook promotes this entry into the current turn.
+        // Same out-of-turn convention as `process_artifact`: B0 claims
+        // the entry on the next turn by ledger cursor (#2175).
         turn_id: 0,
         recorded_at: Utc::now(),
     };

@@ -11,7 +11,9 @@ pub struct ProvenanceEntry {
     pub source: String,
     pub decoder_version: String,
     pub ocr_engine_version: Option<String>,
-    /// Monotonic per-agent turn counter.
+    /// The writer's turn, if it knew one; bridges write 0. Informational
+    /// only — readers claim entries with `ProvenanceLedger::claim_new`,
+    /// which tracks a byte cursor rather than this id (#2175).
     pub turn_id: u64,
     pub recorded_at: chrono::DateTime<chrono::Utc>,
 }

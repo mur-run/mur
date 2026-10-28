@@ -29,8 +29,12 @@ async fn fs_write_outside_agent_home_asks_user() {
     let decision = hook.pre_tool_use(&ctx, &call, &cancel).await.unwrap();
     match decision {
         Decision::AskUser {
-            default, prompt, ..
+            default,
+            prompt,
+            one_shot,
+            ..
         } => {
+            assert!(!one_shot, "a permission answer is remembered (#2175)");
             assert!(matches!(default, AskDefault::Deny));
             assert!(prompt.to_lowercase().contains("outside") || prompt.contains("foreign"));
         }

@@ -20,9 +20,8 @@ async fn share_marker_gets_wrapped_with_untrusted_share_tag() {
     // and appends a turn_id=0 ledger entry).
     process_share_text("https://attacker.example/foo", "url_scheme", agent_home).unwrap();
 
-    // The runtime promotes ledger entries into the current turn before
-    // reading; for tests we just hand the hook the same turn_id the
-    // ledger was written with (0).
+    // B0 claims entries by ledger cursor, not turn id (#2175), so any
+    // turn id works here.
     let hook = B0SafetyHook::new();
     let ctx = HookCtx::for_test_with_home(agent_home.to_path_buf(), 0);
     let view = PromptView::empty();

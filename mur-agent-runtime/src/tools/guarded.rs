@@ -13,6 +13,7 @@
 
 mod bash_ceiling;
 mod headless;
+pub(crate) mod hook_gate;
 mod intent_raise;
 
 use std::collections::HashMap;
@@ -56,6 +57,9 @@ pub struct GuardedToolCall {
     /// Layer 3 (`profile.yaml hitl.intent_check`): may RAISE a `bash` call's
     /// tier, never lower it. `None` = off.
     pub(crate) intent: Option<Arc<crate::hitl::intent::IntentChecker>>,
+    /// #2175: the `pre_tool_use` gate hooks. `None` = no chain wired, so no
+    /// hook rules apply — never "refuse everything".
+    pub(crate) hooks: Option<hook_gate::HookGate>,
 }
 
 /// D2 / D2b: with the B1 sandbox not enforcing, the agent can read its own
@@ -83,6 +87,7 @@ fn refuse_unsandboxed(agent_name: &str, tool_name: &str) -> crate::hitl::HitlDec
         )),
         surface: None,
         awaiting_human: false,
+        refusal_code: None,
     }
 }
 
@@ -126,15 +131,29 @@ impl GuardedToolCall {
         let mut step_ids = HashMap::new();
         let entry = self.approval_sinks.lock().await.get(task_id).cloned();
         let raised = self.intent_raises(task_id, calls).await;
+        let mut hooked = self.pre_tool_use(task_id, calls).await;
         for call in calls {
             let lift = raised.get(&call.call_id).copied();
             let policy =
                 effective_call_policy(&self.tools_policy, &call.tool_name, Some(&call.input));
+            if !known.contains(&call.tool_name) || policy == ToolPolicy::Deny {
+                continue;
+            }
+            // #2175: a gate hook's refusal stands whatever the policy says;
+            // its ask lifts an `Allow` exactly as an intent raise does.
+            let (hook_asks, one_shot) = match hooked.remove(&call.call_id) {
+                Some(hook_gate::HookVerdict::Refuse(d)) => {
+                    out.insert(call.call_id.clone(), d);
+                    continue;
+                }
+                Some(hook_gate::HookVerdict::Ask { one_shot }) => (true, one_shot),
+                None => (false, false),
+            };
             // An intent raise turns an `Allow` into an ask: the model saw
             // something the static floor could not. It never turns an ask
             // into an allow — there is no path here that skips one.
-            let asks = policy == ToolPolicy::Ask || (policy == ToolPolicy::Allow && lift.is_some());
-            if !known.contains(&call.tool_name) || !asks {
+            let asks = policy == ToolPolicy::Ask || lift.is_some() || hook_asks;
+            if !asks {
                 continue;
             }
             // #1814: a refusal is a stop too — doctor's job is "how often
@@ -150,12 +169,14 @@ impl GuardedToolCall {
             }
             let step_id = uuid::Uuid::now_v7().to_string();
             step_ids.insert(call.call_id.clone(), step_id.clone());
-            pending.push(crate::hitl::batch::pending(
+            let mut p = crate::hitl::batch::pending(
                 &self.agent_name,
                 step_id,
                 call,
                 approval_risk(&self.tools_policy, &call.tool_name, Some(&call.input)).max(lift),
-            ));
+            );
+            p.one_shot = one_shot;
+            pending.push(p);
         }
         // #2085: a caller that cannot approve is refused only AFTER the
         // decision store had its say, so an answer the human already gave
@@ -182,6 +203,7 @@ impl GuardedToolCall {
                         reason: Some("no approval channel available".into()),
                         surface: None,
                         awaiting_human: false,
+                        refusal_code: None,
                     },
                 );
             }
@@ -384,6 +406,7 @@ impl GuardedToolCall {
                         reason: Some("no approval decision for this call".into()),
                         surface: None,
                         awaiting_human: false,
+                        refusal_code: None,
                     });
                     if decision.awaiting_human {
                         return Err(task_error(
@@ -394,7 +417,7 @@ impl GuardedToolCall {
                     }
                     if !decision.allow {
                         return Err(task_error(
-                            "hitl_denied",
+                            decision.refusal_code.unwrap_or("hitl_denied"),
                             deny_message(decision.reason.as_deref()),
                             false,
                         ));

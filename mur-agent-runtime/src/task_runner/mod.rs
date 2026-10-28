@@ -155,6 +155,15 @@ pub(crate) type ApprovalSink = (tokio::sync::mpsc::Sender<serde_json::Value>, bo
 /// Task ids whose tool approvals must not be remembered (#1783).
 pub(crate) type OneShotApprovals = Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>;
 
+/// #2175: the turn flags `on_prompt_submit` raised, per turn task id, for
+/// that turn's `pre_tool_use` gate (B0 rule 4). Cleared with the turn's sinks.
+pub(crate) type TurnFlags = Arc<std::sync::Mutex<HashMap<String, Vec<String>>>>;
+
+/// #2175: the untrusted wrappers `on_prompt_submit` returned, per turn task
+/// id, waiting to be placed before that turn's message. Taken once.
+pub(crate) type PendingWrappers =
+    Arc<std::sync::Mutex<HashMap<String, Vec<crate::hooks::UntrustedWrapper>>>>;
+
 /// A caller's `TaskSpec.cwd` the runtime could not adopt for one turn.
 #[derive(Debug, Clone)]
 pub(super) struct RefusedCwd {
@@ -232,6 +241,10 @@ pub struct TaskRunner {
     /// the decision store nor records into it (#1783). Keyed by turn task id,
     /// cleared with the turn's sinks.
     one_shot_approvals: OneShotApprovals,
+    /// #2175: see [`TurnFlags`].
+    turn_flags: TurnFlags,
+    /// #2175: see [`PendingWrappers`].
+    pending_wrappers: PendingWrappers,
     /// Per-turn steering channels keyed by task id. A running agentic loop
     /// holds the receiver; `turn/steer` pushes a user interjection here and the
     /// loop picks it up at the next iteration boundary.

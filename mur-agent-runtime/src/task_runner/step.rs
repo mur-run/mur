@@ -26,41 +26,26 @@ impl TaskRunner {
         }
 
         // Apply hook chain on_prompt_submit if wired.
-        let system = if let (Some(chain), Some(ctx), Some(cancel)) =
-            (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
-        {
-            if cancel.is_cancelled() {
-                return Err(task_error(
-                    "cancelled",
-                    "cancelled before prompt submit".to_string(),
-                    true,
-                ));
-            }
-            let mut turn_ctx = ctx.clone();
-            turn_ctx.turn_id = self.turn_counter.load(Ordering::Relaxed);
-            let view = PromptView {
-                system: Some(system),
-                messages: vec![serde_json::json!({"role": input.role, "content": prompt})],
-            };
-            let patch = chain.on_prompt_submit(&turn_ctx, &view, cancel).await;
-            {
-                let mut s = view.system.unwrap_or_default();
-                if let Some(prefix) = patch.set_system_prefix {
-                    s = format!("{prefix}\n{s}");
-                }
-                if let Some(suffix) = patch.set_system_suffix {
-                    s = format!("{s}\n{suffix}");
-                }
-                s
-            }
-        } else {
-            system
+        if self.hook_cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
+            return Err(task_error(
+                "cancelled",
+                "cancelled before prompt submit".to_string(),
+                true,
+            ));
+        }
+        let system = match self.prompt_submit(task_id, &system, input).await {
+            Some(patch) => super::system_prompt::apply_system_patch(system, &patch),
+            None => system,
         };
 
         // Seed with prior conversation threaded via `context.task_id` so the
         // model has multi-turn memory (was: system + this message only).
         let (pinned, prior) = self.pinned_and_prior(task_id, context_task_id);
-        let messages = seed_history(system, pinned, prior, input);
+        let mut messages = seed_history(system, pinned, prior, input);
+        // #2175: this turn's untrusted wrappers, just before its message.
+        if let Some(m) = self.take_untrusted_message(task_id) {
+            messages.insert(messages.len() - 1, m);
+        }
         let req = LlmRequest {
             messages,
             temperature: None,
@@ -288,7 +273,26 @@ impl TaskRunner {
             sandbox_enforcing: self.sandbox_enforcing,
             telemetry: self.telemetry.clone(),
             intent: self.intent.clone(),
+            hooks: self.hook_gate(),
         }
+    }
+
+    /// The gate hooks over this turn's context, or `None` when no chain is
+    /// wired (no rules, not a refusal).
+    fn hook_gate(&self) -> Option<crate::tools::guarded::hook_gate::HookGate> {
+        let (Some(chain), Some(ctx), Some(cancel)) =
+            (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
+        else {
+            return None;
+        };
+        let mut ctx = ctx.clone();
+        ctx.turn_id = self.turn_counter.load(Ordering::Relaxed);
+        Some(crate::tools::guarded::hook_gate::HookGate {
+            chain: chain.clone(),
+            ctx,
+            cancel: cancel.clone(),
+            turn_flags: self.turn_flags.clone(),
+        })
     }
 
     /// Fold the hook chain's `post_tool_use` patch into each tool result,

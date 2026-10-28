@@ -26,6 +26,11 @@ pub struct HitlDecision {
     /// nothing is remembered — "needs a human", not "a human said no". Always
     /// paired with `allow: false`; the call never runs.
     pub awaiting_human: bool,
+    /// #2175: the `TaskError` code a refusal travels as. `None` =
+    /// `hitl_denied`. A `pre_tool_use` hook's refusal sets its own
+    /// (`hook_deny`, `hook_rewrite_unsupported`, `hook_error`) so a log reader
+    /// can tell "a rule said no" from "a human said no" from "the rule broke".
+    pub refusal_code: Option<&'static str>,
 }
 
 /// Shared map from hitl_id → oneshot sender for approval decisions.

@@ -157,6 +157,7 @@ async fn run_wired(
                     reason: Some("test denies".into()),
                     surface: None,
                     awaiting_human: false,
+                    refusal_code: None,
                 });
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
