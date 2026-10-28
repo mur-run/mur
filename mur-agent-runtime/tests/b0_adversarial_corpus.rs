@@ -148,8 +148,9 @@ async fn every_drivable_case_is_refused_by_the_real_chain() {
                     .input
                     .clone()
                     .expect("pre_tool_use case needs b0_input");
-                // The benign control reads inside its own home; substitute the
-                // real temp path so "allowed" means allowed, not "missing".
+                // `AGENT_HOME/` is the case's own temp home: the benign control
+                // reads there (so "allowed" means allowed, not "missing") and
+                // Rule 1 targets the agent's own profile there.
                 if let Some(s) = input.get("path").and_then(|v| v.as_str())
                     && let Some(rest) = s.strip_prefix("AGENT_HOME/")
                 {

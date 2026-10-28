@@ -6,6 +6,9 @@ use crate::llm::ToolDef;
 use crate::tools::fs_policy::{SessionCwd, check_write_entitlement};
 use crate::tools::{ToolError, ToolExecutor, ToolOutput};
 
+/// The tool's registered name. B0 (#2181) and the registry key off this.
+pub const WRITE_FILE: &str = "write_file";
+
 pub struct WriteFileTool {
     pub session_cwd: SessionCwd,
     pub fs: FilesystemEntitlement,
@@ -45,12 +48,12 @@ impl WriteFileTool {
 #[async_trait::async_trait]
 impl ToolExecutor for WriteFileTool {
     fn name(&self) -> &str {
-        "write_file"
+        WRITE_FILE
     }
 
     fn def(&self) -> ToolDef {
         ToolDef {
-            name: "write_file".into(),
+            name: WRITE_FILE.into(),
             description: "Create or fully overwrite a UTF-8 text file. Parent directories are NOT auto-created — create them explicitly first. Relative paths resolve against the shared session cwd (set by the bash tool's `cwd`); a `cd` inside a bash subprocess is NOT retained. Writes are checked against the agent's filesystem write entitlements."
                 .into(),
             input_schema: serde_json::json!({

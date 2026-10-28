@@ -66,31 +66,31 @@ pub async fn build_tools(
     let mut map: HashMap<String, Arc<dyn ToolExecutor>> = HashMap::new();
 
     if let Some((def, exec)) = bash
-        && resolve_tool_policy(rules, "bash") != ToolPolicy::Deny
+        && resolve_tool_policy(rules, crate::tools::bash::BASH) != ToolPolicy::Deny
     {
         defs.push(def);
-        map.insert("bash".to_string(), exec);
+        map.insert(crate::tools::bash::BASH.to_string(), exec);
     }
 
     if let Some((def, exec)) = read_file
-        && resolve_tool_policy(rules, "read_file") != ToolPolicy::Deny
+        && resolve_tool_policy(rules, crate::tools::read_file::READ_FILE) != ToolPolicy::Deny
     {
         defs.push(def);
-        map.insert("read_file".to_string(), exec);
+        map.insert(crate::tools::read_file::READ_FILE.to_string(), exec);
     }
 
     if let Some((def, exec)) = write_file
-        && resolve_tool_policy(rules, "write_file") != ToolPolicy::Deny
+        && resolve_tool_policy(rules, crate::tools::write_file::WRITE_FILE) != ToolPolicy::Deny
     {
         defs.push(def);
-        map.insert("write_file".to_string(), exec);
+        map.insert(crate::tools::write_file::WRITE_FILE.to_string(), exec);
     }
 
     if let Some((def, exec)) = edit_file
-        && resolve_tool_policy(rules, "edit_file") != ToolPolicy::Deny
+        && resolve_tool_policy(rules, crate::tools::edit_file::EDIT_FILE) != ToolPolicy::Deny
     {
         defs.push(def);
-        map.insert("edit_file".to_string(), exec);
+        map.insert(crate::tools::edit_file::EDIT_FILE.to_string(), exec);
     }
 
     // Built-in no-op suggest_replies. Always in the executor map (so a call can

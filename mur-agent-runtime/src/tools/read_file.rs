@@ -32,6 +32,9 @@ fn image_media_type(path: &Path) -> Option<&'static str> {
 /// Hard ceiling on returned bytes so a huge file cannot blow up the turn.
 const MAX_RETURN_BYTES: usize = 512 * 1024;
 
+/// The tool's registered name. B0 (#2181) and the registry key off this.
+pub const READ_FILE: &str = "read_file";
+
 pub struct ReadFileTool {
     /// Session cwd shared with `bash`; relative paths resolve against its
     /// current snapshot so `read_file rel/x` matches where `bash` last ran.
@@ -82,12 +85,12 @@ impl ReadFileTool {
 #[async_trait::async_trait]
 impl ToolExecutor for ReadFileTool {
     fn name(&self) -> &str {
-        "read_file"
+        READ_FILE
     }
 
     fn def(&self) -> ToolDef {
         ToolDef {
-            name: "read_file".into(),
+            name: READ_FILE.into(),
             description: "Read a UTF-8 text file, or an image you want to LOOK AT. \
 PNG/JPEG/GIF/WebP are returned as real image input you can see — use this rather than describing a picture you have not been shown. Optional 1-indexed `offset`/`limit` select a line window (text only). \
 Relative paths resolve against the shared session working directory (the same base the `bash` tool uses, moved only by passing `bash` an explicit `cwd`); reads are checked against the agent's filesystem entitlements."

@@ -447,6 +447,48 @@ pub(crate) fn under_any_read_deny(roots: &[String], canonical: &Path, agent_home
     under_any(roots, &canonical)
 }
 
+/// A write no grant can authorise: the launch chain, or an explicit `deny`.
+///
+/// Split out of [`check_write_entitlement`] so B0 Rule 1 (#2181) refuses the
+/// same paths BEFORE the approval prompt — asking a human to approve a write
+/// the tool will refuse anyway is a prompt that cannot mean anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HardWriteRefusal {
+    LaunchChain(&'static str),
+    Denied,
+}
+
+impl HardWriteRefusal {
+    /// Stable token for logs and refusal reasons: which hard rule fired.
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::LaunchChain(_) => "launch_chain",
+            Self::Denied => "fs_deny",
+        }
+    }
+
+    pub(crate) fn message(self, canonical: &Path) -> String {
+        match self {
+            Self::LaunchChain(reason) => format!(
+                "path is part of MUR's launch chain and can never be written: {} ({reason})",
+                canonical.display()
+            ),
+            Self::Denied => format!("path denied by entitlement: {}", canonical.display()),
+        }
+    }
+}
+
+pub(crate) fn hard_write_refusal(
+    fs: &FilesystemEntitlement,
+    canonical: &Path,
+    chain: &crate::sandbox::launch_chain::LaunchChain,
+) -> Option<HardWriteRefusal> {
+    if let Some(reason) = chain.protects_write(canonical) {
+        return Some(HardWriteRefusal::LaunchChain(reason));
+    }
+    under_any(&fs.deny, canonical).then_some(HardWriteRefusal::Denied)
+}
+
 pub(crate) fn check_write_entitlement(
     agent: &str,
     fs: &FilesystemEntitlement,
@@ -456,17 +498,8 @@ pub(crate) fn check_write_entitlement(
     // Checked first and unconditionally: no entitlement can satisfy this, and
     // the kernel's bare EPERM reads the same as "not granted", so this is the
     // only layer that can say which of the two happened.
-    if let Some(reason) = chain.protects_write(canonical) {
-        return Err(ToolError::Execution(format!(
-            "path is part of MUR's launch chain and can never be written: {} ({reason})",
-            canonical.display()
-        )));
-    }
-    if under_any(&fs.deny, canonical) {
-        return Err(ToolError::Execution(format!(
-            "path denied by entitlement: {}",
-            canonical.display()
-        )));
+    if let Some(refusal) = hard_write_refusal(fs, canonical, chain) {
+        return Err(ToolError::Execution(refusal.message(canonical)));
     }
     // `under_any_or_worktree` tries the literal grants first, then one derived
     // hop for a worktree of a granted checkout (#004).

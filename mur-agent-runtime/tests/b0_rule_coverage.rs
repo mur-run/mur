@@ -34,7 +34,7 @@ struct RuleCoverage {
 const COVERAGE: &[RuleCoverage] = &[
     RuleCoverage {
         rule: 1,
-        enforces: "fs.write/delete/append/create outside agent_home -> AskUser",
+        enforces: "write_file/edit_file into the launch chain or an fs.deny root -> Deny",
         owners: &["mur-agent-runtime/tests/b0_rule1_fs_confinement.rs"],
         note: "",
     },
