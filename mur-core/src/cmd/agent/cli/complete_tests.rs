@@ -469,6 +469,7 @@ fn browser_menu_offers_live() {
         "live",
         "allow",
         "status",
+        "list",
     ] {
         assert!(
             words.contains(&mode),
@@ -566,4 +567,26 @@ fn menu_context_lists_agents_from_the_given_home() {
     assert_eq!(ctx.agents, ["coder", "mur"]);
     let empty = tempfile::tempdir().unwrap();
     assert!(MenuContext::load(empty.path(), "nope").agents.is_empty());
+}
+
+/// #2101 item 2: once the skill is attached, `--add` has nothing to do, so
+/// the menu stops leading with it; every other mode stays.
+#[test]
+fn browser_menu_hides_add_once_attached() {
+    let attached = MenuContext {
+        browser_attached: true,
+        ..ctx()
+    };
+    let words = |c: &MenuContext| -> Vec<String> {
+        compute("/browser ", &[], c, &cur())
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|i| i.display)
+            .collect()
+    };
+    assert_eq!(words(&ctx()).first().map(String::as_str), Some("--add"));
+    let w = words(&attached);
+    assert!(!w.iter().any(|x| x == "--add"), "{w:?}");
+    assert!(w.iter().any(|x| x == "automation") && w.iter().any(|x| x == "list"));
 }

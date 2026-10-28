@@ -16,6 +16,9 @@ use super::suggest::Suggestion;
 pub struct EgressChips {
     /// Hosts the user answered 不用 for: no chip again this session.
     pub dismissed: HashSet<String>,
+    /// Hosts granted with `/browser allow --session`: on the running proxy
+    /// only, so the profile's allowlist does not show them (#2101).
+    pub session_allowed: HashSet<String>,
     /// Every host denied this session, per server — for the wildcard hint.
     pub denied: std::collections::HashMap<String, BTreeSet<String>>,
     /// (server, host) pairs whose notice line is already in the transcript.

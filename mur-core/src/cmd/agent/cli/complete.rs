@@ -67,6 +67,9 @@ pub struct MenuContext {
     /// Agent names as their directories are named — already canonical, so
     /// the menu never needs `canonicalize_agent_name`; that runs at send time.
     pub agents: Vec<String>,
+    /// The `browser` skill is attached: `/browser --add` has nothing left to
+    /// do, so its row is hidden (#2101).
+    pub browser_attached: bool,
 }
 
 /// The session half of "what is in force": a `/effort` override or a `/skin`
@@ -170,6 +173,9 @@ impl MenuContext {
             model_ref,
             channels,
             agents: agent_names(home),
+            browser_attached: load_agent_skills(agent)
+                .iter()
+                .any(|c| c.display == "/browser"),
         }
     }
 }
@@ -267,6 +273,8 @@ pub enum Args {
     /// `MenuContext::agents`, offered only where `/review` expects an agent
     /// name: after `--main` / `--reviewer`. Never a fixed layer 2.
     ReviewAgents,
+    /// `BROWSER_MODES`, minus `--add` once `MenuContext::browser_attached`.
+    Browser,
 }
 
 const ON_OFF: &[(&str, &str)] = &[("on", "enable"), ("off", "disable")];
@@ -284,11 +292,19 @@ const SKILL_SUBS: &[(&str, &str)] = &[
     ("add", "install a skill"),
     ("remove", "uninstall a skill"),
 ];
+const BROWSER_ADD: &str = "--add";
 const BROWSER_MODES: &[(&str, &str)] = &[
-    ("--add", "attach the browser skill to this agent"),
+    (BROWSER_ADD, "attach the browser skill to this agent"),
     ("auth", "log in once, keep an encrypted profile"),
-    ("testing", "record/replay an end-to-end test"),
-    ("automation", "run a repeatable browser task"),
+    (
+        "testing",
+        "record/replay an end-to-end test (--profile <site>: as a saved login)",
+    ),
+    (
+        "automation",
+        "run a repeatable browser task (--profile <site>: as a saved login)",
+    ),
+    ("list", "recorded runs, e.g. list deepseek --tag daily"),
     (
         "live",
         "allow this agent these hosts, e.g. live shop.example.com",
@@ -353,7 +369,7 @@ const COMMANDS: &[(&str, &str, Args)] = &[
     (
         "browser",
         "browser skill hub — auth, testing, automation, live",
-        Args::Fixed(BROWSER_MODES),
+        Args::Browser,
     ),
     ("card", "show this agent's card", Args::None),
     (
@@ -452,6 +468,11 @@ fn args_for(cmd: &str) -> Option<Args> {
 fn build_args(cmd: &str, args: Args, ctx: &MenuContext, cur: &Current) -> Vec<Candidate> {
     let rows: Vec<(String, String)> = match args {
         Args::None | Args::ReviewAgents => return Vec::new(),
+        Args::Browser => BROWSER_MODES
+            .iter()
+            .filter(|(w, _)| !(ctx.browser_attached && *w == BROWSER_ADD))
+            .map(|(w, d)| ((*w).to_string(), (*d).to_string()))
+            .collect(),
         Args::Fixed(f) => f
             .iter()
             .map(|(w, d)| ((*w).to_string(), (*d).to_string()))

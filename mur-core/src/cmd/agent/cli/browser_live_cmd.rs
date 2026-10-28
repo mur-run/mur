@@ -42,6 +42,8 @@ pub(super) enum Route {
     Allow(Vec<String>),
     /// `status`: the effective network policy (#1906).
     Status,
+    /// `list [keyword]... [--tag <t>]...`: recorded runs (#2101).
+    List,
     /// Anything else: forwarded to the model as a browser-skill turn.
     Turn,
 }
@@ -52,6 +54,7 @@ pub(super) fn route(args: &[String]) -> Route {
         Some("live") => Route::Live(args[1..].to_vec()),
         Some("allow") => Route::Allow(args[1..].to_vec()),
         Some("status") if args.len() == 1 => Route::Status,
+        Some("list") => Route::List,
         _ => Route::Turn,
     }
 }

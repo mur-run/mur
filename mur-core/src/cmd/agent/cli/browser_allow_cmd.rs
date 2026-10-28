@@ -71,6 +71,19 @@ fn confirm_chip(host: &str) -> Option<Proposal> {
     mur_common::proposal::vet(&args).ok()
 }
 
+/// The host a finished `/browser allow --session` run actually granted, for
+/// the pre-turn host check (#2101 item 4). Only a successful run counts: a
+/// grant that failed to reach the running agent left the host blocked, so
+/// remembering it would silence the pre-run prompt for a host that still
+/// cannot be reached.
+pub(super) fn granted_session_host(
+    args: &[String],
+    res: &Result<Managed, String>,
+) -> Option<String> {
+    let a = parse_allow(args).ok()?;
+    (a.session && res.is_ok()).then_some(a.host)
+}
+
 pub(super) fn run_allow(
     agent: &str,
     args: &[String],

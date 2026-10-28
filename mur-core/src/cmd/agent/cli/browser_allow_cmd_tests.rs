@@ -211,3 +211,41 @@ fn status_names_the_attached_profile_and_hints_when_none() {
     let (text, _) = status_tail("TABLE".into(), &[], &deepseek());
     assert_eq!(text, "TABLE");
 }
+
+#[test]
+fn failed_session_grant_still_prompts_before_the_next_run() {
+    // PR #2184 review: a session grant that never reached the running agent
+    // must not be remembered, or re-sending `/browser testing <url>` skips
+    // the pre-run prompt for a host that is still blocked.
+    use super::super::browser_mode_cmd::blocked_hosts;
+    let args = s(&["--session", "x.com"]);
+    let mut f = fake(McpNetMode::Restricted, &[]);
+    f.live_err = Some("agent not reachable".into());
+    let res = run_allow("mur", &args, &mut f).map_err(|e| e.to_string());
+    assert!(res.is_err());
+    let no_dismissals = std::collections::HashSet::new();
+    let mut skip = std::collections::HashSet::new();
+    skip.extend(granted_session_host(&args, &res));
+    assert!(skip.is_empty(), "failed grant was recorded: {skip:?}");
+    let entry = f.servers[0].clone();
+    assert_eq!(
+        blocked_hosts(&s(&["x.com"]), Some(&entry), &no_dismissals, &skip),
+        vec!["x.com".to_owned()]
+    );
+
+    // The same request, succeeding, is remembered and stops the prompt.
+    let mut f = fake(McpNetMode::Restricted, &[]);
+    let res = run_allow("mur", &args, &mut f).map_err(|e| e.to_string());
+    skip.extend(granted_session_host(&args, &res));
+    assert!(blocked_hosts(&s(&["x.com"]), Some(&entry), &no_dismissals, &skip).is_empty());
+}
+
+#[test]
+fn only_session_grants_are_recorded() {
+    let ok: Result<Managed, String> = Ok(("done".into(), None));
+    assert_eq!(granted_session_host(&s(&["x.com"]), &ok), None);
+    assert_eq!(
+        granted_session_host(&s(&["--session", "X.com"]), &ok),
+        Some("x.com".to_owned())
+    );
+}
