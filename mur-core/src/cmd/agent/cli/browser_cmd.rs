@@ -175,13 +175,12 @@ pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<S
                 .into_iter()
                 .find(|e| e.name == live::LIVE_ENTRY)
         });
-    let skip: std::collections::HashSet<String> = app
-        .egress_chips
-        .dismissed
-        .union(&app.egress_chips.session_allowed)
-        .cloned()
-        .collect();
-    let blocked = mode::blocked_hosts(&mode::url_hosts(&plan.args), entry.as_ref(), &skip);
+    let blocked = mode::blocked_hosts(
+        &mode::url_hosts(&plan.args),
+        entry.as_ref(),
+        &app.egress_chips.dismissed,
+        &app.egress_chips.session_allowed,
+    );
     if let Some((text, chips)) = mode::allow_prompt(&blocked) {
         app.push_system(text);
         app.pending_suggestions = chips;

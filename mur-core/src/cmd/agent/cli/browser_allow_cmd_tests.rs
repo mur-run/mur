@@ -223,12 +223,13 @@ fn failed_session_grant_still_prompts_before_the_next_run() {
     f.live_err = Some("agent not reachable".into());
     let res = run_allow("mur", &args, &mut f).map_err(|e| e.to_string());
     assert!(res.is_err());
+    let no_dismissals = std::collections::HashSet::new();
     let mut skip = std::collections::HashSet::new();
     skip.extend(granted_session_host(&args, &res));
     assert!(skip.is_empty(), "failed grant was recorded: {skip:?}");
     let entry = f.servers[0].clone();
     assert_eq!(
-        blocked_hosts(&s(&["x.com"]), Some(&entry), &skip),
+        blocked_hosts(&s(&["x.com"]), Some(&entry), &no_dismissals, &skip),
         vec!["x.com".to_owned()]
     );
 
@@ -236,7 +237,7 @@ fn failed_session_grant_still_prompts_before_the_next_run() {
     let mut f = fake(McpNetMode::Restricted, &[]);
     let res = run_allow("mur", &args, &mut f).map_err(|e| e.to_string());
     skip.extend(granted_session_host(&args, &res));
-    assert!(blocked_hosts(&s(&["x.com"]), Some(&entry), &skip).is_empty());
+    assert!(blocked_hosts(&s(&["x.com"]), Some(&entry), &no_dismissals, &skip).is_empty());
 }
 
 #[test]

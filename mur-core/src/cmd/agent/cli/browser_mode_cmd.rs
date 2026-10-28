@@ -224,11 +224,15 @@ pub(super) fn instruction(plan: &TurnPlan) -> String {
 /// URL hosts the `browser` entry may not reach. Only a host-scoped
 /// (`Restricted`) entry is checked: with no entry there is nothing to scope,
 /// and research mode reaches everything but its deny list, which is never
-/// grantable. `skip` holds hosts already allowed this session or dismissed.
+/// grantable. `dismissed` holds exact hosts the user declined to allow;
+/// `session_grants` holds the patterns `/browser allow --session` granted,
+/// matched like the profile's own allowlist (`*.example.com` covers
+/// `app.example.com`), because that is how the running proxy applies them.
 pub(super) fn blocked_hosts(
     hosts: &[String],
     entry: Option<&McpServerEntry>,
-    skip: &HashSet<String>,
+    dismissed: &HashSet<String>,
+    session_grants: &HashSet<String>,
 ) -> Vec<String> {
     let Some(net) = entry.and_then(|e| e.network.as_ref()) else {
         return Vec::new();
@@ -236,9 +240,11 @@ pub(super) fn blocked_hosts(
     if net.mode != McpNetMode::Restricted {
         return Vec::new();
     }
+    let granted: Vec<String> = session_grants.iter().cloned().collect();
     hosts
         .iter()
-        .filter(|h| !skip.contains(*h))
+        .filter(|h| !dismissed.contains(*h))
+        .filter(|h| !mur_common::net::host_allowed(h, &granted))
         .filter(|h| !mur_common::net::host_allowed(h, &net.allow_hosts))
         .cloned()
         .collect()

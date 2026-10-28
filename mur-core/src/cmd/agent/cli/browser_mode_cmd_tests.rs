@@ -122,14 +122,15 @@ fn blocked_hosts_only_checks_a_restricted_entry() {
         McpNetMode::Restricted,
         &["chat.deepseek.com", "*.example.org"],
     );
-    assert_eq!(blocked_hosts(&hosts, Some(&e), &none), s(&["x.com"]));
+    assert_eq!(blocked_hosts(&hosts, Some(&e), &none, &none), s(&["x.com"]));
     // Session grants and dismissals are not asked again.
     let skip: HashSet<String> = ["x.com".to_owned()].into();
-    assert!(blocked_hosts(&hosts, Some(&e), &skip).is_empty());
+    assert!(blocked_hosts(&hosts, Some(&e), &skip, &none).is_empty());
+    assert!(blocked_hosts(&hosts, Some(&e), &none, &skip).is_empty());
     // No entry, or research mode: nothing to ask.
-    assert!(blocked_hosts(&hosts, None, &none).is_empty());
+    assert!(blocked_hosts(&hosts, None, &none, &none).is_empty());
     let broad = entry(McpNetMode::BroadAudited, &[]);
-    assert!(blocked_hosts(&hosts, Some(&broad), &none).is_empty());
+    assert!(blocked_hosts(&hosts, Some(&broad), &none, &none).is_empty());
 }
 
 #[test]
@@ -145,5 +146,25 @@ fn allow_prompt_offers_the_three_egress_chips() {
             "/browser allow x.com",
             "/browser allow --dismiss x.com",
         ]
+    );
+}
+
+#[test]
+fn wildcard_session_grant_covers_subdomains_but_not_unrelated_hosts() {
+    // PR #2184 review: `/browser allow --session *.example.com` must stop the
+    // pre-run prompt for every covered host, as the running proxy does.
+    let hosts = s(&["app.example.com", "example.com", "x.com"]);
+    let e = entry(McpNetMode::Restricted, &[]);
+    let none = HashSet::new();
+    let grants: HashSet<String> = ["*.example.com".to_owned()].into();
+    assert_eq!(
+        blocked_hosts(&hosts, Some(&e), &none, &grants),
+        s(&["x.com"])
+    );
+    // A dismissal stays exact: it names the one host the user declined.
+    let dismissed: HashSet<String> = ["app.example.com".to_owned()].into();
+    assert_eq!(
+        blocked_hosts(&hosts, Some(&e), &dismissed, &none),
+        s(&["example.com", "x.com"])
     );
 }
