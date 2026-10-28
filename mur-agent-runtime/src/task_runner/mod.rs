@@ -302,6 +302,9 @@ pub struct TaskRunner {
     /// supervisor after the runner is built; unset (tests, stubs) means the
     /// builder's `limits` / `autonomy` are what every turn reads.
     live: std::sync::OnceLock<Arc<crate::live_profile::LiveSettings>>,
+    /// This boot's `--no-hitl`; set once by the supervisor before any
+    /// transport starts. Unset = every ask reaches a human as before.
+    startup_waiver: std::sync::OnceLock<mur_common::hitl::startup_waiver::StartupWaiver>,
     /// Multi-turn chat memory keyed by `context.task_id` (see `ConversationStore`).
     conversations: Mutex<ConversationStore>,
     /// The session cwd shared with bash and the file tools, plus the roots a

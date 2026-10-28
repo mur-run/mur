@@ -82,6 +82,10 @@ pub const METHOD_SKILL_CURATED: &str = "mur.skill.curated";
 /// agent's bash ceiling, so the gate asked for it. `enforced: true`.
 pub const METHOD_BASH_CEILING_EXCEEDED: &str = "mur.hitl.bash_ceiling_exceeded";
 
+/// A call this boot's `--no-hitl` startup override settled without asking.
+/// Carries the override nonce, so every waived call traces to one boot.
+pub const METHOD_STARTUP_WAIVED: &str = "mur.hitl.startup_waived";
+
 /// Emitted by `mur agent mcp set-network --broad-audited` — an operator
 /// granted a per-server BroadAudited egress policy (advisory-enforced,
 /// audited-CONNECT). Records which agent+server was authorized.

@@ -96,6 +96,7 @@ impl TaskRunner {
             bash_jobs: None,
             effort: std::sync::RwLock::new(None),
             live: std::sync::OnceLock::new(),
+            startup_waiver: std::sync::OnceLock::new(),
             conversations: Mutex::new(ConversationStore::default()),
             session_cwd: None,
             turn_tracks: Mutex::new(HashMap::new()),
@@ -609,6 +610,12 @@ impl TaskRunner {
     /// calls it right after the runner is built; a second call is ignored.
     pub fn attach_live(&self, live: Arc<crate::live_profile::LiveSettings>) {
         let _ = self.live.set(live);
+    }
+
+    /// Attach this boot's `--no-hitl` waiver. Once per runner, before any
+    /// transport starts; a second call is ignored.
+    pub fn attach_startup_waiver(&self, waiver: mur_common::hitl::startup_waiver::StartupWaiver) {
+        let _ = self.startup_waiver.set(waiver);
     }
 
     /// The profile settings this turn runs under, read once at its start so

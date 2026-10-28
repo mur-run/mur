@@ -271,6 +271,7 @@ impl TaskRunner {
             pending_approvals: self.pending_approvals.clone(),
             shim_trust: Some(self.shim_trust.clone()),
             sandbox_enforcing: self.sandbox_enforcing,
+            startup_waiver: self.startup_waiver.get().cloned(),
             telemetry: self.telemetry.clone(),
             intent: self.intent.clone(),
             hooks: self.hook_gate(),
