@@ -578,7 +578,9 @@ fn short8(s: &str) -> &str {
 
 mod launcher;
 mod respawn;
-pub(super) use launcher::{CliLauncher, Launcher};
+#[cfg(test)]
+pub(super) use launcher::StopFailed;
+pub(super) use launcher::{CliLauncher, Launcher, StartLauncher};
 pub(super) use respawn::{direct_respawn, kickstart_service, poll_new_lock};
 
 #[cfg(test)]

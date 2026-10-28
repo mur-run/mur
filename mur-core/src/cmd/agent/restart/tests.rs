@@ -366,7 +366,7 @@ struct FakeLauncher {
 }
 
 impl Launcher for FakeLauncher {
-    fn stop(&mut self, _old: u32, _wait: std::time::Duration) -> Result<(), launcher::StopFailed> {
+    fn stop(&mut self, _old: u32, _wait: std::time::Duration) -> Result<(), StopFailed> {
         self.calls.push("stop");
         Ok(())
     }

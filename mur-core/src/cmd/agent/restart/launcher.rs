@@ -52,6 +52,12 @@ pub(in crate::cmd::agent) trait Launcher {
     /// A runnable process that may still write the lock: not `old_pid`, not
     /// a zombie. `None` when nothing is coming up on its own.
     fn fresh_pid(&self, old_pid: Option<u32>) -> Option<u32>;
+    /// The runtime this launcher started has already given up (a recorded
+    /// start refusal): stop waiting, it is not coming back. `None` keeps
+    /// `mur agent restart`'s behavior, which never had this check.
+    fn exited_early(&self) -> Option<String> {
+        None
+    }
 }
 
 /// `mur agent restart`'s launcher: signals for stop, launchd / systemd or a
@@ -167,5 +173,60 @@ fn wait_gone(pid: u32, within: Duration) {
     let until = Instant::now() + within;
     while Instant::now() < until && pid_alive(pid) {
         std::thread::sleep(STOP_POLL);
+    }
+}
+
+/// `mur agent start --<override>`'s launcher (`Mode::Start`): no stop, and
+/// `start` is `cmd_start`'s service or direct-spawn leg without its 8 s
+/// confirmation window — the override wait replaces it.
+pub(in crate::cmd::agent) struct StartLauncher {
+    inner: CliLauncher,
+    started_ms: u64,
+}
+
+impl StartLauncher {
+    pub(in crate::cmd::agent) fn new(name: &str, home: &Path, has_service: bool) -> Self {
+        Self {
+            inner: CliLauncher::new(name, home, has_service),
+            started_ms: 0,
+        }
+    }
+}
+
+impl Launcher for StartLauncher {
+    /// `Mode::Start` never stops anything; the orchestrator never calls this.
+    fn stop(&mut self, old_pid: u32, _kill_wait: Duration) -> Result<(), StopFailed> {
+        Err(StopFailed { pid: old_pid })
+    }
+
+    fn start(&mut self) -> Result<Option<u32>> {
+        // Taken before the service manager is poked: a refusal can land
+        // before the wait first looks, and must still count as this start's.
+        self.started_ms = super::super::start::now_unix_ms();
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if let Some(started) =
+            super::super::start::start_service_unit(&self.inner.name, &self.inner.agent_home)?
+        {
+            println!("{}", started.line);
+            return Ok(None);
+        }
+        self.inner.respawn().map(Some)
+    }
+
+    fn kick(&mut self, note: &mut dyn FnMut(RestartNote)) -> Result<Option<u32>> {
+        self.inner.kick(note)
+    }
+
+    fn fresh_pid(&self, old_pid: Option<u32>) -> Option<u32> {
+        self.inner.fresh_pid(old_pid)
+    }
+
+    fn exited_early(&self) -> Option<String> {
+        super::super::start::refusal_since(&self.inner.agent_home, self.started_ms).map(|r| {
+            format!(
+                "'{}' refused to start and will not be restarted automatically:\n{}",
+                self.inner.name, r.message
+            )
+        })
     }
 }

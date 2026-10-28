@@ -72,85 +72,16 @@ pub fn cmd_start(name: &str) -> Result<()> {
     let started_ms = now_unix_ms();
 
     // 2. Service manager owns it?
-    #[cfg(target_os = "macos")]
-    {
-        let plist = dirs::home_dir()
-            .context("no home dir")?
-            .join(format!("Library/LaunchAgents/run.mur.agent.{name}.plist"));
-        if plist.exists() {
-            // The unit's ExecStart IS this path, so it is the one to verify —
-            // no fallback here, or we would attest a binary launchd will not
-            // run. A missing link is filled rather than reported: the unit is
-            // already committed to it, and `mur agent create` would have
-            // written exactly this.
-            heal_launcher(name);
-            verify_runtime_at(&resolve_bin_dir()?.join(format!("mur_agent_{name}")))?;
-            // A plist from before #2015 respawns a refused start forever; the
-            // reload that fixes it is only safe now, when starting anyway.
-            super::service_migrate::migrate(name, &agent_home)?;
-            // Before kickstart: only what this start writes may be quoted.
-            let mark =
-                super::startup_error::LogMark::at_end(super::service::service_stderr_log(name));
-            let label = format!("run.mur.agent.{name}");
-            let uid = unsafe { libc::getuid() };
-            let kick = Command::new("launchctl")
-                .args(["kickstart", &format!("gui/{uid}/{label}")])
-                .output()?;
-            if kick.status.success() {
-                println!("started '{name}' via launchd ({label})");
-                return confirm_startup(
-                    name,
-                    &agent_home,
-                    &service_log_hint(name),
-                    Some(&mark),
-                    started_ms,
-                );
-            }
-            // Not loaded (e.g. after a manual bootout) — load brings it up
-            // by itself thanks to RunAtLoad.
-            let load = Command::new("launchctl")
-                .args(["load", "-w"])
-                .arg(&plist)
-                .output()?;
-            if load.status.success() {
-                println!("loaded + started '{name}' via launchd ({label})");
-                return confirm_startup(
-                    name,
-                    &agent_home,
-                    &service_log_hint(name),
-                    Some(&mark),
-                    started_ms,
-                );
-            }
-            bail!(
-                "launchd refused to start '{name}': kickstart: {} / load: {}",
-                String::from_utf8_lossy(&kick.stderr).trim(),
-                String::from_utf8_lossy(&load.stderr).trim()
-            );
-        }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let unit = dirs::config_dir()
-            .context("no config dir")?
-            .join(format!("systemd/user/mur-agent-{name}.service"));
-        if unit.exists() {
-            // Same reasoning as the launchd leg above.
-            heal_launcher(name);
-            verify_runtime_at(&resolve_bin_dir()?.join(format!("mur_agent_{name}")))?;
-            super::service_migrate::migrate(name, &agent_home)?;
-            let out = Command::new("systemctl")
-                .args(["--user", "start", &format!("mur-agent-{name}.service")])
-                .output()?;
-            if !out.status.success() {
-                bail!(
-                    "systemd refused to start '{name}': {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                );
-            }
-            println!("started '{name}' via systemd --user");
-            return confirm_startup(name, &agent_home, &service_log_hint(name), None, started_ms);
-        }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    if let Some(started) = start_service_unit(name, &agent_home)? {
+        println!("{}", started.line);
+        return confirm_startup(
+            name,
+            &agent_home,
+            &service_log_hint(name),
+            started.mark.as_ref(),
+            started_ms,
+        );
     }
 
     // 3. No unit — detached spawn of the agent's runtime.
@@ -218,6 +149,101 @@ pub fn cmd_start(name: &str) -> Result<()> {
     }
 }
 
+/// A service unit this start asked to run.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(super) struct ServiceStarted {
+    /// What the CLI prints, e.g. `started 'x' via launchd (run.mur.agent.x)`.
+    pub line: String,
+    /// The service log's end before the kick: only what this start writes
+    /// may be quoted as its failure. `None` where the log is the journal.
+    pub mark: Option<super::startup_error::LogMark>,
+}
+
+/// Path 2 of `cmd_start`, shared with the override orchestrator's
+/// `StartLauncher`: start the agent through its launchd / systemd unit.
+/// `Ok(None)` when no unit is installed. Never waits for the runtime.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(super) fn start_service_unit(
+    name: &str,
+    agent_home: &std::path::Path,
+) -> Result<Option<ServiceStarted>> {
+    #[cfg(target_os = "macos")]
+    {
+        let plist = dirs::home_dir()
+            .context("no home dir")?
+            .join(format!("Library/LaunchAgents/run.mur.agent.{name}.plist"));
+        if !plist.exists() {
+            return Ok(None);
+        }
+        // The unit's ExecStart IS this path, so it is the one to verify —
+        // no fallback here, or we would attest a binary launchd will not
+        // run. A missing link is filled rather than reported: the unit is
+        // already committed to it, and `mur agent create` would have
+        // written exactly this.
+        heal_launcher(name);
+        verify_runtime_at(&resolve_bin_dir()?.join(format!("mur_agent_{name}")))?;
+        // A plist from before #2015 respawns a refused start forever; the
+        // reload that fixes it is only safe now, when starting anyway.
+        super::service_migrate::migrate(name, agent_home)?;
+        // Before kickstart: only what this start writes may be quoted.
+        let mark = super::startup_error::LogMark::at_end(super::service::service_stderr_log(name));
+        let label = format!("run.mur.agent.{name}");
+        let uid = unsafe { libc::getuid() };
+        let kick = Command::new("launchctl")
+            .args(["kickstart", &format!("gui/{uid}/{label}")])
+            .output()?;
+        if kick.status.success() {
+            return Ok(Some(ServiceStarted {
+                line: format!("started '{name}' via launchd ({label})"),
+                mark: Some(mark),
+            }));
+        }
+        // Not loaded (e.g. after a manual bootout) — load brings it up
+        // by itself thanks to RunAtLoad.
+        let load = Command::new("launchctl")
+            .args(["load", "-w"])
+            .arg(&plist)
+            .output()?;
+        if load.status.success() {
+            return Ok(Some(ServiceStarted {
+                line: format!("loaded + started '{name}' via launchd ({label})"),
+                mark: Some(mark),
+            }));
+        }
+        bail!(
+            "launchd refused to start '{name}': kickstart: {} / load: {}",
+            String::from_utf8_lossy(&kick.stderr).trim(),
+            String::from_utf8_lossy(&load.stderr).trim()
+        );
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let unit = dirs::config_dir()
+            .context("no config dir")?
+            .join(format!("systemd/user/mur-agent-{name}.service"));
+        if !unit.exists() {
+            return Ok(None);
+        }
+        // Same reasoning as the launchd leg above.
+        heal_launcher(name);
+        verify_runtime_at(&resolve_bin_dir()?.join(format!("mur_agent_{name}")))?;
+        super::service_migrate::migrate(name, agent_home)?;
+        let out = Command::new("systemctl")
+            .args(["--user", "start", &format!("mur-agent-{name}.service")])
+            .output()?;
+        if !out.status.success() {
+            bail!(
+                "systemd refused to start '{name}': {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(Some(ServiceStarted {
+            line: format!("started '{name}' via systemd --user"),
+            mark: None,
+        }))
+    }
+}
+
 /// How long `mur agent start` waits for the runtime to write a live
 /// `running.lock`. Long enough to catch an immediate crash, short enough not
 /// to stall the CLI: heavy starts (local model load) legitimately take 60s+
@@ -236,14 +262,14 @@ fn live_lock_pid(agent_home: &std::path::Path) -> Option<u32> {
 
 /// The refusal a runtime recorded at or after `since_unix_ms`, if any. Older
 /// markers belong to an earlier start and must not fail this one (#2015).
-fn refusal_since(
+pub(super) fn refusal_since(
     agent_home: &std::path::Path,
     since_unix_ms: u64,
 ) -> Option<mur_common::start_refusal::StartRefusal> {
     mur_common::start_refusal::read(agent_home).filter(|r| r.at_unix_ms >= since_unix_ms)
 }
 
-fn now_unix_ms() -> u64 {
+pub(super) fn now_unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))

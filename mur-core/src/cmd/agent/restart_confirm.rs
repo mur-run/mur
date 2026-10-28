@@ -65,6 +65,12 @@ pub(super) fn wait_for_confirmed_lock(
         // coming back on its own. Kick the service, or re-spawn directly. A
         // service-manager-tracked zombie counts as not-runnable here, so it is
         // kicked instead of being mistaken for a cold start.
+        if new_lock.is_none()
+            && let Some(why) = launcher.exited_early()
+        {
+            note(RestartNote::Failure(why));
+            return Ok(None);
+        }
         if new_lock.is_none() && !expired(deadline) {
             // A kick / fresh spawn is a cold start from zero: give the fresh
             // process the same liveness-gated slow-start window. Only when no
