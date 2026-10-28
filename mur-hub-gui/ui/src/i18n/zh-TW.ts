@@ -194,6 +194,7 @@ export const zhTW: Table = {
   "perm.enforcement.advisory": "執行中但沒有核心沙盒（{mode}）。只有 advisory hook 生效，所以它能碰到的比下列授權更多 — 重新啟動以重試封印。",
   "perm.enforcement.enforcing": "沙盒強制中（{mode}）。",
   "perm.drifted": "授權在封印後有變動：✓ 列描述的是目前的 profile，不是實際強制的內容。重新啟動以套用。",
+  "perm.relaxed": "這次開機由啟動 override 放寬（{nonce}）：{flags}。上面的列是 profile 檔案裡寫的內容；這次開機實際以這些 flag 放開的權限執行，直到一般重新啟動為止。",
   "perm.runtime": "Runtime 自己的流量",
   "perm.runtime.note": "行程內 DNS 守衛＋network.* 工具的 B0 閘門",
   "perm.outbound.off": "無對外連線",

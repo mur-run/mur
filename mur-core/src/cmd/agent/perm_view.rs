@@ -123,6 +123,12 @@ pub struct LimitsView {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OverrideView {
+    pub nonce: String,
+    pub flags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionsView {
     pub enforcement: Enforcement,
     /// `SandboxRecord.mode` when a seal exists (`"macos-sbpl"`, `"advisory-only"`, …).
@@ -130,6 +136,11 @@ pub struct PermissionsView {
     /// Filesystem grants were edited after the seal: `Effective` rows describe
     /// the profile as it is now, not as it was enforced.
     pub grants_drifted: bool,
+    /// This boot runs relaxed by a startup override: the nonce and the flags
+    /// as the CLI spells them. Expected drift, kept apart from
+    /// `grants_drifted` (spec §Visibility). `None` = no override applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relaxed_by_override: Option<OverrideView>,
     pub runtime_outbound: OutboundView,
     pub mcp_servers: Vec<McpNetView>,
     pub filesystem: PathsView,
@@ -225,9 +236,25 @@ pub fn permissions_view(
     let spawn_dirs_match = sandbox
         .and_then(|sb| sb.granted_spawn_dirs_digest.as_deref())
         .map(|sealed| sealed == spawn_dirs_digest(spawn_dirs));
+    // An override relaxes the sealed entitlements on purpose. The seal was
+    // built from the profile with the override merged, so that is what its
+    // digest is compared against; any other difference is still an edit.
+    let applied = lock.and_then(|l| l.startup_override.as_ref());
+    let sealed_fs = match applied {
+        Some(r) => {
+            let mut merged = ent.clone();
+            mur_common::startup_override::merge::apply(&mut merged, r.flags);
+            merged.filesystem
+        }
+        None => ent.filesystem.clone(),
+    };
     let grants_drifted = sandbox
-        .is_some_and(|sb| sb.granted_digest != filesystem_grants_digest(&ent.filesystem))
+        .is_some_and(|sb| sb.granted_digest != filesystem_grants_digest(&sealed_fs))
         || spawn_dirs_match == Some(false);
+    let relaxed_by_override = applied.map(|r| OverrideView {
+        nonce: r.nonce.clone(),
+        flags: r.flags.cli_names().into_iter().map(String::from).collect(),
+    });
 
     let grants = |verb: &str, list: &[String]| -> Vec<PathGrantView> {
         list.iter()
@@ -298,6 +325,7 @@ pub fn permissions_view(
         enforcement,
         sandbox_mode: sandbox.map(|sb| sb.mode.clone()),
         grants_drifted,
+        relaxed_by_override,
         runtime_outbound: OutboundView {
             mode: out.mode,
             allow_hosts: out.allow_hosts.clone(),
@@ -533,6 +561,16 @@ pub(super) fn paths_picture(
         }
     }
 
+    if let Some(r) = &v.relaxed_by_override {
+        let _ = writeln!(
+            o,
+            "\nRelaxed by startup override ({}): {}. The rows above are the profile \
+             as written; this boot runs with what those flags open, until a plain \
+             restart:\n    mur agent status {name}",
+            r.nonce,
+            r.flags.join(", ")
+        );
+    }
     if v.grants_drifted {
         let _ = writeln!(
             o,

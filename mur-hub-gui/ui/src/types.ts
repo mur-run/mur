@@ -143,6 +143,8 @@ export interface PermissionsView {
   enforcement: Enforcement;
   sandbox_mode: string | null;
   grants_drifted: boolean;
+  /** Absent when no startup override is applied. */
+  relaxed_by_override?: { nonce: string; flags: string[] };
   runtime_outbound: OutboundView;
   mcp_servers: McpNetView[];
   filesystem: PathsView;
