@@ -56,6 +56,7 @@ mod who;
 #[allow(dead_code)]
 pub mod mcp_remote;
 pub mod model_resolve;
+mod override_restart;
 mod peers;
 mod perm;
 pub mod perm_view;
