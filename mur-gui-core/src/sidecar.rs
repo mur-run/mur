@@ -212,9 +212,14 @@ async fn os_actor(
                             handover::notify_one(&mut watchers, &slug, status);
                             info!(agent = %slug, "stopped supervised runtime");
                         }
+                        // `wait`, not `try_wait`: SIGKILL lands asynchronously,
+                        // so a single `try_wait` right after it usually sees
+                        // `None`, and the dropped `Child` is never reaped — a
+                        // zombie for the life of the process. SIGKILL cannot be
+                        // ignored, so this wait is bounded.
                         for (_, mut child) in reaping.drain(..) {
                             let _ = child.kill();
-                            let _ = child.try_wait();
+                            let _ = child.wait();
                         }
                         break;
                     }
