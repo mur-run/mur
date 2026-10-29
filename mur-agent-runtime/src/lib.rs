@@ -52,6 +52,7 @@ pub mod scheduler;
 pub mod secrets;
 pub mod skills;
 pub mod socket_path;
+pub mod ssh_proxy;
 pub mod subcommand;
 pub mod supervisor;
 pub mod supervisor_runner;

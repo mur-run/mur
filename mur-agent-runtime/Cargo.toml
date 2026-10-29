@@ -56,6 +56,9 @@ uuid = { workspace = true, features = ["v7"] }
 reqwest = { workspace = true }
 secrecy = "0.10"
 sha2 = "0.10"
+# ssh-agent proxy: `session-bind` signature verifiers (ed25519, ECDSA P-256/384,
+# RSA SHA-2). Already in the lock and compiled in via rustls; see the proxy spec.
+ring = "0.17"
 # C5 / M5.2 — webhook HMAC verifier. `hmac` for the MAC, `subtle`
 # for constant-time comparison so signature checks aren't
 # timing-side-channel-vulnerable.
