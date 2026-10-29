@@ -21,6 +21,7 @@ mod quit;
 pub(super) mod run;
 #[cfg(test)]
 mod test_support;
+mod text;
 mod writer;
 
 pub use confirm::banner;
@@ -30,6 +31,7 @@ pub use outcome::{Cleanup, OverrideOutcome, Step};
 pub use prepare::prepare;
 pub use quit::withdraw_on_quit;
 pub use run::override_restart;
+pub use text::{outcome_text, step_text};
 
 /// Which command the override rides on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

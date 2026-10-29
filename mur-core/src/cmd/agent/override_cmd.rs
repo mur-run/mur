@@ -10,8 +10,8 @@ use mur_common::agent_name::validate_agent_name;
 use mur_common::startup_override::IssuedBy;
 
 use super::override_restart::{
-    AlwaysYes, Cleanup, Confirmation, Issuer, Mode, OverrideOutcome, OverrideRequest, Step,
-    Terminal, audit, confirm, override_restart, prepare, run::FILE_REMAINS,
+    AlwaysYes, Confirmation, Issuer, Mode, OverrideOutcome, OverrideRequest, Terminal, audit,
+    confirm, outcome_text, override_restart, prepare, step_text,
 };
 use super::resolve_mur_home;
 use super::restart::{CliLauncher, Launcher, StartLauncher, print_note};
@@ -109,64 +109,19 @@ fn run(name: &str, mode: Mode, flags: OverrideFlags, flag_confirm: bool) -> Resu
     report(name, &outcome)
 }
 
-/// The outcome as the CLI says it (Hub spec §Failure paths).
+/// The outcome as the CLI says it (Hub spec §Failure paths); the wording
+/// itself lives in [`outcome_text`] so the Hub says the same.
 pub(super) fn report(name: &str, outcome: &OverrideOutcome) -> Result<()> {
     debug_assert_eq!(
         outcome.is_success(),
         matches!(outcome, OverrideOutcome::Applied { .. })
     );
-    match outcome {
-        OverrideOutcome::Applied { flags, detail, .. } => {
-            println!(
-                "✓ '{name}' is running with the override: {}",
-                flags.cli_names().join(" ")
-            );
-            if let Some(d) = detail {
-                eprintln!("  (an earlier step reported: {d})");
-            }
-            Ok(())
-        }
-        OverrideOutcome::Rejected { reason, detail, .. } => {
-            let mut msg = format!(
-                "'{name}' restarted, but rejected the override: {reason}. It is running with \
-                 normal permissions."
-            );
-            if let Some(d) = detail {
-                msg.push_str(&format!(" (an earlier step reported: {d})"));
-            }
-            bail!(msg)
-        }
-        OverrideOutcome::Failed {
-            step,
-            cleanup,
-            detail,
-        } => bail!(failed_text(name, step, cleanup.as_ref(), detail)),
-        OverrideOutcome::Abandoned { reason } => bail!("override abandoned: {reason}"),
-    }
-}
-
-fn failed_text(name: &str, step: &Step, cleanup: Option<&Cleanup>, detail: &str) -> String {
-    let suffix = match cleanup {
-        None => return detail.to_owned(),
-        Some(Cleanup::Withdrawn) => match step {
-            Step::NoAck => format!(
-                "the override was withdrawn; '{name}' may still come up, with normal permissions"
-            ),
-            _ => "the override was withdrawn and nothing is relaxed".to_owned(),
-        },
-        Some(Cleanup::ConsumedUnacknowledged) => format!(
-            "the override was consumed by a boot that has not acknowledged it; it may still come \
-             up relaxed. Run `mur agent status {name}`"
-        ),
-        Some(Cleanup::WithdrawFailed { error }) => format!("{FILE_REMAINS} ({error})"),
-    };
-    format!("{detail}; {suffix}")
-}
-
-fn step_text(step: &Step) -> String {
-    match step {
-        Step::Refusal { reason } => reason.clone(),
-        other => format!("{other:?}"),
+    let text = outcome_text(name, outcome);
+    if outcome.is_success() {
+        println!("✓ {text}");
+        Ok(())
+    } else {
+        bail!(text)
     }
 }
 
