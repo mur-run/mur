@@ -32,23 +32,22 @@ pub fn check_flags(flags: OverrideFlags) -> Result<(), String> {
     }
 }
 
-/// Check 3. Validation runs before any path is built: canonicalization
-/// returns `../x` unchanged when a matching `profile.yaml` exists.
+/// Check 3. Validation runs before any path is built, so `../x` never
+/// reaches the filesystem.
 ///
-/// The directory entry itself must spell `name` exactly. On a
-/// case-insensitive filesystem (the macOS default) `agents/Foo/profile.yaml`
-/// is a file when the directory is `foo`, and `canonicalize_agent_name`
-/// returns `Foo` unchanged from its exact-match branch, so comparing its
-/// result alone lets a case variant through.
+/// The directory entry itself must spell `name` exactly.
+/// `canonicalize_agent_name` reads the directory listing, so a case variant
+/// (`Foo` for `foo`) comes back as the real spelling and fails the
+/// comparison even on a case-insensitive filesystem; a name with no entry
+/// comes back unchanged and fails the `profile.yaml` check.
 pub fn check_name(home: &Path, name: &str) -> Result<(), String> {
     validate_agent_name(name).map_err(|e| format!("{e}; {NOTHING_CHANGED}"))?;
-    let agents = home.join("agents");
-    let exact_entry = std::fs::read_dir(&agents)
-        .map(|it| it.flatten().any(|e| e.file_name() == name))
-        .unwrap_or(false);
-    if !exact_entry
-        || canonicalize_agent_name(home, name) != name
-        || !agents.join(name).join("profile.yaml").is_file()
+    if canonicalize_agent_name(home, name) != name
+        || !home
+            .join("agents")
+            .join(name)
+            .join("profile.yaml")
+            .is_file()
     {
         return Err(format!("agent '{name}' not found; {NOTHING_CHANGED}"));
     }
