@@ -61,6 +61,18 @@ impl Rig {
     }
 }
 
+/// Waits for the fake runtime to touch `$0.ready`, which it does only after
+/// installing its TERM trap. A fixed sleep raced the shell under load: SIGTERM
+/// landed before the trap and the default action killed the child early.
+fn wait_ready(bin: &Path) {
+    let ready = PathBuf::from(format!("{}.ready", bin.display()));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ready.exists() {
+        assert!(Instant::now() < deadline, "fake runtime never became ready");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn gone_within(pid: u32, within: Duration) -> bool {
     let deadline = Instant::now() + within;
     while Instant::now() < deadline {
@@ -92,11 +104,12 @@ fn take_child_for_an_unknown_slug_is_none() {
 
 #[test]
 fn stop_child_sends_term_before_kill() {
-    let r = rig(r#"trap 'echo term >> "$0.log"; exit 0' TERM; while :; do sleep 0.05; done"#);
+    let r = rig(
+        r#"trap 'echo term >> "$0.log"; exit 0' TERM; : > "$0.ready"; while :; do sleep 0.05; done"#,
+    );
     r.start("a");
     let mut child = r.take("a").unwrap();
-    // Give the shell time to install its trap.
-    std::thread::sleep(Duration::from_millis(200));
+    wait_ready(&r.bin);
     let st = stop_child(&mut child, Duration::from_secs(5), Duration::from_secs(1)).unwrap();
     assert!(st.success(), "{st}");
     let log = std::fs::read_to_string(format!("{}.log", r.bin.display())).unwrap();
@@ -105,10 +118,10 @@ fn stop_child_sends_term_before_kill() {
 
 #[test]
 fn stop_child_kills_after_kill_wait() {
-    let r = rig("trap '' TERM; while :; do sleep 0.05; done");
+    let r = rig(r#"trap '' TERM; : > "$0.ready"; while :; do sleep 0.05; done"#);
     r.start("a");
     let mut child = r.take("a").unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    wait_ready(&r.bin);
     let t0 = Instant::now();
     stop_child(
         &mut child,
@@ -116,7 +129,11 @@ fn stop_child_kills_after_kill_wait() {
         Duration::from_secs(2),
     )
     .unwrap();
-    assert!(t0.elapsed() >= Duration::from_millis(300));
+    let waited = t0.elapsed();
+    assert!(
+        waited >= Duration::from_millis(300),
+        "child died on TERM after {waited:?}; the trap was not in place"
+    );
     // Reaped: try_wait keeps answering with the cached status, no zombie.
     assert!(matches!(child.try_wait(), Ok(Some(_))));
 }
