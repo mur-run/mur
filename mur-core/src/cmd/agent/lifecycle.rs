@@ -739,7 +739,11 @@ pub fn cmd_status(name: &str) -> Result<()> {
     if let Some(up) = &row.uptime {
         println!("       Uptime: {up}");
     }
-    if let Some(line) = status_ssh_proxy::line_for(&mur_home.join("agents").join(name)) {
+    let agent_home = mur_home.join("agents").join(name);
+    if let Some(line) = status_ssh_proxy::line_for(&agent_home) {
+        println!("{line}");
+    }
+    for line in status_ssh_proxy::refusal_lines_for(&agent_home) {
         println!("{line}");
     }
     let lock_path = mur_home.join("agents").join(name).join("running.lock");
