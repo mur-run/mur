@@ -20,8 +20,8 @@ first whenever they need an authenticated profile.
    does not exist, report the error and stop. Do **not** start
    `mur browser auth` on your own — the login handoff requires a person.
 3. **Omit `--browser` by default.** Without it, `select_browser` uses
-   Playwright's Chromium build (installed by `mur browser setup` under
-   `~/.mur/browser/pw/`) when present, with no prompt. Pass
+   Playwright's Chromium build (installed by `mur browser setup` into
+   Playwright's browser cache) when present, with no prompt. Pass
    `--browser <engine>` only when that build is missing or the user asks for
    a specific engine, and only after verifying the engine is installed
    (e.g. `ls "/Applications/Google Chrome.app"`). Never guess `chrome`.
