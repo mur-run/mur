@@ -160,7 +160,7 @@ pub(super) fn status_for(class: &Classification) -> SshProxyStatus {
             SshProxyState::Boundary,
             None,
             "a probe under this agent's sandbox could not connect(2) to the upstream \
-             ssh-agent, so a proxy could be a boundary here; no proxy is active yet"
+             ssh-agent, so the proxy is the agent's only route to it"
                 .to_string(),
         ),
         Classification::AuditOnly(r) => (

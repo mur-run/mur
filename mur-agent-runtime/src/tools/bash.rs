@@ -80,6 +80,10 @@ pub struct BashTool {
     /// `rm` → trash (issue #2154). `None` = `hooks.trash_guard: false`, or a
     /// test/embedded use: removers run as-is.
     pub trash: Option<super::bash_trash::BashTrash>,
+    /// The ssh-agent proxy socket. `Some` only while the proxy runs; the
+    /// child then gets it as `SSH_AUTH_SOCK`. The runtime's own value is
+    /// never passed on.
+    pub ssh_auth_sock: Option<PathBuf>,
 }
 
 /// `timeout_secs` (alias `wait_secs`): missing/invalid → default; negative →
@@ -102,7 +106,14 @@ impl BashTool {
             scratch_dir: None,
             jobs: crate::tools::bash_jobs::JobTable::new(),
             trash: None,
+            ssh_auth_sock: None,
         }
+    }
+
+    /// Attach the ssh-agent proxy socket exported as `SSH_AUTH_SOCK`.
+    pub fn with_ssh_auth_sock(mut self, sock: Option<PathBuf>) -> Self {
+        self.ssh_auth_sock = sock;
+        self
     }
 
     /// Route the agent's `rm` / `rmdir` / `unlink` into its trash.
@@ -262,6 +273,9 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
         // inherits from the runtime (see `bash_env`).
         let mut env =
             super::bash_env::base_env(augmented_path(std::env::var("PATH").ok().as_deref()));
+        env.extend(super::bash_env::ssh_agent_env(
+            self.ssh_auth_sock.as_deref(),
+        ));
         // Turn track: exec-granted CARGO_TARGET_DIR (+ warm clone). Before the vault so a user secret wins.
         let (target, warm_note) = super::bash_track::prepare_current_turn(
             &self.session_cwd,

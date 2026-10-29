@@ -80,6 +80,58 @@ pub(super) fn append_ssh_proxy(signer: &Signer<'_>, s: &SshProxyStatus) -> anyho
     Ok(channel_id)
 }
 
+/// `payload.notice` value marking one ssh-agent proxy refusal.
+pub(super) const SSH_REFUSAL_NOTICE: &str = "ssh_proxy_refusal";
+
+/// A `'static` poster for the proxy's refusal sink: each refusal becomes one
+/// signed note on the start channel. Best-effort, like every notice here.
+pub(super) fn refusal_poster(
+    signer: &Signer<'_>,
+) -> impl Fn(&crate::ssh_proxy::refusal::Refusal, &str) + Send + Sync + 'static {
+    let mur_home = signer.mur_home.to_path_buf();
+    let agent = signer.agent.to_string();
+    let identity = signer.identity.clone();
+    let key_version = signer.key_version;
+    move |r, message| {
+        let signer = Signer {
+            mur_home: &mur_home,
+            agent: &agent,
+            identity: &identity,
+            key_version,
+        };
+        if let Err(e) = append_ssh_refusal(&signer, r.code.as_str(), message) {
+            tracing::warn!(error = %e, "could not post the ssh-agent proxy refusal to the agent's channel");
+        }
+    }
+}
+
+/// Append one refusal. Returns the channel id written to.
+pub(super) fn append_ssh_refusal(
+    signer: &Signer<'_>,
+    code: &str,
+    message: &str,
+) -> anyhow::Result<String> {
+    let svc = ChannelService::open(signer.mur_home)?;
+    let channel_id = start_channel(&svc, signer.mur_home, signer.agent)?;
+    svc.append_signed(
+        &channel_id,
+        signer.identity,
+        signer.key_version,
+        ChannelActor::Agent {
+            id: signer.agent.to_string(),
+        },
+        EventKind::Note,
+        serde_json::json!({
+            "notice": SSH_REFUSAL_NOTICE,
+            "text": message,
+            "code": code,
+        }),
+        // Every refusal is its own event.
+        None,
+    )?;
+    Ok(channel_id)
+}
+
 /// `payload.notice` value marking the startup-override banner (boot step 11).
 pub(super) const STARTUP_OVERRIDE_NOTICE: &str = "startup_override";
 

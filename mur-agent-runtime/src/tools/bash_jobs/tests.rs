@@ -258,6 +258,8 @@ async fn unwritable_spool_dir_is_a_note_not_a_failure() {
 /// The child gets exactly `spec.env` — nothing the runtime inherited
 /// (`SSH_AUTH_SOCK`, a stray API token) reaches it. Asserts the exact key
 /// set, so any future inheritance path turns this red, not just one name.
+/// `SSH_AUTH_SOCK` is present only as the value the spec sets (the ssh-agent
+/// proxy socket), never the runtime's upstream.
 #[cfg(unix)]
 #[tokio::test]
 async fn child_env_is_exactly_the_spec_env() {
@@ -269,6 +271,8 @@ async fn child_env_is_exactly_the_spec_env() {
         env: vec![
             ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
             ("MUR_SPEC_ONLY".into(), "1".into()),
+            crate::tools::bash_env::ssh_agent_env(Some(&dir.path().join("ssh-agent.sock")))
+                .unwrap(),
         ],
         spool_dir: dir.path(),
         vault: None,
@@ -283,5 +287,15 @@ async fn child_env_is_exactly_the_spec_env() {
         .filter(|k| !matches!(*k, "PWD" | "OLDPWD" | "SHLVL" | "_"))
         .collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["MUR_SPEC_ONLY", "PATH"], "{}", p.new_stdout);
+    assert_eq!(
+        keys,
+        ["MUR_SPEC_ONLY", "PATH", "SSH_AUTH_SOCK"],
+        "{}",
+        p.new_stdout
+    );
+    let sock = format!(
+        "SSH_AUTH_SOCK={}",
+        dir.path().join("ssh-agent.sock").display()
+    );
+    assert!(p.new_stdout.lines().any(|l| l == sock), "{}", p.new_stdout);
 }

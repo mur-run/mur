@@ -122,11 +122,11 @@ fn boundary_at(at: u64) -> SshProxyStatus {
 }
 
 #[test]
-fn boundary_says_the_proxy_is_not_active_yet() {
-    // Phase 1 installs no proxy: the probe measures a potential boundary,
-    // it does not mean signatures are mediated.
+fn boundary_names_the_proxy_as_the_only_route() {
+    // The proxy runs now (Phase 2 part 2), but signs nothing until HITL is
+    // wired, so the line must not promise mediated signatures either.
     let e = status_for(&Classification::Boundary).explanation;
-    assert!(e.contains("no proxy is active yet"), "{e}");
+    assert!(e.contains("only route"), "{e}");
     assert!(!e.contains("every signature"), "{e}");
 }
 
