@@ -55,7 +55,6 @@ use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
 use mur_gui_core::event_bus::EventBus;
 use mur_gui_core::sidecar::{AgentRuntimeStatus, Supervisor};
 use mur_gui_core::stub;
-use override_restart::jobs::OverrideJobs;
 use pet::{EventBusState, PetState};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -96,7 +95,7 @@ fn list_runtime_statuses(supervisor: State<'_, SupervisorState>) -> Vec<AgentRun
 async fn start_agent(
     name: String,
     supervisor: State<'_, SupervisorState>,
-    jobs: State<'_, OverrideJobs>,
+    jobs: State<'_, override_restart::jobs::OverrideJobs>,
 ) -> Result<(), String> {
     jobs.refuse_if_busy(&name)?;
     supervisor.0.start(&name).await
@@ -106,7 +105,7 @@ async fn start_agent(
 async fn stop_agent(
     name: String,
     supervisor: State<'_, SupervisorState>,
-    jobs: State<'_, OverrideJobs>,
+    jobs: State<'_, override_restart::jobs::OverrideJobs>,
 ) -> Result<(), String> {
     jobs.refuse_if_busy(&name)?;
     supervisor.0.stop(&name).await;
@@ -317,7 +316,7 @@ pub fn run() {
         .manage(chat::ChatRegistryState::default())
         .manage(session_allow::SessionAllowState::default())
         .manage(SupervisorState(supervisor))
-        .manage(OverrideJobs::default())
+        .manage(override_restart::jobs::OverrideJobs::default())
         .manage(onboarding::spec::WizardSpecState::default())
         .manage(PetState(Mutex::new(std::collections::HashMap::new())))
         .manage(EventBusState(EventBus::new(256)))
