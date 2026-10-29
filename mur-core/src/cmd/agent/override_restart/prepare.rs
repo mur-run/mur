@@ -6,6 +6,7 @@ use std::path::Path;
 
 use mur_common::LockFile;
 use mur_common::lock_file::{SentinelProbe, pid_alive, probe_sentinel};
+use mur_common::startup_override::IssuedBy;
 use mur_common::startup_override::claim::overrides_dir;
 
 use super::super::restart::stop_timeout_for;
@@ -18,7 +19,7 @@ pub(in crate::cmd::agent) fn refusal(reason: String) -> Step {
     Step::Refusal { reason }
 }
 
-pub(in crate::cmd::agent) fn prepare(req: &OverrideRequest<'_>) -> Result<Prepared, Step> {
+pub fn prepare(req: &OverrideRequest<'_>) -> Result<Prepared, Step> {
     let name = req.name;
     if !req.home.join("agents").join(name).is_dir() {
         return Err(refusal(format!(
@@ -28,7 +29,7 @@ pub(in crate::cmd::agent) fn prepare(req: &OverrideRequest<'_>) -> Result<Prepar
     }
     let service = super::super::service::installed_service(name);
     if let Some(unit) = &service {
-        check_home(name, req.home, unit)?;
+        check_home(name, req.home, unit, req.by)?;
     }
     let old_pid = check_running(req.home, name, req.mode)?;
     let lock = match writer::lock(&overrides_dir(req.home), name) {
@@ -104,7 +105,7 @@ fn live_lock(agent_dir: &Path) -> Option<LockFile> {
 }
 
 /// Check H: the service must read the same home this writer writes to.
-fn check_home(name: &str, home: &Path, unit: &Path) -> Result<(), Step> {
+fn check_home(name: &str, home: &Path, unit: &Path, by: IssuedBy) -> Result<(), Step> {
     let service_home = service_home(unit);
     let same = match (&service_home, std::fs::canonicalize(home)) {
         (Some(s), Ok(h)) => std::fs::canonicalize(s).is_ok_and(|s| s == h),
@@ -115,8 +116,12 @@ fn check_home(name: &str, home: &Path, unit: &Path) -> Result<(), Step> {
     }
     let shown =
         service_home.map_or_else(|| "an unknown home".to_owned(), |p| p.display().to_string());
+    let this = match by {
+        IssuedBy::Cli => "this CLI",
+        IssuedBy::Hub => "this Hub",
+    };
     Err(refusal(format!(
-        "'{name}' is installed as a service that uses {shown}, but this CLI uses {}. \
+        "'{name}' is installed as a service that uses {shown}, but {this} uses {}. \
          An override written here would never reach it; {NOTHING_CHANGED}",
         home.display()
     )))

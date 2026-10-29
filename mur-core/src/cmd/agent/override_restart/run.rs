@@ -26,52 +26,19 @@ pub(in crate::cmd::agent) const FILE_REMAINS: &str = "a pending override file re
 
 const HUB_QUITTING: &str = "hub quitting";
 
-pub(in crate::cmd::agent) fn override_restart(
+pub fn override_restart(
     prepared: Prepared,
     issuer: Issuer,
     mut gate: Box<dyn JobGate>,
     launcher: &mut dyn Launcher,
     note: &mut dyn FnMut(RestartNote),
 ) -> OverrideOutcome {
-    let job = Job {
-        dir: overrides_dir(&prepared.home),
-        lock_path: prepared
-            .home
-            .join("agents")
-            .join(&prepared.name)
-            .join("running.lock"),
-        window: issuer.window(),
-        prepared: &prepared,
-    };
+    let job = Job::new(&prepared.home, &prepared.name, issuer.window());
     let name = prepared.name.as_str();
 
     // ── Step 2: orphan sweep ──────────────────────────────────────────
-    match writer::sweep(&job.dir, name) {
-        Ok(Swept::Clear) => {}
-        Ok(Swept::Discarded { nonce }) => {
-            note(RestartNote::Info(format!(
-                "discarded an orphaned override for '{name}' ({})",
-                nonce.as_deref().unwrap_or("no readable nonce")
-            )));
-            job.audit(AuditEvent::StartupOverrideDiscarded {
-                ts: Utc::now(),
-                nonce,
-                window: job.window.clone(),
-            });
-        }
-        Err(e) => {
-            job.audit(AuditEvent::StartupOverrideWithdrawFailed {
-                ts: Utc::now(),
-                nonce: None,
-                error: e.to_string(),
-                window: job.window.clone(),
-            });
-            return OverrideOutcome::Failed {
-                step: Step::Sweep,
-                cleanup: None,
-                detail: format!("{FILE_REMAINS}: {e}"),
-            };
-        }
+    if let Err(failed) = job.sweep(note) {
+        return failed;
     }
 
     // ── Check R again for Start, under the lock, just before publish ──
@@ -176,16 +143,63 @@ pub(in crate::cmd::agent) fn override_restart(
     }
 }
 
-struct Job<'a> {
+/// One agent's override paths and audit sink. Holds no lock: the writer
+/// lock lives in `Prepared`, and the Hub quit path runs without one.
+pub(super) struct Job {
+    home: PathBuf,
+    name: String,
     dir: PathBuf,
     lock_path: PathBuf,
     window: Option<String>,
-    prepared: &'a Prepared,
 }
 
-impl Job<'_> {
+impl Job {
+    pub(super) fn new(home: &Path, name: &str, window: Option<String>) -> Self {
+        Self {
+            home: home.to_owned(),
+            name: name.to_owned(),
+            dir: overrides_dir(home),
+            lock_path: home.join("agents").join(name).join("running.lock"),
+            window,
+        }
+    }
+
     fn audit(&self, event: AuditEvent) {
-        audit::append(&self.prepared.home, &self.prepared.name, &event);
+        audit::append(&self.home, &self.name, &event);
+    }
+
+    /// Step 2: withdraw an orphan a crashed writer left live. `Err` is the
+    /// outcome to return: the orphan stays and nothing may be published.
+    pub(super) fn sweep(&self, note: &mut dyn FnMut(RestartNote)) -> Result<(), OverrideOutcome> {
+        let name = self.name.as_str();
+        match writer::sweep(&self.dir, name) {
+            Ok(Swept::Clear) => Ok(()),
+            Ok(Swept::Discarded { nonce }) => {
+                note(RestartNote::Info(format!(
+                    "discarded an orphaned override for '{name}' ({})",
+                    nonce.as_deref().unwrap_or("no readable nonce")
+                )));
+                self.audit(AuditEvent::StartupOverrideDiscarded {
+                    ts: Utc::now(),
+                    nonce,
+                    window: self.window.clone(),
+                });
+                Ok(())
+            }
+            Err(e) => {
+                self.audit(AuditEvent::StartupOverrideWithdrawFailed {
+                    ts: Utc::now(),
+                    nonce: None,
+                    error: e.to_string(),
+                    window: self.window.clone(),
+                });
+                Err(OverrideOutcome::Failed {
+                    step: Step::Sweep,
+                    cleanup: None,
+                    detail: format!("{FILE_REMAINS}: {e}"),
+                })
+            }
+        }
     }
 
     /// Step 6, behind the gate.
@@ -202,8 +216,13 @@ impl Job<'_> {
         self.withdraw_and_classify(nonce, step, detail)
     }
 
-    fn withdraw_and_classify(&self, nonce: &str, step: Step, detail: String) -> OverrideOutcome {
-        let name = self.prepared.name.as_str();
+    pub(super) fn withdraw_and_classify(
+        &self,
+        nonce: &str,
+        step: Step,
+        detail: String,
+    ) -> OverrideOutcome {
+        let name = self.name.as_str();
         let failed = |cleanup: Cleanup, detail: String| OverrideOutcome::Failed {
             step: step.clone(),
             cleanup: Some(cleanup),

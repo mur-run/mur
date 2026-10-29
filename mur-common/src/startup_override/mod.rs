@@ -36,8 +36,10 @@ pub enum ConfirmedBy {
     Tty,
     #[serde(rename = "flag:--confirm")]
     FlagConfirm,
-    #[serde(rename = "hub:native-dialog+typed-name")]
-    HubNativeDialogTypedName,
+    /// The Hub's Rust-side native dialog. The webview's typed name is an
+    /// accident guard the Rust side never sees, so the label does not claim it.
+    #[serde(rename = "hub:native-dialog")]
+    HubNativeDialog,
 }
 
 /// The pairing table, defined once. Writers refuse to write any other pair;
@@ -47,7 +49,7 @@ pub fn is_valid_pair(issued: IssuedBy, confirmed: ConfirmedBy) -> bool {
         (issued, confirmed),
         (IssuedBy::Cli, ConfirmedBy::Tty)
             | (IssuedBy::Cli, ConfirmedBy::FlagConfirm)
-            | (IssuedBy::Hub, ConfirmedBy::HubNativeDialogTypedName)
+            | (IssuedBy::Hub, ConfirmedBy::HubNativeDialog)
     )
 }
 

@@ -126,3 +126,35 @@ fn discarded_keeps_a_missing_nonce_as_null() {
     });
     assert_eq!(v["nonce"], Value::Null);
 }
+
+#[test]
+fn hub_refusal_line_is_pinned() {
+    let v = round_trip(&AuditEvent::StartupOverrideRefused {
+        ts: ts(),
+        reason: "dialog open".into(),
+        window: Some("dashboard".into()),
+    });
+    assert_eq!(
+        v,
+        json!({
+            "type": "startup_override_refused",
+            "ts": "2026-10-28T12:00:00Z",
+            "reason": "dialog open",
+            "window": "dashboard",
+        })
+    );
+}
+
+#[test]
+fn hub_issued_line_carries_the_native_dialog_label() {
+    let v = round_trip(&AuditEvent::StartupOverrideIssued {
+        ts: ts(),
+        nonce: NONCE.into(),
+        flags: flags(),
+        issued_by: IssuedBy::Hub,
+        confirmed_by: ConfirmedBy::HubNativeDialog,
+        window: Some("dashboard".into()),
+    });
+    assert_eq!(v["issued_by"], "hub");
+    assert_eq!(v["confirmed_by"], "hub:native-dialog");
+}

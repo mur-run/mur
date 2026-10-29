@@ -4,7 +4,7 @@ const ISSUED: [IssuedBy; 2] = [IssuedBy::Cli, IssuedBy::Hub];
 const CONFIRMED: [ConfirmedBy; 3] = [
     ConfirmedBy::Tty,
     ConfirmedBy::FlagConfirm,
-    ConfirmedBy::HubNativeDialogTypedName,
+    ConfirmedBy::HubNativeDialog,
 ];
 
 #[test]
@@ -22,7 +22,7 @@ fn is_valid_pair_accepts_exactly_the_table() {
         vec![
             (IssuedBy::Cli, ConfirmedBy::Tty),
             (IssuedBy::Cli, ConfirmedBy::FlagConfirm),
-            (IssuedBy::Hub, ConfirmedBy::HubNativeDialogTypedName),
+            (IssuedBy::Hub, ConfirmedBy::HubNativeDialog),
         ]
     );
 }
@@ -37,10 +37,7 @@ fn enums_round_trip_their_exact_strings() {
     let confirmed = [
         (ConfirmedBy::Tty, "\"tty\""),
         (ConfirmedBy::FlagConfirm, "\"flag:--confirm\""),
-        (
-            ConfirmedBy::HubNativeDialogTypedName,
-            "\"hub:native-dialog+typed-name\"",
-        ),
+        (ConfirmedBy::HubNativeDialog, "\"hub:native-dialog\""),
     ];
     for (value, wire) in confirmed {
         assert_eq!(serde_json::to_string(&value).unwrap(), wire);

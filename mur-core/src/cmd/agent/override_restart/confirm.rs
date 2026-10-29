@@ -48,8 +48,9 @@ pub(in crate::cmd::agent) fn confirm(
     }
 }
 
-/// What each flag relaxes and what stays on, for the next boot only.
-pub(in crate::cmd::agent) fn banner(name: &str, flags: OverrideFlags) -> String {
+/// What each flag relaxes and what stays on, for the next boot only. The
+/// one text source for the CLI banner and the Hub dialog.
+pub fn banner(name: &str, flags: OverrideFlags) -> String {
     let mut s = format!(
         "\n⚠  Startup override for '{name}' — the NEXT boot only, then normal permissions.\n\n"
     );

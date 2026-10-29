@@ -57,8 +57,20 @@ mod who;
 pub mod mcp_remote;
 pub mod model_resolve;
 mod override_cmd;
+#[allow(dead_code)] // `Issuer::Hub` and the `Prepared` getters are Hub-only.
 mod override_restart;
 pub use override_cmd::{cmd_restart_override, cmd_start_override};
+// The startup-override orchestrator, exported for the Hub GUI (Hub spec
+// §Orchestrator). The `mur` binary never names these, so silence the
+// lib+bin split's unused warnings, as above.
+#[allow(unused_imports)]
+pub use override_restart::{
+    AlwaysYes, Cleanup, Issuer, JobGate, Mode, NOTHING_CHANGED, NormalRestart, OverrideOutcome,
+    OverrideRequest, Prepared, PublishPermit, Step, banner, override_restart, prepare,
+    restart_normally, withdraw_on_quit,
+};
+#[allow(unused_imports)]
+pub use restart::{CliLauncher, Launcher, RestartNote, StopFailed};
 mod peers;
 mod perm;
 pub mod perm_view;
