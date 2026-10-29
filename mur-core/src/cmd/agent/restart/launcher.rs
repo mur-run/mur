@@ -24,7 +24,7 @@ const STOP_POLL: Duration = Duration::from_millis(100);
 /// The old runtime is still alive after SIGTERM, the drain window, SIGKILL
 /// and [`POST_KILL_WAIT`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::cmd::agent) struct StopFailed {
+pub struct StopFailed {
     pub pid: u32,
 }
 
@@ -38,7 +38,7 @@ impl std::fmt::Display for StopFailed {
     }
 }
 
-pub(in crate::cmd::agent) trait Launcher {
+pub trait Launcher {
     /// Stop the runtime whose lock file names `old_pid`. `Ok` once the pid
     /// is gone (exiting on its own counts).
     fn stop(&mut self, old_pid: u32, kill_wait: Duration) -> Result<(), StopFailed>;
@@ -62,7 +62,7 @@ pub(in crate::cmd::agent) trait Launcher {
 
 /// `mur agent restart`'s launcher: signals for stop, launchd / systemd or a
 /// detached direct spawn for start and kick.
-pub(in crate::cmd::agent) struct CliLauncher {
+pub struct CliLauncher {
     name: String,
     agent_home: PathBuf,
     home: PathBuf,
@@ -71,7 +71,7 @@ pub(in crate::cmd::agent) struct CliLauncher {
 }
 
 impl CliLauncher {
-    pub(in crate::cmd::agent) fn new(name: &str, home: &Path, has_service: bool) -> Self {
+    pub fn new(name: &str, home: &Path, has_service: bool) -> Self {
         Self {
             name: name.to_owned(),
             agent_home: home.join("agents").join(name),

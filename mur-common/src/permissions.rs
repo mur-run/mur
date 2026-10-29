@@ -102,6 +102,14 @@ pub enum AuditEvent {
     StartupOverrideNotReapplied { ts: chrono::DateTime<chrono::Utc> },
     // Writer side (CLI and Hub orchestrator; Hub spec §Audit). `window` is the
     // Hub window label, `None` (and omitted) for the CLI.
+    /// The Hub refused a request before showing its dialog: `"dialog open"`
+    /// or `"job in progress"`. Nothing was written.
+    StartupOverrideRefused {
+        ts: chrono::DateTime<chrono::Utc>,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window: Option<String>,
+    },
     /// The confirmation prompt was declined; nothing was written.
     StartupOverrideDeclined {
         ts: chrono::DateTime<chrono::Utc>,

@@ -2,6 +2,7 @@ use super::super::Mode;
 use super::super::outcome::Step;
 use super::*;
 use mur_common::agent::OverrideFlags;
+use mur_common::startup_override::IssuedBy;
 
 const NAME: &str = "ovr-prepare-test";
 
@@ -20,6 +21,7 @@ fn req(home: &Path, mode: Mode) -> OverrideRequest<'_> {
             no_hitl: true,
             ..OverrideFlags::default()
         },
+        by: IssuedBy::Cli,
     }
 }
 
@@ -114,11 +116,18 @@ fn check_home_compares_the_units_baked_home() {
     };
     let unit = h.path().join("run.mur.agent.x.plist");
     std::fs::write(&unit, plist(h.path())).unwrap();
-    check_home(NAME, h.path(), &unit).unwrap();
+    check_home(NAME, h.path(), &unit, IssuedBy::Cli).unwrap();
+    check_home(NAME, h.path(), &unit, IssuedBy::Hub).unwrap();
     std::fs::write(&unit, plist(other.path())).unwrap();
-    let why = match check_home(NAME, h.path(), &unit) {
+    let why = |by| match check_home(NAME, h.path(), &unit, by) {
         Err(Step::Refusal { reason }) => reason,
         other => panic!("{other:?}"),
     };
-    assert!(why.contains("would never reach it"), "{why}");
+    let cli = why(IssuedBy::Cli);
+    assert!(cli.contains("would never reach it"), "{cli}");
+    assert!(cli.contains("this CLI"), "{cli}");
+    // The same refusal from the Hub names the Hub, and never says "use the CLI".
+    let hub = why(IssuedBy::Hub);
+    assert!(hub.contains("this Hub"), "{hub}");
+    assert!(!hub.contains("CLI"), "{hub}");
 }

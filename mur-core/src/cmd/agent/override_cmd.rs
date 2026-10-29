@@ -7,6 +7,7 @@ use std::io::IsTerminal as _;
 use anyhow::{Result, bail};
 use mur_common::agent::OverrideFlags;
 use mur_common::agent_name::validate_agent_name;
+use mur_common::startup_override::IssuedBy;
 
 use super::override_restart::{
     AlwaysYes, Cleanup, Confirmation, Issuer, Mode, OverrideOutcome, OverrideRequest, Step,
@@ -66,6 +67,7 @@ fn run(name: &str, mode: Mode, flags: OverrideFlags, flag_confirm: bool) -> Resu
         name,
         mode,
         flags,
+        by: IssuedBy::Cli,
     };
     let prepared = prepare(&req).map_err(|s| anyhow::anyhow!(step_text(&s)))?;
 

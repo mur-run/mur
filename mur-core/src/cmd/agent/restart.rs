@@ -123,9 +123,9 @@ pub(crate) fn select_targets_with_on_disk(
 }
 
 /// One agent's restart outcome, for the end-of-run summary.
-struct RestartReport {
-    ok: bool,
-    detail: String,
+pub(super) struct RestartReport {
+    pub(super) ok: bool,
+    pub(super) detail: String,
 }
 
 /// Restart every agent in `targets`, then print a final verdict table. This
@@ -393,7 +393,7 @@ pub(crate) fn restart_quiet(name: &str) -> Result<QuietRestart> {
 /// A progress line from a restart, handed to the caller instead of printed so
 /// a non-CLI caller (the murmur TUI) can render it without stdout writes
 /// tearing its screen.
-pub(super) enum RestartNote {
+pub enum RestartNote {
     /// Ordinary progress — the CLI prints it to stdout as-is.
     Info(String),
     /// A verdict the agent is NOT confirmed running — the CLI prints it to
@@ -411,7 +411,7 @@ pub(super) fn print_note(note: RestartNote) {
 
 /// [`restart_one`] without any stdout/stderr writes: every progress line goes
 /// to `note`. Behavior is otherwise identical.
-fn restart_one_with(
+pub(super) fn restart_one_with(
     name: &str,
     home: &Path,
     on_disk_sha: &str,
@@ -578,9 +578,8 @@ fn short8(s: &str) -> &str {
 
 mod launcher;
 mod respawn;
-#[cfg(test)]
-pub(super) use launcher::StopFailed;
-pub(super) use launcher::{CliLauncher, Launcher, StartLauncher};
+pub(super) use launcher::StartLauncher;
+pub use launcher::{CliLauncher, Launcher, StopFailed};
 pub(super) use respawn::{direct_respawn, kickstart_service, poll_new_lock};
 
 #[cfg(test)]
