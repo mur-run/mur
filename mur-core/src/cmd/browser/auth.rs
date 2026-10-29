@@ -199,6 +199,7 @@ pub async fn auth(
     reauth: bool,
     requested_browser: Option<BrowserEngine>,
     allow_domain: &[String],
+    bind: Option<&str>,
 ) -> Result<()> {
     let install_dir = mur_browser::server::install_dir(&mur_home()?);
     let browsers = mur_browser::chromium::system_browsers_dir();
@@ -214,6 +215,10 @@ pub async fn auth(
     }
     let allow_domains = resolve_allow_domains(&parsed, allow_domain)?;
     let home = mur_home()?;
+    // Before the login, so a mistyped agent never costs a sign-in.
+    let bind = bind
+        .map(|agent| super::bind::resolve_agent(&home, agent))
+        .transpose()?;
     let state = paths::profile_state(&home, site);
     if state.exists() && !reauth {
         bail!("browser profile {site:?} already has encrypted state; use --reauth to replace it");
@@ -239,8 +244,14 @@ pub async fn auth(
         &KeychainStateKeyStore,
     )?;
     println!("saved encrypted browser profile {site:?}");
-    super::bind::after_auth(&home, site, &mut std::io::stdout());
-    Ok(())
+    let mut out = std::io::stdout();
+    match bind {
+        Some(agent) => super::bind::bind_flag(&home, site, &agent, &mut out),
+        None => {
+            super::bind::after_auth(&home, site, &mut out);
+            Ok(())
+        }
+    }
 }
 
 /// Allowlist to store with a profile: the explicit `--allow-domain` values,

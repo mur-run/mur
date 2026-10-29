@@ -22,7 +22,10 @@ pub(super) async fn run_browser(action: BrowserAction) -> Result<()> {
             reauth,
             browser,
             allow_domain,
-        } => cmd::browser::auth(&site, &url, reauth, browser, &allow_domain).await?,
+            bind,
+        } => {
+            cmd::browser::auth(&site, &url, reauth, browser, &allow_domain, bind.as_deref()).await?
+        }
         BrowserAction::Broker => cmd::browser::broker().await?,
         BrowserAction::List {
             json,
