@@ -240,8 +240,9 @@ impl JobGate for HubGate {
                 e.state = JobState::Cleaning;
                 true
             }
-            // No slot means nobody else can own the claim.
-            None => true,
+            // A gate outlives its slot only when the quit path claimed the
+            // file and `finish_claim` already freed the slot: still theirs.
+            None => false,
         }
     }
 }

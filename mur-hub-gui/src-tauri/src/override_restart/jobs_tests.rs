@@ -112,6 +112,9 @@ fn quit_while_published_claims_once() {
     assert_eq!(jobs.active_names(), vec!["a".to_string()]);
     jobs.finish_claim("a");
     assert!(jobs.active_names().is_empty());
+    // The job thread reaching cleanup after the quit path finished still
+    // stands down: exactly one side audits the nonce.
+    assert!(!gate.begin_cleanup());
 }
 
 #[test]

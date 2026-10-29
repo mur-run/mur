@@ -67,7 +67,7 @@ pub use override_cmd::{cmd_restart_override, cmd_start_override};
 pub use override_restart::{
     AlwaysYes, Cleanup, Issuer, JobGate, Mode, NOTHING_CHANGED, NormalRestart, OverrideOutcome,
     OverrideRequest, Prepared, PublishPermit, Step, banner, outcome_text, override_restart,
-    prepare, restart_normally, withdraw_on_quit,
+    prepare, restart_normally, step_text, withdraw_on_quit,
 };
 #[allow(unused_imports)]
 pub use restart::{CliLauncher, Launcher, POST_KILL_WAIT, RestartNote, StopFailed};
