@@ -133,5 +133,5 @@ only applies heals when `report.failed == 0 && report.budget_exceeded.is_none()`
 ## Handing off
 
 If the flow needs a profile you don't have, stop and name the exact command
-for the human: `mur browser auth <site> --url <URL> --browser <engine>` (see
+for the human: `mur browser auth <site> --url <URL>` (see
 **auth mode**) — do not attempt it yourself.
