@@ -3,3 +3,4 @@
 //! supplies the Hub's job table, launcher, confirmation and commands.
 
 pub mod jobs;
+pub mod launcher;
