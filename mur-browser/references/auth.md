@@ -19,12 +19,15 @@ first whenever they need an authenticated profile.
    any headless invocation) and `~/.mur/browser/profiles/<site>/state.json.age`
    does not exist, report the error and stop. Do **not** start
    `mur browser auth` on your own — the login handoff requires a person.
-3. **Always pass `--browser <engine>`.** Without it, `select_browser`
-   uses Playwright's Chromium build when present; otherwise it collects the
-   engines it can launch (Playwright builds, plus installed Chrome or Edge)
-   and, when more than one remains, prompts interactively on stderr/stdin.
-   That prompt hangs or fails in an agent session. Pick an engine
-   explicitly every time.
+3. **Omit `--browser` by default.** Without it, `select_browser` uses
+   Playwright's Chromium build (installed by `mur browser setup` under
+   `~/.mur/browser/pw/`) when present, with no prompt. Pass
+   `--browser <engine>` only when that build is missing or the user asks for
+   a specific engine, and only after verifying the engine is installed
+   (e.g. `ls "/Applications/Google Chrome.app"`). Never guess `chrome`.
+   If Playwright's Chromium is absent and more than one engine remains, the
+   selection prompts on stderr/stdin, which hangs in an agent session; in
+   that case pass an engine you verified.
 
 ## Command table
 
@@ -33,8 +36,8 @@ Copied from `mur-core/src/cli/actions.rs` (`BrowserAction::Auth`) and
 
 | Command | Purpose |
 |---|---|
-| `mur browser auth <site> --url <URL> --browser <engine>` | First-time login for profile `<site>` |
-| `mur browser auth <site> --url <URL> --browser <engine> --reauth` | Replace an existing profile's state after a fresh login |
+| `mur browser auth <site> --url <URL>` | First-time login for profile `<site>` |
+| `mur browser auth <site> --url <URL> --reauth` | Replace an existing profile's state after a fresh login |
 | `mur browser status` | List profiles with their state and recorded runs |
 
 `mur browser auth` parameters:
@@ -44,7 +47,7 @@ Copied from `mur-core/src/cli/actions.rs` (`BrowserAction::Auth`) and
 | `<site>` | positional, required | Profile name; used as a path component under `~/.mur/browser/profiles/`. Must satisfy `validate_name`: `[A-Za-z0-9._-]`, max 64 chars, must not start with `.` |
 | `--url <URL>` | required | Login page to open in the headed session. Must be an absolute `http(s)` URL with a host |
 | `--reauth` | flag | Replace an existing profile state. Without it, the command refuses when `state.json.age` already exists |
-| `--browser <engine>` | optional value (**always pass it**, rule 3) | One of `chrome`, `chromium`, `firefox`, `msedge` |
+| `--browser <engine>` | optional value (**omit by default**, rule 3) | One of `chrome`, `chromium`, `firefox`, `msedge` |
 | `--allow-domain <DOMAIN>` | optional, repeatable | Domain the profile may navigate to; subdomains included. Must be a bare host (no scheme, port, path, or wildcard). Defaults to the host of `--url` |
 
 `--browser` value domain (`BrowserEngine`, clap `ValueEnum`):
@@ -61,7 +64,7 @@ Copied from `mur-core/src/cli/actions.rs` (`BrowserAction::Auth`) and
 1. Confirm a human is present and can see the terminal. If not → rule 2.
 2. Run `mur browser status` and read the `profiles:` line for `<site>`.
 3. Decide (see "When to reauth" below):
-   - profile absent → first-time `mur browser auth <site> --url <URL> --browser <engine>`
+   - profile absent → first-time `mur browser auth <site> --url <URL>`
    - profile present and healthy → nothing to do; hand the profile name to
      the calling mode
    - profile present but stale/broken → same command with `--reauth`
@@ -130,7 +133,7 @@ profiles at all.
 | `browser profile "<site>" already has encrypted state; use --reauth to replace it` | state exists, no `--reauth` | Confirm with the human, then add `--reauth` |
 | `no supported browser found. Install Chrome, Chromium, Firefox, or Microsoft Edge, then retry with --browser <engine>` | no engine installed | Ask the human to install one |
 | `login confirmation cancelled: stdin closed` | no interactive stdin | You violated rule 2 — stop |
-| `browser selection cancelled: stdin closed` | `--browser` omitted in a non-interactive session | You violated rule 3 — add `--browser` |
+| `browser selection cancelled: stdin closed` | `--browser` omitted, Playwright's Chromium absent, and several engines remain, in a non-interactive session | Run `mur browser setup`, or pass an engine you verified is installed (rule 3) |
 
 ## What this mode produces
 
