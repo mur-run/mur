@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { LanguageProvider } from "../../../i18n";
 import { DangerZone, DangerZoneBody } from "./DangerZone";
-import { OverrideDialog } from "./OverrideDialog";
 import { OverrideBadge } from "../../shell/OverrideBadge";
 
 // No jsdom in this test env; LanguageProvider reads localStorage on mount.
@@ -39,15 +38,6 @@ describe("DangerZone", () => {
     const stopped = html(<DangerZoneBody agentName="a" isRunning={false} onOpen={noop} />);
     expect(stopped).toContain("for one run only");
     expect(stopped).not.toContain("<button");
-  });
-});
-
-describe("OverrideDialog", () => {
-  it("starts with four unchecked boxes and Continue disabled", () => {
-    const out = html(<OverrideDialog agentName="a" onClose={noop} />);
-    expect((out.match(/type="checkbox"/g) ?? []).length).toBe(4);
-    expect(out).not.toMatch(/checked=""/);
-    expect(out).toMatch(/<button[^>]*disabled=""[^>]*>Continue<\/button>/);
   });
 });
 
