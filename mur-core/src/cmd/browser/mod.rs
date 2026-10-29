@@ -4,6 +4,8 @@ mod auth;
 pub mod doctor;
 pub mod engine_check;
 pub mod list;
+pub(crate) mod live_effect;
+pub(crate) mod live_entry;
 pub mod live_state;
 pub mod perms;
 mod replay;
