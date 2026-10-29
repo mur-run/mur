@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { useModalFocus } from "../../useModalFocus";
 import { useT } from "../../../i18n";
 import type { OverrideReply } from "../../../types";
 import { NO_CHOICE, allChosen, anyChosen, canContinue, toggleAll, type OverrideChoice } from "./overrideLogic";
@@ -16,6 +18,16 @@ export function OverrideDialog({ agentName, onClose }: { agentName: string; onCl
   const [banner, setBanner] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  useModalFocus(dialogRef);
+
+  // Busy disables the button that was just pressed, which drops focus to
+  // <body>; park it on the dialog so keyboard focus never leaves.
+  useEffect(() => {
+    const d = dialogRef.current;
+    if (d && !d.contains(document.activeElement)) d.focus();
+  }, [busy, result]);
 
   useEffect(() => {
     if (!anyChosen(choice)) {
@@ -62,11 +74,20 @@ export function OverrideDialog({ agentName, onClose }: { agentName: string; onCl
     </label>
   );
 
-  return (
+  return createPortal(
     <div className="modal__overlay" onClick={() => { if (!busy) onClose(); }}>
-      <div className="modal modal--wide override-dialog" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-busy={busy}
+        tabIndex={-1}
+        className="modal modal--wide override-dialog"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal__header">
-          <h2 className="modal__title">{t("override.dialog.title", { name: agentName })}</h2>
+          <h2 id={titleId} className="modal__title">{t("override.dialog.title", { name: agentName })}</h2>
           {!busy && (
             <button className="modal__close" onClick={onClose} aria-label={t("detail.close")}>
               ×
@@ -97,9 +118,9 @@ export function OverrideDialog({ agentName, onClose }: { agentName: string; onCl
             disabled={busy || result !== null}
             onChange={(e) => setTyped(e.target.value)}
           />
-          {busy && <p className="override-dialog__busy">{t("override.dialog.busy", { name: agentName })}</p>}
+          {busy && <p className="override-dialog__busy" role="status">{t("override.dialog.busy", { name: agentName })}</p>}
           {result && (
-            <p className={result.ok ? "override-dialog__result--ok" : "override-dialog__result--err"}>{result.text}</p>
+            <p role="status" className={result.ok ? "override-dialog__result--ok" : "override-dialog__result--err"}>{result.text}</p>
           )}
         </div>
         <div className="modal__footer">
@@ -119,6 +140,7 @@ export function OverrideDialog({ agentName, onClose }: { agentName: string; onCl
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
