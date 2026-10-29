@@ -2,7 +2,7 @@ use super::*;
 
 /// Write a `running.lock` naming `pid` and the sentinel that carries the
 /// startup flock, and return the agent dir.
-fn seed_runtime_state(mur_home: &Path, slug: &str, pid: u32) -> PathBuf {
+pub(super) fn seed_runtime_state(mur_home: &Path, slug: &str, pid: u32) -> PathBuf {
     let dir = mur_home.join("agents").join(slug);
     std::fs::create_dir_all(&dir).unwrap();
     let lock = mur_common::LockFile {
