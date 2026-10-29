@@ -24,6 +24,26 @@ export type RuntimeState =
 export interface AgentRuntimeStatus {
   name: string;
   state: RuntimeState;
+  /** Startup-override flags the live runtime booted with (CLI spelling);
+   *  absent when it runs with normal permissions. */
+  relaxed?: string[];
+}
+
+/** Mirrors the Rust `OverrideOutcome` serde shape (`tag = "kind"`). */
+export type OverrideOutcome =
+  | { kind: "applied"; late: boolean; detail: string | null }
+  | { kind: "rejected"; reason: string; late: boolean; detail: string | null }
+  | { kind: "failed"; detail: string }
+  | { kind: "abandoned"; reason: string };
+
+export interface OverrideReply {
+  outcome: OverrideOutcome;
+  message: string;
+}
+
+export interface NormalReply {
+  ok: boolean;
+  message: string;
 }
 
 // ── Appearance types ──────────────────────────────────────────────────────
