@@ -125,7 +125,11 @@ fn the_override_module_never_uses_the_dialog_plugin() {
 
 #[test]
 fn the_chip_restart_never_touches_an_override() {
-    let s = std::fs::read_to_string(src_root().join("proposal_chip.rs")).unwrap();
+    // Normalize line endings: a CRLF checkout (Windows runners) would
+    // otherwise hide the "\n}\n" that marks the end of the function.
+    let s = std::fs::read_to_string(src_root().join("proposal_chip.rs"))
+        .unwrap()
+        .replace("\r\n", "\n");
     let start = s
         .find("pub async fn restart_agent(")
         .expect("restart_agent exists");
