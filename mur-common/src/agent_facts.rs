@@ -275,7 +275,7 @@ pub fn agent_facts(mur_home: &Path, name: &str) -> Option<AgentFacts> {
     };
 
     // `persona.description` is auto-filled with "Agent <name>" at creation
-    // (cmd/agent/lifecycle.rs), which says nothing — treat it as unset rather
+    // (cmd/agent/lifecycle/), which says nothing — treat it as unset rather
     // than showing it as a role.
     let boilerplate = format!("Agent {name}");
     let role = p
