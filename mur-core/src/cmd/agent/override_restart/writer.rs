@@ -94,7 +94,11 @@ pub(crate) fn sweep(dir: &Path, agent: &str) -> io::Result<Swept> {
 pub(crate) enum PublishError {
     /// `link` hit `EEXIST`: a live file appeared after the sweep.
     Exists,
+    /// Failed before the link: nothing is live.
     Io(io::Error),
+    /// The link succeeded, so `<agent>.json` is live, but the directory
+    /// `fsync` failed. The caller owns the file and must Cleanup.
+    Unsynced(io::Error),
 }
 
 impl std::fmt::Display for PublishError {
@@ -102,13 +106,14 @@ impl std::fmt::Display for PublishError {
         match self {
             Self::Exists => f.write_str("another override file appeared"),
             Self::Io(e) => write!(f, "{e}"),
+            Self::Unsynced(e) => write!(f, "could not sync the override directory: {e}"),
         }
     }
 }
 
 /// Step 3. `<agent>.<nonce>.tmp` → `fsync` → `link` to `<agent>.json` (never
 /// replaces) → unlink the tmp → `fsync` the directory. The tmp name is gone
-/// on every return.
+/// on every return; the live file exists on `Ok` and on `Unsynced` only.
 pub(crate) fn publish(dir: &Path, agent: &str, file: &OverrideFile) -> Result<(), PublishError> {
     check_name(agent).map_err(PublishError::Io)?;
     create_private_dir(dir).map_err(PublishError::Io)?;
@@ -122,7 +127,26 @@ pub(crate) fn publish(dir: &Path, agent: &str, file: &OverrideFile) -> Result<()
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Err(PublishError::Exists),
         Err(e) => return Err(PublishError::Io(e)),
     }
-    sync_dir(dir).map_err(PublishError::Io)
+    sync_published_dir(dir).map_err(PublishError::Unsynced)
+}
+
+#[cfg(test)]
+type DirSyncHook = Box<dyn FnMut(&Path) -> io::Result<()>>;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs in place of the directory `fsync` after the link, so tests can
+    /// fail it (and act on the live file first).
+    pub(super) static DIR_SYNC_HOOK: std::cell::RefCell<Option<DirSyncHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn sync_published_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    if let Some(r) = DIR_SYNC_HOOK.with(|h| h.borrow_mut().as_mut().map(|f| f(dir))) {
+        return r;
+    }
+    sync_dir(dir)
 }
 
 /// What a Cleanup withdraw found.

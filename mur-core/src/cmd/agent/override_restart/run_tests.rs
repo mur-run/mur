@@ -495,3 +495,41 @@ fn the_writer_lock_is_released_after_a_panic_in_stop() {
     assert!(r.is_err());
     assert!(home.lock_is_free());
 }
+
+/// A directory `fsync` that fails after the link leaves the file live: the
+/// writer must withdraw it and never launch on a non-durable override.
+#[test]
+fn an_unsynced_publish_is_withdrawn_and_never_launches() {
+    let home = Home::new();
+    let mut fake = Fake::new(&home, Boot::Applies);
+    writer::DIR_SYNC_HOOK
+        .with(|h| *h.borrow_mut() = Some(Box::new(|_| Err(std::io::Error::other("eio")))));
+    let out = run(&home, Mode::Restart, &mut fake);
+    writer::DIR_SYNC_HOOK.with(|h| *h.borrow_mut() = None);
+    match out {
+        OverrideOutcome::Failed {
+            step: Step::Publish,
+            cleanup: Some(Cleanup::Withdrawn),
+            ..
+        } => {}
+        other => panic!("{other:?}"),
+    }
+    assert!(fake.calls.is_empty(), "{:?}", fake.calls);
+    assert!(!live_path(&home.dir(), NAME).exists());
+    let audit = home.audit();
+    assert!(audit.contains("startup_override_issued"), "{audit}");
+    assert!(audit.contains("startup_override_withdrawn"), "{audit}");
+    assert!(home.lock_is_free());
+}
+
+/// Like plain start/restart (#1980), a confirmed override launch is the
+/// user's answer to the keychain prompt, so pending markers are cleared.
+#[test]
+fn an_override_launch_clears_pending_keychain_markers() {
+    let home = Home::new();
+    let agent_home = home.path().join("agents").join(NAME);
+    mur_common::secret::keychain_pending::mark(&agent_home, "GOOGLE_MAPS_KEY").unwrap();
+    let mut fake = Fake::new(&home, Boot::Applies);
+    assert!(run(&home, Mode::Restart, &mut fake).is_success());
+    assert!(mur_common::secret::keychain_pending::list(&agent_home).is_empty());
+}
