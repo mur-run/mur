@@ -239,6 +239,7 @@ pub async fn auth(
         &KeychainStateKeyStore,
     )?;
     println!("saved encrypted browser profile {site:?}");
+    super::bind::after_auth(&home, site, &mut std::io::stdout());
     Ok(())
 }
 

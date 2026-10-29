@@ -20,7 +20,7 @@ use mur_common::host_pattern::{Normalization, normalize_host_pattern};
 use mur_common::proposal::Proposal;
 
 use super::browser_live_effect::Effect;
-pub(super) use super::browser_live_ops::ProfileOps;
+pub(crate) use super::browser_live_ops::ProfileOps;
 use super::browser_live_preview::render_preview;
 #[cfg(test)]
 use super::manage;

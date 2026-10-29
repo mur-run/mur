@@ -61,4 +61,11 @@ pub(crate) trait LiveOps {
     fn pending_repairs(&mut self, servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>>;
     /// Append the `broad_audited_enabled` trace event after a `--research` write.
     fn record_research(&mut self, agent: &str) -> anyhow::Result<()>;
+    /// Append the `profile_bound` trace event after a binder write (#2199).
+    fn record_profile_bound(
+        &mut self,
+        agent: &str,
+        old: Option<&str>,
+        new: &str,
+    ) -> anyhow::Result<()>;
 }

@@ -10,11 +10,27 @@ use super::browser_live_effect::Effect;
 use super::manage;
 
 /// Real profile-backed [`LiveOps`].
-pub(super) struct ProfileOps<'a>(pub &'a str);
+pub(crate) struct ProfileOps<'a>(pub &'a str);
 
 impl LiveOps for ProfileOps<'_> {
     fn record_research(&mut self, _agent: &str) -> anyhow::Result<()> {
         self.record_research_event()
+    }
+    fn record_profile_bound(
+        &mut self,
+        agent: &str,
+        old: Option<&str>,
+        new: &str,
+    ) -> anyhow::Result<()> {
+        let home = crate::cmd::agent::resolve_mur_home()?;
+        crate::cmd::agent::mcp_network::record_profile_bound(
+            &home,
+            agent,
+            LIVE_ENTRY,
+            old,
+            new,
+            chrono::Utc::now(),
+        )
     }
     fn servers(&mut self) -> anyhow::Result<Vec<McpServerEntry>> {
         Ok(crate::cmd::agent::load_profile_for_edit(self.0)?
