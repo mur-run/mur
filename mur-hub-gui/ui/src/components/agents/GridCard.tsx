@@ -9,6 +9,7 @@ import { PetFace } from "../PetFace";
 import { useT } from "../../i18n";
 import { CATEGORY_COLORS, avatarInitials, avatarPreset, familyOf } from "../../utils";
 import { StatusPill, statusOf } from "../shell/Status";
+import { OverrideBadge } from "../shell/OverrideBadge";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
@@ -226,6 +227,7 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
         </div>
         <div className="grid-card__foot">
           <StatusPill kind={statusOf(runtime?.state)} />
+          {runtime?.relaxed && <OverrideBadge flags={runtime.relaxed} />}
           <button
             className="grid-card__settings"
             onClick={(e) => { e.stopPropagation(); setSelected(agent.name); }}

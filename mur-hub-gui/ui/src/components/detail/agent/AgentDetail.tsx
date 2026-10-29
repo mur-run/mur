@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
-import type { AgentEntry, AgentRuntimeStatus, AgentDetail as AgentDetailData } from "../../../types";
+import type { AgentEntry, AgentRuntimeStatus, AgentDetail as AgentDetailData, NormalReply } from "../../../types";
 import type { ChannelSummary } from "../../../work/types";
 import type { ModelOption } from "../../modelPicker";
 import { useAgents } from "../../../context/AgentContext";
@@ -12,6 +12,7 @@ import { PetFace } from "../../PetFace";
 import { sanitizeChain } from "../../settings/modelSwitch";
 import { DetailPage } from "../../shell/DetailPage";
 import { OverflowMenu } from "../../shell/OverflowMenu";
+import { OverrideBadge } from "../../shell/OverrideBadge";
 import { statusOf } from "../../shell/Status";
 import { AGENT_TABS, AGENT_TAB_LABEL_KEY, detailGroupOf, type AgentTabId } from "../../shell/detailTabs";
 import { useDirtyGuard } from "../../shell/dirty";
@@ -32,6 +33,8 @@ export interface AgentDetailProps {
   onOpenHome: () => void;
   /** Dashboard only: the ⋯ "Open in window" item. Undefined inside a window. */
   onOpenInWindow?: () => void;
+  /** True in the dashboard: enables the Danger zone and the badge's action. */
+  inDashboard?: boolean;
 }
 
 // Lightweight toast — appends a bare `.toast` element to <body>, mirrors
@@ -47,7 +50,7 @@ function showToast(msg: string, durationMs = 2000) {
 /** The agent's full-width detail pane (spec §4.3): AgentInspector's data and
  *  handlers, rendered through DetailPage with the six grouped tabs. */
 export function AgentDetail({
-  agentName, entry, runtime, channels, needsYou, onOpenChat, onOpenHome, onOpenInWindow,
+  agentName, entry, runtime, channels, needsYou, onOpenChat, onOpenHome, onOpenInWindow, inDashboard,
 }: AgentDetailProps) {
   const { t } = useT();
   const { desiredDetailTab, setDesiredDetailTab } = useAgents();
@@ -156,6 +159,11 @@ export function AgentDetail({
   function handleStop(name: string) {
     invoke("stop_agent", { name }).catch((e) => showToast(`Failed: ${e}`));
   }
+  function handleRestartNormally(name: string) {
+    invoke<NormalReply>("restart_agent_normally", { name })
+      .then((r) => showToast(r.message, 6000))
+      .catch((e) => showToast(String(e), 6000));
+  }
   async function handleExport(name: string) {
     const outPath = await save({
       defaultPath: `${name}.muragent`,
@@ -208,6 +216,15 @@ export function AgentDetail({
       {entry?.role && <span>{entry.role}</span>}
       {entry?.role && <span className="sep">·</span>}
       <span className="mono">{entry?.model_id ?? "—"}</span>
+      {runtime?.relaxed && (
+        <>
+          <span className="sep">·</span>
+          <OverrideBadge
+            flags={runtime.relaxed}
+            onRestartNormally={inDashboard ? () => handleRestartNormally(agentName) : undefined}
+          />
+        </>
+      )}
     </>
   );
 
@@ -252,7 +269,7 @@ export function AgentDetail({
           setLibraryOpen={setLibraryOpen}
         />
       )}
-      {detail && tab === "capabilities" && <CapabilitiesTab detail={detail} onSaved={setDetail} isRunning={isRunning} />}
+      {detail && tab === "capabilities" && <CapabilitiesTab detail={detail} onSaved={setDetail} isRunning={isRunning} dashboardOnly={inDashboard} />}
       {tab === "memory" && <MemoryTab agentName={agentName} />}
       {tab === "automation" && <ScheduleTab agentName={agentName} />}
       {tab === "channels" && <ChannelsTab agentName={agentName} />}
