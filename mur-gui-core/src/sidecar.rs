@@ -44,6 +44,10 @@ pub enum RuntimeState {
 pub struct AgentRuntimeStatus {
     pub name: String,
     pub state: RuntimeState,
+    /// The startup-override flags the live runtime booted with, as the CLI
+    /// spells them; absent when it runs with normal permissions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relaxed: Option<Vec<String>>,
 }
 
 // ─── Internal messages ──────────────────────────────────────────────────────
@@ -308,14 +312,19 @@ fn emit_status(
                 .get_mut(name)
                 .map(|c| matches!(c.try_wait(), Ok(None)))
                 .unwrap_or(false);
-            let state = if child_alive || lock_is_live(mur_home, name) {
+            let lock = live_lock(mur_home, name);
+            let state = if child_alive || lock.is_some() {
                 RuntimeState::Running { pid: 0 }
             } else {
                 RuntimeState::Stopped
             };
+            let relaxed = lock
+                .and_then(|l| l.startup_override)
+                .map(|o| o.flags.cli_names().into_iter().map(String::from).collect());
             AgentRuntimeStatus {
                 name: name.clone(),
                 state,
+                relaxed,
             }
         })
         .collect();
@@ -404,14 +413,20 @@ fn spawn_runtime(slug: &str, mur_home: &Path) -> Result<Child, String> {
 
 /// Whether a live process currently owns the agent's `running.lock`.
 fn lock_is_live(mur_home: &Path, slug: &str) -> bool {
-    lock_owner_pid(mur_home, slug).is_some()
+    live_lock(mur_home, slug).is_some()
 }
 
 /// The pid of the live process owning the agent's `running.lock`, if any.
 fn lock_owner_pid(mur_home: &Path, slug: &str) -> Option<u32> {
+    live_lock(mur_home, slug).map(|l| l.pid)
+}
+
+/// The agent's `running.lock` when its owner is alive; one read serves both
+/// liveness and the override record.
+fn live_lock(mur_home: &Path, slug: &str) -> Option<mur_common::LockFile> {
     let lock = mur_home.join("agents").join(slug).join("running.lock");
     match mur_common::lock_file::read(&lock) {
-        Ok(Some(l)) if mur_common::lock_file::pid_alive(l.pid) => Some(l.pid),
+        Ok(Some(l)) if mur_common::lock_file::pid_alive(l.pid) => Some(l),
         _ => None,
     }
 }

@@ -368,3 +368,70 @@ fn probe_sentinel_matches_the_mur_common_copy() {
     assert!(!missing.exists(), "a probe must not create the agent dir");
     drop(flock);
 }
+
+/// Rewrite the seeded lock with a startup override on it.
+fn seed_override(dir: &Path, flags: mur_common::agent::OverrideFlags) {
+    let path = dir.join("running.lock");
+    let mut lock: mur_common::LockFile =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    lock.startup_override = Some(mur_common::agent::OverrideRecord {
+        nonce: "n".into(),
+        flags,
+        confirmed_by: mur_common::startup_override::ConfirmedBy::Tty,
+    });
+    std::fs::write(&path, serde_json::to_vec(&lock).unwrap()).unwrap();
+}
+
+fn snapshot_for(home: &Path, slug: &str) -> AgentRuntimeStatus {
+    let known: HashSet<String> = [slug.to_string()].into();
+    let (tx, rx) = watch::channel(Vec::new());
+    emit_status(&known, home, &mut HashMap::new(), &tx);
+    rx.borrow()
+        .iter()
+        .find(|s| s.name == slug)
+        .cloned()
+        .unwrap()
+}
+
+#[test]
+fn status_reports_a_live_override() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = seed_runtime_state(home.path(), "a", std::process::id());
+    seed_override(
+        &dir,
+        mur_common::agent::OverrideFlags {
+            no_hitl: true,
+            ..Default::default()
+        },
+    );
+    let s = snapshot_for(home.path(), "a");
+    assert_eq!(s.relaxed, Some(vec!["--no-hitl".to_string()]));
+    let json = serde_json::to_value(&s).unwrap();
+    assert_eq!(json["relaxed"], serde_json::json!(["--no-hitl"]));
+}
+
+#[test]
+fn status_without_an_override_has_no_relaxed_key() {
+    let home = tempfile::tempdir().unwrap();
+    seed_runtime_state(home.path(), "a", std::process::id());
+    let s = snapshot_for(home.path(), "a");
+    assert_eq!(s.relaxed, None);
+    let json = serde_json::to_value(&s).unwrap();
+    assert!(json.get("relaxed").is_none(), "{json}");
+}
+
+#[test]
+fn a_dead_lock_with_an_override_is_not_relaxed() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = seed_runtime_state(home.path(), "a", dead_pid());
+    seed_override(
+        &dir,
+        mur_common::agent::OverrideFlags {
+            full_perms: true,
+            ..Default::default()
+        },
+    );
+    let s = snapshot_for(home.path(), "a");
+    assert_eq!(s.state, RuntimeState::Stopped);
+    assert_eq!(s.relaxed, None);
+}
