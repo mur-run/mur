@@ -104,3 +104,57 @@ fn dial_does_not_gate_ungated_method() {
         "must not gate message/send"
     );
 }
+
+// ---------------------------------------------------------------------------
+// canonicalize_agent_name (#2208)
+// ---------------------------------------------------------------------------
+
+fn make_agent(home: &std::path::Path, dir: &str) {
+    let d = home.join("agents").join(dir);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("profile.yaml"), format!("name: {dir}\n")).unwrap();
+}
+
+/// The regression: on a case-insensitive filesystem `agents/Mur/profile.yaml`
+/// "exists" when the directory is `mur`, and the old exact-match probe handed
+/// `Mur` back. The listing is the source of truth on every filesystem.
+#[test]
+fn canonicalize_returns_on_disk_spelling() {
+    let home = tempdir().unwrap();
+    make_agent(home.path(), "mur");
+    assert_eq!(canonicalize_agent_name(home.path(), "Mur"), "mur");
+    assert_eq!(canonicalize_agent_name(home.path(), "MUR"), "mur");
+    assert_eq!(canonicalize_agent_name(home.path(), "mur"), "mur");
+}
+
+#[test]
+fn canonicalize_leaves_unknown_names_unchanged() {
+    let home = tempdir().unwrap();
+    assert_eq!(canonicalize_agent_name(home.path(), "Ghost"), "Ghost");
+    make_agent(home.path(), "mur");
+    assert_eq!(canonicalize_agent_name(home.path(), "Ghost"), "Ghost");
+}
+
+/// A directory without `profile.yaml` is not an agent.
+#[test]
+fn canonicalize_ignores_dirs_without_profile() {
+    let home = tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("agents").join("mur")).unwrap();
+    assert_eq!(canonicalize_agent_name(home.path(), "Mur"), "Mur");
+}
+
+/// Two case variants can only coexist on a case-sensitive filesystem. Exact
+/// spelling wins; with none exact it is ambiguous and the input comes back.
+#[test]
+fn canonicalize_case_variants_exact_wins_else_ambiguous() {
+    let home = tempdir().unwrap();
+    make_agent(home.path(), "mur");
+    let variant = home.path().join("agents").join("Mur");
+    if variant.exists() {
+        return; // case-insensitive filesystem: the scenario cannot exist
+    }
+    make_agent(home.path(), "Mur");
+    assert_eq!(canonicalize_agent_name(home.path(), "mur"), "mur");
+    assert_eq!(canonicalize_agent_name(home.path(), "Mur"), "Mur");
+    assert_eq!(canonicalize_agent_name(home.path(), "MUR"), "MUR");
+}

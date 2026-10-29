@@ -63,8 +63,7 @@ fn hitl_requests(home: &Path, channel_id: &str) -> usize {
 }
 
 /// One entry per member profile, however many steps name it and however it
-/// is cased. (Which spelling survives depends on the filesystem: a
-/// case-insensitive one keeps the first as typed — see `canonicalize_agent_name`.)
+/// is cased, always under the on-disk spelling (#2208).
 #[test]
 fn delegate_members_are_unique_per_profile() {
     let (tmp, _, _) = setup("coder", true);
@@ -75,7 +74,7 @@ fn delegate_members_are_unique_per_profile() {
     ]);
     let m = delegate_members(tmp.path(), &p);
     assert_eq!(m.len(), 1, "{m:?}");
-    assert!(m[0].eq_ignore_ascii_case("coder"), "{m:?}");
+    assert_eq!(m, vec!["coder".to_string()]);
 }
 
 /// The routing note lands on the prompt the member receives (intent, else

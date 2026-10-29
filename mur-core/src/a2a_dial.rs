@@ -45,25 +45,36 @@ use idle::{dial_io_timeout_for, is_io_timeout, note_frame, timeout_error};
 /// The runtime's spoof check ([`mur-agent-runtime`] `verify_name_match`)
 /// requires the name passed downstream to equal the profile's `name` field,
 /// which for every MUR-created agent equals its directory name — so we
-/// return the real directory name. If an exact match already exists, or no
-/// case-insensitive match is found, the input is returned unchanged so
-/// downstream code emits its normal "not found / not running" error.
+/// return the real directory name.
+///
+/// The answer always comes from the directory listing, never from probing
+/// `agents/<typed>/profile.yaml`: on a case-insensitive filesystem (the macOS
+/// default) that probe succeeds for any casing and would hand the typed
+/// spelling straight back (#2208). An entry spelled exactly like `typed`
+/// wins; otherwise a single case-insensitive match is returned. No match, or
+/// several case variants with none exact (only possible on a case-sensitive
+/// filesystem), returns the input unchanged so downstream code emits its
+/// normal "not found / not running" error.
 pub fn canonicalize_agent_name(home: &Path, typed: &str) -> String {
-    let agents = home.join("agents");
-    // Exact match wins — cheapest, and correct on case-sensitive filesystems.
-    if agents.join(typed).join("profile.yaml").is_file() {
+    let Ok(entries) = fs::read_dir(home.join("agents")) else {
         return typed.to_string();
-    }
-    if let Ok(entries) = fs::read_dir(&agents) {
-        for entry in entries.flatten() {
-            let dir = entry.file_name();
-            let dir = dir.to_string_lossy();
-            if dir.eq_ignore_ascii_case(typed) && entry.path().join("profile.yaml").is_file() {
-                return dir.into_owned();
-            }
+    };
+    let mut folded: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        let dir = entry.file_name();
+        let dir = dir.to_string_lossy();
+        if !dir.eq_ignore_ascii_case(typed) || !entry.path().join("profile.yaml").is_file() {
+            continue;
         }
+        if dir == typed {
+            return typed.to_string();
+        }
+        folded.push(dir.into_owned());
     }
-    typed.to_string()
+    match <[String; 1]>::try_from(folded) {
+        Ok([only]) => only,
+        Err(_) => typed.to_string(),
+    }
 }
 
 /// Dial the named agent and return the `result` field of the JSON-RPC
