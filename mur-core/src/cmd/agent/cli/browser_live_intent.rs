@@ -21,7 +21,8 @@ pub(super) const TASK_NOTICE: &str =
 /// Punctuation that ends or joins clauses; no hostname contains it.
 const SENTENCE_PUNCT: [char; 8] = ['?', '？', '，', '。', '、', '!', '！', '；'];
 
-/// Drop `--profile <x>`, `--yes`, `--research` and `--replace` so only host candidates remain.
+/// Drop `--profile <x>`, `--no-profile`, `--yes`, `--research` and `--replace`
+/// so only host candidates remain.
 fn host_tokens(args: &[String]) -> Vec<&str> {
     let mut out = Vec::new();
     let mut it = args.iter();
@@ -30,7 +31,7 @@ fn host_tokens(args: &[String]) -> Vec<&str> {
             "--profile" => {
                 it.next();
             }
-            "--yes" | "--research" | "--replace" => {}
+            "--yes" | "--research" | "--replace" | "--no-profile" => {}
             other => out.push(other),
         }
     }

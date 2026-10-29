@@ -174,16 +174,13 @@ pub(crate) fn bind_agent(
     Ok(Outcome::Bound)
 }
 
-/// How to put the old binding back. A `/browser live` rerun that names a
-/// profile re-points the entry, so a replaced profile has a one-command undo;
-/// a first-time bind has none today, and says so rather than print a command
-/// that would keep the new profile.
+/// How to put the old binding back: a `/browser live` rerun with the same
+/// scope that re-points the entry at the replaced profile, or drops the
+/// profile (`--no-profile`) when there was none.
 fn undo_line(agent: &str, entry: &McpServerEntry, replaces: Option<&str>) -> String {
-    let Some(old) = replaces else {
-        return format!(
-            "undo: there is no one-command unbind yet; {agent}'s live entry keeps this \
-             profile until another one is bound."
-        );
+    let profile = match replaces {
+        Some(old) => format!("--profile {old}"),
+        None => "--no-profile".to_owned(),
     };
     let scope = match entry.network.as_ref().map(|n| n.mode) {
         Some(McpNetMode::BroadAudited) => "--research".to_owned(),
@@ -193,9 +190,7 @@ fn undo_line(agent: &str, entry: &McpServerEntry, replaces: Option<&str>) -> Str
             .map(|n| n.allow_hosts.join(" "))
             .unwrap_or_default(),
     };
-    format!(
-        "undo, inside murmur in the {agent} conversation:\n  /browser live {scope} --profile {old}"
-    )
+    format!("undo, inside murmur in the {agent} conversation:\n  /browser live {scope} {profile}")
 }
 
 /// Why a non-`Bind` plan was refused, plus the command to run when one exists.

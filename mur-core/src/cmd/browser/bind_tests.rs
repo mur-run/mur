@@ -111,7 +111,10 @@ fn bind_rewrites_only_the_profile_argv_and_records_a_trace() {
     assert_eq!(&after.args[4..], &["--profile", "deepseek"]);
     assert_eq!(f.bound, vec![("mur".into(), None, "deepseek".into())]);
     assert!(out.contains("bound \"deepseek\" to mur"), "{out}");
-    assert!(out.contains("no one-command unbind"), "{out}");
+    assert!(
+        out.contains("/browser live *.deepseek.com gitea.example --no-profile"),
+        "{out}"
+    );
 }
 
 #[test]
