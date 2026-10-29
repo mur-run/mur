@@ -53,7 +53,9 @@ impl HubLauncher {
         }
     }
 
-    #[cfg(test)]
+    // Only the unix-gated test module calls this; match its gate so
+    // Windows test builds don't flag it as dead code.
+    #[cfg(all(test, unix))]
     fn with_stopper(mut self, stopper: Stopper) -> Self {
         self.stopper = stopper;
         self
