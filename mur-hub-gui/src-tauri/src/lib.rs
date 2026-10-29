@@ -37,6 +37,7 @@ pub mod models_admin;
 pub mod notif;
 pub mod official_catalog;
 pub mod onboarding;
+pub mod override_restart;
 pub mod panel;
 mod perm_admin;
 pub mod pet;
