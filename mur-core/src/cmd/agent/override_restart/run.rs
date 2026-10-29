@@ -17,7 +17,7 @@ use super::super::restart::{Launcher, RestartNote, kill_wait_secs};
 use super::super::restart_confirm::wait_for_confirmed_lock;
 use super::outcome::{Ack, Cleanup, OverrideOutcome, Step, classify};
 use super::prepare::check_running;
-use super::writer::{self, Swept, Withdrawn};
+use super::writer::{self, PublishError, Swept, Withdrawn};
 use super::{Issuer, JobGate, Mode, NOTHING_CHANGED, Prepared, audit};
 
 /// Suffix F (Hub spec §Failure paths), shared by the sweep and Cleanup.
@@ -79,10 +79,14 @@ pub fn override_restart(
         net_unrestricted: prepared.flags.net_unrestricted,
         full_perms: prepared.flags.full_perms,
     };
-    if let Err(e) = writer::publish(&job.dir, name, &file) {
+    let unsynced = match writer::publish(&job.dir, name, &file) {
+        Ok(()) => None,
+        // The link made the file live before the directory sync failed: it
+        // is ours to withdraw, exactly like a published file.
+        Err(PublishError::Unsynced(e)) => Some(e),
         // The permit drops uncommitted: nothing is live.
-        return publish_failed(&e.to_string());
-    }
+        Err(e) => return publish_failed(&e.to_string()),
+    };
     permit.commit(&nonce);
     job.audit(AuditEvent::StartupOverrideIssued {
         ts: Utc::now(),
@@ -92,8 +96,15 @@ pub fn override_restart(
         confirmed_by,
         window: job.window.clone(),
     });
+    if let Some(e) = unsynced {
+        let detail = format!("could not write the override durably ({e})");
+        return job.cleanup(&mut *gate, &nonce, Step::Publish, detail);
+    }
 
     // ── Step 4: launch ────────────────────────────────────────────────
+    // A confirmed start/restart is the user's "I answered the keychain
+    // prompt" signal, as for plain `cmd_start` / `cmd_restart` (#1980).
+    super::super::secret::clear_pending_keychain(&prepared.home.join("agents").join(name));
     let old_pid = prepared.old_pid.filter(|_| prepared.mode == Mode::Restart);
     if let Some(pid) = old_pid {
         let kill_wait = Duration::from_secs(kill_wait_secs(prepared.stop_timeout_secs));

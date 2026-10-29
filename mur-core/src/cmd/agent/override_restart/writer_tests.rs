@@ -210,3 +210,16 @@ fn withdraw_that_fails_leaves_the_file_live() {
     });
     assert!(live_path(d.path(), AGENT).exists());
 }
+
+/// The link made the file live before the directory sync failed, so the
+/// caller must be told it owns a live file, not that nothing happened.
+#[test]
+fn a_failed_dir_sync_after_the_link_is_unsynced_and_leaves_the_file_live() {
+    let d = tempfile::tempdir().unwrap();
+    DIR_SYNC_HOOK.with(|h| *h.borrow_mut() = Some(Box::new(|_| Err(io::Error::other("eio")))));
+    let r = publish(d.path(), AGENT, &file(&nonce()));
+    DIR_SYNC_HOOK.with(|h| *h.borrow_mut() = None);
+    assert!(matches!(r, Err(PublishError::Unsynced(_))), "{r:?}");
+    assert!(live_path(d.path(), AGENT).exists());
+    assert!(tmp_names(d.path()).is_empty());
+}
