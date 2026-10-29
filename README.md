@@ -734,6 +734,18 @@ Agent** wizard offers the same catalog as a source.
   Other fields (model, skills, companion) aren't pinned and can be edited
   freely. An existing agent is pinned automatically on its first start after
   the upgrade.
+- **Startup overrides from the MUR Hub** — the dashboard's *Capabilities* tab
+  ends in a collapsed **Danger zone** (never in a detail window) with
+  *Restart with overrides…* for a running agent. Pick `--no-hitl`,
+  `--net=unrestricted`, `--full-perms`, or all three; the dialog shows the
+  same banner `mur agent restart` prints, and Continue stays disabled until
+  you type the agent name exactly. A native macOS/OS dialog then asks once
+  more — **Cancel** is the default, so Return or Escape declines — and the
+  restart runs through the same code path as the CLI, with the same outcome
+  wording. While the override is live, a red *Relaxed* badge sits on the
+  agent's card, the dashboard header, and its detail window; the dashboard
+  one carries **Restart normally**. Quitting the Hub mid-restart asks first
+  and withdraws an override that has not been claimed yet.
 - **A refused start stays down, and says why** — when an agent refuses to start
   (changed entitlements, or a `profile.yaml` that does not parse), its
   launchd/systemd service no longer respawns it in a loop. `mur agent status

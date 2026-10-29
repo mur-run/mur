@@ -878,3 +878,37 @@
   color: var(--text-tertiary, #6B7688);
   font-size: 12px;
 }
+
+/* ── Startup overrides: Danger zone, dialog, badge ─────────────────────── */
+.danger-zone {
+  border: 1px solid var(--status-failed);
+  border-radius: var(--radius-sm);
+  padding: 0;
+}
+.danger-zone__header {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 10px 12px;
+  color: var(--status-failed);
+  font-weight: var(--fw-semi);
+  cursor: pointer;
+}
+.danger-zone__header[aria-expanded="true"] { border-bottom: 1px solid var(--status-failed); }
+.danger-zone__body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.danger-zone__guidance { margin: 0; }
+.override-dialog__flag { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.override-dialog__all { margin-top: 4px; font-weight: var(--fw-semi); }
+.override-dialog__banner {
+  white-space: pre-wrap;
+  color: var(--status-failed);
+  border: 1px solid var(--status-failed);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  font-size: var(--text-xs);
+}
+.override-dialog__result--err { color: var(--status-failed); }
+.override-dialog__result--ok { color: var(--status-running, inherit); }
+.override-badge { display: inline-flex; gap: 6px; align-items: center; }
+.badge--danger { background: var(--status-failed); color: #fff; }

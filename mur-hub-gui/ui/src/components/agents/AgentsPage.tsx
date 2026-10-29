@@ -216,6 +216,7 @@ function AgentsPageInner({
             needsYou={needsYou[selectedAgent] ?? 0}
             onOpenChat={onOpenChat}
             onOpenHome={onOpenHome}
+            inDashboard
             onOpenInWindow={() => {
               void openDetailWindow("agent", entry.name, entry.display_name);
             }}
