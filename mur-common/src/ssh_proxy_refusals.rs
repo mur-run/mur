@@ -6,7 +6,9 @@
 //! the actual reason (spec §"Refusals must be diagnosable outside the ssh
 //! client").
 
-use std::io;
+use std::io::{self, Write};
+
+use fs2::FileExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -42,18 +44,26 @@ pub fn read(agent_home: &Path) -> Vec<SshRefusal> {
         .unwrap_or_default()
 }
 
-/// Prepend `r`, keep [`RECENT_REFUSALS`], write atomically (temp + rename).
+/// Prepend `r`, keep [`RECENT_REFUSALS`], and atomically replace the file.
+/// A stable sidecar lock serializes the entire read-modify-write across threads
+/// and processes. Never remove the lock file: waiters may hold its inode open.
 pub fn record(agent_home: &Path, r: SshRefusal) -> io::Result<()> {
+    let path = refusals_path(agent_home);
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path.with_extension("json.lock"))?;
+    lock.lock_exclusive()?;
+    // Closing `lock` releases it on every return path, including errors.
     let mut all = read(agent_home);
     all.insert(0, r);
     all.truncate(RECENT_REFUSALS);
-    let path = refusals_path(agent_home);
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(
-        &tmp,
-        serde_json::to_vec_pretty(&all).map_err(io::Error::other)?,
-    )?;
-    std::fs::rename(&tmp, &path)
+    let mut tmp = tempfile::NamedTempFile::new_in(agent_home)?;
+    tmp.write_all(&serde_json::to_vec_pretty(&all).map_err(io::Error::other)?)?;
+    tmp.persist(&path).map_err(|e| e.error)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -80,6 +90,38 @@ mod tests {
         let got = read(tmp.path());
         assert_eq!(got.len(), RECENT_REFUSALS);
         assert_eq!(got[0].at_unix_ms, RECENT_REFUSALS as u64 + 1);
+    }
+
+    /// Concurrent writers must not lose each other's records or trip over a
+    /// shared temp file (each `record` is its own read-modify-rename).
+    #[test]
+    fn concurrent_records_are_all_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_path_buf();
+        let n = RECENT_REFUSALS as u64;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(n as usize));
+        let handles: Vec<_> = (0..n)
+            .map(|i| {
+                let (home, barrier) = (home.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    record(&home, r(i))
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap().unwrap();
+        }
+        let mut got: Vec<u64> = read(&home).iter().map(|x| x.at_unix_ms).collect();
+        got.sort_unstable();
+        assert_eq!(got, (0..n).collect::<Vec<_>>());
+        let leftovers: Vec<_> = std::fs::read_dir(&home)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
     }
 
     #[test]

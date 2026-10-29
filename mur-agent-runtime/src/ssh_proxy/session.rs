@@ -28,7 +28,7 @@ enum Bind {
     None,
     /// Host-key fingerprint of the most recent verified bind.
     Verified(String),
-    /// A bind failed to verify (or exceeded the cap). Sticky: a later valid
+    /// A bind failed to decode or verify (or exceeded the cap). Sticky: a later valid
     /// bind does not clear it, so a client cannot retry its way past.
     Poisoned(String),
 }
@@ -78,6 +78,15 @@ impl<'a, U: Upstream> Session<'a, U> {
         let req = match wire::decode_request(body) {
             Ok(r) => r,
             Err(e) => {
+                // An undecodable extension may be a session-bind attempt. Even
+                // a truncated name must not preserve an earlier verified bind
+                // or permit recovery via a later valid bind. Well-formed
+                // unknown extensions still follow OtherExtension below.
+                if body.first() == Some(&wire::SSH_AGENTC_EXTENSION)
+                    && !matches!(self.bind, Bind::Poisoned(_))
+                {
+                    self.bind = Bind::Poisoned(format!("malformed extension: {e}"));
+                }
                 self.refuse(Refusal::new(RefusalCode::MalformedRequest).detail(e.to_string()));
                 return Answer::Failure;
             }

@@ -179,6 +179,45 @@ async fn tampered_bind_is_session_bind_unverified_and_sticky() {
     assert_eq!(w.last_code().as_deref(), Some("session_bind_unverified"));
 }
 
+/// A malformed session-bind (truncated, or trailing bytes) must poison the
+/// connection exactly like one that fails to verify: it is still a bind
+/// attempt: it must invalidate an earlier verified bind and prevent a later
+/// valid bind from recovering the connection.
+#[tokio::test]
+async fn malformed_bind_after_a_valid_one_poisons_the_connection() {
+    let w = World::new();
+    let good = w.good_bind();
+    for bad in [
+        good[..good.len() - 3].to_vec(),
+        [good.clone(), vec![0]].concat(),
+    ] {
+        let (p, up, sink) = (w.policy(), w.upstream(), w.sink());
+        let mut sess = Session::new(&p, &up, &sink);
+        assert_eq!(sess.handle(&good).await, Answer::Success);
+        assert_eq!(sess.handle(&bad).await, Answer::Failure);
+        sess.handle(&sign_body(&w.keys[0].key_blob())).await;
+        assert_eq!(w.last_code().as_deref(), Some("session_bind_unverified"));
+    }
+}
+
+#[tokio::test]
+async fn malformed_first_bind_blocks_a_later_valid_one() {
+    let w = World::new();
+    let good = w.good_bind();
+    for bad in [
+        good[..good.len() - 3].to_vec(),
+        [good.clone(), vec![0]].concat(),
+        vec![wire::SSH_AGENTC_EXTENSION],
+    ] {
+        let (p, up, sink) = (w.policy(), w.upstream(), w.sink());
+        let mut sess = Session::new(&p, &up, &sink);
+        assert_eq!(sess.handle(&bad).await, Answer::Failure);
+        assert_eq!(sess.handle(&good).await, Answer::Failure);
+        sess.handle(&sign_body(&w.keys[0].key_blob())).await;
+        assert_eq!(w.last_code().as_deref(), Some("session_bind_unverified"));
+    }
+}
+
 #[tokio::test]
 async fn too_many_binds_poison_the_connection() {
     let w = World::new();
