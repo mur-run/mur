@@ -189,3 +189,52 @@ fn mcp_add_arg_accepts_hyphen_prefixed_values() {
     };
     assert_eq!(args, vec!["--engine".to_string()]);
 }
+
+#[test]
+fn override_flags_parse_on_start_and_restart() {
+    let AgentAction::Start { name, overrides } =
+        parse_cli_action(&["mur", "agent", "start", "a", "--no-hitl", "--confirm"])
+    else {
+        panic!("expected Start");
+    };
+    assert_eq!(name, "a");
+    assert!(overrides.flags().no_hitl && overrides.confirm);
+
+    let AgentAction::Restart { overrides, .. } =
+        parse_cli_action(&["mur", "agent", "restart", "a", "--dangerously-skip-all"])
+    else {
+        panic!("expected Restart");
+    };
+    let f = overrides.flags();
+    assert!(f.no_hitl && f.net_unrestricted && f.full_perms);
+
+    let AgentAction::Restart { overrides, .. } =
+        parse_cli_action(&["mur", "agent", "restart", "a", "--net=unrestricted"])
+    else {
+        panic!("expected Restart");
+    };
+    assert!(overrides.flags().net_unrestricted && !overrides.flags().no_hitl);
+}
+
+#[test]
+fn plain_start_and_restart_carry_no_override() {
+    let AgentAction::Start { overrides, .. } = parse_cli_action(&["mur", "agent", "start", "a"])
+    else {
+        panic!("expected Start");
+    };
+    assert!(!overrides.any());
+}
+
+#[test]
+fn override_flag_misuse_is_a_parse_error() {
+    for argv in [
+        &["mur", "agent", "start", "a", "--confirm"][..],
+        &["mur", "agent", "restart", "a", "--net=open"][..],
+        &["mur", "agent", "restart", "a", "--net"][..],
+    ] {
+        assert!(
+            Cli::try_parse_from(argv).is_err(),
+            "{argv:?} must not parse"
+        );
+    }
+}

@@ -7,13 +7,14 @@
 
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
 use super::start::tail_of;
 use super::startup_error::{LogMark, last_error_line, startup_log};
-use super::{pid_alive, resolve_mur_home, restart_confirm, stale};
+use super::{resolve_mur_home, restart_confirm, stale};
 use mur_common::startup_override::RESTART_KILL_GRACE_SECS;
 
 /// Fallback `stop_timeout_secs` used when the agent's `profile.yaml` cannot be
@@ -132,11 +133,11 @@ struct RestartReport {
 /// stopped concierge went unnoticed in the field. Errors and unconfirmed
 /// agents both fail the run — after the table, so the user sees the whole
 /// picture, not the first casualty.
-fn run_restarts(targets: &[String], agents_dir: &Path) -> Result<()> {
+fn run_restarts(targets: &[String], home: &Path) -> Result<()> {
     let mut reports: Vec<(String, RestartReport)> = Vec::new();
     for agent_name in targets {
         let on_disk = stale::on_disk_sha_for(agent_name);
-        let report = match restart_one(agent_name, agents_dir, &on_disk) {
+        let report = match restart_one(agent_name, home, &on_disk) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("error restarting '{agent_name}': {e:#}");
@@ -190,7 +191,7 @@ pub fn restart_stale_excluding(exclude: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    run_restarts(&targets, &agents_dir)
+    run_restarts(&targets, &mur_home)
 }
 
 /// Gracefully restart one or more agents.
@@ -237,7 +238,7 @@ pub fn cmd_restart(names: &[String], all: bool, stale: bool, dry_run: bool) -> R
     for t in &targets {
         super::secret::clear_pending_keychain(&agents_dir.join(t));
     }
-    run_restarts(&targets, &agents_dir)?;
+    run_restarts(&targets, &mur_home)?;
     if all || stale {
         report_unexamined(&agents_dir);
     }
@@ -350,8 +351,13 @@ fn unexamined(agents_dir: &Path, has_service: &dyn Fn(&str) -> bool) -> (Vec<Str
 /// Restart a single agent: SIGTERM, wait for exit, respawn, verify the fresh
 /// lock. `ok: false` means the agent was NOT confirmed running — never a
 /// silent note.
-fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<RestartReport> {
-    restart_one_with(name, agents_dir, on_disk_sha, &mut print_note)
+fn restart_one(name: &str, home: &Path, on_disk_sha: &str) -> Result<RestartReport> {
+    let mut launcher = CliLauncher::new(name, home, has_service(name));
+    restart_one_with(name, home, on_disk_sha, &mut launcher, &mut print_note)
+}
+
+fn has_service(name: &str) -> bool {
+    super::service::installed_service(name).is_some()
 }
 
 /// Outcome of [`restart_quiet`]: the verdict plus every progress line, in
@@ -367,10 +373,11 @@ pub(crate) struct QuietRestart {
 /// same path as `mur agent restart <name>`, with no stdout/stderr writes —
 /// progress is collected instead. Blocks; run it off the UI thread.
 pub(crate) fn restart_quiet(name: &str) -> Result<QuietRestart> {
-    let agents_dir = resolve_mur_home()?.join("agents");
+    let home = resolve_mur_home()?;
     let on_disk = stale::on_disk_sha_for(name);
     let mut notes = Vec::new();
-    let report = restart_one_with(name, &agents_dir, &on_disk, &mut |n| {
+    let mut launcher = CliLauncher::new(name, &home, has_service(name));
+    let report = restart_one_with(name, &home, &on_disk, &mut launcher, &mut |n| {
         notes.push(match n {
             RestartNote::Info(line) => (false, line),
             RestartNote::Failure(line) => (true, line),
@@ -406,11 +413,12 @@ pub(super) fn print_note(note: RestartNote) {
 /// to `note`. Behavior is otherwise identical.
 fn restart_one_with(
     name: &str,
-    agents_dir: &Path,
+    home: &Path,
     on_disk_sha: &str,
+    launcher: &mut dyn Launcher,
     note: &mut dyn FnMut(RestartNote),
 ) -> Result<RestartReport> {
-    let agent_home = agents_dir.join(name);
+    let agent_home = home.join("agents").join(name);
     let lock_path = agent_home.join("running.lock");
 
     if !lock_path.exists() {
@@ -426,92 +434,40 @@ fn restart_one_with(
     // Whether a launchd/systemd service unit is installed for this agent —
     // computed before signalling so we know, once the old pid is dead,
     // whether to expect an automatic respawn or do it ourselves.
-    let has_service = super::service::installed_service(name).is_some();
-
-    // Load stop_timeout_secs from the agent's profile (mirrors cmd_stop).
-    // The SIGKILL fallback must wait at least this long so the runtime's
-    // cooperative drain can complete before we force-kill.
-    let stop_timeout = {
-        let pp = agent_home.join("profile.yaml");
-        match fs::read_to_string(&pp)
-            .ok()
-            .and_then(|y| serde_yaml_ng::from_str::<_AgentProfile>(&y).ok())
-        {
-            Some(p) => p.lifecycle.stop_timeout_secs,
-            None => {
-                // Profile missing/unreadable/malformed: fall back to the
-                // default, but say so — silently truncating an operator's
-                // configured drain window is exactly the kind of thing
-                // that only shows up as a mysteriously-killed agent later.
-                note(RestartNote::Info(format!(
-                    "agent '{name}': could not read stop_timeout_secs from \
-                     {}; defaulting to {DEFAULT_STOP_TIMEOUT_SECS}s",
-                    pp.display()
-                )));
-                DEFAULT_STOP_TIMEOUT_SECS
-            }
-        }
-    };
+    let has_service = has_service(name);
+    let stop_timeout = stop_timeout_for(name, &agent_home, note);
 
     // Mark the startup log before the old process goes down, so a failure
     // report quotes only what THIS respawn wrote (#1979).
     let log_mark = startup_log(name, &agent_home, has_service).map(LogMark::at_end);
 
-    // ── SIGTERM (drain) ───────────────────────────────────────────────
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(old_pid as libc::pid_t, libc::SIGTERM);
-    }
-
-    // Wait for the old pid to exit.  Timeout = stop_timeout_secs + RESTART_KILL_GRACE_SECS
-    // so the SIGKILL fallback never fires while the runtime is still draining.
-    let term_deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(kill_wait_secs(stop_timeout));
-    while std::time::Instant::now() < term_deadline {
-        if !pid_alive(old_pid) {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    // Fallback SIGKILL if drain timed out (mirrors cmd_stop)
-    if pid_alive(old_pid) {
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(old_pid as libc::pid_t, libc::SIGKILL);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200));
+    // ── SIGTERM (drain), SIGKILL after the drain window ───────────────
+    if let Err(e) = launcher.stop(old_pid, Duration::from_secs(kill_wait_secs(stop_timeout))) {
+        // As before the seam: carry on, and let the wait report the verdict.
+        tracing::debug!(agent = name, error = %e, "old runtime did not exit");
     }
 
     // ── No installed service → nothing will respawn us automatically ──
     // Spawn the runtime directly, detached, so the respawn-poll loop below
     // (shared with the service-managed path) has a fresh process to find.
-    // The spawned pid rides along so the confirmation window can liveness-gate
-    // its slow cold start instead of treating it as "not coming back".
-    let mut direct_pid: Option<u32> = None;
     if !has_service {
         note(RestartNote::Info(format!(
             "agent '{name}' has no service installed; respawning runtime directly"
         )));
-        direct_pid = Some(direct_respawn(name, &agent_home)?);
     }
+    launcher.start()?;
 
     // ── Poll for fresh running.lock with a different pid ──────────────
     // launchd KeepAlive=true respawns on process exit. Confirmation lives in
     // `restart_confirm`: it kicks the service only when no runnable fresh
     // process exists, and gives a slow cold start (sandbox + model load) time
     // to write the lock instead of killing it mid-start.
-    let new_pid = restart_confirm::wait_for_confirmed_lock(
-        name,
-        &agent_home,
-        &lock_path,
-        old_pid,
-        has_service,
-        direct_pid,
-        note,
-    )?;
+    let new_pid =
+        restart_confirm::wait_for_confirmed_lock(&lock_path, Some(old_pid), launcher, None, note)?;
 
     Ok(match new_pid {
-        Some((_pid, new_sha)) => {
+        Some((_pid, new_lock)) => {
+            let new_sha = new_lock.build_sha;
             let landed = if new_sha.is_empty() {
                 on_disk_sha
             } else {
@@ -562,6 +518,34 @@ fn restart_one_with(
     })
 }
 
+/// The profile's `lifecycle.stop_timeout_secs` (mirrors `cmd_stop`). The
+/// SIGKILL fallback must wait at least this long so the runtime's
+/// cooperative drain can complete before it is force-killed.
+pub(super) fn stop_timeout_for(
+    name: &str,
+    agent_home: &Path,
+    note: &mut dyn FnMut(RestartNote),
+) -> u64 {
+    let pp = agent_home.join("profile.yaml");
+    match fs::read_to_string(&pp)
+        .ok()
+        .and_then(|y| serde_yaml_ng::from_str::<_AgentProfile>(&y).ok())
+    {
+        Some(p) => p.lifecycle.stop_timeout_secs,
+        None => {
+            // Profile missing/unreadable/malformed: fall back to the default,
+            // but say so — silently truncating an operator's configured drain
+            // window only shows up as a mysteriously-killed agent later.
+            note(RestartNote::Info(format!(
+                "agent '{name}': could not read stop_timeout_secs from \
+                 {}; defaulting to {DEFAULT_STOP_TIMEOUT_SECS}s",
+                pp.display()
+            )));
+            DEFAULT_STOP_TIMEOUT_SECS
+        }
+    }
+}
+
 fn read_lock(path: &Path) -> std::io::Result<Option<LockFile>> {
     mur_common::lock_file::read(path)
 }
@@ -592,7 +576,11 @@ fn short8(s: &str) -> &str {
     &s[..end]
 }
 
+mod launcher;
 mod respawn;
+#[cfg(test)]
+pub(super) use launcher::StopFailed;
+pub(super) use launcher::{CliLauncher, Launcher, StartLauncher};
 pub(super) use respawn::{direct_respawn, kickstart_service, poll_new_lock};
 
 #[cfg(test)]

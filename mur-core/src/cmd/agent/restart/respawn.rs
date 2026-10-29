@@ -8,14 +8,21 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result};
 
 use super::super::attest::verify_runtime_at;
-use super::super::{resolve_bin_dir, resolve_mur_home, stale};
+use super::super::{pid_alive, resolve_bin_dir, stale};
 use super::read_lock;
+use mur_common::LockFile;
 
 /// Spawn the runtime directly (detached) for an agent with no service unit.
 ///
 /// Returns the spawned child's pid so callers can liveness-gate the wait for
 /// its fresh `running.lock` (a slow cold start is a healthy start).
-pub(in crate::cmd::agent) fn direct_respawn(name: &str, agent_home: &Path) -> Result<u32> {
+/// `mur_home` is the home the respawned runtime reads (its `MUR_HOME`): the
+/// caller's, so an override written under it reaches this boot.
+pub(in crate::cmd::agent) fn direct_respawn(
+    name: &str,
+    agent_home: &Path,
+    mur_home: &Path,
+) -> Result<u32> {
     // The agent's OWN runtime, not the one beside `mur`. These are not always
     // the same file, and when they differ this path used to relaunch the exact
     // binary `--stale` had just flagged — a restart that reported success and
@@ -23,7 +30,6 @@ pub(in crate::cmd::agent) fn direct_respawn(name: &str, agent_home: &Path) -> Re
     let target = stale::runtime_path_for(name);
     verify_runtime_at(&target)
         .with_context(|| format!("cannot respawn agent '{name}' — runtime attestation failed"))?;
-    let mur_home = resolve_mur_home()?;
     let stderr_log = agent_home.join("stderr.log");
     let stdout_file = OpenOptions::new()
         .create(true)
@@ -38,7 +44,7 @@ pub(in crate::cmd::agent) fn direct_respawn(name: &str, agent_home: &Path) -> Re
     let child = Command::new(&target)
         .arg("--profile")
         .arg(name)
-        .env("MUR_HOME", &mur_home)
+        .env("MUR_HOME", mur_home)
         .stdin(Stdio::null())
         .stdout(stdout_file)
         .stderr(stderr_file)
@@ -52,12 +58,13 @@ pub(in crate::cmd::agent) fn direct_respawn(name: &str, agent_home: &Path) -> Re
     Ok(child.id())
 }
 
-/// Wait up to `secs` for `lock_path` to hold a pid different from `old_pid`.
+/// Wait up to `secs` for a fresh `lock_path`: one naming a pid other than
+/// `old_pid`, or, with no `old_pid` (a plain start), any live pid.
 pub(in crate::cmd::agent) fn poll_new_lock(
     lock_path: &Path,
-    old_pid: u32,
+    old_pid: Option<u32>,
     secs: u64,
-) -> Option<(u32, String)> {
+) -> Option<LockFile> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     loop {
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -65,10 +72,17 @@ pub(in crate::cmd::agent) fn poll_new_lock(
             return None;
         }
         if let Ok(Some(new_lock)) = read_lock(lock_path)
-            && new_lock.pid != old_pid
+            && is_fresh(&new_lock, old_pid)
         {
-            return Some((new_lock.pid, new_lock.build_sha));
+            return Some(new_lock);
         }
+    }
+}
+
+fn is_fresh(lock: &LockFile, old_pid: Option<u32>) -> bool {
+    match old_pid {
+        Some(old) => lock.pid != old,
+        None => pid_alive(lock.pid),
     }
 }
 

@@ -11,13 +11,31 @@ pub(super) async fn run_agent(action: AgentAction) -> Result<()> {
         } => cmd::agent::cmd_create(&name, no_interactive, display_name, model, provider)?,
         AgentAction::List { json } => cmd::agent::cmd_list(json)?,
         AgentAction::Status { name } => cmd::agent::cmd_status(&name)?,
-        AgentAction::Start { name } => cmd::agent::cmd_start(&name)?,
+        AgentAction::Start { name, overrides } if overrides.any() => {
+            cmd::agent::cmd_start_override(&name, overrides.flags(), overrides.confirm)?
+        }
+        AgentAction::Start { name, .. } => cmd::agent::cmd_start(&name)?,
         AgentAction::Stop { name } => cmd::agent::cmd_stop(&name)?,
         AgentAction::Restart {
             names,
             all,
             stale,
             dry_run,
+            overrides,
+        } if overrides.any() => cmd::agent::cmd_restart_override(
+            &names,
+            all,
+            stale,
+            dry_run,
+            overrides.flags(),
+            overrides.confirm,
+        )?,
+        AgentAction::Restart {
+            names,
+            all,
+            stale,
+            dry_run,
+            ..
         } => cmd::agent::cmd_restart(&names, all, stale, dry_run)?,
         AgentAction::Remove { name, purge, force } => cmd::agent::cmd_remove(&name, purge, force)?,
         AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,

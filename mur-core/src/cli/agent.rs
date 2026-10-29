@@ -4,6 +4,9 @@ use clap::Subcommand;
 
 use crate::cmd;
 
+mod override_args;
+pub use override_args::OverrideArgs;
+
 #[derive(Subcommand)]
 pub enum AgentAction {
     /// Create a new agent profile
@@ -41,6 +44,8 @@ pub enum AgentAction {
     Start {
         /// Agent name
         name: String,
+        #[command(flatten)]
+        overrides: OverrideArgs,
     },
     /// Stop a running agent and keep it stopped: unloads its launchd/systemd
     /// service first when one is installed (otherwise KeepAlive respawns it a
@@ -66,6 +71,8 @@ pub enum AgentAction {
         /// Print targets without restarting
         #[arg(long = "dry-run")]
         dry_run: bool,
+        #[command(flatten)]
+        overrides: OverrideArgs,
     },
     /// Remove an agent: deletes its runtime symlink and its launchd/systemd
     /// service, and leaves `~/.mur/agents/<name>/` in place unless --purge.

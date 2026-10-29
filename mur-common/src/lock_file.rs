@@ -145,6 +145,60 @@ pub fn classify(lock_path: &Path) -> AgentStatus {
     }
 }
 
+/// The runtime's startup exclusion file in an agent's directory. A booting
+/// runtime holds its flock for the whole seal, before `running.lock` exists.
+pub const SENTINEL_FILE: &str = "running.sentinel";
+
+/// What [`probe_sentinel`] found on an agent's `running.sentinel`.
+#[derive(Debug)]
+pub enum SentinelProbe {
+    /// The agent directory does not exist.
+    NoAgentDir,
+    /// A live process owns it — or the probe could not tell, which counts
+    /// the same.
+    Owned,
+    /// The caller now holds its flock and it names no live pid. The handle
+    /// keeps the flock until dropped; the dead pid it recorded is erased.
+    Free(std::fs::File),
+}
+
+/// Take the `running.sentinel` flock if nobody owns it, creating the file
+/// when it is missing (the same open the runtime does, so both always meet
+/// on one inode).
+///
+/// A copy of `mur-gui-core::sidecar::probe_sentinel`, pinned to it by a
+/// shared-fixture test in `mur-gui-core`, until that one moves here.
+/// Drop a `Free` handle before launching a runtime, or it fails its own
+/// flock and exits as a duplicate.
+pub fn probe_sentinel(agent_dir: &Path) -> SentinelProbe {
+    use fs2::FileExt;
+    use std::io::Read;
+
+    let mut file = match std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(agent_dir.join(SENTINEL_FILE))
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SentinelProbe::NoAgentDir,
+        Err(_) => return SentinelProbe::Owned,
+    };
+    if file.try_lock_exclusive().is_err() {
+        return SentinelProbe::Owned;
+    }
+    let mut pid = String::new();
+    if file.read_to_string(&mut pid).is_err() {
+        return SentinelProbe::Owned;
+    }
+    if pid.trim().parse::<u32>().is_ok_and(pid_alive) {
+        return SentinelProbe::Owned;
+    }
+    let _ = file.set_len(0);
+    SentinelProbe::Free(file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

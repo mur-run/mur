@@ -288,7 +288,7 @@ fn systemd_owns_unit(show: &str) -> bool {
 /// `MUR_HOME` set by a systemd unit's `Environment=` lines (last wins), with
 /// systemd's double-quote / backslash quoting undone.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn systemd_unit_mur_home(unit: &str) -> Option<PathBuf> {
+pub(crate) fn systemd_unit_mur_home(unit: &str) -> Option<PathBuf> {
     let prefix = format!("{}=", mur_common::home::MUR_HOME_ENV);
     let mut found = None;
     for line in unit.lines() {
@@ -341,7 +341,7 @@ fn split_systemd_words(s: &str) -> Vec<String> {
 /// `MUR_HOME` from a launchd plist's `EnvironmentVariables` (the XML form
 /// `install_launchd` writes), XML entities undone.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn launchd_plist_mur_home(plist: &str) -> Option<PathBuf> {
+pub(crate) fn launchd_plist_mur_home(plist: &str) -> Option<PathBuf> {
     let env = plist.split("<key>EnvironmentVariables</key>").nth(1)?;
     let env = &env[..env.find("</dict>")?];
     let key = format!("<key>{}</key>", mur_common::home::MUR_HOME_ENV);
