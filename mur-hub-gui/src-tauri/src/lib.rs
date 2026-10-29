@@ -37,6 +37,7 @@ pub mod models_admin;
 pub mod notif;
 pub mod official_catalog;
 pub mod onboarding;
+pub mod override_restart;
 pub mod panel;
 mod perm_admin;
 pub mod pet;
@@ -91,12 +92,22 @@ fn list_runtime_statuses(supervisor: State<'_, SupervisorState>) -> Vec<AgentRun
 }
 
 #[tauri::command]
-async fn start_agent(name: String, supervisor: State<'_, SupervisorState>) -> Result<(), String> {
+async fn start_agent(
+    name: String,
+    supervisor: State<'_, SupervisorState>,
+    jobs: State<'_, override_restart::jobs::OverrideJobs>,
+) -> Result<(), String> {
+    jobs.refuse_if_busy(&name)?;
     supervisor.0.start(&name).await
 }
 
 #[tauri::command]
-async fn stop_agent(name: String, supervisor: State<'_, SupervisorState>) -> Result<(), String> {
+async fn stop_agent(
+    name: String,
+    supervisor: State<'_, SupervisorState>,
+    jobs: State<'_, override_restart::jobs::OverrideJobs>,
+) -> Result<(), String> {
+    jobs.refuse_if_busy(&name)?;
     supervisor.0.stop(&name).await;
     Ok(())
 }
@@ -305,6 +316,7 @@ pub fn run() {
         .manage(chat::ChatRegistryState::default())
         .manage(session_allow::SessionAllowState::default())
         .manage(SupervisorState(supervisor))
+        .manage(override_restart::jobs::OverrideJobs::default())
         .manage(onboarding::spec::WizardSpecState::default())
         .manage(PetState(Mutex::new(std::collections::HashMap::new())))
         .manage(EventBusState(EventBus::new(256)))
@@ -676,6 +688,9 @@ pub fn run() {
             start_agent,
             stop_agent,
             proposal_chip::restart_agent,
+            override_restart::commands::restart_agent_with_overrides,
+            override_restart::commands::restart_agent_normally,
+            override_restart::commands::override_banner,
             chat::agent_chat_send,
             chat::agent_chat_cancel,
             chat::channel_load,
@@ -853,6 +868,7 @@ pub fn run() {
             // A server the Hub started should not outlive the Hub: a listening
             // socket the user never asked for has no business surviving the app
             // that opened it. One that was already running is untouched.
+            override_restart::quit::on_run_event(_app, &_event);
             if matches!(_event, tauri::RunEvent::Exit) {
                 dashboard::shutdown();
             }

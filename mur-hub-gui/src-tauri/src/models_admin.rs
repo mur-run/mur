@@ -360,15 +360,26 @@ pub fn update_model(
     reg.save_to(&path).map_err(|e| e.to_string())
 }
 
+/// The concierge agent's slug, which a registry model change restarts.
+const CONCIERGE: &str = "mur";
+
 /// Switch the concierge to a registry model, restarting the sidecar.
 #[tauri::command]
 pub async fn use_registry_model(app: AppHandle, ref_name: String) -> Result<(), String> {
+    // The concierge restarts below; never under an override restart's feet.
+    if let Err(e) = app
+        .state::<crate::override_restart::jobs::OverrideJobs>()
+        .refuse_if_busy(CONCIERGE)
+    {
+        tracing::warn!("model change refused: {e}");
+        return Err(e);
+    }
     let home = crate::mur_home_path();
     crate::seed_mur::set_concierge_model_ref(&home, &ref_name).map_err(|e| e.to_string())?;
 
     let supervisor = app.state::<crate::SupervisorState>();
-    supervisor.0.stop("mur").await;
-    if let Err(e) = supervisor.0.start("mur").await {
+    supervisor.0.stop(CONCIERGE).await;
+    if let Err(e) = supervisor.0.start(CONCIERGE).await {
         tracing::warn!("restart concierge after model change failed: {e}");
     }
     Ok(())

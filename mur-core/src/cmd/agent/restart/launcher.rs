@@ -18,7 +18,7 @@ use super::{RestartNote, direct_respawn, kickstart_service};
 /// How long to wait for the pid to vanish after SIGKILL before calling the
 /// stop failed. SIGKILL cannot be caught; this only covers the kernel
 /// tearing the process down.
-const POST_KILL_WAIT: Duration = Duration::from_secs(2);
+pub const POST_KILL_WAIT: Duration = Duration::from_secs(2);
 const STOP_POLL: Duration = Duration::from_millis(100);
 
 /// The old runtime is still alive after SIGTERM, the drain window, SIGKILL

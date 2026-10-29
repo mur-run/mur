@@ -97,7 +97,9 @@ fn payload(agent: &str, p: Proposal) -> Option<ChipPayload> {
 pub async fn restart_agent(
     name: String,
     supervisor: State<'_, SupervisorState>,
+    jobs: State<'_, crate::override_restart::jobs::OverrideJobs>,
 ) -> Result<(), String> {
+    jobs.refuse_if_busy(&name)?;
     supervisor.0.stop(&name).await;
     supervisor.0.start(&name).await
 }

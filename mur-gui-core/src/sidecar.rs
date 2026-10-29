@@ -13,11 +13,17 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing::{info, warn};
+
+mod handover;
+pub use handover::{Watched, stop_child};
+
+/// How often the actor re-checks child and lock liveness.
+pub const STATUS_POLL: Duration = Duration::from_secs(5);
 
 // ─── Public types ──────────────────────────────────────────────────────────
 
@@ -38,6 +44,10 @@ pub enum RuntimeState {
 pub struct AgentRuntimeStatus {
     pub name: String,
     pub state: RuntimeState,
+    /// The startup-override flags the live runtime booted with, as the CLI
+    /// spells them; absent when it runs with normal permissions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relaxed: Option<Vec<String>>,
 }
 
 // ─── Internal messages ──────────────────────────────────────────────────────
@@ -48,6 +58,12 @@ enum Msg {
     /// swallowing them into the log.
     Start(String, oneshot::Sender<Result<(), String>>),
     Stop(String),
+    /// Lend the child to a blocking caller (the override restart's stop).
+    TakeChild(String, oneshot::Sender<Option<Child>>),
+    /// A lent child coming back.
+    ReturnChild(String, Child),
+    /// Start like `Start`, and also report the pid and its exit.
+    StartWatched(String, oneshot::Sender<Result<Watched, String>>),
     Shutdown,
 }
 
@@ -63,9 +79,15 @@ pub struct Supervisor {
 impl Supervisor {
     /// Create the supervisor and start its background actor + status poller.
     pub fn new(mur_home: PathBuf) -> Self {
+        Self::with_poll_interval(mur_home, STATUS_POLL)
+    }
+
+    /// [`Supervisor::new`] with another poll period; tests use a short one so
+    /// an exit is noticed without waiting [`STATUS_POLL`].
+    pub fn with_poll_interval(mur_home: PathBuf, poll: Duration) -> Self {
         let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<Msg>(64);
         let (status_tx, status_rx) = watch::channel::<Vec<AgentRuntimeStatus>>(Vec::new());
-        tokio::spawn(os_actor(mur_home, msg_rx, status_tx));
+        tokio::spawn(os_actor(mur_home, msg_rx, status_tx, poll));
         Supervisor { msg_tx, status_rx }
     }
 
@@ -94,6 +116,60 @@ impl Supervisor {
         let _ = self.msg_tx.send(Msg::Stop(name.into())).await;
     }
 
+    /// Take the supervised child for `slug` out of the actor, so a blocking
+    /// caller can stop it without blocking the actor. `None` when the Hub
+    /// holds no child for it.
+    pub async fn take_child(&self, slug: impl Into<String>) -> Option<Child> {
+        let (tx, rx) = oneshot::channel();
+        self.msg_tx
+            .send(Msg::TakeChild(slug.into(), tx))
+            .await
+            .ok()?;
+        rx.await.ok().flatten()
+    }
+
+    /// Give a taken child back without waiting; on a full or closed channel
+    /// the child comes back to the caller.
+    pub fn try_return_child(&self, slug: String, child: Child) -> Result<(), Child> {
+        use tokio::sync::mpsc::error::TrySendError;
+        match self.msg_tx.try_send(Msg::ReturnChild(slug, child)) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(m) | TrySendError::Closed(m)) => Err(take_back(m)),
+        }
+    }
+
+    /// For a blocking thread after `try_return_child` found the channel full:
+    /// wait up to `within` for room. Must not be called on a runtime thread.
+    pub fn return_child_within(
+        &self,
+        rt: &tokio::runtime::Handle,
+        slug: String,
+        child: Child,
+        within: Duration,
+    ) -> Result<(), Child> {
+        let tx = self.msg_tx.clone();
+        rt.block_on(async move {
+            let permit = match tokio::time::timeout(within, tx.reserve()).await {
+                Ok(Ok(p)) => p,
+                _ => return Err(child),
+            };
+            permit.send(Msg::ReturnChild(slug, child));
+            Ok(())
+        })
+    }
+
+    /// Start `slug` and report the pid it runs as plus its exit, so a caller
+    /// waiting for a boot can tell "still booting" from "died".
+    pub async fn start_watched(&self, slug: impl Into<String>) -> Result<Watched, String> {
+        let (tx, rx) = oneshot::channel();
+        self.msg_tx
+            .send(Msg::StartWatched(slug.into(), tx))
+            .await
+            .map_err(|_| "supervisor is not running".to_string())?;
+        rx.await
+            .map_err(|_| "supervisor dropped the start request".to_string())?
+    }
+
     /// Shut down the supervisor actor (does not stop running agents — OS owns them).
     pub async fn shutdown(self) {
         let _ = self.msg_tx.send(Msg::Shutdown).await;
@@ -106,6 +182,7 @@ async fn os_actor(
     mur_home: PathBuf,
     mut rx: tokio::sync::mpsc::Receiver<Msg>,
     status_tx: watch::Sender<Vec<AgentRuntimeStatus>>,
+    poll: Duration,
 ) {
     // Agents this Hub spawned and supervises directly. The Hub owns each
     // child's lifetime, so there is exactly one runtime per agent.
@@ -117,7 +194,11 @@ async fn os_actor(
     // recognise foreign runtimes) is never asked about them and the Agents page
     // renders every one of them idle while they are plainly running.
     let mut known: HashSet<String> = adopt_live_runtimes(&mur_home);
-    let mut poll_interval = tokio::time::interval(Duration::from_secs(5));
+    // Lent children that came back to a refilled slot: killed, awaiting reap.
+    let mut reaping: Vec<(String, Child)> = Vec::new();
+    // `StartWatched` callers waiting to hear their child exited.
+    let mut watchers: HashMap<String, watch::Sender<Option<ExitStatus>>> = HashMap::new();
+    let mut poll_interval = tokio::time::interval(poll);
     poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
@@ -127,13 +208,24 @@ async fn os_actor(
                     Msg::Shutdown => {
                         for (slug, mut child) in children.drain() {
                             let _ = child.kill();
-                            let _ = child.wait();
+                            let status = child.wait().ok();
+                            handover::notify_one(&mut watchers, &slug, status);
                             info!(agent = %slug, "stopped supervised runtime");
+                        }
+                        // `wait`, not `try_wait`: SIGKILL lands asynchronously,
+                        // so a single `try_wait` right after it usually sees
+                        // `None`, and the dropped `Child` is never reaped — a
+                        // zombie for the life of the process. SIGKILL cannot be
+                        // ignored, so this wait is bounded.
+                        for (_, mut child) in reaping.drain(..) {
+                            let _ = child.kill();
+                            let _ = child.wait();
                         }
                         break;
                     }
 
                     Msg::Start(slug, reply) => {
+                        handover::notify_exits(&mut children, &mut watchers);
                         known.insert(slug.clone());
                         let result = ensure_running(&slug, &mur_home, &mut children);
                         match &result {
@@ -148,7 +240,8 @@ async fn os_actor(
                         match children.remove(&slug) {
                             Some(mut child) => {
                                 let _ = child.kill();
-                                let _ = child.wait();
+                                let status = child.wait().ok();
+                                handover::notify_one(&mut watchers, &slug, status);
                             }
                             // No handle of our own — the runtime may still be
                             // alive from an earlier Hub session or the CLI.
@@ -159,6 +252,32 @@ async fn os_actor(
                         known.remove(&slug);
                         emit_status(&known, &mur_home, &mut children, &status_tx);
                     }
+
+                    Msg::TakeChild(slug, reply) => {
+                        let _ = reply.send(children.remove(&slug));
+                    }
+
+                    Msg::ReturnChild(slug, child) => {
+                        handover::reinsert(&mut children, &mut reaping, slug, child);
+                    }
+
+                    Msg::StartWatched(slug, reply) => {
+                        handover::notify_exits(&mut children, &mut watchers);
+                        known.insert(slug.clone());
+                        let result = ensure_running(&slug, &mur_home, &mut children).map(|()| {
+                            let pid = children.get(&slug).map(Child::id);
+                            let (tx, exit) = watch::channel(None);
+                            if pid.is_some() {
+                                watchers.insert(slug.clone(), tx);
+                            }
+                            Watched { pid, exit }
+                        });
+                        if let Err(e) = &result {
+                            warn!(agent = %slug, "start failed: {e}");
+                        }
+                        emit_status(&known, &mur_home, &mut children, &status_tx);
+                        let _ = reply.send(result);
+                    }
                 }
             }
 
@@ -167,11 +286,21 @@ async fn os_actor(
                 // started from the CLI while the Hub is open, and it would
                 // otherwise stay invisible until the next Hub restart.
                 known.extend(adopt_live_runtimes(&mur_home));
+                handover::drain_reaping(&mut reaping);
+                handover::notify_exits(&mut children, &mut watchers);
                 if !known.is_empty() {
                     emit_status(&known, &mur_home, &mut children, &status_tx);
                 }
             }
         }
+    }
+}
+
+/// The child inside a `ReturnChild` that could not be sent.
+fn take_back(msg: Msg) -> Child {
+    match msg {
+        Msg::ReturnChild(_, child) => child,
+        _ => unreachable!("only ReturnChild is sent through take_back"),
     }
 }
 
@@ -188,14 +317,19 @@ fn emit_status(
                 .get_mut(name)
                 .map(|c| matches!(c.try_wait(), Ok(None)))
                 .unwrap_or(false);
-            let state = if child_alive || lock_is_live(mur_home, name) {
+            let lock = live_lock(mur_home, name);
+            let state = if child_alive || lock.is_some() {
                 RuntimeState::Running { pid: 0 }
             } else {
                 RuntimeState::Stopped
             };
+            let relaxed = lock
+                .and_then(|l| l.startup_override)
+                .map(|o| o.flags.cli_names().into_iter().map(String::from).collect());
             AgentRuntimeStatus {
                 name: name.clone(),
                 state,
+                relaxed,
             }
         })
         .collect();
@@ -284,14 +418,20 @@ fn spawn_runtime(slug: &str, mur_home: &Path) -> Result<Child, String> {
 
 /// Whether a live process currently owns the agent's `running.lock`.
 fn lock_is_live(mur_home: &Path, slug: &str) -> bool {
-    lock_owner_pid(mur_home, slug).is_some()
+    live_lock(mur_home, slug).is_some()
 }
 
 /// The pid of the live process owning the agent's `running.lock`, if any.
 fn lock_owner_pid(mur_home: &Path, slug: &str) -> Option<u32> {
+    live_lock(mur_home, slug).map(|l| l.pid)
+}
+
+/// The agent's `running.lock` when its owner is alive; one read serves both
+/// liveness and the override record.
+fn live_lock(mur_home: &Path, slug: &str) -> Option<mur_common::LockFile> {
     let lock = mur_home.join("agents").join(slug).join("running.lock");
     match mur_common::lock_file::read(&lock) {
-        Ok(Some(l)) if mur_common::lock_file::pid_alive(l.pid) => Some(l.pid),
+        Ok(Some(l)) if mur_common::lock_file::pid_alive(l.pid) => Some(l),
         _ => None,
     }
 }

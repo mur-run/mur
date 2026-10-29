@@ -64,6 +64,15 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signa
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 
+# The startup-override confirmation calls rfd directly: tauri-plugin-dialog
+# 2.7.1 remaps rfd's `Cancel` (Escape, window close) to the second custom
+# label, which would read a dismissed dialog as "Restart with overrides".
+# Same version, target set and features the plugin resolves to
+# (`common-controls-v6`, plus `gtk3` from its default), so the graph keeps
+# one rfd and gains no crate.
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
+rfd = { version = "0.16", default-features = false, features = ["common-controls-v6", "gtk3"] }
+
 [features]
 default = ["custom-protocol", "macos-un-notifications"]
 custom-protocol = ["tauri/custom-protocol"]
