@@ -699,6 +699,30 @@ Agent** wizard offers the same catalog as a source.
   ones you approved earlier. The refusal points at
   `mur agent perm list-paths <agent>`, whose header shows the seal state.
   Tools set to `allow` still run.
+- **Loosen one boot, on purpose** — `mur agent start|restart <agent>` takes
+  `--no-hitl`, `--net=unrestricted`, `--full-perms`, or
+  `--dangerously-skip-all` (all three) for the next process lifetime only;
+  `profile.yaml` and the pins are never touched, and the next plain start is
+  back to normal. A terminal shows what is relaxed and what stays on, and you
+  type the agent name to go ahead; a script passes `--confirm` (deliberately
+  not `--yes`, which means "approve every gated action"), and without either
+  nothing is written. With an override flag `restart` takes exactly one name.
+
+  | Flag | Relaxes | Still enforced |
+  |---|---|---|
+  | `--no-hitl` | calls that would ask because of a default run without asking | calls **classified** `Spend` (`fleet_run`, `parallel_jobs`, `delegate_to`) or `Privileged`, and calls with no declared tier, still ask — declare `risk:` on an MCP tool to cover it; explicit per-tool `ask` / `deny` rules; remembered denials; the untrusted-input rule |
+  | `--net=unrestricted` | shell and child-process egress is open | MCP servers stay behind the egress proxy and its credential scan |
+  | `--full-perms` | `fs_deny` reset to the defaults (`~/.ssh`, `~/.aws`, `~/.gnupg`); any process may spawn | the default deny list, credential paths, write-protected MUR state (`secrets/`, keys, pins), fail-closed sealing |
+
+  The untrusted-input rule stays: a side-effect call in the same turn as fresh
+  untrusted input still parks, and unattended it is **deferred** — held for a
+  human, never auto-released. `mur agent status <agent>` prints
+  `⚠ override active (ovr-…)` with the flags and the number of parked calls,
+  `mur agent perm show` says "Relaxed by startup override (ovr-…)" instead of reporting drift,
+  and the boot posts a banner on the agent's channel. The override applies only
+  on a sealed boot; an unsealed one reports it rejected. In `mur agent cli`,
+  `!mur agent start <agent> --no-hitl` hands over the terminal for the prompt;
+  a plain start, or one with `--confirm`, stays in the transcript.
 - **An agent can't grant itself more** — Landlock is allow-only, so on Linux
   an agent's shell could rewrite its own `profile.yaml` and widen the
   entitlements its next start seals. MUR now keeps a copy of each agent's
@@ -1247,7 +1271,7 @@ mur dashboard        # terminal TUI dashboard
 ```
 mur
 ├── init / doctor / update / stats / verify
-├── agent        create · start · stop · restart · remove · cli · send · card · dial · who · limits ·
+├── agent        create · start · stop · restart (--no-hitl · --net · --full-perms) · remove · cli · send · card · dial · who · limits ·
 │                export · install · install-service · addon · companion · voice · pair ·
 │                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal · intent-check) · secret · hitl (list · forget · pending · approve · deny) ·
 │                fallback · smart · routing · effort · trash · rollback · turn (list · undo) … (40+)
