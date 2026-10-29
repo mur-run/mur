@@ -132,11 +132,22 @@ fn clear_runtime_state_refuses_when_the_sentinel_names_a_live_pid() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = seed_runtime_state(tmp.path(), "booting", dead_pid());
     std::fs::remove_file(dir.join("running.lock")).unwrap();
-    std::fs::write(dir.join("running.sentinel"), std::process::id().to_string()).unwrap();
+    let pid = std::process::id().to_string();
+    std::fs::write(dir.join("running.sentinel"), &pid).unwrap();
 
     clear_runtime_state(tmp.path(), "booting");
 
-    assert!(dir.join("running.sentinel").exists());
+    // The sentinel is never unlinked, so its existence proves nothing; the
+    // refusal shows in the socket surviving and the pid being left intact.
+    // `running.lock` isn't checked: the setup above already removed it.
+    assert!(
+        dir.join("agent.sock").exists(),
+        "a live owner's socket must survive"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("running.sentinel")).unwrap(),
+        pid
+    );
 }
 
 #[test]
