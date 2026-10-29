@@ -6806,6 +6806,7 @@ dependencies = [
  "mur-mcp-proto",
  "mur-open-items",
  "mur-track",
+ "mur-trash",
  "rand 0.8.6",
  "regex",
  "reqwest 0.12.28",
@@ -7004,6 +7005,7 @@ dependencies = [
  "mur-monitor",
  "mur-open-items",
  "mur-track",
+ "mur-trash",
  "notify",
  "oauth2",
  "open",
@@ -7079,6 +7081,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "fs2",
  "image",
  "libc",
  "mur-common",
@@ -7181,6 +7184,19 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "mur-trash"
+version = "2.97.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "libc",
+ "mur-common",
+ "shell-words",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
