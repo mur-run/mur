@@ -335,7 +335,11 @@ fn run_adds_once_with_per_agent_run_and_offers_restart() {
     let (text, _) = run("bob", &s(&["--yes", "new.example.com"]), true, &mut f).unwrap();
     assert_eq!(f.adds.len(), 1, "second call must not re-add");
     assert!(text.contains("old.example.com"), "{text}");
-    assert_eq!(hosts_of(&f.servers), s(&["new.example.com"]));
+    // #2101: a rerun adds; it no longer drops what was allowed before.
+    assert_eq!(
+        hosts_of(&f.servers),
+        s(&["old.example.com", "new.example.com"])
+    );
 }
 
 // 11a: a new entry is written ONCE, by `mcp_add`, already restricted — no
@@ -782,3 +786,6 @@ fn restricted_policy_does_not_inherit_deny_hosts() {
     carry_deny_hosts(&mut after, Some(&existing));
     assert!(after.deny_hosts.is_empty());
 }
+
+#[path = "browser_live_merge_tests.rs"]
+mod merge;
