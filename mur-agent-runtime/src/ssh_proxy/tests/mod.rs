@@ -5,6 +5,7 @@ mod fixtures;
 mod listener;
 mod rsa_vector;
 mod session;
+mod sign_binding;
 
 use fixtures::*;
 

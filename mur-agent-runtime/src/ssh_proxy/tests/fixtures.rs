@@ -126,6 +126,11 @@ pub fn rsa_sig_blob(sha512: bool) -> Vec<u8> {
 
 /// A `session-bind@openssh.com` extension body (type byte included).
 pub fn bind_body(host_key: &[u8], session_id: &[u8], sig: &[u8]) -> Vec<u8> {
+    bind_body_fwd(host_key, session_id, sig, false)
+}
+
+/// [`bind_body`] with the `is_forwarding` flag chosen.
+pub fn bind_body_fwd(host_key: &[u8], session_id: &[u8], sig: &[u8], fwd: bool) -> Vec<u8> {
     let mut b = vec![crate::ssh_proxy::wire::SSH_AGENTC_EXTENSION];
     put_string(
         &mut b,
@@ -134,14 +139,72 @@ pub fn bind_body(host_key: &[u8], session_id: &[u8], sig: &[u8]) -> Vec<u8> {
     put_string(&mut b, host_key);
     put_string(&mut b, session_id);
     put_string(&mut b, sig);
-    b.push(0);
+    b.push(u8::from(fwd));
     b
 }
 
+/// The session id every test bind uses unless it says otherwise.
+pub const SID: &[u8] = b"sid";
+
+/// A sign request for `key_blob` whose data is a valid `publickey` userauth
+/// request for session [`SID`].
 pub fn sign_body(key_blob: &[u8]) -> Vec<u8> {
+    sign_data_body(key_blob, &Userauth::new(SID, key_blob).encode())
+}
+
+/// A sign request with arbitrary data.
+pub fn sign_data_body(key_blob: &[u8], data: &[u8]) -> Vec<u8> {
     let mut b = vec![crate::ssh_proxy::wire::SSH_AGENTC_SIGN_REQUEST];
     put_string(&mut b, key_blob);
-    put_string(&mut b, b"data to sign");
+    put_string(&mut b, data);
     put_u32(&mut b, 0);
     b
+}
+
+/// The data an ssh client asks the agent to sign during publickey auth
+/// (RFC 4252 section 7; OpenSSH PROTOCOL section 2.5 for the hostbound
+/// method). Built independently of the proxy's parser.
+pub struct Userauth<'a> {
+    pub session_id: &'a [u8],
+    pub user: &'a [u8],
+    pub service: &'a [u8],
+    pub method: &'a [u8],
+    pub key_blob: &'a [u8],
+    /// `Some` selects the hostbound method's trailing server host key.
+    pub host_key: Option<&'a [u8]>,
+}
+
+impl<'a> Userauth<'a> {
+    pub fn new(session_id: &'a [u8], key_blob: &'a [u8]) -> Self {
+        Self {
+            session_id,
+            user: b"git",
+            service: b"ssh-connection",
+            method: b"publickey",
+            key_blob,
+            host_key: None,
+        }
+    }
+
+    pub fn hostbound(mut self, host_key: &'a [u8]) -> Self {
+        self.method = b"publickey-hostbound-v00@openssh.com";
+        self.host_key = Some(host_key);
+        self
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        let mut d = Vec::new();
+        put_string(&mut d, self.session_id);
+        d.push(50); // SSH_MSG_USERAUTH_REQUEST
+        put_string(&mut d, self.user);
+        put_string(&mut d, self.service);
+        put_string(&mut d, self.method);
+        d.push(1); // TRUE: this is a real signature, not a query
+        put_string(&mut d, b"ssh-ed25519");
+        put_string(&mut d, self.key_blob);
+        if let Some(h) = self.host_key {
+            put_string(&mut d, h);
+        }
+        d
+    }
 }
