@@ -144,7 +144,12 @@ jobs:
             libdbus-1-dev \
             libasound2-dev \
             libespeak-ng-dev \
-            pkg-config
+            pkg-config \
+            openssh-server
+          # ssh_proxy_openssh runs an unprivileged sshd on loopback; Debian's
+          # sshd refuses to start without its privilege-separation dir even
+          # when not root. The test fails (not skips) under CI if sshd is absent.
+          sudo mkdir -p /run/sshd
       - name: Install protobuf (macOS)
         if: runner.os == 'macOS'
         run: brew install protobuf

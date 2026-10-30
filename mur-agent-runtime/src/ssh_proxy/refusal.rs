@@ -17,8 +17,11 @@ pub enum RefusalCode {
     KeyNotAllowed,
     HostNotAllowed,
     HitlUnavailable,
-    /// Phase 2 only: every signature is refused until HITL is wired.
-    HitlNotWired,
+    /// A person said no to this key on this host, now or earlier.
+    HitlDenied,
+    /// The approval was asked for and not answered in time. It stays
+    /// pending; nothing was signed.
+    HitlDeferred,
     PolicyUnpinned,
     MalformedRequest,
     /// The connecting process is not this agent or one it spawned.
@@ -36,7 +39,7 @@ pub enum RefusalCode {
 }
 
 impl RefusalCode {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::PolicyInvalid,
         Self::UpstreamUnavailable,
         Self::NoSessionBind,
@@ -44,7 +47,8 @@ impl RefusalCode {
         Self::KeyNotAllowed,
         Self::HostNotAllowed,
         Self::HitlUnavailable,
-        Self::HitlNotWired,
+        Self::HitlDenied,
+        Self::HitlDeferred,
         Self::PolicyUnpinned,
         Self::MalformedRequest,
         Self::PeerNotSelf,
@@ -63,7 +67,8 @@ impl RefusalCode {
             Self::KeyNotAllowed => "key_not_allowed",
             Self::HostNotAllowed => "host_not_allowed",
             Self::HitlUnavailable => "hitl_unavailable",
-            Self::HitlNotWired => "hitl_not_wired",
+            Self::HitlDenied => "hitl_denied",
+            Self::HitlDeferred => "hitl_deferred",
             Self::PolicyUnpinned => "policy_unpinned",
             Self::MalformedRequest => "malformed_request",
             Self::PeerNotSelf => "peer_not_self",
@@ -168,9 +173,13 @@ impl Refusal {
                 "the approval channel is unavailable, and signatures are never passed through"
                     .into()
             }
-            RefusalCode::HitlNotWired => format!(
-                "policy allows host key {host}, but approval prompts are not wired yet, \
-                 so this MUR version signs nothing"
+            RefusalCode::HitlDenied => {
+                format!("signing for host key {host} was denied at the approval prompt")
+            }
+            RefusalCode::HitlDeferred => format!(
+                "signing for host key {host} is waiting for approval and nobody answered in \
+                 time; answer it with `mur agent hitl <agent> approve`, then retry the \
+                 connection"
             ),
             RefusalCode::PolicyUnpinned => {
                 "this agent's entitlements have no trusted pin, so its ssh policy cannot be trusted"

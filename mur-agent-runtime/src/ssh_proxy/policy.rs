@@ -18,12 +18,18 @@ pub enum PinTrust {
     Unpinned,
 }
 
-/// One listed key: its display label and the host-key fingerprints it may
-/// sign for.
+/// One listed key: its display label and the host keys it may sign for.
 #[derive(Debug, Clone)]
 pub struct KeyEntry {
     label: Option<String>,
-    hosts: Vec<String>,
+    hosts: Vec<HostEntry>,
+}
+
+/// One allowed host key and its display label (never resolved at runtime).
+#[derive(Debug, Clone)]
+struct HostEntry {
+    fp: String,
+    label: Option<String>,
 }
 
 /// What the proxy enforces. Default deny throughout.
@@ -42,6 +48,7 @@ pub struct Allowed {
     pub key_fp: String,
     pub key_label: Option<String>,
     pub host_key_fp: String,
+    pub host_label: Option<String>,
 }
 
 impl Policy {
@@ -63,8 +70,10 @@ impl Policy {
                 label: k.label.clone(),
                 hosts: Vec::new(),
             });
-            e.hosts
-                .extend(k.allow_hosts.iter().map(|h| h.host_key.clone()));
+            e.hosts.extend(k.allow_hosts.iter().map(|h| HostEntry {
+                fp: h.host_key.clone(),
+                label: h.label.clone(),
+            }));
         }
         Self::Enforce(keys)
     }
@@ -109,13 +118,14 @@ impl Policy {
         let Some(host) = host_key_fp else {
             return Err(refusal(RefusalCode::NoSessionBind));
         };
-        if !entry.hosts.iter().any(|h| h == host) {
+        let Some(h) = entry.hosts.iter().find(|h| h.fp == host) else {
             return Err(refusal(RefusalCode::HostNotAllowed).host(host));
-        }
+        };
         Ok(Allowed {
             key_fp: key_fp.to_string(),
             key_label: entry.label.clone(),
             host_key_fp: host.to_string(),
+            host_label: h.label.clone(),
         })
     }
 }

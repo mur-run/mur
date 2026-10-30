@@ -1,6 +1,7 @@
 //! Phase 2 tests (plan §"Phase 2 tests").
 
 mod fixtures;
+mod gate;
 #[cfg(unix)]
 mod listener;
 mod rsa_vector;
@@ -180,7 +181,7 @@ pub(crate) fn policy_for(key_fp: &str, host_fp: &str) -> Policy {
                 label: Some("deploy".into()),
                 allow_hosts: vec![SshHostRule {
                     host_key: host_fp.into(),
-                    label: None,
+                    label: Some("test-host".into()),
                 }],
             }],
         },

@@ -9,7 +9,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 
 use super::fixtures::*;
+use super::gate::{FakeGate, NeverAsked};
 use super::policy_for;
+use crate::ssh_proxy::gate::{GateOutcome, SignGate};
 use crate::ssh_proxy::keys::fingerprint;
 use crate::ssh_proxy::listener::{self, HeldUpstream, PeerGate, Proxy};
 use crate::ssh_proxy::refusal::RefusalSink;
@@ -73,6 +75,10 @@ struct Rig {
 }
 
 async fn rig(gate: PeerGate) -> Rig {
+    rig_with(gate, Arc::new(NeverAsked)).await
+}
+
+async fn rig_with(gate: PeerGate, approvals: Arc<dyn SignGate>) -> Rig {
     let keys = vec![Ed::new(), Ed::new(), Ed::new()];
     let host = Ed::new();
     let agent = FakeAgent::start(keys.iter().map(TestHost::key_blob).collect());
@@ -88,6 +94,7 @@ async fn rig(gate: PeerGate) -> Rig {
         upstream: upstream.clone(),
         sink: RefusalSink::new(Some(home.path().to_path_buf())),
         gate,
+        approvals,
     });
     tokio::spawn(listener::serve(l, proxy));
     Rig {
@@ -130,19 +137,30 @@ async fn listing_through_the_socket_shows_only_the_policy_key() {
 }
 
 #[tokio::test]
-async fn an_allowed_sign_is_still_refused_and_never_forwarded() {
-    let r = rig(admit_all()).await;
+async fn an_approved_sign_returns_the_upstream_signature() {
+    let r = rig_with(admit_all(), FakeGate::new(GateOutcome::Allow)).await;
+    let mut c = UnixStream::connect(&r.sock).await.unwrap();
+    let bind = bind_body(&r.host.key_blob(), b"sid", &r.host.sign_blob(b"sid"));
+    assert_eq!(ask(&mut c, &bind).await, Answer::Success);
+    let a = ask(&mut c, &sign_body(&r.keys[0].key_blob())).await;
+    assert_eq!(a, Answer::SignResponse(b"A REAL SIGNATURE".to_vec()));
+    assert_eq!(last_code(&r), None);
+}
+
+#[tokio::test]
+async fn a_denied_sign_is_never_forwarded() {
+    let r = rig_with(admit_all(), FakeGate::new(GateOutcome::Deny)).await;
     let mut c = UnixStream::connect(&r.sock).await.unwrap();
     let bind = bind_body(&r.host.key_blob(), b"sid", &r.host.sign_blob(b"sid"));
     assert_eq!(ask(&mut c, &bind).await, Answer::Success);
     let before = r.agent.bytes_in.load(Ordering::SeqCst);
     let a = ask(&mut c, &sign_body(&r.keys[0].key_blob())).await;
     assert_eq!(a, Answer::Failure);
-    assert_eq!(last_code(&r).as_deref(), Some("hitl_not_wired"));
+    assert_eq!(last_code(&r).as_deref(), Some("hitl_denied"));
     assert_eq!(
         r.agent.bytes_in.load(Ordering::SeqCst),
         before,
-        "a sign request must never reach the upstream in Phase 2"
+        "a denied sign request must never reach the upstream"
     );
 }
 
@@ -184,6 +202,7 @@ async fn upstream_that_was_never_reached_refuses_upstream_unavailable() {
         upstream: Arc::new(HeldUpstream::disconnected()),
         sink: RefusalSink::new(Some(home.path().to_path_buf())),
         gate: admit_all(),
+        approvals: Arc::new(NeverAsked),
     });
     tokio::spawn(listener::serve(listener::bind(&sock).unwrap(), proxy));
     let mut c = UnixStream::connect(&sock).await.unwrap();

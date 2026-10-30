@@ -16,6 +16,16 @@ pub(super) struct Sealed {
     pub(super) sandbox_record: Option<mur_common::agent::SandboxRecord>,
     /// The ssh-agent proxy socket, when the proxy is running.
     pub(super) ssh_auth_sock: Option<std::path::PathBuf>,
+    /// The proxy's approval gate, filled by the supervisor once its HITL
+    /// channel is built. `Some` exactly when the proxy is running.
+    pub(super) ssh_gate: Option<SshGateSlot>,
+}
+
+/// What the supervisor needs to fill the proxy's approval gate.
+pub(super) struct SshGateSlot {
+    pub(super) slot: Arc<crate::ssh_proxy::gate::GateSlot>,
+    /// The proxy is audit-only for this agent (spec: the prompt says so).
+    pub(super) audit_only: bool,
 }
 
 pub(super) async fn prepare_and_seal(
@@ -434,26 +444,34 @@ pub(super) async fn prepare_and_seal(
     // Listener after the seal, in the agent's own home. Refusals reach the
     // agent's channel through the same start-notice channel.
     #[cfg(unix)]
-    let ssh_auth_sock = match ssh_upstream {
+    let (ssh_auth_sock, ssh_gate) = match ssh_upstream {
         Some(upstream) => {
             let sink = crate::ssh_proxy::refusal::RefusalSink::new(Some(agent_home.to_path_buf()))
                 .with_channel(super::start_notice::refusal_poster(&signer));
-            super::ssh_proxy_boot::start_after_seal(super::ssh_proxy_boot::StartArgs {
+            let slot = Arc::new(crate::ssh_proxy::gate::GateSlot::default());
+            let sock = super::ssh_proxy_boot::start_after_seal(super::ssh_proxy_boot::StartArgs {
                 agent_home,
                 agents_dir: mur_home.join("agents"),
                 ent: &profile.inner.entitlements.ssh,
                 pin_trust,
                 upstream,
                 sink,
+                approvals: slot.clone(),
             })
-            .await
+            .await;
+            let gate = sock.as_ref().map(|_| SshGateSlot {
+                slot,
+                audit_only: ssh_proxy.state
+                    == mur_common::ssh_proxy_status::SshProxyState::AuditOnly,
+            });
+            (sock, gate)
         }
-        None => None,
+        None => (None, None),
     };
     #[cfg(not(unix))]
-    let ssh_auth_sock = {
+    let (ssh_auth_sock, ssh_gate) = {
         let _ = pin_trust;
-        None
+        (None, None)
     };
 
     Ok(Sealed {
@@ -462,6 +480,7 @@ pub(super) async fn prepare_and_seal(
         approval_token,
         sandbox_record,
         ssh_auth_sock,
+        ssh_gate,
     })
 }
 
