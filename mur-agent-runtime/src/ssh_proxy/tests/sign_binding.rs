@@ -3,7 +3,9 @@
 //! refusal here must leave the fake upstream without a single sign request.
 
 use super::fixtures::*;
+use super::gate::FakeGate;
 use super::session::{FakeUpstream, World};
+use crate::ssh_proxy::gate::GateOutcome;
 use crate::ssh_proxy::session::Session;
 use crate::ssh_proxy::wire::{self, Answer};
 use mur_common::ssh_proxy_refusals;
@@ -17,10 +19,13 @@ struct Outcome {
     forwarded_signs: usize,
 }
 
-/// Send `binds` in order, then one sign request for `key` with `data`.
+/// Send `binds` in order, then one sign request for `key` with `data`. The
+/// gate denies, so a request that passes every binding rule and the policy
+/// ends at `hitl_denied` and is still never forwarded.
 async fn run(w: &World, binds: &[Vec<u8>], key: usize, data: &[u8]) -> Outcome {
     let (p, up, sink) = (w.policy(), w.upstream(), w.sink());
-    let mut sess = Session::new(&p, &up, &sink);
+    let gate = FakeGate::new(GateOutcome::Deny);
+    let mut sess = Session::new(&p, &up, &sink, &*gate);
     for b in binds {
         assert_eq!(sess.handle(b).await, Answer::Success, "setup bind refused");
     }
@@ -59,14 +64,14 @@ fn assert_refused(o: &Outcome, want: &str) {
     );
 }
 
-/// Test 1. The matching request still reaches the policy, which in this
-/// phase ends at `hitl_not_wired`.
+/// Test 1. The matching request passes every binding rule and the policy,
+/// and reaches the approval gate (which denies here).
 #[tokio::test]
 async fn matching_session_id_reaches_the_policy() {
     let w = World::new();
     let key = w.keys[0].key_blob();
     let o = run(&w, &[w.good_bind()], 0, &Userauth::new(SID, &key).encode()).await;
-    assert_refused(&o, "hitl_not_wired");
+    assert_refused(&o, "hitl_denied");
 }
 
 /// Test 2. The attack: bind proves session H1, signature is for H2.
@@ -107,7 +112,7 @@ async fn hostbound_host_key_must_match_the_bind() {
     );
     let host = w.host.key_blob();
     let good = Userauth::new(SID, &key).hostbound(&host).encode();
-    assert_refused(&run(&w, &[w.good_bind()], 0, &good).await, "hitl_not_wired");
+    assert_refused(&run(&w, &[w.good_bind()], 0, &good).await, "hitl_denied");
 }
 
 /// Test 5. The key inside the data must be the key asked to sign.

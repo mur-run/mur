@@ -1,13 +1,15 @@
 //! One client connection (plan Task 2.3, per-connection part).
 //!
 //! Independent of where the proxy runs (spec §"Proxy process placement",
-//! open): the upstream is behind [`Upstream`]. In Phase 2 no sign request is
-//! ever forwarded — there is no code path that produces a signature.
+//! open): the upstream is behind [`Upstream`]. A sign request is forwarded
+//! only after the binding rules, the policy, and the approval gate
+//! ([`SignGate`]) all pass; there is no other path to a signature.
 
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
+use super::gate::{GateOutcome, SignAsk, SignGate};
 use super::keys::{self, fingerprint};
 use super::policy::Policy;
 use super::refusal::{Refusal, RefusalCode, RefusalSink};
@@ -49,16 +51,23 @@ pub(crate) struct Session<'a, U> {
     policy: &'a Policy,
     upstream: &'a U,
     sink: &'a RefusalSink,
+    gate: &'a dyn SignGate,
     bind: Bind,
     binds_seen: usize,
 }
 
 impl<'a, U: Upstream> Session<'a, U> {
-    pub(crate) fn new(policy: &'a Policy, upstream: &'a U, sink: &'a RefusalSink) -> Self {
+    pub(crate) fn new(
+        policy: &'a Policy,
+        upstream: &'a U,
+        sink: &'a RefusalSink,
+        gate: &'a dyn SignGate,
+    ) -> Self {
         Self {
             policy,
             upstream,
             sink,
+            gate,
             bind: Bind::None,
             binds_seen: 0,
         }
@@ -106,10 +115,11 @@ impl<'a, U: Upstream> Session<'a, U> {
         match req {
             Request::RequestIdentities => self.list().await,
             Request::SessionBind(sb) => self.session_bind(&sb),
-            Request::SignRequest { key_blob, data, .. } => {
-                self.sign(&key_blob, &data);
-                Answer::Failure
-            }
+            Request::SignRequest {
+                key_blob,
+                data,
+                flags,
+            } => self.sign(key_blob, data, flags).await,
             // Not an error: an agent without the extension answers FAILURE.
             Request::OtherExtension(_) => Answer::Failure,
         }
@@ -176,41 +186,88 @@ impl<'a, U: Upstream> Session<'a, U> {
         }
     }
 
-    /// Run every check so the refusal is the most specific one, then refuse
-    /// anyway: Phase 2 has no HITL, so nothing is signed.
-    fn sign(&self, key_blob: &[u8], data: &[u8]) {
-        let key_fp = fingerprint(key_blob);
+    /// Binding rules, then policy, then the approval gate; only an approved
+    /// request is forwarded. Every refusal is recorded with the most
+    /// specific code and answered FAILURE.
+    async fn sign(&self, key_blob: Vec<u8>, data: Vec<u8>, flags: u32) -> Answer {
+        let key_fp = fingerprint(&key_blob);
         let host = match &self.bind {
             Bind::Verified(v) => {
                 // Rule 6: after bind presence, before the key/host lookup,
                 // so a mismatch never reaches an approval prompt.
-                if let Err((code, detail)) = check_binding(v, key_blob, data) {
+                if let Err((code, detail)) = check_binding(v, &key_blob, &data) {
                     let r = Refusal::new(code)
                         .key(key_fp.clone(), self.policy.label(&key_fp))
                         .host(v.host_key_fp.clone())
                         .detail(detail);
                     self.refuse(r);
-                    return;
+                    return Answer::Failure;
                 }
                 Some(v.host_key_fp.as_str())
             }
             Bind::None | Bind::Poisoned(_) => None,
         };
-        let refusal = match self.policy.check_sign(&key_fp, host) {
-            Err(r) if r.code == RefusalCode::NoSessionBind => match &self.bind {
-                Bind::Poisoned(why) => Refusal {
-                    code: RefusalCode::SessionBindUnverified,
-                    ..r
-                }
-                .detail(why.clone()),
-                _ => r,
-            },
-            Err(r) => r,
-            Ok(a) => Refusal::new(RefusalCode::HitlNotWired)
-                .key(a.key_fp, a.key_label)
-                .host(a.host_key_fp),
+        let allowed = match self.policy.check_sign(&key_fp, host) {
+            Ok(a) => a,
+            Err(r) if r.code == RefusalCode::NoSessionBind => {
+                self.refuse(match &self.bind {
+                    Bind::Poisoned(why) => Refusal {
+                        code: RefusalCode::SessionBindUnverified,
+                        ..r
+                    }
+                    .detail(why.clone()),
+                    _ => r,
+                });
+                return Answer::Failure;
+            }
+            Err(r) => {
+                self.refuse(r);
+                return Answer::Failure;
+            }
         };
-        self.refuse(refusal);
+        let ask = SignAsk {
+            key_fp: allowed.key_fp,
+            key_label: allowed.key_label,
+            host_key_fp: allowed.host_key_fp,
+            host_label: allowed.host_label,
+        };
+        let refused = |code| {
+            Refusal::new(code)
+                .key(ask.key_fp.clone(), ask.key_label.clone())
+                .host(ask.host_key_fp.clone())
+        };
+        match self.gate.decide(&ask).await {
+            GateOutcome::Allow => {}
+            GateOutcome::Deny => {
+                self.refuse(refused(RefusalCode::HitlDenied));
+                return Answer::Failure;
+            }
+            GateOutcome::Unavailable(why) => {
+                self.refuse(refused(RefusalCode::HitlUnavailable).detail(why));
+                return Answer::Failure;
+            }
+            GateOutcome::Deferred => {
+                self.refuse(refused(RefusalCode::HitlDeferred));
+                return Answer::Failure;
+            }
+        }
+        let frame = Request::SignRequest {
+            key_blob,
+            data,
+            flags,
+        }
+        .encode();
+        let why = match self.upstream.roundtrip(frame).await {
+            Err(e) => e.to_string(),
+            Ok(body) => match wire::decode_answer(&body) {
+                Ok(a @ Answer::SignResponse(_)) => return a,
+                Ok(Answer::Failure) => "the upstream ssh-agent refused to sign".into(),
+                Ok(_) => "the upstream answered SIGN_REQUEST with something else".into(),
+                Err(e) => e.to_string(),
+            },
+        };
+        self.refuse(refused(RefusalCode::UpstreamUnavailable).detail(why));
+        Answer::Failure
     }
 
     fn refuse(&self, r: Refusal) {

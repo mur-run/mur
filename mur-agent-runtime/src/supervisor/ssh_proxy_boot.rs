@@ -17,6 +17,7 @@ use std::sync::Arc;
 use mur_common::agent::SshEntitlement;
 use mur_common::ssh_proxy_status::{self, SshProxyState, SshProxyStatus};
 
+use crate::ssh_proxy::gate::GateSlot;
 use crate::ssh_proxy::listener::{self, HeldUpstream, Proxy};
 use crate::ssh_proxy::policy::{PinTrust, Policy};
 use crate::ssh_proxy::refusal::RefusalSink;
@@ -67,6 +68,9 @@ pub(super) struct StartArgs<'a> {
     pub pin_trust: PinTrust,
     pub upstream: Arc<HeldUpstream>,
     pub sink: RefusalSink,
+    /// Filled by the supervisor once its approval channel exists; until then
+    /// every sign request is refused `hitl_unavailable`.
+    pub approvals: Arc<GateSlot>,
 }
 
 /// Bind and serve. Returns the socket path children get as `SSH_AUTH_SOCK`,
@@ -107,6 +111,7 @@ pub(super) async fn start_after_seal(a: StartArgs<'_>) -> Option<PathBuf> {
         upstream: a.upstream,
         sink: a.sink,
         gate: listener::self_only_gate(std::process::id(), a.agents_dir),
+        approvals: a.approvals,
     });
     tokio::spawn(listener::serve(l, proxy));
     tracing::info!(socket = %path.display(), "ssh-agent proxy listening");

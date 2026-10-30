@@ -5,6 +5,7 @@
 use std::sync::Mutex;
 
 use super::fixtures::*;
+use super::gate::NeverAsked;
 use super::policy_for;
 use crate::ssh_proxy::keys::fingerprint;
 use crate::ssh_proxy::policy::{PinTrust, Policy};
@@ -28,6 +29,11 @@ impl FakeUpstream {
             up: true,
             sent: Mutex::new(Vec::new()),
         }
+    }
+    /// Every roundtrip fails, as an upstream that went away.
+    pub(super) fn down(mut self) -> Self {
+        self.up = false;
+        self
     }
 }
 
@@ -102,7 +108,7 @@ async fn sign_with(
     key: usize,
 ) -> (Answer, Option<String>) {
     let sink = w.sink();
-    let mut sess = Session::new(policy, up, &sink);
+    let mut sess = Session::new(policy, up, &sink, &NeverAsked);
     if let Some(b) = bind {
         sess.handle(&b).await;
     }
@@ -114,27 +120,12 @@ async fn sign_with(
 async fn listing_shows_only_policy_keys() {
     let w = World::new();
     let (p, up, sink) = (w.policy(), w.upstream(), w.sink());
-    let mut sess = Session::new(&p, &up, &sink);
+    let mut sess = Session::new(&p, &up, &sink, &NeverAsked);
     let Answer::Identities(ids) = sess.handle(&[wire::SSH_AGENTC_REQUEST_IDENTITIES]).await else {
         panic!("expected identities");
     };
     assert_eq!(ids.len(), 1);
     assert_eq!(ids[0].key_blob, w.keys[0].key_blob());
-}
-
-#[tokio::test]
-async fn allowed_pair_is_still_refused_hitl_not_wired_and_never_forwarded() {
-    let w = World::new();
-    let (p, up) = (w.policy(), w.upstream());
-    let (a, code) = sign_with(&w, &p, &up, Some(w.good_bind()), 0).await;
-    assert_eq!(a, Answer::Failure);
-    assert_eq!(code.as_deref(), Some("hitl_not_wired"));
-    // Phase 2 invariant: no sign request reached the upstream.
-    let sent = up.sent.lock().unwrap();
-    assert!(
-        sent.iter().all(|f| f[4] != wire::SSH_AGENTC_SIGN_REQUEST),
-        "a sign request was forwarded upstream"
-    );
 }
 
 #[tokio::test]
@@ -173,7 +164,7 @@ async fn tampered_bind_is_session_bind_unverified_and_sticky() {
     let mut sig = w.host.sign_blob(b"sid");
     let last = sig.len() - 1;
     sig[last] ^= 1;
-    let mut sess = Session::new(&p, &up, &sink);
+    let mut sess = Session::new(&p, &up, &sink, &NeverAsked);
     let bad = bind_body(&w.host.key_blob(), b"sid", &sig);
     assert_eq!(sess.handle(&bad).await, Answer::Failure);
     // A later valid bind must not clear the failed one.
@@ -195,7 +186,7 @@ async fn malformed_bind_after_a_valid_one_poisons_the_connection() {
         [good.clone(), vec![0]].concat(),
     ] {
         let (p, up, sink) = (w.policy(), w.upstream(), w.sink());
-        let mut sess = Session::new(&p, &up, &sink);
+        let mut sess = Session::new(&p, &up, &sink, &NeverAsked);
         assert_eq!(sess.handle(&good).await, Answer::Success);
         assert_eq!(sess.handle(&bad).await, Answer::Failure);
         sess.handle(&sign_body(&w.keys[0].key_blob())).await;
@@ -213,7 +204,7 @@ async fn malformed_first_bind_blocks_a_later_valid_one() {
         vec![wire::SSH_AGENTC_EXTENSION],
     ] {
         let (p, up, sink) = (w.policy(), w.upstream(), w.sink());
-        let mut sess = Session::new(&p, &up, &sink);
+        let mut sess = Session::new(&p, &up, &sink, &NeverAsked);
         assert_eq!(sess.handle(&bad).await, Answer::Failure);
         assert_eq!(sess.handle(&good).await, Answer::Failure);
         sess.handle(&sign_body(&w.keys[0].key_blob())).await;
@@ -225,7 +216,7 @@ async fn malformed_first_bind_blocks_a_later_valid_one() {
 async fn too_many_binds_poison_the_connection() {
     let w = World::new();
     let (p, up, sink) = (w.policy(), w.upstream(), w.sink());
-    let mut sess = Session::new(&p, &up, &sink);
+    let mut sess = Session::new(&p, &up, &sink, &NeverAsked);
     for _ in 0..MAX_SESSION_BINDS {
         assert_eq!(sess.handle(&w.good_bind()).await, Answer::Success);
     }
@@ -241,7 +232,7 @@ async fn upstream_unavailable() {
     let mut up = w.upstream();
     up.up = false;
     let sink = w.sink();
-    let mut sess = Session::new(&p, &up, &sink);
+    let mut sess = Session::new(&p, &up, &sink, &NeverAsked);
     assert_eq!(
         sess.handle(&[wire::SSH_AGENTC_REQUEST_IDENTITIES]).await,
         Answer::Failure
@@ -253,7 +244,7 @@ async fn upstream_unavailable() {
 async fn malformed_request() {
     let w = World::new();
     let (p, up, sink) = (w.policy(), w.upstream(), w.sink());
-    let mut sess = Session::new(&p, &up, &sink);
+    let mut sess = Session::new(&p, &up, &sink, &NeverAsked);
     // ADD_IDENTITY: nobody may load keys through MUR.
     assert_eq!(sess.handle(&[17, 0, 0, 0, 0]).await, Answer::Failure);
     assert_eq!(w.last_code().as_deref(), Some("malformed_request"));
@@ -265,7 +256,7 @@ async fn oversize_frame_ends_the_connection_as_malformed() {
     let w = World::new();
     let (p, up, sink) = (w.policy(), w.upstream(), w.sink());
     let (mut client, server) = tokio::io::duplex(64);
-    let serve = Session::new(&p, &up, &sink).serve(server);
+    let serve = Session::new(&p, &up, &sink, &NeverAsked).serve(server);
     let drive = async {
         client
             .write_all(&(wire::MAX_FRAME_BYTES as u32 + 1).to_be_bytes())
@@ -295,7 +286,7 @@ async fn policy_invalid_and_unpinned_refuse_everything_and_list_nothing() {
         let (_, code) = sign_with(&w, &policy, &up, Some(w.good_bind()), 0).await;
         assert_eq!(code.as_deref(), Some(want));
         let sink = w.sink();
-        let mut sess = Session::new(&policy, &up, &sink);
+        let mut sess = Session::new(&policy, &up, &sink, &NeverAsked);
         assert_eq!(
             sess.handle(&[wire::SSH_AGENTC_REQUEST_IDENTITIES]).await,
             Answer::Identities(vec![])
@@ -307,11 +298,10 @@ async fn policy_invalid_and_unpinned_refuse_everything_and_list_nothing() {
     }
 }
 
-/// `hitl_unavailable` needs the Phase 3 gate; Phase 2 can only show the
-/// code exists and renders. Kept here so the "each code has a test" list is
-/// checkable in one file.
+/// `hitl_unavailable` is reached through the gate in `tests/gate.rs`; this
+/// pins its wording: a signature is never passed through.
 #[test]
-fn hitl_unavailable_is_reserved_for_phase_3() {
+fn hitl_unavailable_says_nothing_is_passed_through() {
     let m = crate::ssh_proxy::refusal::Refusal::new(RefusalCode::HitlUnavailable).message();
     assert!(m.contains("hitl_unavailable") && m.contains("never passed through"));
 }

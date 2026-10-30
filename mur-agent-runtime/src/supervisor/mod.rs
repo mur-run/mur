@@ -52,6 +52,7 @@ mod dispatch;
 mod identity;
 mod pin;
 mod seal;
+mod ssh_gate_boot;
 #[cfg(unix)]
 mod ssh_proxy_boot;
 mod ssh_proxy_class;
@@ -285,6 +286,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         approval_token,
         sandbox_record,
         ssh_auth_sock,
+        ssh_gate,
     } = seal::prepare_and_seal(&profile, &agent_home, &mur_home, &identity, pin_trust).await?;
     // `Some` on every path that reaches here; `None` would mean no seal was
     // attempted, which must not count as sealed. Every consumer below reads
@@ -386,6 +388,22 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         )
         .await?;
     runner.attach_live(live.clone());
+    // The ssh-agent proxy has refused `hitl_unavailable` since the seal; from
+    // here its sign requests are asked through gate B.
+    if let Some(g) = ssh_gate {
+        ssh_gate_boot::fill(
+            g,
+            ssh_gate_boot::Parts {
+                mur_home: &mur_home,
+                profile: &profile.inner,
+                identity: &identity,
+                approvals: pending_approvals.clone(),
+                notifier: sock_notif_tx.clone(),
+                parking: runner.parking(),
+                wait_secs: hitl_timeout_secs,
+            },
+        );
+    }
     // Before any transport starts, so no turn runs without it.
     if let Some(w) = startup_override::waiver(&pending_override, enforcing) {
         warn!(

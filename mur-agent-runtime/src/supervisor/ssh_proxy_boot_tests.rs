@@ -51,6 +51,7 @@ async fn over_long_home_is_off_with_its_reason_and_no_socket() {
         pin_trust: PinTrust::Pinned,
         upstream: Arc::new(HeldUpstream::disconnected()),
         sink: RefusalSink::new(None),
+        approvals: Default::default(),
     })
     .await;
     assert!(sock.is_none(), "no SSH_AUTH_SOCK for the bash child");
@@ -71,6 +72,7 @@ async fn a_normal_home_listens_in_the_agent_home() {
         pin_trust: PinTrust::Pinned,
         upstream: Arc::new(HeldUpstream::disconnected()),
         sink: RefusalSink::new(None),
+        approvals: Default::default(),
     })
     .await
     .expect("proxy started");

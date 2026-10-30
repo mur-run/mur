@@ -10,6 +10,7 @@ pub mod parked;
 pub mod remembered;
 pub mod shim_ticket;
 pub mod ssh;
+pub mod ssh_gate;
 pub mod store;
 
 pub use ssh::ssh_action_hash;

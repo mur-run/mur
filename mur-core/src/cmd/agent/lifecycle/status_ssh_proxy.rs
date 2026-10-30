@@ -89,7 +89,7 @@ mod tests {
     #[test]
     fn renders_recorded_refusals_newest_first() {
         let tmp = tempfile::tempdir().unwrap();
-        for (i, code) in ["key_not_allowed", "hitl_not_wired"].iter().enumerate() {
+        for (i, code) in ["key_not_allowed", "hitl_denied"].iter().enumerate() {
             ssh_proxy_refusals::record(
                 tmp.path(),
                 SshRefusal {
@@ -105,7 +105,7 @@ mod tests {
         let lines = refusal_lines_for(tmp.path());
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0], "    ssh_proxy refusals (last 2):");
-        assert!(lines[1].ends_with("[hitl_not_wired] msg 1"), "{}", lines[1]);
+        assert!(lines[1].ends_with("[hitl_denied] msg 1"), "{}", lines[1]);
         assert!(
             lines[2].ends_with("[key_not_allowed] msg 0"),
             "{}",
