@@ -25,8 +25,7 @@ use super::browser_live_preview::render_preview;
 use super::manage;
 use super::manage::Managed;
 
-/// Profile entry name for the live browser server.
-pub(super) const LIVE_ENTRY: &str = "browser";
+pub(super) use crate::cmd::browser::live_entry::{LIVE_ENTRY, LiveOps};
 
 /// Example shown when no host was given.
 pub(super) const USAGE_EXAMPLE: &str = "/browser live shop-a.example.com";
@@ -487,27 +486,6 @@ pub(super) const CONFIRM_LABEL: &str = "save this browser network policy";
 fn confirm_chip(cmd: &str) -> Option<Proposal> {
     let args = serde_json::json!({ "label": CONFIRM_LABEL, "kind": "slash", "command": cmd });
     mur_common::proposal::vet(&args).ok()
-}
-
-/// Profile side effects, injected so tests run with a fake.
-pub(super) trait LiveOps {
-    /// Current MCP entries on the agent.
-    fn servers(&mut self) -> anyhow::Result<Vec<McpServerEntry>>;
-    /// Create the entry WITH its network policy through
-    /// `manage::mcp_add_with_network` (pins + probes behind the egress proxy +
-    /// one atomic save). `Err` means nothing was written.
-    fn mcp_add(&mut self, argv: &[String], network: McpServerNetwork) -> anyhow::Result<String>;
-    /// Persist `servers` back to the profile, together with any missing
-    /// [`live_fs`] grants and a [`repin_command`] onto this binary's absolute
-    /// path (an entry made before those existed lacks both).
-    /// Returns one note per grant added, and when the write reaches the
-    /// running agent. `Err` means nothing was written.
-    fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<(Vec<String>, Effect)>;
-    /// The notes [`LiveOps::save`] would report for `servers`, computed
-    /// without writing — so a preview can tell "unchanged" from "needs repair".
-    fn pending_repairs(&mut self, servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>>;
-    /// Append the `broad_audited_enabled` trace event after a `--research` write.
-    fn record_research(&mut self, agent: &str) -> anyhow::Result<()>;
 }
 
 /// The whole `/browser live` flow. Every refusal returns before the first

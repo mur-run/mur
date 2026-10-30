@@ -12,6 +12,9 @@ use std::path::Path;
 use mur_common::agent::McpServerEntry;
 use mur_common::proposal::Proposal;
 
+pub(super) use crate::cmd::browser::live_entry::attached_profile;
+use crate::cmd::browser::live_entry::{norm, within};
+
 /// One saved `mur browser auth` profile and the hosts it was made for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SavedProfile {
@@ -48,21 +51,6 @@ pub(super) fn load_saved_profiles(home: &Path) -> Vec<SavedProfile> {
             })
         })
         .collect()
-}
-
-/// The `--profile <site>` value in the entry's launch argv, if any.
-pub(super) fn attached_profile(entry: &McpServerEntry) -> Option<&str> {
-    let i = entry.args.iter().position(|a| a == "--profile")?;
-    entry.args.get(i + 1).map(String::as_str)
-}
-
-fn norm(host: &str) -> String {
-    host.trim_end_matches('.').to_ascii_lowercase()
-}
-
-/// `a` is `b` or a subdomain of it, label-aligned (`evilb.com` is not `b.com`).
-fn within(a: &str, b: &str) -> bool {
-    a == b || a.strip_suffix(b).is_some_and(|p| p.ends_with('.'))
 }
 
 /// Sites whose domains overlap any allowed host, in `profiles` order. Either

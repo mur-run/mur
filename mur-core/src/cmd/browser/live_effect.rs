@@ -9,7 +9,7 @@ use mur_common::agent::McpNetMode;
 
 /// When the write reaches the running agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Effect {
+pub(crate) enum Effect {
     /// Every changed field is hot: the next turn uses it.
     NextTurn,
     /// Something cold changed (or the entry is new): restart the agent.
@@ -19,7 +19,7 @@ pub(super) enum Effect {
 impl Effect {
     /// Classify a profile write the way the running agent will: by the
     /// reload diff between what was on disk and what was written.
-    pub(super) fn of_write(
+    pub(crate) fn of_write(
         before: &mur_common::AgentProfile,
         after: &mur_common::AgentProfile,
     ) -> Self {
@@ -36,7 +36,7 @@ impl Effect {
     /// The preview's guess, before anything is written: hot only for an
     /// existing entry whose mode stays and that needs no repair (a repair adds
     /// grants, which are cold).
-    pub(super) fn predicted(
+    pub(crate) fn predicted(
         existing_mode: Option<McpNetMode>,
         after_mode: McpNetMode,
         repairs_pending: bool,
@@ -48,7 +48,7 @@ impl Effect {
     }
 
     /// The preview's last line.
-    pub(super) fn preview_line(self) -> &'static str {
+    pub(crate) fn preview_line(self) -> &'static str {
         match self {
             Effect::NextTurn => "Saved to the profile; the agent's next turn uses it.",
             Effect::Restart => "Saved to the profile; takes effect after the agent restarts.",
@@ -56,7 +56,7 @@ impl Effect {
     }
 
     /// The line after a successful write.
-    pub(super) fn applied_line(self) -> &'static str {
+    pub(crate) fn applied_line(self) -> &'static str {
         match self {
             Effect::NextTurn => APPLIED_HOT,
             Effect::Restart => APPLIED_COLD,
@@ -78,7 +78,7 @@ mod tests {
 
     fn profile(entry: Option<McpServerEntry>) -> mur_common::AgentProfile {
         let mut p: mur_common::AgentProfile = serde_yaml::from_str(include_str!(
-            "../../../../../mur-common/tests/fixtures/minimal_profile.yaml"
+            "../../../../mur-common/tests/fixtures/minimal_profile.yaml"
         ))
         .unwrap();
         p.mcp_servers = entry.into_iter().collect();

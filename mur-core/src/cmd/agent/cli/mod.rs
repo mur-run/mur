@@ -13,7 +13,7 @@ use mur_common::hitl::bash_class;
 mod browser_allow_cmd;
 mod browser_cmd;
 pub(crate) mod browser_live_cmd;
-mod browser_live_effect;
+use crate::cmd::browser::live_effect as browser_live_effect;
 mod browser_live_intent;
 mod browser_live_ops;
 pub(crate) mod browser_live_preview;
