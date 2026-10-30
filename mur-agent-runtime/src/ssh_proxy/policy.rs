@@ -78,6 +78,15 @@ impl Policy {
         matches!(self, Self::Enforce(keys) if keys.contains_key(key_fp))
     }
 
+    /// The display label of a listed key, for refusals raised before the
+    /// policy lookup.
+    pub fn label(&self, key_fp: &str) -> Option<String> {
+        match self {
+            Self::Enforce(keys) => keys.get(key_fp).and_then(|e| e.label.clone()),
+            Self::RefuseAll(_) => None,
+        }
+    }
+
     /// Listed key fingerprints, for the start-time "missing upstream" warning.
     pub fn key_fps(&self) -> Vec<&str> {
         match self {
