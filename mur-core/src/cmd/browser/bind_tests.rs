@@ -323,3 +323,74 @@ fn set_profile_appends_or_replaces_in_place() {
     assert_eq!(e.args.iter().filter(|x| *x == "--profile").count(), 1);
     assert_eq!(e.args.last().unwrap(), "b");
 }
+
+/// A hand-edited entry may spell the flag `--profile=old` (clap accepts both).
+fn restricted_eq(allow: &[&str], site: &str) -> McpServerEntry {
+    let mut e = restricted(allow, None);
+    e.args.push(format!("--profile={site}"));
+    e
+}
+
+fn profile_flags(e: &McpServerEntry) -> usize {
+    e.args
+        .iter()
+        .filter(|a| *a == "--profile" || a.starts_with("--profile="))
+        .count()
+}
+
+#[test]
+fn equals_style_profile_is_read_as_the_attached_profile() {
+    let e = restricted_eq(&["*.x.com"], "old");
+    assert_eq!(attached_profile(&e), Some("old"));
+}
+
+#[test]
+fn set_profile_rewrites_an_equals_style_flag_in_place() {
+    let mut e = restricted_eq(&[], "old");
+    set_profile(&mut e, "new");
+    assert_eq!(profile_flags(&e), 1, "{:?}", e.args);
+    assert_eq!(e.args.last().unwrap(), "--profile=new");
+    assert_eq!(attached_profile(&e), Some("new"));
+}
+
+#[test]
+fn rebinding_an_equals_style_entry_names_the_old_profile_and_keeps_one_flag() {
+    let mut f = Fake {
+        servers: vec![restricted_eq(&["*.deepseek.com", "gitea.example"], "gitea")],
+        ..Default::default()
+    };
+    let (outcome, out) = run(&mut f, "deepseek", &["deepseek.com"], None);
+    assert_eq!(outcome, Outcome::Bound);
+    let after = &f.saves[0][0];
+    assert_eq!(profile_flags(after), 1, "{:?}", after.args);
+    assert_eq!(attached_profile(after), Some("deepseek"));
+    assert_eq!(f.bound[0].1.as_deref(), Some("gitea"));
+    assert!(out.contains("(was \"gitea\")"), "{out}");
+    assert!(
+        out.contains("/browser live *.deepseek.com gitea.example --profile gitea"),
+        "{out}"
+    );
+}
+
+#[test]
+fn equals_style_entry_already_bound_is_unchanged_without_a_write() {
+    let mut f = Fake {
+        servers: vec![restricted_eq(&["*.x.com"], "x")],
+        ..Default::default()
+    };
+    let (outcome, _) = run(&mut f, "x", &["a.x.com"], Some("y\n"));
+    assert_eq!(outcome, Outcome::Unchanged);
+    assert!(f.saves.is_empty() && f.bound.is_empty());
+}
+
+#[test]
+fn set_profile_never_writes_past_a_double_dash() {
+    let mut e = restricted(&[], None);
+    e.args
+        .extend(["--".to_string(), "--profile=pos".to_string()]);
+    set_profile(&mut e, "new");
+    let dd = e.args.iter().position(|a| a == "--").unwrap();
+    assert_eq!(&e.args[dd - 2..dd], &["--profile", "new"]);
+    assert_eq!(e.args.last().unwrap(), "--profile=pos");
+    assert_eq!(attached_profile(&e), Some("new"));
+}

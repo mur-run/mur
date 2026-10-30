@@ -13,7 +13,7 @@ use anyhow::Result;
 use mur_common::agent::{McpNetMode, McpServerEntry};
 
 use super::bind_plan::{BindPlan, plan_bind, warning};
-use super::live_entry::{LIVE_ENTRY, LiveOps, attached_profile};
+use super::live_entry::{LIVE_ENTRY, LiveOps, attached_profile, set_profile};
 
 /// One agent offered in the menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,16 +172,6 @@ pub(crate) fn bind_agent(
     }
     writeln!(out, "{undo}")?;
     Ok(Outcome::Bound)
-}
-
-/// Point the entry's `--profile` at `site`, appending the flag if absent.
-/// Nothing else in the argv or the entry changes.
-fn set_profile(entry: &mut McpServerEntry, site: &str) {
-    match entry.args.iter().position(|a| a == "--profile") {
-        Some(i) if i + 1 < entry.args.len() => entry.args[i + 1] = site.to_owned(),
-        Some(_) => entry.args.push(site.to_owned()),
-        None => entry.args.extend(["--profile".to_owned(), site.to_owned()]),
-    }
 }
 
 /// How to put the old binding back. A `/browser live` rerun that names a

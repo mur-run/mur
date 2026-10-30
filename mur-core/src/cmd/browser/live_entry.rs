@@ -33,6 +33,27 @@ pub(crate) fn attached_profile(entry: &McpServerEntry) -> Option<&str> {
     None
 }
 
+/// Point the entry's `--profile` at `site`, in place and in whichever
+/// spelling the argv already uses (`--profile <site>` or `--profile=<site>`);
+/// otherwise insert `--profile <site>` before any `--`. Never leaves a second
+/// `--profile` behind, which Clap rejects at launch. Nothing else changes.
+pub(crate) fn set_profile(entry: &mut McpServerEntry, site: &str) {
+    let args = &mut entry.args;
+    let end = args.iter().position(|a| a == "--").unwrap_or(args.len());
+    let eq = format!("{PROFILE_OPT}=");
+    match args[..end]
+        .iter()
+        .position(|a| a == PROFILE_OPT || a.starts_with(&eq))
+    {
+        Some(i) if args[i] != PROFILE_OPT => args[i] = format!("{eq}{site}"),
+        Some(i) if i + 1 < end => args[i + 1] = site.to_owned(),
+        Some(i) => args.insert(i + 1, site.to_owned()),
+        None => {
+            args.splice(end..end, [PROFILE_OPT.to_owned(), site.to_owned()]);
+        }
+    }
+}
+
 pub(crate) fn norm(host: &str) -> String {
     host.trim_end_matches('.').to_ascii_lowercase()
 }
