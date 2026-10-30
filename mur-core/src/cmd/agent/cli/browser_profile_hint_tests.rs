@@ -44,8 +44,8 @@ fn domains_match_exact_sub_and_parent_but_not_lookalikes() {
 
 #[test]
 fn hint_names_the_exact_live_command_with_every_host() {
-    // `/browser live` REPLACES the allowlist, so the hint must carry every
-    // host or following it would drop the ones already allowed.
+    // The hint carries every allowed host, so following it — even with
+    // `--replace` — never drops one already allowed.
     let p = [saved("deepseek", &["chat.deepseek.com"])];
     let hosts = s(&["cdn.example.com", "chat.deepseek.com"]);
     let h = hint(&entry(&["browser", "record"]), &hosts, &p).expect("hint");

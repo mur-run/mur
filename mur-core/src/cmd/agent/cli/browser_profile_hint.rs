@@ -76,8 +76,8 @@ pub(super) struct Hint {
     pub chip: Option<Proposal>,
 }
 
-/// `/browser live` REPLACES the allowlist, so the command names every host
-/// already allowed — following the hint must not drop any of them. The chip
+/// The command names every host already allowed, so following it keeps every
+/// grant even when the user adds `--replace` (#2101). The chip
 /// runs the preview form (no `--yes`): the user still sees the change.
 fn live_command(hosts: &[String], site: &str) -> String {
     format!("browser live {} --profile {site}", hosts.join(" "))
