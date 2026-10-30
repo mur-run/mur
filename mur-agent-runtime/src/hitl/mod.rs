@@ -9,7 +9,10 @@ pub mod intent;
 pub mod parked;
 pub mod remembered;
 pub mod shim_ticket;
+pub mod ssh;
 pub mod store;
+
+pub use ssh::ssh_action_hash;
 
 #[cfg(test)]
 mod store_integrity_tests;
