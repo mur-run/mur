@@ -61,16 +61,30 @@ fn base_env_from(
 /// The key the ssh client reads its agent socket from.
 pub const SSH_AUTH_SOCK_ENV: &str = "SSH_AUTH_SOCK";
 
-/// `SSH_AUTH_SOCK` for a bash child: the ssh-agent proxy socket when the
-/// proxy runs, else nothing. Set from the proxy path, never inherited, so the
-/// runtime's own upstream value cannot reach the child.
-pub fn ssh_agent_env(proxy_sock: Option<&std::path::Path>) -> Option<(String, String)> {
-    proxy_sock.map(|p| {
-        (
-            SSH_AUTH_SOCK_ENV.to_string(),
-            p.to_string_lossy().into_owned(),
-        )
-    })
+/// What a bash child gets for ssh while the ssh-agent proxy runs.
+#[derive(Debug, Clone)]
+pub struct SshChild {
+    /// The proxy socket, exported as `SSH_AUTH_SOCK`.
+    pub sock: std::path::PathBuf,
+    /// Pinned client settings (plan O2). `None` when no real ssh was found in
+    /// the seal's exec dirs: the socket is still exported.
+    pub client: Option<super::ssh_client_env::SshClientEnv>,
+}
+
+/// ssh keys for a bash child: `SSH_AUTH_SOCK` from the proxy path (never
+/// inherited, so the runtime's own upstream value cannot reach the child),
+/// plus `GIT_SSH_COMMAND` and `BASH_FUNC_ssh%%` when `client` is set. Nothing
+/// when the proxy is not running.
+pub fn ssh_child_env(ssh: Option<&SshChild>) -> Vec<(String, String)> {
+    let Some(ssh) = ssh else { return Vec::new() };
+    let mut env = vec![(
+        SSH_AUTH_SOCK_ENV.to_string(),
+        ssh.sock.to_string_lossy().into_owned(),
+    )];
+    if let Some(c) = &ssh.client {
+        env.extend(c.env_pairs());
+    }
+    env
 }
 
 #[cfg(test)]
@@ -88,12 +102,28 @@ mod tests {
     }
 
     #[test]
-    fn ssh_auth_sock_is_the_proxy_path_or_absent() {
-        assert_eq!(ssh_agent_env(None), None);
-        let got = ssh_agent_env(Some(std::path::Path::new("/h/agents/a/ssh-agent.sock")));
+    fn ssh_env_follows_proxy_and_client() {
+        let sock = std::path::PathBuf::from("/h/agents/a/ssh-agent.sock");
+        let keys = |s: Option<&SshChild>| -> Vec<String> {
+            ssh_child_env(s).into_iter().map(|(k, _)| k).collect()
+        };
+        assert!(keys(None).is_empty());
+        let bare = SshChild {
+            sock: sock.clone(),
+            client: None,
+        };
         assert_eq!(
-            got,
-            Some(("SSH_AUTH_SOCK".into(), "/h/agents/a/ssh-agent.sock".into()))
+            ssh_child_env(Some(&bare)),
+            [("SSH_AUTH_SOCK".into(), "/h/agents/a/ssh-agent.sock".into())]
+        );
+        let client = super::super::ssh_client_env::SshClientEnv::for_test("/h/agents/a");
+        let full = SshChild {
+            sock,
+            client: Some(client),
+        };
+        assert_eq!(
+            keys(Some(&full)),
+            ["SSH_AUTH_SOCK", "GIT_SSH_COMMAND", "BASH_FUNC_ssh%%"]
         );
     }
 

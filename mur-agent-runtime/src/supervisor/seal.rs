@@ -14,8 +14,8 @@ pub(super) struct Sealed {
     pub(super) secrets: Arc<crate::secrets::SecretVault>,
     pub(super) approval_token: Option<String>,
     pub(super) sandbox_record: Option<mur_common::agent::SandboxRecord>,
-    /// The ssh-agent proxy socket, when the proxy is running.
-    pub(super) ssh_auth_sock: Option<std::path::PathBuf>,
+    /// The ssh-agent proxy socket and O2 client env, when the proxy is running.
+    pub(super) ssh_child: Option<crate::tools::bash_env::SshChild>,
     /// The proxy's approval gate, filled by the supervisor once its HITL
     /// channel is built. `Some` exactly when the proxy is running.
     pub(super) ssh_gate: Option<SshGateSlot>,
@@ -468,8 +468,14 @@ pub(super) async fn prepare_and_seal(
         }
         None => (None, None),
     };
+    // O2: real ssh from the dirs the seal grants exec on, not the inherited PATH.
+    #[cfg(unix)]
+    let ssh_child = ssh_auth_sock.map(|sock| crate::tools::bash_env::SshChild {
+        sock,
+        client: o2_client(agent_home),
+    });
     #[cfg(not(unix))]
-    let (ssh_auth_sock, ssh_gate) = {
+    let (ssh_child, ssh_gate) = {
         let _ = pin_trust;
         (None, None)
     };
@@ -479,9 +485,22 @@ pub(super) async fn prepare_and_seal(
         secrets,
         approval_token,
         sandbox_record,
-        ssh_auth_sock,
+        ssh_child,
         ssh_gate,
     })
+}
+
+#[cfg(unix)]
+fn o2_client(agent_home: &Path) -> Option<crate::tools::ssh_client_env::SshClientEnv> {
+    let user_home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let dirs = crate::sandbox::search_dirs::spawn_search_dirs(&user_home);
+    let c = crate::tools::ssh_client_env::SshClientEnv::resolve(agent_home, &dirs);
+    if c.is_none() {
+        warn!(
+            "no usable ssh in the exec dirs: bash children get SSH_AUTH_SOCK without pinned ssh settings"
+        );
+    }
+    c
 }
 
 /// Directories outside `agent_home` that every sealed agent may write, beyond its

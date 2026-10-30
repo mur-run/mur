@@ -59,7 +59,8 @@ async fn over_long_home_is_off_with_its_reason_and_no_socket() {
     assert_eq!(s.label(), "off (socket_path_too_long)");
     assert!(s.explanation.contains("/tmp"), "{}", s.explanation);
     // And the bash child's SSH_AUTH_SOCK follows from `None`: unset.
-    assert_eq!(crate::tools::bash_env::ssh_agent_env(sock.as_deref()), None);
+    let child = sock.map(|sock| crate::tools::bash_env::SshChild { sock, client: None });
+    assert!(crate::tools::bash_env::ssh_child_env(child.as_ref()).is_empty());
 }
 
 #[tokio::test]

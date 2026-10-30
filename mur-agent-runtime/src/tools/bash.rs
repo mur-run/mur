@@ -80,10 +80,10 @@ pub struct BashTool {
     /// `rm` → trash (issue #2154). `None` = `hooks.trash_guard: false`, or a
     /// test/embedded use: removers run as-is.
     pub trash: Option<super::bash_trash::BashTrash>,
-    /// The ssh-agent proxy socket. `Some` only while the proxy runs; the
-    /// child then gets it as `SSH_AUTH_SOCK`. The runtime's own value is
-    /// never passed on.
-    pub ssh_auth_sock: Option<PathBuf>,
+    /// ssh for the child. `Some` only while the ssh-agent proxy runs; the
+    /// child then gets the socket as `SSH_AUTH_SOCK` (the runtime's own value
+    /// is never passed on) and the O2 client env (see `bash_env`).
+    pub ssh: Option<super::bash_env::SshChild>,
 }
 
 /// `timeout_secs` (alias `wait_secs`): missing/invalid → default; negative →
@@ -106,13 +106,13 @@ impl BashTool {
             scratch_dir: None,
             jobs: crate::tools::bash_jobs::JobTable::new(),
             trash: None,
-            ssh_auth_sock: None,
+            ssh: None,
         }
     }
 
-    /// Attach the ssh-agent proxy socket exported as `SSH_AUTH_SOCK`.
-    pub fn with_ssh_auth_sock(mut self, sock: Option<PathBuf>) -> Self {
-        self.ssh_auth_sock = sock;
+    /// Attach the ssh-agent proxy socket and O2 client env.
+    pub fn with_ssh(mut self, ssh: Option<super::bash_env::SshChild>) -> Self {
+        self.ssh = ssh;
         self
     }
 
@@ -273,9 +273,7 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
         // inherits from the runtime (see `bash_env`).
         let mut env =
             super::bash_env::base_env(augmented_path(std::env::var("PATH").ok().as_deref()));
-        env.extend(super::bash_env::ssh_agent_env(
-            self.ssh_auth_sock.as_deref(),
-        ));
+        env.extend(super::bash_env::ssh_child_env(self.ssh.as_ref()));
         // Turn track: exec-granted CARGO_TARGET_DIR (+ warm clone). Before the vault so a user secret wins.
         let (target, warm_note) = super::bash_track::prepare_current_turn(
             &self.session_cwd,

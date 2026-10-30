@@ -39,6 +39,17 @@ impl SshClientEnv {
         Self::with_paths(real_ssh, mur_common::agent::known_hosts_path(agent_home))
     }
 
+    /// `/usr/bin/ssh` with `<agent_home>/ssh/known_hosts`, for tests that
+    /// need a value but not a real binary.
+    #[cfg(test)]
+    pub(crate) fn for_test(agent_home: &str) -> Self {
+        Self::with_paths(
+            PathBuf::from("/usr/bin/ssh"),
+            mur_common::agent::known_hosts_path(Path::new(agent_home)),
+        )
+        .unwrap()
+    }
+
     fn with_paths(real_ssh: PathBuf, known_hosts: PathBuf) -> Option<Self> {
         ssh_quote(&known_hosts)?;
         Some(Self {

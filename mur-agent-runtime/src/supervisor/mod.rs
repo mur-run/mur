@@ -285,7 +285,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         secrets,
         approval_token,
         sandbox_record,
-        ssh_auth_sock,
+        ssh_child,
         ssh_gate,
     } = seal::prepare_and_seal(&profile, &agent_home, &mur_home, &identity, pin_trust).await?;
     // `Some` on every path that reaches here; `None` would mean no seal was
@@ -384,7 +384,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             secrets.clone(),
             enforcing,
             &boot_cfg,
-            ssh_auth_sock,
+            ssh_child,
         )
         .await?;
     runner.attach_live(live.clone());
