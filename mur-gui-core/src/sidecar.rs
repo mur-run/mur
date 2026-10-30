@@ -10,6 +10,7 @@
 //! (launchd-based always-on background services remain available separately via
 //! `mur agent install-service` for non-interactive/scheduled agents.)
 
+use mur_common::lock_file::{SentinelProbe, probe_sentinel};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -544,60 +545,6 @@ fn clear_runtime_state(mur_home: &Path, slug: &str) {
     for f in ["running.lock", "agent.sock"] {
         let _ = std::fs::remove_file(dir.join(f));
     }
-}
-
-/// What `probe_sentinel` found on an agent's `running.sentinel`.
-enum SentinelProbe {
-    /// The agent directory doesn't exist, so there is nothing to clear.
-    NoAgentDir,
-    /// A live process owns it — or the probe couldn't tell, which counts the
-    /// same: keeping a dead runtime's files costs one manual clear, deleting a
-    /// live one's state is #790.
-    Owned,
-    /// We now hold its flock and it names no live pid. The handle keeps the
-    /// flock until dropped; the pid it recorded has been erased.
-    Free(std::fs::File),
-}
-
-/// Take the `running.sentinel` flock if nobody owns it, creating the file when
-/// it is missing (the same open the runtime does, so both always meet on one
-/// inode).
-///
-/// The pid the runtime writes into the sentinel is a fallback for a filesystem
-/// where the flock probe can't see a holder. It is erased once the sentinel is
-/// judged free, so a later process reusing that pid can't make a long-dead
-/// runtime look alive forever.
-fn probe_sentinel(dir: &Path) -> SentinelProbe {
-    use fs2::FileExt;
-    use std::io::Read;
-
-    let mut file = match std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(dir.join("running.sentinel"))
-    {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SentinelProbe::NoAgentDir,
-        Err(_) => return SentinelProbe::Owned,
-    };
-    if file.try_lock_exclusive().is_err() {
-        return SentinelProbe::Owned;
-    }
-    let mut pid = String::new();
-    if file.read_to_string(&mut pid).is_err() {
-        return SentinelProbe::Owned;
-    }
-    if pid
-        .trim()
-        .parse::<u32>()
-        .is_ok_and(mur_common::lock_file::pid_alive)
-    {
-        return SentinelProbe::Owned;
-    }
-    let _ = file.set_len(0);
-    SentinelProbe::Free(file)
 }
 
 /// A non-empty regular file. The `binaries/` directory ships zero-byte

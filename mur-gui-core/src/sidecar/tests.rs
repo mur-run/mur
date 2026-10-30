@@ -306,69 +306,6 @@ fn spawn_runtime_fails_cleanly_on_invalid_target() {
     );
 }
 
-/// The orchestrator's `mur_common::lock_file::probe_sentinel` is a copy of
-/// this crate's `probe_sentinel` until that one moves (Hub spec revision 8
-/// item 7). One fixture set, both probes, same verdict.
-#[test]
-fn probe_sentinel_matches_the_mur_common_copy() {
-    use fs2::FileExt;
-    use mur_common::lock_file::{SentinelProbe as Common, probe_sentinel as common};
-
-    #[derive(Debug, PartialEq)]
-    enum V {
-        NoDir,
-        Owned,
-        Free,
-    }
-    fn ours(dir: &Path) -> V {
-        match probe_sentinel(dir) {
-            SentinelProbe::NoAgentDir => V::NoDir,
-            SentinelProbe::Owned => V::Owned,
-            SentinelProbe::Free(_) => V::Free,
-        }
-    }
-    fn theirs(dir: &Path) -> V {
-        match common(dir) {
-            Common::NoAgentDir => V::NoDir,
-            Common::Owned => V::Owned,
-            Common::Free(_) => V::Free,
-        }
-    }
-
-    let tmp = tempfile::tempdir().unwrap();
-    let missing = tmp.path().join("missing");
-    let fresh = tmp.path().join("fresh");
-    let dead = tmp.path().join("dead");
-    let live = tmp.path().join("live");
-    let held = tmp.path().join("held");
-    for d in [&fresh, &dead, &live, &held] {
-        std::fs::create_dir_all(d).unwrap();
-    }
-    std::fs::write(dead.join("running.sentinel"), dead_pid().to_string()).unwrap();
-    std::fs::write(
-        live.join("running.sentinel"),
-        std::process::id().to_string(),
-    )
-    .unwrap();
-    std::fs::write(held.join("running.sentinel"), b"").unwrap();
-    let flock = std::fs::File::open(held.join("running.sentinel")).unwrap();
-    flock.try_lock_exclusive().unwrap();
-
-    for (dir, want) in [
-        (&missing, V::NoDir),
-        (&fresh, V::Free),
-        (&dead, V::Free),
-        (&live, V::Owned),
-        (&held, V::Owned),
-    ] {
-        // Each probe's `Free` handle is dropped before the next one looks.
-        assert_eq!(ours(dir), want, "gui-core on {}", dir.display());
-        assert_eq!(theirs(dir), want, "mur-common on {}", dir.display());
-    }
-    assert!(!missing.exists(), "a probe must not create the agent dir");
-    drop(flock);
-}
-
 /// Rewrite the seeded lock with a startup override on it.
 fn seed_override(dir: &Path, flags: mur_common::agent::OverrideFlags) {
     let path = dir.join("running.lock");

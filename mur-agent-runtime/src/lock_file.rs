@@ -2,6 +2,7 @@
 
 use fs2::FileExt;
 use mur_common::LockFile;
+use mur_common::lock_file::sentinel_path;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -24,19 +25,6 @@ pub struct LockHandle {
     sentinel: File,
     /// Path of the JSON data file (`running.lock`), removed on `release`.
     path: PathBuf,
-}
-
-/// Returns the sentinel file path for a given lock path.
-///
-/// The sentinel (`running.sentinel`) is a separate, always-stable file used
-/// exclusively for flock-based ownership tracking.  `write_lock` performs a
-/// temp-file + rename on the JSON data file, which swaps the inode.  If we
-/// flocked the JSON file directly the inode swap would leave `is_stale`
-/// probing an inode that nobody holds a lock on, incorrectly classifying a
-/// live agent as stale.  By keeping the flock on a file that is never
-/// renamed we avoid the race entirely.
-fn sentinel_path(path: &Path) -> PathBuf {
-    path.with_extension("sentinel")
 }
 
 impl LockHandle {

@@ -8,7 +8,7 @@
 
 use crate::LockFile;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Three-state classification of an agent's runtime state.
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,13 +149,25 @@ pub fn classify(lock_path: &Path) -> AgentStatus {
 /// runtime holds its flock for the whole seal, before `running.lock` exists.
 pub const SENTINEL_FILE: &str = "running.sentinel";
 
+/// The flock sentinel beside a runtime lock file (`running.lock` →
+/// `running.sentinel`).
+///
+/// A separate file on purpose: `running.lock` is written by temp-file +
+/// rename, which swaps its inode. A flock on the JSON file itself would be
+/// left on an inode nobody can see; the sentinel is never renamed, so its
+/// inode is the one every holder and every probe meets on.
+pub fn sentinel_path(lock: &Path) -> PathBuf {
+    lock.with_extension("sentinel")
+}
+
 /// What [`probe_sentinel`] found on an agent's `running.sentinel`.
 #[derive(Debug)]
 pub enum SentinelProbe {
-    /// The agent directory does not exist.
+    /// The agent directory does not exist, so there is nothing to clear.
     NoAgentDir,
     /// A live process owns it — or the probe could not tell, which counts
-    /// the same.
+    /// the same: keeping a dead runtime's files costs one manual clear,
+    /// deleting a live one's state is #790.
     Owned,
     /// The caller now holds its flock and it names no live pid. The handle
     /// keeps the flock until dropped; the dead pid it recorded is erased.
@@ -166,10 +178,17 @@ pub enum SentinelProbe {
 /// when it is missing (the same open the runtime does, so both always meet
 /// on one inode).
 ///
-/// A copy of `mur-gui-core::sidecar::probe_sentinel`, pinned to it by a
-/// shared-fixture test in `mur-gui-core`, until that one moves here.
-/// Drop a `Free` handle before launching a runtime, or it fails its own
-/// flock and exits as a duplicate.
+/// The pid the runtime writes into the sentinel is a fallback for a
+/// filesystem where the flock probe cannot see a holder. It is erased once
+/// the sentinel is judged free, so a later process reusing that pid cannot
+/// make a long-dead runtime look alive forever.
+///
+/// The sentinel itself is never unlinked, by anyone: its existence means
+/// nothing, only the flock does, and every unlink is a chance for a holder
+/// to end up locking an inode the next opener cannot see. Hold a `Free`
+/// handle across any clear of the agent's other files, so a runtime racing
+/// the clear fails its own `try_lock_exclusive` and exits as a duplicate —
+/// and drop it before launching a runtime, for the same reason.
 pub fn probe_sentinel(agent_dir: &Path) -> SentinelProbe {
     use fs2::FileExt;
     use std::io::Read;
@@ -319,5 +338,65 @@ mod tests {
     #[test]
     fn pid_alive_returns_false_for_dead_pid() {
         assert!(!pid_alive(999_999));
+    }
+
+    #[test]
+    fn sentinel_path_sits_beside_the_lock() {
+        let dir = Path::new("/x/agents/a");
+        assert_eq!(
+            sentinel_path(&dir.join("running.lock")),
+            dir.join(SENTINEL_FILE)
+        );
+    }
+
+    /// Every verdict the probe can reach. Each `Free` handle is dropped
+    /// before the next directory is looked at.
+    #[test]
+    fn probe_sentinel_verdicts() {
+        use fs2::FileExt;
+
+        #[derive(Debug, PartialEq)]
+        enum V {
+            NoDir,
+            Owned,
+            Free,
+        }
+        let verdict = |dir: &Path| match probe_sentinel(dir) {
+            SentinelProbe::NoAgentDir => V::NoDir,
+            SentinelProbe::Owned => V::Owned,
+            SentinelProbe::Free(_) => V::Free,
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing");
+        let fresh = tmp.path().join("fresh");
+        let dead = tmp.path().join("dead");
+        let live = tmp.path().join("live");
+        let held = tmp.path().join("held");
+        for d in [&fresh, &dead, &live, &held] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(dead.join(SENTINEL_FILE), b"999999").unwrap();
+        std::fs::write(live.join(SENTINEL_FILE), std::process::id().to_string()).unwrap();
+        std::fs::write(held.join(SENTINEL_FILE), b"").unwrap();
+        let flock = std::fs::File::open(held.join(SENTINEL_FILE)).unwrap();
+        flock.try_lock_exclusive().unwrap();
+
+        for (dir, want) in [
+            (&missing, V::NoDir),
+            (&fresh, V::Free),
+            (&dead, V::Free),
+            (&live, V::Owned),
+            (&held, V::Owned),
+        ] {
+            assert_eq!(verdict(dir), want, "{}", dir.display());
+        }
+        assert!(!missing.exists(), "a probe must not create the agent dir");
+        assert_eq!(
+            std::fs::read_to_string(dead.join(SENTINEL_FILE)).unwrap(),
+            "",
+            "a free sentinel's dead pid is erased"
+        );
+        drop(flock);
     }
 }
