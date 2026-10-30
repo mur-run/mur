@@ -19,6 +19,7 @@ use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing::{info, warn};
 
+mod boot_window;
 mod handover;
 pub use handover::{Watched, stop_child};
 
@@ -459,8 +460,13 @@ fn adopt_live_runtimes(mur_home: &Path) -> HashSet<String> {
 /// `clear_runtime_state` and only deleted the lock files out from under a
 /// process that kept running — see the duplicate-supervisor path documented on
 /// `clear_runtime_state`.
+///
+/// A runtime still booting has no `running.lock` yet; its target then comes
+/// from the flocked sentinel (`boot_window::sentinel_target`).
 fn stop_unowned_runtime(mur_home: &Path, slug: &str) {
-    let Some(pid) = lock_owner_pid(mur_home, slug) else {
+    let Some(pid) =
+        lock_owner_pid(mur_home, slug).or_else(|| boot_window::sentinel_target(mur_home, slug))
+    else {
         return;
     };
     warn!(agent = %slug, pid, "stopping untracked runtime holding the lock");
