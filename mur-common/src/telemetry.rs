@@ -91,6 +91,11 @@ pub const METHOD_STARTUP_WAIVED: &str = "mur.hitl.startup_waived";
 /// audited-CONNECT). Records which agent+server was authorized.
 pub const METHOD_EGRESS_BROAD_AUDITED_ENABLED: &str = "mur.egress.broad_audited.enabled";
 
+/// Emitted when `mur browser auth` binds a saved browser profile to an
+/// agent's live `browser` entry — handing that agent a cookie jar (#2199).
+/// Records the agent, the server, and the old and new profile.
+pub const METHOD_BROWSER_PROFILE_BOUND: &str = "mur.browser.profile_bound";
+
 pub const MUR_SKILL_NAME: &str = "mur.skill.name";
 pub const MUR_SKILL_VERSION: &str = "mur.skill.version";
 pub const MUR_SKILL_OUTCOME: &str = "mur.skill.outcome";

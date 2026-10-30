@@ -1,6 +1,7 @@
 //! `mur browser` command handlers. Heavy implementation lives in `mur-browser`.
 
 mod auth;
+mod bind;
 pub(crate) mod bind_plan;
 mod bindings;
 pub mod doctor;

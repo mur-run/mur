@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result, bail};
 use mur_common::agent::{EgressAuthorization, McpNetMode, McpServerNetwork, NetworkOutboundMode};
-use mur_common::telemetry::METHOD_EGRESS_BROAD_AUDITED_ENABLED;
+use mur_common::telemetry::{METHOD_BROWSER_PROFILE_BOUND, METHOD_EGRESS_BROAD_AUDITED_ENABLED};
 
 use super::perm::{add_port, is_base_port};
 use super::{load_profile_for_edit, resolve_mur_home, save_profile};
@@ -150,19 +150,54 @@ pub(crate) fn record_broad_audited_enabled(
     server_id: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
+    append_trace(
+        mur_home,
+        now,
+        serde_json::json!({
+            "ts": now.to_rfc3339(),
+            "method": METHOD_EGRESS_BROAD_AUDITED_ENABLED,
+            "mur.agent.name": agent,
+            "mur.mcp.server_id": server_id,
+        }),
+    )
+}
+
+/// Append a `mur.browser.profile_bound` event: `agent`'s `server_id` entry now
+/// launches with saved profile `new` (was `old`, `null` when none) (#2199).
+pub(crate) fn record_profile_bound(
+    mur_home: &std::path::Path,
+    agent: &str,
+    server_id: &str,
+    old: Option<&str>,
+    new: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<()> {
+    append_trace(
+        mur_home,
+        now,
+        serde_json::json!({
+            "ts": now.to_rfc3339(),
+            "method": METHOD_BROWSER_PROFILE_BOUND,
+            "mur.agent.name": agent,
+            "mur.mcp.server_id": server_id,
+            "mur.browser.profile.old": old,
+            "mur.browser.profile.new": new,
+        }),
+    )
+}
+
+/// Append one JSON line to today's `traces/<YYYY-MM-DD>.jsonl`.
+fn append_trace(
+    mur_home: &std::path::Path,
+    now: chrono::DateTime<chrono::Utc>,
+    line: serde_json::Value,
+) -> Result<()> {
     let traces_dir = mur_home.join("traces");
     std::fs::create_dir_all(&traces_dir)
         .with_context(|| format!("create {}", traces_dir.display()))?;
     let path = traces_dir
         .join(now.format("%Y-%m-%d").to_string())
         .with_extension("jsonl");
-
-    let line = serde_json::json!({
-        "ts": now.to_rfc3339(),
-        "method": METHOD_EGRESS_BROAD_AUDITED_ENABLED,
-        "mur.agent.name": agent,
-        "mur.mcp.server_id": server_id,
-    });
 
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new()
@@ -567,5 +602,39 @@ mod tests {
         assert!(contents.contains(mur_common::telemetry::METHOD_EGRESS_BROAD_AUDITED_ENABLED));
         assert!(contents.contains("carol"));
         assert!(contents.contains("browser"));
+    }
+
+    #[test]
+    fn record_profile_bound_appends_old_and_new_profile() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let now = chrono::Utc::now();
+        record_profile_bound(tmp.path(), "carol", "browser", None, "deepseek", now).unwrap();
+        record_profile_bound(
+            tmp.path(),
+            "carol",
+            "browser",
+            Some("deepseek"),
+            "gitea",
+            now,
+        )
+        .unwrap();
+
+        let path = tmp
+            .path()
+            .join("traces")
+            .join(now.format("%Y-%m-%d").to_string())
+            .with_extension("jsonl");
+        let lines: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["method"], METHOD_BROWSER_PROFILE_BOUND);
+        assert_eq!(lines[0]["mur.agent.name"], "carol");
+        assert_eq!(lines[0]["mur.mcp.server_id"], "browser");
+        assert!(lines[0]["mur.browser.profile.old"].is_null());
+        assert_eq!(lines[0]["mur.browser.profile.new"], "deepseek");
+        assert_eq!(lines[1]["mur.browser.profile.old"], "deepseek");
     }
 }

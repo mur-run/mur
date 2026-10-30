@@ -306,6 +306,9 @@ impl LiveOps for Fake {
         self.research_events += 1;
         Ok(())
     }
+    fn record_profile_bound(&mut self, _: &str, _: Option<&str>, _: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 // flow: refused port → no add, no save, and no chip (it's an Err)

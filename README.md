@@ -633,6 +633,17 @@ Agent** wizard offers the same catalog as a source.
   rows read the saved agent configuration; they do not prove an
   already-running browser has reloaded it — the `/browser live` reply says
   when a change needs an agent restart.
+  After saving, on a terminal, `mur browser auth` lists every agent with a live browser
+  entry and the profile each one launches with, and asks which agent should
+  use the new profile; Enter skips, and nothing is bound without a `[y/N]`
+  confirmation that names any profile being replaced. Binding only changes
+  the entry's `--profile`, never its network policy: an agent whose
+  `allow_hosts` do not cover the profile's host is refused with the full
+  `/browser live <hosts> --profile <site>` command to run instead, and a denied
+  host or a non-host-scoped entry is refused outright. The reply says when the
+  change takes effect (next turn, or after a restart) and how to put the old
+  profile back. Without a terminal it prints the current bindings and binds
+  nothing.
 - **Human-in-the-loop** — tool calls pause for your approval in Hub. In
   `mur agent cli` a session starts with auto-approve ON (the status bar's
   `AUTO` badge says so); `--ask` or `/auto off` makes it ask first. AUTO only
