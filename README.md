@@ -575,6 +575,11 @@ Agent** wizard offers the same catalog as a source.
   this time only). Hosts on a research-mode deny list are never offered. Live
   grants need the same approval token as a tool approval, so the agent cannot
   grant itself a host.
+- **Rerunning `/browser live` adds hosts** — `/browser live <host>...` adds
+  the named hosts to the browser's allow-list and keeps the ones already
+  there, including those granted with `/browser allow`, so attaching a
+  `--profile` no longer drops them; the summary names what was kept. **Behavior
+  change:** to narrow the list to exactly the hosts you name, add `--replace`.
 - **A reachable site can still be logged out** — allowing a host opens the
   network, not a session: the browser only carries cookies when its entry was
   set up with `/browser live <hosts> --profile <site>`. When it was not and

@@ -1,5 +1,6 @@
 //! `/browser live <host>...`: persist a live-mode browser MCP entry on this
-//! agent and scope its egress to exactly the given hosts.
+//! agent and add the given hosts to its egress allowlist. `--replace` scopes
+//! it to exactly the given hosts instead (#2101).
 //!
 //! Editing an existing entry (hosts, `--profile`) hot-reloads: the agent's
 //! next turn uses it. Creating the entry, a new grant, or a research-mode
@@ -226,7 +227,7 @@ pub(super) struct Applied {
     pub previous: Vec<String>,
 }
 
-/// Ensure the live entry exists and overwrite its allowlist with `hosts`.
+/// Ensure the live entry exists and set its allowlist to exactly `hosts`.
 /// `new_entry` is only called when the entry is missing.
 #[cfg(test)]
 pub(super) fn apply(
@@ -256,7 +257,8 @@ pub(super) fn apply_network(
         .take()
         .map(|n| n.allow_hosts)
         .unwrap_or_default();
-    // Replace, never merge: the allowlist is exactly what this call named.
+    // `network` is final here: merging (the default) already happened in
+    // [`merge_hosts`], before the preview, so the preview shows what is written.
     entry.network = Some(network);
     Applied { added, previous }
 }
@@ -268,6 +270,39 @@ pub(super) fn live_network(hosts: &[String]) -> McpServerNetwork {
         allow_hosts: hosts.to_vec(),
         ..Default::default()
     }
+}
+
+/// Default `/browser live` (#2101): keep the hosts already allowed, in their
+/// order, and add the new ones after them. A rerun that only meant to attach `--profile`
+/// used to silently drop every host `/browser allow` had added. Only a
+/// `Restricted` policy is merged into a `Restricted` one; any other existing
+/// mode has no host list worth keeping. Returns the kept hosts that this call
+/// did not name, so the summary can say what `--replace` would have dropped.
+pub(super) fn merge_hosts(
+    after: &mut McpServerNetwork,
+    existing: Option<&McpServerNetwork>,
+) -> Vec<String> {
+    let Some(prev) = existing.filter(|n| n.mode == McpNetMode::Restricted) else {
+        return Vec::new();
+    };
+    if after.mode != McpNetMode::Restricted {
+        return Vec::new();
+    }
+    let kept: Vec<String> = prev
+        .allow_hosts
+        .iter()
+        .filter(|h| !after.allow_hosts.contains(h))
+        .cloned()
+        .collect();
+    // Previous order first, so naming a host already allowed is a no-op.
+    let mut merged = prev.allow_hosts.clone();
+    for h in &after.allow_hosts {
+        if !merged.contains(h) {
+            merged.push(h.clone());
+        }
+    }
+    after.allow_hosts = merged;
+    kept
 }
 
 /// Gate on `mur browser setup`: refuse (and name the command) when not ready.
@@ -444,9 +479,11 @@ pub(super) struct LiveFlags {
     pub yes: bool,
     /// Research mode: all hosts, audited (`BroadAudited`).
     pub research: bool,
+    /// Set the allowlist to exactly the named hosts instead of adding them.
+    pub replace: bool,
 }
 
-/// Strip `--yes` / `--research`, leaving `--profile` and the hosts.
+/// Strip `--yes` / `--research` / `--replace`, leaving `--profile` and the hosts.
 pub(super) fn split_flags(args: &[String]) -> (Vec<String>, LiveFlags) {
     let mut flags = LiveFlags::default();
     let mut rest = Vec::with_capacity(args.len());
@@ -454,6 +491,7 @@ pub(super) fn split_flags(args: &[String]) -> (Vec<String>, LiveFlags) {
         match a.as_str() {
             "--yes" => flags.yes = true,
             "--research" => flags.research = true,
+            "--replace" => flags.replace = true,
             _ => rest.push(a.clone()),
         }
     }
@@ -465,11 +503,14 @@ pub(super) fn split_flags(args: &[String]) -> (Vec<String>, LiveFlags) {
 pub(super) fn confirm_command(
     hosts_args: &[String],
     profile: Option<&str>,
-    research: bool,
+    flags: LiveFlags,
 ) -> String {
     let mut cmd = vec!["browser live --yes".to_owned()];
-    if research {
+    if flags.research {
         cmd.push("--research".to_owned());
+    }
+    if flags.replace {
+        cmd.push("--replace".to_owned());
     }
     cmd.extend(hosts_args.iter().cloned());
     if let Some(site) = profile {
@@ -505,6 +546,12 @@ pub(super) fn run(
                  nothing was changed. Run `/browser live --research` alone, or name sites without it"
             );
         }
+        if flags.replace {
+            anyhow::bail!(
+                "`--replace` scopes a host list and research mode has none; nothing was changed. \
+                 Run `/browser live --research` alone"
+            );
+        }
         let by = std::env::var("USER").unwrap_or_else(|_| "unknown".to_owned());
         let at_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -522,6 +569,13 @@ pub(super) fn run(
     let existing = servers.iter().find(|e| e.name == LIVE_ENTRY);
     let mut after = after;
     carry_deny_hosts(&mut after, existing.and_then(|e| e.network.as_ref()));
+    let kept = if flags.replace {
+        Vec::new()
+    } else {
+        merge_hosts(&mut after, existing.and_then(|e| e.network.as_ref()))
+    };
+    // What the entry may reach once written: every host, not just the new ones.
+    let reach = after.allow_hosts.clone();
     let preview = render_preview(
         agent,
         LIVE_ENTRY,
@@ -546,7 +600,7 @@ pub(super) fn run(
             Vec::new()
         };
         if policy_same && profile_same && repairs.is_empty() {
-            return Ok((unchanged_text(&hosts), None));
+            return Ok((unchanged_text(&reach), None));
         }
         let effect = Effect::predicted(
             existing.and_then(|e| e.network.as_ref()).map(|n| n.mode),
@@ -559,7 +613,7 @@ pub(super) fn run(
         } else {
             format!("{preview}\nalso repairs:\n  {}", repairs.join("\n  "))
         };
-        let cmd = confirm_command(&hosts, profile.as_deref(), flags.research);
+        let cmd = confirm_command(&hosts, profile.as_deref(), flags);
         return Ok(match confirm_chip(&cmd) {
             Some(chip) => (preview, Some(chip)),
             None => (format!("{preview}\nRun: `/{cmd}`"), None),
@@ -568,7 +622,7 @@ pub(super) fn run(
     let mut notes = vec![preview];
     // `mcp_add` bails on a duplicate name by contract; decide here instead.
     let (previous, effect) = if servers.iter().any(|e| e.name == LIVE_ENTRY) {
-        // Existing entry: overwrite its allowlist. The save is atomic
+        // Existing entry: write the (merged or replaced) policy. The save is atomic
         // (`save_profile` → `write_atomic`), so a failed save leaves the old,
         // still-valid policy in place — nothing to roll back.
         let before = servers.clone();
@@ -589,7 +643,7 @@ pub(super) fn run(
         // so no notes + same entry means the profile is exactly as it was:
         // a restart would reload identical config, so offer none.
         if !entry_changed && saved.is_empty() {
-            return Ok((unchanged_text(&hosts), None));
+            return Ok((unchanged_text(&reach), None));
         }
         notes.extend(saved);
         (out.previous, effect)
@@ -613,7 +667,7 @@ pub(super) fn run(
             ));
         }
     } else {
-        notes.push(format!("browser live mode may reach: {}", hosts.join(", ")));
+        notes.push(format!("browser live mode may reach: {}", reach.join(", ")));
     }
     match profile.as_deref() {
         Some(site) => notes.push(format!("signed in as the saved profile `{site}`")),
@@ -624,7 +678,12 @@ pub(super) fn run(
                 .to_owned(),
         ),
     }
-    if !previous.is_empty() && previous != hosts {
+    if !kept.is_empty() {
+        notes.push(format!(
+            "kept from the previous allowlist: {} — rerun with `--replace` to allow only the hosts you named",
+            kept.join(", ")
+        ));
+    } else if flags.replace && !previous.is_empty() && previous != hosts {
         notes.push(format!(
             "replaced previous allowlist: {}",
             previous.join(", ")

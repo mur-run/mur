@@ -307,7 +307,7 @@ const BROWSER_MODES: &[(&str, &str)] = &[
     ("list", "recorded runs, e.g. list deepseek --tag daily"),
     (
         "live",
-        "allow this agent these hosts, e.g. live shop.example.com",
+        "add hosts this agent may reach, e.g. live shop.example.com (--replace: only these)",
     ),
     (
         "allow",
