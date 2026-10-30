@@ -29,6 +29,31 @@ fn attached_profile_reads_the_launch_argv() {
 }
 
 #[test]
+fn attached_profile_reads_the_equals_form_and_stops_at_double_dash() {
+    // Clap's long option also accepts `--profile=<site>` (#2203).
+    assert_eq!(
+        attached_profile(&entry(&["browser", "record", "--profile=deepseek"])),
+        Some("deepseek")
+    );
+    assert_eq!(attached_profile(&entry(&["--profile="])), None);
+    // After `--` every token is positional, never an option.
+    assert_eq!(
+        attached_profile(&entry(&[
+            "browser",
+            "record",
+            "--",
+            "--profile",
+            "deepseek"
+        ])),
+        None
+    );
+    assert_eq!(
+        attached_profile(&entry(&["--", "--profile=deepseek"])),
+        None
+    );
+}
+
+#[test]
 fn domains_match_exact_sub_and_parent_but_not_lookalikes() {
     let p = [saved("deepseek", &["chat.deepseek.com"])];
     assert_eq!(matching(&p, &s(&["chat.deepseek.com"])), vec!["deepseek"]);

@@ -126,6 +126,19 @@ fn unscoped_entry_is_flagged() {
 }
 
 #[test]
+fn equals_form_profile_is_reported_as_bound() {
+    // `--profile=<site>` is a valid Clap spelling; the browser loads it, so
+    // status must not report the agent as unbound (#2203).
+    let t = tempfile::tempdir().unwrap();
+    saved(t.path(), "deepseek", "https://chat.deepseek.com/");
+    let yaml = live("x", Some("deepseek"), restricted())
+        .replace("- --profile\n  - deepseek", "- --profile=deepseek");
+    assert!(yaml.contains("--profile=deepseek"), "{yaml}");
+    agent(t.path(), "x", &yaml);
+    assert_eq!(rows(t.path()), [r("x", "deepseek", None)]);
+}
+
+#[test]
 fn incomplete_profile_is_flagged_before_hosts() {
     let t = tempfile::tempdir().unwrap();
     fs::create_dir_all(paths::profile_dir(t.path(), "half")).unwrap();
