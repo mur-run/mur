@@ -29,7 +29,8 @@ pub enum SshProxyState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SshProxyStatus {
     pub state: SshProxyState,
-    /// Stable reason code (`AuditReason::as_str`) for `AuditOnly`, else `None`.
+    /// Stable reason code: why it is `AuditOnly` (`AuditReason::as_str`), or
+    /// why the proxy did not start despite `entitlements.ssh` keys (`Off`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     /// One line a human can act on.
@@ -60,12 +61,15 @@ pub fn read(agent_home: &Path) -> Option<SshProxyStatus> {
 }
 
 impl SshProxyStatus {
-    /// `off`, `boundary`, or `audit-only (<code>)`. The one rendering of the
+    /// `off`, `off (<code>)`, `boundary`, or `audit-only (<code>)`. The one rendering of the
     /// value, shared by `mur agent status` and the start notice on the
     /// agent's channel so the two can never word it differently.
     pub fn label(&self) -> String {
         match self.state {
-            SshProxyState::Off => "off".to_string(),
+            SshProxyState::Off => match &self.code {
+                Some(c) => format!("off ({c})"),
+                None => "off".to_string(),
+            },
             SshProxyState::Boundary => "boundary".to_string(),
             SshProxyState::AuditOnly => {
                 format!("audit-only ({})", self.code.as_deref().unwrap_or("unknown"))
@@ -99,6 +103,19 @@ mod tests {
             write(tmp.path(), &s).unwrap();
             assert_eq!(read(tmp.path()), Some(s));
         }
+    }
+
+    #[test]
+    fn off_names_its_reason_when_it_has_one() {
+        let mut s = SshProxyStatus {
+            state: SshProxyState::Off,
+            code: None,
+            explanation: "why".into(),
+            at_unix_ms: 0,
+        };
+        assert_eq!(s.label(), "off");
+        s.code = Some("socket_path_too_long".into());
+        assert_eq!(s.label(), "off (socket_path_too_long)");
     }
 
     #[test]

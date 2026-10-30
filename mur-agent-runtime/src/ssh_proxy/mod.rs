@@ -9,6 +9,8 @@
 //! started, and no code path in this module ever produces a signature.
 
 pub mod keys;
+#[cfg(unix)]
+pub mod listener;
 pub mod policy;
 pub mod refusal;
 pub(crate) mod session;

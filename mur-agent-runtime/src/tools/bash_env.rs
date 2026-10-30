@@ -58,6 +58,21 @@ fn base_env_from(
     env
 }
 
+/// The key the ssh client reads its agent socket from.
+pub const SSH_AUTH_SOCK_ENV: &str = "SSH_AUTH_SOCK";
+
+/// `SSH_AUTH_SOCK` for a bash child: the ssh-agent proxy socket when the
+/// proxy runs, else nothing. Set from the proxy path, never inherited, so the
+/// runtime's own upstream value cannot reach the child.
+pub fn ssh_agent_env(proxy_sock: Option<&std::path::Path>) -> Option<(String, String)> {
+    proxy_sock.map(|p| {
+        (
+            SSH_AUTH_SOCK_ENV.to_string(),
+            p.to_string_lossy().into_owned(),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +85,16 @@ mod tests {
         });
         let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(keys, ["PATH", "HOME"]);
+    }
+
+    #[test]
+    fn ssh_auth_sock_is_the_proxy_path_or_absent() {
+        assert_eq!(ssh_agent_env(None), None);
+        let got = ssh_agent_env(Some(std::path::Path::new("/h/agents/a/ssh-agent.sock")));
+        assert_eq!(
+            got,
+            Some(("SSH_AUTH_SOCK".into(), "/h/agents/a/ssh-agent.sock".into()))
+        );
     }
 
     #[test]

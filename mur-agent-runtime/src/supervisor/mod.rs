@@ -52,6 +52,8 @@ mod dispatch;
 mod identity;
 mod pin;
 mod seal;
+#[cfg(unix)]
+mod ssh_proxy_boot;
 mod ssh_proxy_class;
 mod start_notice;
 mod startup_override;
@@ -238,9 +240,10 @@ pub async fn entrypoint() -> anyhow::Result<()> {
 
     // 2b. #712: refuse entitlements that changed outside MUR (the agent's own
     //     bash can rewrite profile.yaml on Linux, where Landlock cannot deny it).
-    if let pin::Verdict::Refuse(msg) = pin::verify(&profile, &agent_home, &mur_home) {
-        pin::refuse(&agent_home, &msg);
-    }
+    let pin_trust = match pin::verify(&profile, &agent_home, &mur_home) {
+        pin::Verdict::Start(t) => t,
+        pin::Verdict::Refuse(msg) => pin::refuse(&agent_home, &msg),
+    };
     // Past the refusal checks: a marker from an earlier refusal is stale, and
     // leaving it would stop the service manager respawning a later crash.
     mur_common::start_refusal::clear(&agent_home);
@@ -281,7 +284,8 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         secrets,
         approval_token,
         sandbox_record,
-    } = seal::prepare_and_seal(&profile, &agent_home, &mur_home, &identity).await?;
+        ssh_auth_sock,
+    } = seal::prepare_and_seal(&profile, &agent_home, &mur_home, &identity, pin_trust).await?;
     // `Some` on every path that reaches here; `None` would mean no seal was
     // attempted, which must not count as sealed. Every consumer below reads
     // this one value, so they cannot disagree about the boot.
@@ -378,6 +382,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             secrets.clone(),
             enforcing,
             &boot_cfg,
+            ssh_auth_sock,
         )
         .await?;
     runner.attach_live(live.clone());

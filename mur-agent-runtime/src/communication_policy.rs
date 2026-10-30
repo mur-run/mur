@@ -34,7 +34,7 @@ pub fn resolve_caller_name(agents_dir: &Path, caller_pid: u32) -> Option<String>
 /// probe opens the sibling's sentinel read+write, which the sandbox denies
 /// inside a sibling's home — the error would read as "stale", drop the
 /// sibling from this map, and let its requests through as the user.
-fn running_agents(agents_dir: &Path) -> HashMap<u32, String> {
+pub(crate) fn running_agents(agents_dir: &Path) -> HashMap<u32, String> {
     let mut out = HashMap::new();
     let Ok(entries) = std::fs::read_dir(agents_dir) else {
         return out;

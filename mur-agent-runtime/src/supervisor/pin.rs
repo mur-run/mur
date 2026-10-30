@@ -10,6 +10,7 @@ use mur_common::start_refusal;
 use tracing::{debug, warn};
 
 use crate::profile::Profile;
+use crate::ssh_proxy::policy::PinTrust;
 
 /// Refuse to start: record why for the service manager and the CLI, print the
 /// refusal, and exit with [`start_refusal::EXIT_CODE`] — which the service unit
@@ -37,7 +38,10 @@ fn record_refusal(agent_home: &Path, line: &str) {
 /// Outcome the caller acts on. `Refuse` carries the message to print.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Verdict {
-    Start,
+    /// Start; whether the entitlements were checked against an existing pin
+    /// (`Pinned`) or not (outside `<mur_home>/agents`, or pinned just now on
+    /// first use). The ssh-agent proxy trusts only `Pinned` on Linux.
+    Start(PinTrust),
     Refuse(String),
 }
 
@@ -47,7 +51,7 @@ pub(super) fn verify(profile: &Profile, agent_home: &Path, mur_home: &Path) -> V
     // a cache dir outside `<mur_home>/agents`, with no trusted writer to pin.
     if agent_home != mur_home.join("agents").join(name) {
         debug!(home = %agent_home.display(), "agent not under mur_home; entitlement pin not applied");
-        return Verdict::Start;
+        return Verdict::Start(PinTrust::Unpinned);
     }
     // Compare what is on disk (unexpanded), the same form writers pin.
     let path = agent_home.join("profile.yaml");
@@ -56,7 +60,7 @@ pub(super) fn verify(profile: &Profile, agent_home: &Path, mur_home: &Path) -> V
         Err(e) => return Verdict::Refuse(format!("error[profile_invalid]: {e}")),
     };
     match entitlements_pin::check(mur_home, name, &on_disk) {
-        Ok(PinCheck::Match) => Verdict::Start,
+        Ok(PinCheck::Match) => Verdict::Start(PinTrust::Pinned),
         Ok(PinCheck::Missing) => {
             // Trust on first use: installs from before #712 have no pin.
             match entitlements_pin::write_pin(mur_home, name, &on_disk) {
@@ -66,7 +70,7 @@ pub(super) fn verify(profile: &Profile, agent_home: &Path, mur_home: &Path) -> V
                 ),
                 Err(e) => warn!(agent = name, error = %e, "could not write entitlement pin"),
             }
-            Verdict::Start
+            Verdict::Start(PinTrust::Unpinned)
         }
         Ok(PinCheck::Mismatch { changed }) => Verdict::Refuse(format!(
             "error[entitlements_unpinned]: {name}'s profile.yaml entitlements changed \
@@ -103,15 +107,25 @@ mod tests {
     #[test]
     fn first_start_pins_then_starts() {
         let (tmp, home) = setup(|y| y);
-        assert_eq!(verify(&load(&home), &home, tmp.path()), Verdict::Start);
+        // Trust on first use is not a verified pin.
+        assert_eq!(
+            verify(&load(&home), &home, tmp.path()),
+            Verdict::Start(PinTrust::Unpinned)
+        );
         assert!(entitlements_pin::pin_path(tmp.path(), "bridge_test").exists());
-        assert_eq!(verify(&load(&home), &home, tmp.path()), Verdict::Start);
+        assert_eq!(
+            verify(&load(&home), &home, tmp.path()),
+            Verdict::Start(PinTrust::Pinned)
+        );
     }
 
     #[test]
     fn self_widened_profile_is_refused() {
         let (tmp, home) = setup(|y| y);
-        assert_eq!(verify(&load(&home), &home, tmp.path()), Verdict::Start);
+        assert!(matches!(
+            verify(&load(&home), &home, tmp.path()),
+            Verdict::Start(_)
+        ));
         // What the agent's bash tool can do on Linux: rewrite its own profile.
         let p = home.join("profile.yaml");
         let y = std::fs::read_to_string(&p).unwrap();
@@ -128,7 +142,10 @@ mod tests {
     #[test]
     fn self_granted_ssh_key_is_refused() {
         let (tmp, home) = setup(|y| y);
-        assert_eq!(verify(&load(&home), &home, tmp.path()), Verdict::Start);
+        assert!(matches!(
+            verify(&load(&home), &home, tmp.path()),
+            Verdict::Start(_)
+        ));
         let p = home.join("profile.yaml");
         let y = std::fs::read_to_string(&p).unwrap();
         // Edit the parsed document, not the text: the fixture is CRLF on a
@@ -160,18 +177,27 @@ mod tests {
     #[test]
     fn non_entitlement_edit_still_starts() {
         let (tmp, home) = setup(|y| y);
-        assert_eq!(verify(&load(&home), &home, tmp.path()), Verdict::Start);
+        assert!(matches!(
+            verify(&load(&home), &home, tmp.path()),
+            Verdict::Start(_)
+        ));
         let p = home.join("profile.yaml");
         let y = std::fs::read_to_string(&p).unwrap();
         std::fs::write(&p, y.replace("name: \"m\"", "name: \"other\"")).unwrap();
-        assert_eq!(verify(&load(&home), &home, tmp.path()), Verdict::Start);
+        assert!(matches!(
+            verify(&load(&home), &home, tmp.path()),
+            Verdict::Start(_)
+        ));
     }
 
     #[test]
     fn agent_outside_mur_home_is_not_pinned() {
         let (tmp, home) = setup(|y| y);
         let other = tempfile::tempdir().unwrap();
-        assert_eq!(verify(&load(&home), &home, other.path()), Verdict::Start);
+        assert_eq!(
+            verify(&load(&home), &home, other.path()),
+            Verdict::Start(PinTrust::Unpinned)
+        );
         assert!(!entitlements_pin::pin_path(tmp.path(), "bridge_test").exists());
     }
 

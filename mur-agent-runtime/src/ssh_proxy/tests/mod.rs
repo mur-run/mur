@@ -1,6 +1,8 @@
 //! Phase 2 tests (plan §"Phase 2 tests").
 
 mod fixtures;
+#[cfg(unix)]
+mod listener;
 mod rsa_vector;
 mod session;
 

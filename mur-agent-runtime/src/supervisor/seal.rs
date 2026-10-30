@@ -14,6 +14,8 @@ pub(super) struct Sealed {
     pub(super) secrets: Arc<crate::secrets::SecretVault>,
     pub(super) approval_token: Option<String>,
     pub(super) sandbox_record: Option<mur_common::agent::SandboxRecord>,
+    /// The ssh-agent proxy socket, when the proxy is running.
+    pub(super) ssh_auth_sock: Option<std::path::PathBuf>,
 }
 
 pub(super) async fn prepare_and_seal(
@@ -21,6 +23,7 @@ pub(super) async fn prepare_and_seal(
     agent_home: &Path,
     mur_home: &Path,
     identity: &mur_common::identity::AgentIdentity,
+    pin_trust: crate::ssh_proxy::policy::PinTrust,
 ) -> anyhow::Result<Sealed> {
     // 3c. Self-heal MUR's own copy of the MCP server binary. When an enabled
     //     MCP server points at the bundled location (~/.mur/mcp-servers/...),
@@ -335,6 +338,17 @@ pub(super) async fn prepare_and_seal(
             &extra_write_paths,
         ),
     );
+    // ssh-agent proxy, O7 option A: the one upstream connection is made now,
+    // while the upstream is still reachable; the seal below makes a new
+    // connect impossible on a boundary platform. Never gates start.
+    #[cfg(unix)]
+    let ssh_upstream = super::ssh_proxy_boot::connect_before_seal(
+        &profile.inner.entitlements.ssh,
+        std::env::var_os(super::ssh_proxy_class::UPSTREAM_ENV)
+            .map(std::path::PathBuf::from)
+            .as_deref(),
+    )
+    .await;
     let sandbox_record = match crate::sandbox::apply(
         &profile.inner.entitlements,
         agent_home,
@@ -417,11 +431,37 @@ pub(super) async fn prepare_and_seal(
         warn!(error = %e, "could not post the ssh-agent proxy classification to the agent's channel");
     }
 
+    // Listener after the seal, in the agent's own home. Refusals reach the
+    // agent's channel through the same start-notice channel.
+    #[cfg(unix)]
+    let ssh_auth_sock = match ssh_upstream {
+        Some(upstream) => {
+            let sink = crate::ssh_proxy::refusal::RefusalSink::new(Some(agent_home.to_path_buf()))
+                .with_channel(super::start_notice::refusal_poster(&signer));
+            super::ssh_proxy_boot::start_after_seal(super::ssh_proxy_boot::StartArgs {
+                agent_home,
+                agents_dir: mur_home.join("agents"),
+                ent: &profile.inner.entitlements.ssh,
+                pin_trust,
+                upstream,
+                sink,
+            })
+            .await
+        }
+        None => None,
+    };
+    #[cfg(not(unix))]
+    let ssh_auth_sock = {
+        let _ = pin_trust;
+        None
+    };
+
     Ok(Sealed {
         egress_proxy,
         secrets,
         approval_token,
         sandbox_record,
+        ssh_auth_sock,
     })
 }
 

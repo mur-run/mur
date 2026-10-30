@@ -199,6 +199,11 @@ async fn refuse(stream: tokio::net::UnixStream, reason: &str) {
     }
 }
 
+/// The connecting process's pid, `None` when the platform cannot say.
+pub(crate) fn peer_pid(stream: &tokio::net::UnixStream) -> Option<u32> {
+    peer_info(stream).map(|p| p.pid).filter(|p| *p != 0)
+}
+
 #[cfg(target_os = "linux")]
 fn peer_info(stream: &tokio::net::UnixStream) -> Option<PeerInfo> {
     use std::mem;

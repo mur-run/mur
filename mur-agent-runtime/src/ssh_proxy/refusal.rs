@@ -21,10 +21,12 @@ pub enum RefusalCode {
     HitlNotWired,
     PolicyUnpinned,
     MalformedRequest,
+    /// The connecting process is not this agent or one it spawned.
+    PeerNotSelf,
 }
 
 impl RefusalCode {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::PolicyInvalid,
         Self::UpstreamUnavailable,
         Self::NoSessionBind,
@@ -35,6 +37,7 @@ impl RefusalCode {
         Self::HitlNotWired,
         Self::PolicyUnpinned,
         Self::MalformedRequest,
+        Self::PeerNotSelf,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -49,6 +52,7 @@ impl RefusalCode {
             Self::HitlNotWired => "hitl_not_wired",
             Self::PolicyUnpinned => "policy_unpinned",
             Self::MalformedRequest => "malformed_request",
+            Self::PeerNotSelf => "peer_not_self",
         }
     }
 }
@@ -139,6 +143,11 @@ impl Refusal {
                     .into()
             }
             RefusalCode::MalformedRequest => "the request was malformed or unsupported".into(),
+            RefusalCode::PeerNotSelf => {
+                "the connecting process is not this agent or a process it spawned, \
+                 so the connection was closed before anything was forwarded"
+                    .into()
+            }
         };
         let detail = self
             .detail
