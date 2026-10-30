@@ -14,6 +14,7 @@ pub mod listener;
 pub mod policy;
 pub mod refusal;
 pub(crate) mod session;
+pub(crate) mod userauth;
 pub mod wire;
 
 #[cfg(test)]

@@ -4,11 +4,14 @@
 //! open): the upstream is behind [`Upstream`]. In Phase 2 no sign request is
 //! ever forwarded — there is no code path that produces a signature.
 
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 use super::keys::{self, fingerprint};
 use super::policy::Policy;
 use super::refusal::{Refusal, RefusalCode, RefusalSink};
+use super::userauth;
 use super::wire::{self, Answer, Request, SessionBind};
 
 /// Most `session-bind`s one connection may carry. OpenSSH's agent uses the
@@ -26,11 +29,20 @@ pub(crate) trait Upstream {
 enum Bind {
     #[default]
     None,
-    /// Host-key fingerprint of the most recent verified bind.
-    Verified(String),
+    /// The most recent verified bind (spec "Binding sign requests", rule 1).
+    Verified(Verified),
     /// A bind failed to decode or verify (or exceeded the cap). Sticky: a later valid
     /// bind does not clear it, so a client cannot retry its way past.
     Poisoned(String),
+}
+
+/// What a verified `session-bind` proved. Each new verified bind replaces it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Verified {
+    host_key_fp: String,
+    host_key: Vec<u8>,
+    session_id: Vec<u8>,
+    is_forwarding: bool,
 }
 
 pub(crate) struct Session<'a, U> {
@@ -94,8 +106,8 @@ impl<'a, U: Upstream> Session<'a, U> {
         match req {
             Request::RequestIdentities => self.list().await,
             Request::SessionBind(sb) => self.session_bind(&sb),
-            Request::SignRequest { key_blob, .. } => {
-                self.sign(&key_blob);
+            Request::SignRequest { key_blob, data, .. } => {
+                self.sign(&key_blob, &data);
                 Answer::Failure
             }
             // Not an error: an agent without the extension answers FAILURE.
@@ -149,7 +161,12 @@ impl<'a, U: Upstream> Session<'a, U> {
         }
         match keys::verify_session_bind(&sb.host_key, &sb.session_id, &sb.signature) {
             Ok(()) => {
-                self.bind = Bind::Verified(host_fp);
+                self.bind = Bind::Verified(Verified {
+                    host_key_fp: host_fp,
+                    host_key: sb.host_key.clone(),
+                    session_id: sb.session_id.clone(),
+                    is_forwarding: sb.is_forwarding,
+                });
                 Answer::Success
             }
             Err(e) => {
@@ -159,12 +176,24 @@ impl<'a, U: Upstream> Session<'a, U> {
         }
     }
 
-    /// Run every policy check so the refusal is the most specific one, then
-    /// refuse anyway: Phase 2 has no HITL, so nothing is signed.
-    fn sign(&self, key_blob: &[u8]) {
+    /// Run every check so the refusal is the most specific one, then refuse
+    /// anyway: Phase 2 has no HITL, so nothing is signed.
+    fn sign(&self, key_blob: &[u8], data: &[u8]) {
         let key_fp = fingerprint(key_blob);
         let host = match &self.bind {
-            Bind::Verified(h) => Some(h.as_str()),
+            Bind::Verified(v) => {
+                // Rule 6: after bind presence, before the key/host lookup,
+                // so a mismatch never reaches an approval prompt.
+                if let Err((code, detail)) = check_binding(v, key_blob, data) {
+                    let r = Refusal::new(code)
+                        .key(key_fp.clone(), self.policy.label(&key_fp))
+                        .host(v.host_key_fp.clone())
+                        .detail(detail);
+                    self.refuse(r);
+                    return;
+                }
+                Some(v.host_key_fp.as_str())
+            }
             Bind::None | Bind::Poisoned(_) => None,
         };
         let refusal = match self.policy.check_sign(&key_fp, host) {
@@ -187,4 +216,51 @@ impl<'a, U: Upstream> Session<'a, U> {
     fn refuse(&self, r: Refusal) {
         self.sink.record(&r);
     }
+}
+
+/// Spec "Binding sign requests to the verified session-bind", rules 2-5.
+/// The detail names short hashes only, never the session ID or user (rule 7).
+fn check_binding(v: &Verified, key_blob: &[u8], data: &[u8]) -> Result<(), (RefusalCode, String)> {
+    if v.is_forwarding {
+        return Err((
+            RefusalCode::ForwardingNotSupported,
+            "bind has is_forwarding set".into(),
+        ));
+    }
+    let req =
+        userauth::parse(data).map_err(|e| (RefusalCode::SignDataNotUserauth, e.to_string()))?;
+    if !bool::from(req.session_id.ct_eq(&v.session_id)) {
+        return Err((
+            RefusalCode::SessionIdMismatch,
+            format!(
+                "bound session {}, signature for session {}",
+                short_hash(&v.session_id),
+                short_hash(req.session_id)
+            ),
+        ));
+    }
+    if req.key_blob != key_blob {
+        return Err((
+            RefusalCode::SignRequestInconsistent,
+            format!("login request names key {}", fingerprint(req.key_blob)),
+        ));
+    }
+    if let Some(h) = req.host_key
+        && h != v.host_key.as_slice()
+    {
+        return Err((
+            RefusalCode::SignRequestInconsistent,
+            format!("login request names host key {}", fingerprint(h)),
+        ));
+    }
+    Ok(())
+}
+
+/// First 8 hex digits of SHA-256: enough to correlate log lines, not enough
+/// to recover the value.
+fn short_hash(b: &[u8]) -> String {
+    Sha256::digest(b)[..4]
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect()
 }

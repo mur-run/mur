@@ -15,10 +15,10 @@ use mur_common::agent::SshEntitlement;
 use mur_common::ssh_proxy_refusals;
 
 /// In-process fake ssh-agent. Records every frame it was sent.
-struct FakeUpstream {
+pub(super) struct FakeUpstream {
     keys: Vec<Vec<u8>>,
     up: bool,
-    sent: Mutex<Vec<Vec<u8>>>,
+    pub(super) sent: Mutex<Vec<Vec<u8>>>,
 }
 
 impl FakeUpstream {
@@ -53,40 +53,43 @@ impl Upstream for FakeUpstream {
     }
 }
 
-struct World {
+pub(super) struct World {
     home: tempfile::TempDir,
-    keys: Vec<Ed>,
-    host: Ed,
+    pub(super) keys: Vec<Ed>,
+    pub(super) host: Ed,
 }
 
 impl World {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             home: tempfile::tempdir().unwrap(),
             keys: vec![Ed::new(), Ed::new(), Ed::new()],
             host: Ed::new(),
         }
     }
-    fn upstream(&self) -> FakeUpstream {
+    pub(super) fn upstream(&self) -> FakeUpstream {
         FakeUpstream::new(self.keys.iter().map(TestHost::key_blob).collect())
     }
     /// Policy allows key 0 on `host` only.
-    fn policy(&self) -> Policy {
+    pub(super) fn policy(&self) -> Policy {
         policy_for(
             &fingerprint(&self.keys[0].key_blob()),
             &fingerprint(&self.host.key_blob()),
         )
     }
-    fn sink(&self) -> RefusalSink {
+    pub(super) fn sink(&self) -> RefusalSink {
         RefusalSink::new(Some(self.home.path().to_path_buf()))
     }
-    fn last_code(&self) -> Option<String> {
+    pub(super) fn home_path(&self) -> &std::path::Path {
+        self.home.path()
+    }
+    pub(super) fn last_code(&self) -> Option<String> {
         ssh_proxy_refusals::read(self.home.path())
             .first()
             .map(|r| r.code.clone())
     }
-    fn good_bind(&self) -> Vec<u8> {
-        bind_body(&self.host.key_blob(), b"sid", &self.host.sign_blob(b"sid"))
+    pub(super) fn good_bind(&self) -> Vec<u8> {
+        bind_body(&self.host.key_blob(), SID, &self.host.sign_blob(SID))
     }
 }
 

@@ -23,10 +23,20 @@ pub enum RefusalCode {
     MalformedRequest,
     /// The connecting process is not this agent or one it spawned.
     PeerNotSelf,
+    /// The data to sign is not exactly a publickey userauth request
+    /// (includes SSHSIG: commit/file signing is unsupported in v1).
+    SignDataNotUserauth,
+    /// The signed session ID is not the current verified bind's.
+    SessionIdMismatch,
+    /// The userauth key or hostbound host key disagrees with the request
+    /// or the current bind.
+    SignRequestInconsistent,
+    /// The current bind is a forwarded hop (`ssh -A`); unsupported in v1.
+    ForwardingNotSupported,
 }
 
 impl RefusalCode {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 15] = [
         Self::PolicyInvalid,
         Self::UpstreamUnavailable,
         Self::NoSessionBind,
@@ -38,6 +48,10 @@ impl RefusalCode {
         Self::PolicyUnpinned,
         Self::MalformedRequest,
         Self::PeerNotSelf,
+        Self::SignDataNotUserauth,
+        Self::SessionIdMismatch,
+        Self::SignRequestInconsistent,
+        Self::ForwardingNotSupported,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -53,6 +67,10 @@ impl RefusalCode {
             Self::PolicyUnpinned => "policy_unpinned",
             Self::MalformedRequest => "malformed_request",
             Self::PeerNotSelf => "peer_not_self",
+            Self::SignDataNotUserauth => "sign_data_not_userauth",
+            Self::SessionIdMismatch => "session_id_mismatch",
+            Self::SignRequestInconsistent => "sign_request_inconsistent",
+            Self::ForwardingNotSupported => "forwarding_not_supported",
         }
     }
 }
@@ -117,6 +135,22 @@ impl Refusal {
                      client does not send it. Use OpenSSH 8.9 or newer."
                 );
             }
+            // Spec "Refusal messages" wording. The detail is only short
+            // hashes: never the session ID or user name (rule 7).
+            RefusalCode::SessionIdMismatch => {
+                let detail = self
+                    .detail
+                    .as_deref()
+                    .map(|d| format!(" ({d})"))
+                    .unwrap_or_default();
+                return format!(
+                    "{sig_head}:\nthe signature was for a different SSH session than the one \
+                     the client\nidentified (session-bind). This usually means a second \
+                     connection is reusing\nthe agent. MUR only signs for the session whose \
+                     host it verified.{detail} [{}]",
+                    self.code.as_str()
+                );
+            }
             RefusalCode::PolicyInvalid => {
                 "the entitlements.ssh policy is invalid, so every request is refused".into()
             }
@@ -146,6 +180,22 @@ impl Refusal {
             RefusalCode::PeerNotSelf => {
                 "the connecting process is not this agent or a process it spawned, \
                  so the connection was closed before anything was forwarded"
+                    .into()
+            }
+            RefusalCode::SignDataNotUserauth => {
+                "the data to sign is not an SSH login (userauth) request. SSH signing of \
+                 commits or files (ssh-keygen -Y sign, git commit signing) is not supported \
+                 by the v1 proxy; this is not a key problem"
+                    .into()
+            }
+            RefusalCode::SignRequestInconsistent => {
+                "the login request names a different key or host key than the sign request \
+                 and the verified session-bind"
+                    .into()
+            }
+            RefusalCode::ForwardingNotSupported => {
+                "the session-bind is for a forwarded agent (ssh -A), which the v1 proxy \
+                 does not support"
                     .into()
             }
         };
