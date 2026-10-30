@@ -188,13 +188,10 @@ pub fn resolve_mur_home() -> Result<PathBuf> {
 }
 
 pub(super) fn resolve_bin_dir() -> Result<PathBuf> {
-    if let Some(v) = std::env::var_os("MUR_AGENT_BIN_DIR") {
-        return Ok(PathBuf::from(v));
+    match mur_common::agent_bin::bin_dir() {
+        Some(dir) => Ok(dir),
+        None => bail!("cannot resolve bin dir"),
     }
-    if let Some(home) = dirs::home_dir() {
-        return Ok(home.join(".local/bin"));
-    }
-    bail!("cannot resolve bin dir")
 }
 
 pub(crate) fn resolve_runtime_target() -> PathBuf {
