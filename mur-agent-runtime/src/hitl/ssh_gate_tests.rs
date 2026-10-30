@@ -52,9 +52,15 @@ struct T {
 }
 
 fn rig(audit_only: bool) -> T {
+    rig_with_capacity(audit_only, 8)
+}
+
+/// `capacity` bounds the notification channel, so a test can fill it and
+/// hold every prompt inside `notifier.send`.
+fn rig_with_capacity(audit_only: bool, capacity: usize) -> T {
     let store = Arc::new(MemStore::default());
     let approvals: HitlApprovals = Default::default();
-    let (tx, rx) = mpsc::channel(8);
+    let (tx, rx) = mpsc::channel(capacity);
     let gate = Arc::new(SshSignGate {
         agent: AGENT.into(),
         store: store.clone(),
@@ -217,6 +223,60 @@ async fn concurrent_asks_for_one_pair_share_one_prompt() {
     assert_eq!(h1.await.unwrap(), GateOutcome::Allow);
     assert_eq!(h2.await.unwrap(), GateOutcome::Allow);
     assert!(t.rx.try_recv().is_err(), "one prompt only");
+}
+
+/// Review of #2220: the pending entry must be reserved before any await.
+/// With the notification channel full, both requests reach the gate while
+/// the first prompt is still stuck in `send`; they must still raise one
+/// prompt and share its answer.
+#[tokio::test]
+async fn concurrent_asks_while_delivery_is_blocked_raise_one_prompt() {
+    let mut t = rig_with_capacity(false, 1);
+    t.gate
+        .notifier
+        .send(serde_json::json!("filler"))
+        .await
+        .unwrap();
+    let (g1, g2) = (t.gate.clone(), t.gate.clone());
+    let h1 = tokio::spawn(async move { g1.decide(&ask()).await });
+    let h2 = tokio::spawn(async move { g2.decide(&ask()).await });
+    // Current-thread runtime: this lets both tasks run until they block.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(t.rx.recv().await.unwrap(), serde_json::json!("filler"));
+    let n = t.rx.recv().await.expect("a prompt");
+    let id = call_of(&n)["hitl_id"].as_str().unwrap().to_string();
+    answer(&t.approvals, &id, true).await;
+    assert_eq!(h1.await.unwrap(), GateOutcome::Allow);
+    assert_eq!(h2.await.unwrap(), GateOutcome::Allow);
+    assert!(t.rx.try_recv().is_err(), "one prompt only");
+    assert!(t.approvals.lock().await.is_empty(), "no second approval");
+    assert_eq!(t.store.recorded().len(), 1);
+}
+
+/// Requests that joined an ask whose prompt could not be sent are refused
+/// too, and the reservation is released so a later request can try again.
+#[tokio::test]
+async fn a_failed_send_releases_the_reservation_for_joiners() {
+    let t = rig_with_capacity(false, 1);
+    t.gate
+        .notifier
+        .send(serde_json::json!("filler"))
+        .await
+        .unwrap();
+    let (g1, g2) = (t.gate.clone(), t.gate.clone());
+    let h1 = tokio::spawn(async move { g1.decide(&ask()).await });
+    let h2 = tokio::spawn(async move { g2.decide(&ask()).await });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    drop(t.rx);
+    for h in [h1, h2] {
+        match h.await.unwrap() {
+            GateOutcome::Unavailable(_) => {}
+            o => panic!("expected Unavailable, got {o:?}"),
+        }
+    }
+    assert!(t.gate.pending.lock().unwrap().is_empty());
+    assert!(t.approvals.lock().await.is_empty());
+    assert!(t.gate.parking.list().is_empty());
 }
 
 #[tokio::test]

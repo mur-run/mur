@@ -92,10 +92,20 @@ impl SignGate for SshSignGate {
 
 impl SshSignGate {
     /// The answer channel of the ask already out for `hash`, or a new ask.
+    ///
+    /// The pending entry is reserved under one lock, before any await, so
+    /// concurrent requests for a pair can never raise two prompts. Only the
+    /// reservation's owner publishes the prompt and removes the entry.
     async fn join_or_raise(&self, hash: &str, ask: &SignAsk) -> Result<Answer, String> {
-        if let Some(a) = self.pending_for(hash) {
-            return Ok(a);
-        }
+        let (done_tx, done_rx) = {
+            let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(a) = pending.get(hash) {
+                return Ok(a.clone());
+            }
+            let (tx, rx) = watch::channel(None);
+            pending.insert(hash.to_string(), rx.clone());
+            (tx, rx)
+        };
         let hitl_id = uuid::Uuid::now_v7().to_string();
         let (tx, rx) = oneshot::channel::<HitlDecision>();
         self.approvals.lock().await.insert(hitl_id.clone(), tx);
@@ -118,17 +128,16 @@ impl SshSignGate {
         {
             self.approvals.lock().await.remove(&hitl_id);
             self.parking.unpark(&hitl_id);
+            release(&self.pending, hash, &done_rx);
+            // Dropping `done_tx` refuses every request that joined.
+            drop(done_tx);
             return Err("the approval channel is closed".into());
         }
-        let (done_tx, done_rx) = watch::channel(None);
-        self.pending
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(hash.to_string(), done_rx.clone());
         let store = self.store.clone();
         let parking = self.parking.clone();
         let hash = hash.to_string();
         let pending = self.pending.clone();
+        let mine = done_rx.clone();
         // Outlives the sign request: a late answer is still recorded.
         tokio::spawn(async move {
             let decision = rx.await;
@@ -146,21 +155,10 @@ impl SshSignGate {
                     })
                     .await;
             }
-            pending
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&hash);
+            release(&pending, &hash, &mine);
             let _ = done_tx.send(decision.ok().map(|d| d.allow));
         });
         Ok(done_rx)
-    }
-
-    fn pending_for(&self, hash: &str) -> Option<Answer> {
-        self.pending
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(hash)
-            .cloned()
     }
 
     fn notification(&self, hitl_id: &str, hash: &str, ask: &SignAsk) -> serde_json::Value {
@@ -209,6 +207,15 @@ impl SshSignGate {
             p.push_str(AUDIT_ONLY_LINE);
         }
         p
+    }
+}
+
+/// Remove `hash`'s pending entry only if it is still `mine`, so an owner
+/// never clears an ask it did not raise.
+fn release(pending: &Mutex<HashMap<String, Answer>>, hash: &str, mine: &Answer) {
+    let mut pending = pending.lock().unwrap_or_else(|p| p.into_inner());
+    if pending.get(hash).is_some_and(|a| a.same_channel(mine)) {
+        pending.remove(hash);
     }
 }
 
