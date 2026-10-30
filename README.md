@@ -624,7 +624,15 @@ Agent** wizard offers the same catalog as a source.
   `undefined` while theme and consent cookies stay behind, leaves the saved
   profile untouched. `mur browser status` shows the login cookie's expiry —
   analytics and anti-bot cookies such as `__cf_bm` no longer count — and when
-  the profile was last refreshed.
+  the profile was last refreshed. Its `bindings:` section lists every agent
+  with a live browser entry and the saved profile it is configured with
+  (`none` when it has none, `?` when the agent's `profile.yaml` cannot be
+  read), with a `⚠` when that would not work: the profile is missing,
+  incomplete or names no host, the agent's `allow_hosts` lacks the profile's
+  host, `deny_hosts` blocks it, or the network mode is not host-scoped. The
+  rows read the saved agent configuration; they do not prove an
+  already-running browser has reloaded it — the `/browser live` reply says
+  when a change needs an agent restart.
 - **Human-in-the-loop** — tool calls pause for your approval in Hub. In
   `mur agent cli` a session starts with auto-approve ON (the status bar's
   `AUTO` badge says so); `--ask` or `/auto off` makes it ask first. AUTO only

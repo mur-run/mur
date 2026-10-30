@@ -11,10 +11,26 @@ use super::live_effect::Effect;
 /// Profile entry name for the live browser server.
 pub(crate) const LIVE_ENTRY: &str = "browser";
 
-/// The `--profile <site>` value in the entry's launch argv, if any.
+/// Long option the live browser's launch argv attaches a saved profile with.
+const PROFILE_OPT: &str = "--profile";
+
+/// The `--profile` value in the entry's launch argv, if any. Accepts both
+/// spellings Clap's long option takes (`--profile <site>` and
+/// `--profile=<site>`) and stops at `--`, after which tokens are positional.
 pub(crate) fn attached_profile(entry: &McpServerEntry) -> Option<&str> {
-    let i = entry.args.iter().position(|a| a == "--profile")?;
-    entry.args.get(i + 1).map(String::as_str)
+    let mut args = entry.args.iter().take_while(|a| *a != "--");
+    while let Some(a) = args.next() {
+        let Some(rest) = a.strip_prefix(PROFILE_OPT) else {
+            continue;
+        };
+        if rest.is_empty() {
+            return args.next().map(String::as_str);
+        }
+        if let Some(site) = rest.strip_prefix('=') {
+            return (!site.is_empty()).then_some(site);
+        }
+    }
+    None
 }
 
 pub(crate) fn norm(host: &str) -> String {

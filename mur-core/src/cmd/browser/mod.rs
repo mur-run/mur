@@ -1,6 +1,8 @@
 //! `mur browser` command handlers. Heavy implementation lives in `mur-browser`.
 
 mod auth;
+pub(crate) mod bind_plan;
+mod bindings;
 pub mod doctor;
 pub mod engine_check;
 pub mod list;
@@ -418,6 +420,9 @@ pub fn status() -> Result<()> {
             profiles.join(", ")
         }
     );
+    for line in bindings::section(&home) {
+        println!("{line}");
+    }
     println!(
         "runs: {}",
         if runs.is_empty() {
@@ -430,33 +435,32 @@ pub fn status() -> Result<()> {
 }
 
 fn profile_statuses(home: &std::path::Path) -> Result<Vec<String>> {
-    directory_names(paths::browser_root(home).join("profiles"))?
+    Ok(directory_names(paths::browser_root(home).join("profiles"))?
         .into_iter()
         .map(|site| {
             let state = paths::profile_state(home, &site);
             let meta_path = paths::profile_meta(home, &site);
-            let label = if !state.is_file() {
+            if !state.is_file() {
                 format!("{site} (incomplete)")
             } else if !meta_path.is_file() {
                 format!("{site} (metadata missing)")
             } else {
-                let yaml = fs::read_to_string(&meta_path).map_err(|error| {
-                    anyhow::anyhow!(
-                        "read browser profile metadata {}: {error}",
-                        meta_path.display()
-                    )
-                })?;
-                let meta: ProfileMeta = serde_yaml::from_str(&yaml).map_err(|error| {
-                    anyhow::anyhow!(
-                        "invalid browser profile metadata {}: {error}",
-                        meta_path.display()
-                    )
-                })?;
-                profile_label(&site, &meta)
-            };
-            Ok(label)
+                // One bad file labels its own row; it never fails `status`.
+                match read_profile_meta(&meta_path) {
+                    Ok(meta) => profile_label(&site, &meta),
+                    Err(error) => format!("{site} (metadata unreadable: {error})"),
+                }
+            }
         })
-        .collect()
+        .collect())
+}
+
+/// Read and parse one `profile.yaml`; the error names the file.
+pub(crate) fn read_profile_meta(path: &std::path::Path) -> Result<ProfileMeta> {
+    let yaml = fs::read_to_string(path)
+        .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
+    serde_yaml::from_str(&yaml)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", path.display()))
 }
 
 /// `mur browser status` label for a profile with metadata. The expiry shown
@@ -526,6 +530,34 @@ fn profile_statuses_reports_cookie_expiry_from_metadata() {
         profile_statuses(temp.path()).unwrap(),
         vec!["example (cookie expires 2023-11-16 02:00:00 UTC)"]
     );
+}
+
+#[test]
+fn one_unreadable_profile_labels_its_row_and_keeps_the_others() {
+    let temp = tempfile::tempdir().unwrap();
+    for site in ["bad", "good"] {
+        fs::create_dir_all(paths::profile_dir(temp.path(), site)).unwrap();
+        fs::write(paths::profile_state(temp.path(), site), b"encrypted").unwrap();
+    }
+    fs::write(paths::profile_meta(temp.path(), "bad"), "url: [unclosed").unwrap();
+    write_meta(
+        &paths::profile_meta(temp.path(), "good"),
+        &ProfileMeta {
+            url: "https://good.test/".into(),
+            last_auth: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            earliest_cookie_expires: None,
+            allow_domains: Vec::new(),
+            last_refresh: None,
+        },
+    )
+    .unwrap();
+    let mut rows = profile_statuses(temp.path()).unwrap();
+    rows.sort();
+    assert!(
+        rows[0].starts_with("bad (metadata unreadable: parse "),
+        "{rows:?}"
+    );
+    assert_eq!(rows[1], "good (authenticated 2023-11-14 22:13:20 UTC)");
 }
 
 #[test]
