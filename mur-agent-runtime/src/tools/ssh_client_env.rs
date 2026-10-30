@@ -144,13 +144,20 @@ mod tests {
         .unwrap()
     }
 
+    /// Expected `-o` value, built with the platform separator so the test
+    /// holds on Windows too (`Path::join` gives `\` there).
+    fn ukhf(home: &str) -> String {
+        let kh = mur_common::agent::known_hosts_path(Path::new(home));
+        format!("UserKnownHostsFile=\"{}\"", kh.display())
+    }
+
     #[test]
     fn pinned_args_order_is_fixed() {
         assert_eq!(
             env("/a").pinned_args(),
             [
                 "-o",
-                "UserKnownHostsFile=\"/a/ssh/known_hosts\"",
+                ukhf("/a").as_str(),
                 "-o",
                 "GlobalKnownHostsFile=none",
                 "-o",
@@ -196,7 +203,7 @@ mod tests {
         let mut want = vec!["/usr/bin/ssh".to_string()];
         want.extend(e.pinned_args());
         assert_eq!(argv, want);
-        assert_eq!(argv[2], "UserKnownHostsFile=\"/x y/it's/ssh/known_hosts\"");
+        assert_eq!(argv[2], ukhf("/x y/it's"));
     }
 
     #[test]
