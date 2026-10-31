@@ -312,6 +312,9 @@ fn another_turns_denial_is_neither_shown_nor_adopted_as_this_turns_id() {
     if !sockets_allowed("another_turns_denial_is_neither_shown_nor_adopted_as_this_turns_id") {
         return;
     }
+    // Hold the env lock so another test's `MUR_A2A_IO_TIMEOUT_SECS` override
+    // (process-global) cannot shrink this dial's idle timeout mid-run (#2242).
+    let _envg = mur_common::test_env::EnvGuard::hold();
     let tmp = tempfile::TempDir::new().unwrap();
     let sock_path = tmp.path().join("agent.sock");
     let listener = UnixListener::bind(&sock_path).unwrap();
