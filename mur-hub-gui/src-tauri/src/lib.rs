@@ -291,13 +291,23 @@ pub fn run() {
             {
                 // After the "About" item.
                 submenu.insert(&settings_item, 1)?;
+                // The predefined Quit calls `terminate:`, which skips
+                // `ExitRequested`; swap in one that asks first.
+                if let Some(last) = submenu.items()?.last() {
+                    submenu.remove(last)?;
+                }
+                let quit_app =
+                    MenuItem::with_id(app, "quit_app", "Quit MUR Hub", true, Some("CmdOrCtrl+Q"))?;
+                submenu.append(&quit_app)?;
             }
             app.set_menu(app_menu)?;
-            app.on_menu_event(|app, event| {
-                if event.id.as_ref() == "settings" {
+            app.on_menu_event(|app, event| match event.id.as_ref() {
+                "settings" => {
                     open_dashboard(app.clone(), None, None, None);
                     let _ = app.emit("open-settings", ());
                 }
+                "quit_app" => override_restart::quit::request_quit(app),
+                _ => {}
             });
 
             // Build tray.
@@ -326,7 +336,7 @@ pub fn run() {
                             let _ = app.emit("cli-tools-error", e);
                         }
                     },
-                    "quit" => app.exit(0),
+                    "quit" => override_restart::quit::request_quit(app),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
