@@ -23,8 +23,8 @@ pub(crate) struct Candidate {
     pub plan: BindPlan,
 }
 
-/// What [`bind_agent`] did. `--bind` (PR 4) maps everything but `Bound` and
-/// `Unchanged` to a non-zero exit.
+/// What [`bind_agent`] did. `--bind` maps everything but `Bound` and
+/// `Unchanged` to a non-zero exit ([`flag_result`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Outcome {
     Bound,
@@ -239,11 +239,63 @@ pub(crate) fn after_auth(home: &std::path::Path, site: &str, out: &mut dyn Write
     }
 }
 
-fn offer(home: &std::path::Path, site: &str, tty: bool, out: &mut dyn Write) -> Result<()> {
+/// `--bind <agent>`: the flag is the consent, so bind without asking. Any
+/// refusal is a non-zero exit; the profile itself is already saved.
+pub(crate) fn bind_flag(
+    home: &std::path::Path,
+    site: &str,
+    agent: &str,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let domains = saved_domains(home, site)?;
+    let mut ops = crate::cmd::agent::cli::browser_live_cmd::ProfileOps(agent);
+    let outcome = bind_agent(agent, site, &domains, &mut ops, None, out)?;
+    out.flush()?;
+    flag_result(&outcome, agent, site)
+}
+
+/// Exit status for `--bind`: only a write, or a binding already in place, is
+/// success.
+fn flag_result(outcome: &Outcome, agent: &str, site: &str) -> Result<()> {
+    match outcome {
+        Outcome::Bound | Outcome::Unchanged => Ok(()),
+        Outcome::Declined | Outcome::Refused => {
+            anyhow::bail!("profile {site:?} was saved but not bound to {agent} (see above)")
+        }
+    }
+}
+
+/// The on-disk name of an existing agent (case-insensitive, CLAUDE.md rule
+/// 10), or an error before any login starts: a typo, or case variants with no
+/// exact match, which would otherwise bind whichever agent `read_dir` lists
+/// first. Same selection as `a2a_dial::canonicalize_agent_name`, but it fails
+/// instead of passing the input through.
+pub(crate) fn resolve_agent(home: &std::path::Path, typed: &str) -> Result<String> {
+    use crate::a2a_dial::{NameMatch, agent_dir_names, match_agent_name};
+    match match_agent_name(&agent_dir_names(home), typed) {
+        NameMatch::Found(name) => Ok(name),
+        NameMatch::Missing => {
+            anyhow::bail!("--bind {typed:?}: no such agent (see `mur agent list`)")
+        }
+        NameMatch::Ambiguous(mut names) => {
+            names.sort();
+            anyhow::bail!(
+                "--bind {typed:?} is ambiguous: agents {} differ only by case; \
+                 type the exact name",
+                names.join(", ")
+            )
+        }
+    }
+}
+
+fn saved_domains(home: &std::path::Path, site: &str) -> Result<Vec<String>> {
     let meta = super::read_profile_meta(&mur_browser::paths::profile_meta(home, site))?;
-    let Some(domains) = super::bind_plan::profile_domains(&meta) else {
-        anyhow::bail!("the profile names no host");
-    };
+    super::bind_plan::profile_domains(&meta)
+        .ok_or_else(|| anyhow::anyhow!("the profile names no host"))
+}
+
+fn offer(home: &std::path::Path, site: &str, tty: bool, out: &mut dyn Write) -> Result<()> {
+    let domains = saved_domains(home, site)?;
     let cands = candidates(live_agents(home), site, &domains);
     if !tty {
         if cands.is_empty() {

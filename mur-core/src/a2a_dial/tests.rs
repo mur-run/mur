@@ -158,3 +158,56 @@ fn canonicalize_case_variants_exact_wins_else_ambiguous() {
     assert_eq!(canonicalize_agent_name(home.path(), "Mur"), "Mur");
     assert_eq!(canonicalize_agent_name(home.path(), "MUR"), "MUR");
 }
+
+// ---------------------------------------------------------------------------
+// match_agent_name: the pure selection both resolvers share (#2205 review)
+// ---------------------------------------------------------------------------
+
+fn names(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn match_agent_name_exact_wins_over_case_variants() {
+    let n = names(&["Reviewer", "reviewer"]);
+    assert_eq!(
+        match_agent_name(&n, "reviewer"),
+        NameMatch::Found("reviewer".into())
+    );
+    assert_eq!(
+        match_agent_name(&n, "Reviewer"),
+        NameMatch::Found("Reviewer".into())
+    );
+}
+
+#[test]
+fn match_agent_name_single_fold_resolves() {
+    let n = names(&["reviewer", "mur"]);
+    assert_eq!(
+        match_agent_name(&n, "REVIEWER"),
+        NameMatch::Found("reviewer".into())
+    );
+}
+
+/// The bug: with two case variants and no exact match the first `read_dir`
+/// entry used to win. Both orders must report ambiguity.
+#[test]
+fn match_agent_name_several_folds_is_ambiguous_in_any_order() {
+    for order in [["Reviewer", "reviewer"], ["reviewer", "Reviewer"]] {
+        match match_agent_name(&names(&order), "REVIEWER") {
+            NameMatch::Ambiguous(mut c) => {
+                c.sort();
+                assert_eq!(c, names(&["Reviewer", "reviewer"]));
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn match_agent_name_missing() {
+    assert_eq!(
+        match_agent_name(&names(&["mur"]), "ghost"),
+        NameMatch::Missing
+    );
+}

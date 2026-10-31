@@ -394,3 +394,71 @@ fn set_profile_never_writes_past_a_double_dash() {
     assert_eq!(e.args.last().unwrap(), "--profile=pos");
     assert_eq!(attached_profile(&e), Some("new"));
 }
+
+#[test]
+fn flag_succeeds_only_on_bound_or_unchanged() {
+    assert!(flag_result(&Outcome::Bound, "mur", "x").is_ok());
+    assert!(flag_result(&Outcome::Unchanged, "mur", "x").is_ok());
+    for o in [Outcome::Refused, Outcome::Declined] {
+        let e = flag_result(&o, "mur", "deepseek").unwrap_err().to_string();
+        assert!(e.contains("saved but not bound to mur"), "{e}");
+    }
+}
+
+#[test]
+fn flag_path_writes_without_asking_and_refusals_stay_unwritten() {
+    let mut f = Fake {
+        servers: vec![restricted(&["chat.deepseek.com"], None)],
+        ..Default::default()
+    };
+    let (o, out) = run(&mut f, "deepseek", &["chat.deepseek.com"], None);
+    assert_eq!(o, Outcome::Bound);
+    assert!(!out.contains("proceed?"), "{out}");
+    assert_eq!(f.saves.len(), 1);
+
+    let mut f = Fake {
+        servers: vec![restricted(&["gitea.example.com"], None)],
+        ..Default::default()
+    };
+    let (o, _) = run(&mut f, "deepseek", &["chat.deepseek.com"], None);
+    assert_eq!(o, Outcome::Refused);
+    assert!(f.saves.is_empty());
+    assert!(flag_result(&o, "mur", "deepseek").is_err());
+}
+
+#[test]
+fn resolve_agent_is_case_insensitive_and_rejects_unknown_names() {
+    let home = tempfile::TempDir::new().unwrap();
+    let dir = home.path().join("agents").join("reviewer");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("profile.yaml"), "name: reviewer\n").unwrap();
+    assert_eq!(resolve_agent(home.path(), "Reviewer").unwrap(), "reviewer");
+    let e = resolve_agent(home.path(), "nobody")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("no such agent"), "{e}");
+}
+
+/// #2205 review: two case variants (case-sensitive filesystems only) with no
+/// exact match must fail before login, not bind whichever `read_dir` lists
+/// first. The selection itself is covered on every filesystem by
+/// `a2a_dial::tests::match_agent_name_several_folds_is_ambiguous_in_any_order`.
+#[test]
+fn resolve_agent_rejects_ambiguous_case_variants() {
+    let home = tempfile::TempDir::new().unwrap();
+    for n in ["reviewer", "Reviewer"] {
+        let dir = home.path().join("agents").join(n);
+        if n == "Reviewer" && dir.exists() {
+            return; // case-insensitive filesystem: the scenario cannot exist
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("profile.yaml"), format!("name: {n}\n")).unwrap();
+    }
+    assert_eq!(resolve_agent(home.path(), "Reviewer").unwrap(), "Reviewer");
+    assert_eq!(resolve_agent(home.path(), "reviewer").unwrap(), "reviewer");
+    let e = resolve_agent(home.path(), "REVIEWER")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("ambiguous"), "{e}");
+    assert!(e.contains("Reviewer") && e.contains("reviewer"), "{e}");
+}

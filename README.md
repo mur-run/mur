@@ -644,6 +644,9 @@ Agent** wizard offers the same catalog as a source.
   change takes effect (next turn, or after a restart) and how to put the old
   profile back. Without a terminal it prints the current bindings and binds
   nothing.
+  `--bind <agent>` does the same without asking, for scripts; when it is
+  refused nothing is written, the command to run is printed, and it exits
+  non-zero.
 - **Human-in-the-loop** — tool calls pause for your approval in Hub. In
   `mur agent cli` a session starts with auto-approve ON (the status bar's
   `AUTO` badge says so); `--ask` or `/auto off` makes it ask first. AUTO only

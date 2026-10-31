@@ -58,6 +58,11 @@ pub enum BrowserAction {
         /// included. Defaults to the host of `--url`.
         #[arg(long = "allow-domain", value_name = "DOMAIN")]
         allow_domain: Vec<String>,
+        /// Bind the saved profile to this agent's live browser entry without
+        /// asking (for scripts). Exits non-zero, writing nothing, when the
+        /// binding would need wider egress or the agent has no live entry.
+        #[arg(long, value_name = "AGENT")]
+        bind: Option<String>,
     },
     /// Run the secret broker (needs MUR_BROWSER_BROKER_TOKEN; `record` starts its own).
     Broker,
