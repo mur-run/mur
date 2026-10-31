@@ -5,17 +5,22 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-    # `edited` is not in the default set (opened/synchronize/reopened).
-    # Without it, retargeting a stacked PR onto main fires only `edited`,
-    # so CI never runs and the PR sits at BLOCKED forever — waiting does
-    # not help, because no run was ever queued.
-    types: [opened, synchronize, reopened, edited]
+    # No `edited` here: it also fires on every title/body edit, and each one
+    # re-ran the 3-OS matrix and cancelled the in-flight run. Retargeting a
+    # stacked PR onto main fires only `edited`, so ci-retarget.yml listens
+    # for that one case (base changed) and dispatches this workflow.
+    types: [opened, synchronize, reopened]
+  # Dispatched by ci-retarget.yml on the PR head branch. Treated like push:
+  # every job runs, because there is no PR diff context for paths-filter.
+  workflow_dispatch:
 
 # A new commit on a PR obsoletes the in-flight run for the old commit —
 # cancel it instead of finishing a 3-OS matrix nobody will read. push:main
-# runs never cancel (post-merge validation must complete).
+# runs never cancel (post-merge validation must complete). The group keys on
+# the head branch, not refs/pull/N/merge, so a retarget dispatch (whose ref
+# is refs/heads/<branch>) shares a group with that PR's pull_request runs.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && format('refs/heads/{0}', github.head_ref) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -58,6 +63,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - id: filter
+        # Skipped on workflow_dispatch: outputs stay empty and every job
+        # runs via its `github.event_name != 'pull_request'` arm.
+        if: github.event_name != 'workflow_dispatch'
         uses: dorny/paths-filter@v3
         with:
           # Use the default `some` quantifier — at least ONE changed file
@@ -103,7 +111,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     needs: changes
-    if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60 # hung build ≠ 6h default; normal runs are well under
     strategy:
@@ -262,7 +270,7 @@ jobs:
   clippy:
     name: Clippy
     needs: changes
-    if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     # Headroom, because 45 proved too tight to recover from — NOT because a
     # cold build costs 45 minutes (measured: a cold run takes ~11 min).
@@ -335,7 +343,7 @@ jobs:
   gui:
     name: GUI crate (mur-agent-gui)
     needs: changes
-    if: github.event_name == 'push' || needs.changes.outputs.gui == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.gui == 'true'
     runs-on: ubuntu-22.04   # widest glibc compat for AppImage downstream
     timeout-minutes: 60
     steps:
@@ -402,7 +410,7 @@ jobs:
   hub_gui:
     name: Hub GUI crate (mur-hub-gui) — ${{ matrix.os }}
     needs: changes
-    if: github.event_name == 'push' || needs.changes.outputs.hub_gui == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.hub_gui == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -477,7 +485,7 @@ jobs:
   e2e_quick:
     name: E2E orchestration smoke (quick mode)
     needs: changes
-    if: github.event_name == 'push' || needs.changes.outputs.e2e == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.e2e == 'true'
     runs-on: macos-latest
     timeout-minutes: 45
     env:
