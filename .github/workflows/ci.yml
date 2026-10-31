@@ -152,8 +152,13 @@ jobs:
           # change the bundled MSVC/CMake generator (e.g. VS 17 2022 ->
           # VS 18 2026); without this, a restored target/ carries a stale
           # whisper-rs-sys CMakeCache.txt and CMake aborts on generator
-          # mismatch. Keying on ImageVersion forces a fresh build on bump.
-          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
+          # mismatch. Key on the runner label: `env.ImageOS`/`ImageVersion`
+          # are runner-side env vars and expand to "" in workflow
+          # expressions, so they never scoped anything. A macos-14 target/
+          # restored on macos-15 keeps ort-sys's cached
+          # `-L .../Xcode_15.4.app/.../lib/darwin` + `-lclang_rt.osx` and
+          # the link fails (`library 'clang_rt.osx' not found`).
+          key: ${{ matrix.os }}
           save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - name: Disable ggml native arch (macOS)
         if: runner.os == 'macOS'
@@ -451,7 +456,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: mur-hub-gui/src-tauri
-          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
+          # Runner label, not env.ImageOS (empty in expressions) — see Test.
+          key: ${{ matrix.os }}
           # Restore-only on every OS (see CACHE BUDGET above): cold, even the
           # Windows leg (16-26m) ends inside the Windows test job's wall time.
           save-if: false
