@@ -269,10 +269,16 @@ jobs:
         # without executing a line. Hosted Unix runners allow the sockets, so
         # run this narrow set with the opt-in: a green here means the bodies ran.
         # Reuses the test binaries built above; only these tests execute.
+        # Keep `--workspace` and narrow with the filterset instead of
+        # `-p mur-core --lib`: a package-scoped build unifies features
+        # differently (no tokio/test-util, serde_json/unbounded_depth from
+        # other members), which changes every dependent's build hash and
+        # recompiles the whole tree (~8.5 min on Linux, the 60-min timeout
+        # on a cold macOS cache).
         if: runner.os != 'Windows'
         run: >-
-          cargo nextest run -p mur-core --lib --locked --profile ci
-          -E 'test(/cmd::fleet::loop_run::pause_tests::|a2a_dial::timeout_tests::|executor::dag::late_usage_tests::/)'
+          cargo nextest run --workspace --locked --profile ci
+          -E 'package(mur-core) & kind(lib) & test(/cmd::fleet::loop_run::pause_tests::|a2a_dial::timeout_tests::|executor::dag::late_usage_tests::/)'
         env:
           RUST_MIN_STACK: "16777216"
           MUR_TEST_SOCKETS: "1"
@@ -281,10 +287,14 @@ jobs:
         # write without a readable writer key (#2143). The workspace run above
         # leaves it unset, so a fixture that forgets to plant a key passes there
         # and only breaks for whoever exports the var (#2145). Rerun mur-core's
-        # lib tests with it set; reuses the binaries built above. One OS is
-        # enough: the signing policy has no platform-specific branch.
+        # lib tests with it set; reuses the binaries built above (`--workspace`
+        # + filterset, not `-p`, for the same feature-unification reason as
+        # the socket step). One OS is enough: the signing policy has no
+        # platform-specific branch.
         if: runner.os == 'Linux'
-        run: cargo nextest run -p mur-core --lib --locked --profile ci
+        run: >-
+          cargo nextest run --workspace --locked --profile ci
+          -E 'package(mur-core) & kind(lib)'
         env:
           RUST_MIN_STACK: "16777216"
           MUR_CHANNEL_REQUIRE_SIG: "1"
