@@ -14,7 +14,7 @@ fn the_self_built_client_has_no_response_clock() {
 
 use super::convert::BLANK_USER_TURN;
 use super::*;
-use crate::llm::{RichMessage, ToolCallResult, ToolDef, ToolResultEntry};
+use crate::llm::{RichMessage, StopReason, ToolCallResult, ToolDef, ToolResultEntry};
 use serde_json::json;
 
 fn make_client() -> AnthropicClient {
