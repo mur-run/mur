@@ -60,9 +60,9 @@ pub async fn build_provider_runner(
     // Boot snapshot of config.yaml, read before the seal (#1796). Every
     // boot-once setting below comes from here, never a post-seal re-read.
     boot_cfg: &mur_common::config::Config,
-    // The ssh-agent proxy socket, when the proxy is running: bash children
-    // get it as `SSH_AUTH_SOCK` (set, never inherited).
-    ssh_auth_sock: Option<std::path::PathBuf>,
+    // The ssh-agent proxy socket and O2 client env, when the proxy is running
+    // (see `tools::bash_env::SshChild`).
+    ssh: Option<crate::tools::bash_env::SshChild>,
 ) -> anyhow::Result<(
     Arc<TaskRunner>,
     Option<Arc<dyn LlmClient>>,
@@ -135,7 +135,7 @@ pub async fn build_provider_runner(
             )
             .with_secrets(secrets.clone())
             .with_jobs(bash_jobs.clone())
-            .with_ssh_auth_sock(ssh_auth_sock)
+            .with_ssh(ssh)
             // Same helper as the kernel grant; Err already logged there.
             .with_scratch_dir(crate::agent_paths::agent_scratch_dir(agent_home).ok())
             // D10: `hooks.trash_guard` is the switch for `rm` → trash.

@@ -271,9 +271,15 @@ async fn child_env_is_exactly_the_spec_env() {
         env: vec![
             ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
             ("MUR_SPEC_ONLY".into(), "1".into()),
-            crate::tools::bash_env::ssh_agent_env(Some(&dir.path().join("ssh-agent.sock")))
-                .unwrap(),
-        ],
+        ]
+        .into_iter()
+        .chain(crate::tools::bash_env::ssh_child_env(Some(
+            &crate::tools::bash_env::SshChild {
+                sock: dir.path().join("ssh-agent.sock"),
+                client: Some(crate::tools::ssh_client_env::SshClientEnv::for_test("/h")),
+            },
+        )))
+        .collect(),
         spool_dir: dir.path(),
         vault: None,
     };
@@ -289,7 +295,14 @@ async fn child_env_is_exactly_the_spec_env() {
     keys.sort_unstable();
     assert_eq!(
         keys,
-        ["MUR_SPEC_ONLY", "PATH", "SSH_AUTH_SOCK"],
+        // `BASH_FUNC_ssh%%` is the O2 function as bash re-exports it.
+        [
+            "BASH_FUNC_ssh%%",
+            "GIT_SSH_COMMAND",
+            "MUR_SPEC_ONLY",
+            "PATH",
+            "SSH_AUTH_SOCK"
+        ],
         "{}",
         p.new_stdout
     );

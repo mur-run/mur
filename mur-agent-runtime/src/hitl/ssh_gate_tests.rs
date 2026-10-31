@@ -290,3 +290,44 @@ async fn a_closed_channel_is_unavailable_and_leaves_nothing_pending() {
     assert!(t.approvals.lock().await.is_empty());
     assert!(t.gate.parking.list().is_empty());
 }
+
+/// `--no-hitl` never answers a sign request (spec "no HITL switches"). The
+/// waiver is attached to the task runner only; this pins the tier that keeps
+/// it out even if someone later threads it into the ssh gate.
+#[tokio::test]
+async fn a_startup_waiver_never_settles_an_unremembered_sign() {
+    use mur_common::agent::{OverrideFlags, OverrideRecord};
+    use mur_common::hitl::startup_waiver::{AskOrigin, StartupWaiver};
+    use mur_common::startup_override::ConfirmedBy;
+
+    let waiver = StartupWaiver::from_record(&OverrideRecord {
+        nonce: "nonce-ssh".into(),
+        flags: OverrideFlags {
+            no_hitl: true,
+            ..OverrideFlags::default()
+        },
+        confirmed_by: ConfirmedBy::Tty,
+    })
+    .expect("no_hitl builds a waiver");
+    for bits in 0u8..32 {
+        let origin = AskOrigin {
+            explicit: bits & 1 != 0,
+            default: bits & 2 != 0,
+            clamp: bits & 4 != 0,
+            intent_raised: bits & 8 != 0,
+            hook_raised: bits & 16 != 0,
+        };
+        assert!(
+            !waiver.may_waive(origin, Some(SSH_SIGN_RISK)),
+            "a waiver must not pass a sign ask from {origin:?}"
+        );
+    }
+
+    // With the waiver live, an unremembered pair still raises a prompt and
+    // only the human's answer settles it.
+    let mut t = rig(false);
+    let (out, n) = decide_answering(&mut t, false).await;
+    assert_eq!(out, GateOutcome::Deny);
+    assert_eq!(call_of(&n)["tool_name"], SSH_SIGN_TOOL);
+    assert_eq!(t.store.recorded().len(), 1, "the human's deny is recorded");
+}

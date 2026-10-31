@@ -44,6 +44,7 @@ mur-trash = { path = "../mur-trash" }
 tokio = { workspace = true, features = ["net"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+shell-escape = "0.1"                                        # quote paths in the O2 ssh env (GIT_SSH_COMMAND, BASH_FUNC_ssh%%)
 serde_yaml_ng = "0.10"  # not in workspace (workspace has serde_yaml 0.9)
 clap = { workspace = true }
 anyhow = { workspace = true }
@@ -155,6 +156,7 @@ windows-sys = { version = "0.59", features = [
 
 [dev-dependencies]
 tempfile = "3"
+shell-words = "1"
 # `tokio::time::pause` / `#[tokio::test(start_paused = true)]` for the
 # stream-idle tests (#1287): the bounds are minutes long, so a real clock
 # would mean minutes-long tests. Dev-only, so no production build gains

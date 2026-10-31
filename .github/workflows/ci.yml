@@ -245,6 +245,9 @@ jobs:
           # unavailable) must fail, not skip — a skip there is a green that
           # proved nothing. The gated tests are #[cfg(unix)], so Windows ignores it.
           MUR_TEST_REQUIRE_SANDBOX: "1"
+          # ssh_client_env_tests (O2): hosted Unix runners ship OpenSSH, so a
+          # missing ssh must fail rather than skip. #[cfg(unix)]; Windows ignores it.
+          MUR_TEST_REQUIRE_SSH: "1"
       - name: Socket-backed regression tests (Unix)
         # These tests early-return unless MUR_TEST_SOCKETS=1 (some sandboxes
         # forbid AF_UNIX connects), so the workspace run above passes them

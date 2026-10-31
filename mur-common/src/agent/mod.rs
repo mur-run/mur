@@ -14,6 +14,7 @@ mod mcp_status;
 mod override_record;
 mod reload;
 mod reload_mcp;
+mod ssh_paths;
 mod tool_rule_lint;
 mod transport;
 
@@ -24,6 +25,7 @@ pub use mcp::*;
 pub use mcp_status::{MCP_STATUS_FILE, McpServerStatus, McpStatus};
 pub use override_record::{OverrideFlags, OverrideRecord, OverrideRejection};
 pub use reload::{HOT_PATHS, RELOAD_STATE_FILE, ReloadDiff, ReloadState};
+pub use ssh_paths::{KNOWN_HOSTS, SSH_DIR, known_hosts_path};
 pub use tool_rule_lint::{BUILTIN_TOOL_NAMES, DeadRule, KnownTools, case_fix, dead_rules};
 pub use transport::*;
 

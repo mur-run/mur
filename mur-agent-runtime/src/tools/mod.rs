@@ -24,6 +24,9 @@ pub mod refresh;
 pub mod registry;
 pub mod remember;
 pub mod remind;
+pub mod ssh_client_env;
+#[cfg(all(test, unix))]
+mod ssh_client_env_tests;
 pub(crate) mod suggest;
 pub mod write_file;
 
