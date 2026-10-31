@@ -19,8 +19,12 @@ on:
 # runs never cancel (post-merge validation must complete). The group keys on
 # the head branch, not refs/pull/N/merge, so a retarget dispatch (whose ref
 # is refs/heads/<branch>) shares a group with that PR's pull_request runs.
+# Both sides are prefixed with a repository: the PR's head repo, and this
+# repo for push/dispatch. Without it a fork PR from its own `main` lands in
+# ci-refs/heads/main and, since PR runs cancel in-progress, kills push:main
+# validation; two forks with the same branch name would cancel each other.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && format('refs/heads/{0}', github.head_ref) || github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && format('{0}/refs/heads/{1}', github.event.pull_request.head.repo.full_name, github.head_ref) || format('{0}/{1}', github.repository, github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
