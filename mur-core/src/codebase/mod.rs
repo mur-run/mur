@@ -1,7 +1,14 @@
 pub mod chunker;
 pub mod scanner;
 
+mod discover;
+mod git_hook;
 mod hooks_dir;
+#[cfg(test)]
+use discover::orphan_should_prune;
+pub use discover::{discover_all_indexes, prune_orphan_indexes};
+use git_hook::HOOK_MARKER;
+pub use git_hook::ensure_git_hook;
 pub(crate) use hooks_dir::{HookHealth, MANUAL_HOOK_CMD, hook_health};
 
 use std::collections::HashMap;
@@ -742,198 +749,8 @@ impl CodebaseIndex {
     }
 }
 
-/// Pure decision for the orphan sweep, isolated for testing.
-///
-/// Prune iff we have both paths recorded AND the repo root still exists (drive
-/// mounted / repo present) AND the worktree path is gone. When the repo root is
-/// also missing the situation is ambiguous (unmounted external drive vs. deleted
-/// repo) so we KEEP — never delete an index just because its volume is offline.
-fn orphan_should_prune(
-    repo_root: &str,
-    project_path: &str,
-    repo_exists: bool,
-    worktree_exists: bool,
-) -> bool {
-    !repo_root.is_empty() && !project_path.is_empty() && repo_exists && !worktree_exists
-}
-
-/// Garbage-collect codebase indexes whose linked worktree was removed, reclaiming
-/// their disk. Safe on external drives (see [`orphan_should_prune`]). Skips any
-/// index whose lock is held by a live worker.
-pub fn prune_orphan_indexes() {
-    let indexes_dir = crate::paths::mur_root(None)
-        .join("indexes")
-        .join("codebase");
-    let Ok(entries) = std::fs::read_dir(&indexes_dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if !name.ends_with(".lance") || !p.is_dir() {
-            continue;
-        }
-        let key = name.trim_end_matches(".lance");
-        let meta_path = indexes_dir.join(format!("{key}.meta.json"));
-        let Ok(data) = std::fs::read_to_string(&meta_path) else {
-            continue;
-        };
-        let Ok(meta) = serde_json::from_str::<IndexMetadata>(&data) else {
-            continue;
-        };
-        let repo_exists = Path::new(&meta.repo_root).exists();
-        let wt_exists = Path::new(&meta.project_path).exists();
-        if !orphan_should_prune(&meta.repo_root, &meta.project_path, repo_exists, wt_exists) {
-            continue;
-        }
-        // Don't yank an index out from under a live worker.
-        let lock_path = indexes_dir.join(format!("{key}.lock"));
-        if let Ok(ld) = std::fs::read_to_string(&lock_path)
-            && let Ok(lock) = serde_json::from_str::<IndexLock>(&ld)
-            && mur_common::lock_file::pid_alive(lock.pid)
-        {
-            continue;
-        }
-        let idx = CodebaseIndex::new(key, Path::new(&meta.project_path));
-        if idx.delete_index().is_ok() {
-            tracing::info!(
-                index = key,
-                "pruned orphan codebase index (worktree removed)"
-            );
-        }
-    }
-}
-
 #[cfg(test)]
 mod orphan_sweep_tests;
-
-pub fn discover_all_indexes() -> Vec<DiscoveredIndex> {
-    // GC removed-worktree indexes before listing so callers see only live ones.
-    prune_orphan_indexes();
-    let indexes_dir = crate::paths::mur_root(None)
-        .join("indexes")
-        .join("codebase");
-    let Ok(entries) = std::fs::read_dir(&indexes_dir) else {
-        return Vec::new();
-    };
-
-    let mut results = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if !name.ends_with(".lance") || !path.is_dir() {
-            continue;
-        }
-        let project_name = name.trim_end_matches(".lance");
-        let meta_path = indexes_dir.join(format!("{project_name}.meta.json"));
-        let (project_path, last_indexed, file_count) =
-            if let Ok(data) = std::fs::read_to_string(&meta_path) {
-                if let Ok(meta) = serde_json::from_str::<IndexMetadata>(&data) {
-                    let pp = if meta.project_path.is_empty() {
-                        None
-                    } else {
-                        Some(meta.project_path)
-                    };
-                    (pp, Some(meta.last_indexed), meta.files.len())
-                } else {
-                    (None, None, 0)
-                }
-            } else {
-                (None, None, 0)
-            };
-
-        results.push(DiscoveredIndex {
-            name: project_name.to_string(),
-            project_path,
-            last_indexed,
-            file_count,
-        });
-    }
-    results.sort_by_key(|a| a.name.to_lowercase());
-    results
-}
-
-/// Marker line identifying the mur block inside `post-commit`.
-const HOOK_MARKER: &str = "# mur auto-index";
-/// Bump when the block changes. A block without this exact line is rewritten
-/// in place on the next index run, which is how already-installed hooks pick
-/// up the new form without anyone touching them by hand.
-const HOOK_VERSION_LINE: &str = "# hook-version: 2";
-
-fn hook_block() -> String {
-    // No path baked in: `--main-repo` makes mur resolve the primary repo from
-    // cwd (following linked worktrees), so renaming the directory cannot strand
-    // the hook and every repo carries an identical block. mur itself is resolved
-    // at hook-run time from PATH (brew, cargo, ...), falling back to the
-    // ~/.mur/bin installer location.
-    format!(
-        "\n{HOOK_MARKER}\n{HOOK_VERSION_LINE}\nMUR_BIN=\"$(command -v mur || true)\"\n[ -z \"$MUR_BIN\" ] && [ -x \"$HOME/.mur/bin/mur\" ] && MUR_BIN=\"$HOME/.mur/bin/mur\"\nif [ -n \"$MUR_BIN\" ]; then\n  \"$MUR_BIN\" project index --main-repo --quiet --background\nfi\n"
-    )
-}
-
-/// Byte span of an existing mur block: from the marker line through the end of
-/// the `fi` line that closes it. `None` when the hook has no mur block.
-fn hook_block_span(existing: &str) -> Option<(usize, usize)> {
-    let start = existing.find(HOOK_MARKER)?;
-    let mut from = start;
-    loop {
-        let i = existing[from..].find("\nfi")?;
-        let end = from + i + "\nfi".len();
-        // Accept only a bare `fi` line, not a longer word that starts with it.
-        match existing[end..].chars().next() {
-            None => return Some((start, end)),
-            Some('\n') => return Some((start, end + 1)),
-            Some(_) => from = end,
-        }
-    }
-}
-
-pub fn ensure_git_hook(project_path: &Path, quiet: bool) -> Result<bool> {
-    // #1672: honour core.hooksPath, worktrees and submodules — ask git.
-    let hooks_dir = match hooks_dir::resolve(project_path) {
-        hooks_dir::HooksDir::Writable(dir) => dir,
-        hooks_dir::HooksDir::None => return Ok(false),
-        hooks_dir::HooksDir::InWorkTree(dir) => {
-            // A versioned hooks dir is the user's to edit. The caller reports
-            // it to the user (cmd/project hook_report), so only trace here.
-            tracing::debug!(dir = %dir.display(), "auto-index hook not installed: core.hooksPath is in the working tree");
-            return Ok(false);
-        }
-    };
-    let hook_path = hooks_dir.join("post-commit");
-    let existing = std::fs::read_to_string(&hook_path).unwrap_or_default();
-
-    let (body, action) = match hook_block_span(&existing) {
-        Some(_) if existing.contains(HOOK_VERSION_LINE) => return Ok(false),
-        // Older block (pre-v2 baked in an absolute --path): swap it out in place,
-        // leaving whatever the user keeps before or after it untouched.
-        Some((start, end)) => {
-            let head = existing[..start]
-                .strip_suffix('\n')
-                .unwrap_or(&existing[..start]);
-            (
-                format!("{head}{}{}", hook_block(), &existing[end..]),
-                "upgraded",
-            )
-        }
-        None if existing.is_empty() => (format!("#!/bin/sh\n{}", hook_block()), "installed"),
-        None => (format!("{existing}{}", hook_block()), "installed"),
-    };
-    std::fs::write(&hook_path, body)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755))?;
-    }
-    if !quiet {
-        eprintln!("  Git hook {action} for auto-reindex on commit");
-    }
-    Ok(true)
-}
 
 fn codebase_schema(dim: i32) -> Arc<Schema> {
     Arc::new(Schema::new(vec![
