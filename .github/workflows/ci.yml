@@ -146,6 +146,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - name: Expose runner image for cache key
+        # ImageOS/ImageVersion are runner env vars, not part of the `env`
+        # context, so `${{ env.ImageOS }}` expands to "" in a `with:` field.
+        # Copy them through GITHUB_ENV so the rust-cache key below sees them.
+        shell: bash
+        run: echo "RUNNER_IMAGE=${ImageOS}-${ImageVersion}" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           # Scope the cache to the runner image. GitHub image upgrades can
@@ -153,7 +159,7 @@ jobs:
           # VS 18 2026); without this, a restored target/ carries a stale
           # whisper-rs-sys CMakeCache.txt and CMake aborts on generator
           # mismatch. Keying on ImageVersion forces a fresh build on bump.
-          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
+          key: ${{ env.RUNNER_IMAGE }}
           save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - name: Install Linux system deps
         if: runner.os == 'Linux'
@@ -305,9 +311,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Expose runner image for cache key
+        # ImageOS/ImageVersion are runner env vars, not part of the `env`
+        # context, so `${{ env.ImageOS }}` expands to "" in a `with:` field.
+        # Copy them through GITHUB_ENV so the rust-cache key below sees them.
+        shell: bash
+        run: echo "RUNNER_IMAGE=${ImageOS}-${ImageVersion}" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
+          key: ${{ env.RUNNER_IMAGE }}
           save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - name: Install Linux system deps
         run: |
@@ -368,10 +380,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Expose runner image for cache key
+        # ImageOS/ImageVersion are runner env vars, not part of the `env`
+        # context, so `${{ env.ImageOS }}` expands to "" in a `with:` field.
+        # Copy them through GITHUB_ENV so the rust-cache key below sees them.
+        shell: bash
+        run: echo "RUNNER_IMAGE=${ImageOS}-${ImageVersion}" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: mur-agent-gui/src-tauri
-          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
+          key: ${{ env.RUNNER_IMAGE }}
           # Restore-only (see CACHE BUDGET above): cold, this job still ends
           # well inside the Windows test job's wall time.
           save-if: false
@@ -443,10 +461,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Expose runner image for cache key
+        # ImageOS/ImageVersion are runner env vars, not part of the `env`
+        # context, so `${{ env.ImageOS }}` expands to "" in a `with:` field.
+        # Copy them through GITHUB_ENV so the rust-cache key below sees them.
+        shell: bash
+        run: echo "RUNNER_IMAGE=${ImageOS}-${ImageVersion}" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: mur-hub-gui/src-tauri
-          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
+          key: ${{ env.RUNNER_IMAGE }}
           # Restore-only on every OS (see CACHE BUDGET above): cold, even the
           # Windows leg (16-26m) ends inside the Windows test job's wall time.
           save-if: false
@@ -510,9 +534,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - name: Expose runner image for cache key
+        # ImageOS/ImageVersion are runner env vars, not part of the `env`
+        # context, so `${{ env.ImageOS }}` expands to "" in a `with:` field.
+        # Copy them through GITHUB_ENV so the rust-cache key below sees them.
+        shell: bash
+        run: echo "RUNNER_IMAGE=${ImageOS}-${ImageVersion}" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
+          key: ${{ env.RUNNER_IMAGE }}
           # Restore-only (see CACHE BUDGET above): peaks at 23m cold.
           save-if: false
       - name: Install protobuf
