@@ -56,24 +56,53 @@ use idle::{dial_io_timeout_for, is_io_timeout, note_frame, timeout_error};
 /// filesystem), returns the input unchanged so downstream code emits its
 /// normal "not found / not running" error.
 pub fn canonicalize_agent_name(home: &Path, typed: &str) -> String {
-    let Ok(entries) = fs::read_dir(home.join("agents")) else {
-        return typed.to_string();
-    };
-    let mut folded: Vec<String> = Vec::new();
-    for entry in entries.flatten() {
-        let dir = entry.file_name();
-        let dir = dir.to_string_lossy();
-        if !dir.eq_ignore_ascii_case(typed) || !entry.path().join("profile.yaml").is_file() {
-            continue;
-        }
-        if dir == typed {
-            return typed.to_string();
-        }
-        folded.push(dir.into_owned());
+    match match_agent_name(&agent_dir_names(home), typed) {
+        NameMatch::Found(name) => name,
+        NameMatch::Missing | NameMatch::Ambiguous(_) => typed.to_string(),
     }
-    match <[String; 1]>::try_from(folded) {
-        Ok([only]) => only,
-        Err(_) => typed.to_string(),
+}
+
+/// How a typed agent name resolves against the on-disk agent directories.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NameMatch {
+    /// Exact spelling, or the only case-insensitive match.
+    Found(String),
+    /// No directory matches, even folded.
+    Missing,
+    /// Several case variants and none spelled exactly like the input (only
+    /// possible on a case-sensitive filesystem). Picking one would act on
+    /// whichever `read_dir` lists first, so callers must refuse.
+    Ambiguous(Vec<String>),
+}
+
+/// Directory names under `agents/` that hold a `profile.yaml`. Always the
+/// listing, never a path probe (see [`canonicalize_agent_name`]).
+pub fn agent_dir_names(home: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(home.join("agents")) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.path().join("profile.yaml").is_file())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect()
+}
+
+/// The selection rule shared by every agent-name resolver (CLAUDE.md rule
+/// 10): an exact spelling wins, otherwise exactly one folded match.
+pub fn match_agent_name(names: &[String], typed: &str) -> NameMatch {
+    if names.iter().any(|n| n == typed) {
+        return NameMatch::Found(typed.to_string());
+    }
+    let mut folded: Vec<String> = names
+        .iter()
+        .filter(|n| n.eq_ignore_ascii_case(typed))
+        .cloned()
+        .collect();
+    match folded.len() {
+        0 => NameMatch::Missing,
+        1 => NameMatch::Found(folded.remove(0)),
+        _ => NameMatch::Ambiguous(folded),
     }
 }
 

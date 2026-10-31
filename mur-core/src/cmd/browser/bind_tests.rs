@@ -438,3 +438,27 @@ fn resolve_agent_is_case_insensitive_and_rejects_unknown_names() {
         .to_string();
     assert!(e.contains("no such agent"), "{e}");
 }
+
+/// #2205 review: two case variants (case-sensitive filesystems only) with no
+/// exact match must fail before login, not bind whichever `read_dir` lists
+/// first. The selection itself is covered on every filesystem by
+/// `a2a_dial::tests::match_agent_name_several_folds_is_ambiguous_in_any_order`.
+#[test]
+fn resolve_agent_rejects_ambiguous_case_variants() {
+    let home = tempfile::TempDir::new().unwrap();
+    for n in ["reviewer", "Reviewer"] {
+        let dir = home.path().join("agents").join(n);
+        if n == "Reviewer" && dir.exists() {
+            return; // case-insensitive filesystem: the scenario cannot exist
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("profile.yaml"), format!("name: {n}\n")).unwrap();
+    }
+    assert_eq!(resolve_agent(home.path(), "Reviewer").unwrap(), "Reviewer");
+    assert_eq!(resolve_agent(home.path(), "reviewer").unwrap(), "reviewer");
+    let e = resolve_agent(home.path(), "REVIEWER")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("ambiguous"), "{e}");
+    assert!(e.contains("Reviewer") && e.contains("reviewer"), "{e}");
+}

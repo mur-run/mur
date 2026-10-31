@@ -266,24 +266,26 @@ fn flag_result(outcome: &Outcome, agent: &str, site: &str) -> Result<()> {
 }
 
 /// The on-disk name of an existing agent (case-insensitive, CLAUDE.md rule
-/// 10), or an error naming the typo before any login starts. Matched against
-/// the directory listing rather than a path probe: on a case-insensitive
-/// volume `agents/Reviewer/profile.yaml` exists for `reviewer`, and the
-/// trace must carry the real name.
+/// 10), or an error before any login starts: a typo, or case variants with no
+/// exact match, which would otherwise bind whichever agent `read_dir` lists
+/// first. Same selection as `a2a_dial::canonicalize_agent_name`, but it fails
+/// instead of passing the input through.
 pub(crate) fn resolve_agent(home: &std::path::Path, typed: &str) -> Result<String> {
-    let names: Vec<String> = std::fs::read_dir(home.join("agents"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().join("profile.yaml").is_file())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .collect();
-    names
-        .iter()
-        .find(|n| *n == typed)
-        .or_else(|| names.iter().find(|n| n.eq_ignore_ascii_case(typed)))
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("--bind {typed:?}: no such agent (see `mur agent list`)"))
+    use crate::a2a_dial::{NameMatch, agent_dir_names, match_agent_name};
+    match match_agent_name(&agent_dir_names(home), typed) {
+        NameMatch::Found(name) => Ok(name),
+        NameMatch::Missing => {
+            anyhow::bail!("--bind {typed:?}: no such agent (see `mur agent list`)")
+        }
+        NameMatch::Ambiguous(mut names) => {
+            names.sort();
+            anyhow::bail!(
+                "--bind {typed:?} is ambiguous: agents {} differ only by case; \
+                 type the exact name",
+                names.join(", ")
+            )
+        }
+    }
 }
 
 fn saved_domains(home: &std::path::Path, site: &str) -> Result<Vec<String>> {
