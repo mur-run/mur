@@ -15,8 +15,11 @@ on:
   workflow_dispatch:
 
 # A new commit on a PR obsoletes the in-flight run for the old commit —
-# cancel it instead of finishing a 3-OS matrix nobody will read. push:main
-# runs never cancel (post-merge validation must complete). The group keys on
+# cancel it instead of finishing a 3-OS matrix nobody will read. A push:main
+# run never cancels one already in progress (post-merge validation must
+# complete), but GitHub keeps at most one pending run per group: a newer push
+# replaces a still-queued one. That is fine — the newer commit contains the
+# older one, so it is still validated. The group keys on
 # the head branch, not refs/pull/N/merge, so a retarget dispatch (whose ref
 # is refs/heads/<branch>) shares a group with that PR's pull_request runs.
 # Both sides are prefixed with a repository: the PR's head repo, and this
