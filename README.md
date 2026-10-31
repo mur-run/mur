@@ -647,6 +647,8 @@ Agent** wizard offers the same catalog as a source.
   `--bind <agent>` does the same without asking, for scripts; when it is
   refused nothing is written, the command to run is printed, and it exits
   non-zero.
+  To unbind, rerun `/browser live <hosts> --no-profile`; the saved profile
+  stays on disk.
 - **Human-in-the-loop** — tool calls pause for your approval in Hub. In
   `mur agent cli` a session starts with auto-approve ON (the status bar's
   `AUTO` badge says so); `--ask` or `/auto off` makes it ask first. AUTO only

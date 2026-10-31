@@ -792,3 +792,6 @@ fn restricted_policy_does_not_inherit_deny_hosts() {
 
 #[path = "browser_live_merge_tests.rs"]
 mod merge;
+
+#[path = "browser_live_unbind_tests.rs"]
+mod unbind;
