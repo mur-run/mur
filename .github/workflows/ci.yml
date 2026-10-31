@@ -138,12 +138,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14: its image bundles Xcode 15.4, which we select below. The
-        # default Xcode 16.4 (now on both macos-14 and macos-latest) breaks the
-        # old vendored whisper.cpp build two ways — clang treats it as pre-C++11
-        # ("no template 'function' in namespace std", ">>" errors) and the link
-        # can't find clang_rt.osx (clang/17/lib/darwin missing). 15.4 builds it.
-        os: [ubuntu-latest, macos-14, windows-latest]
+        # macos-15 (Apple Silicon, Xcode 16.x): macos-14 is being retired
+        # (brownouts until 2026-11-02). Xcode 16's clang rejects ggml's
+        # `-mcpu=native`, so GGML_NATIVE is forced off below, the same fix
+        # release.yml's hub-macos job uses on macos-latest.
+        os: [ubuntu-latest, macos-15, windows-latest]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -153,16 +152,20 @@ jobs:
           # change the bundled MSVC/CMake generator (e.g. VS 17 2022 ->
           # VS 18 2026); without this, a restored target/ carries a stale
           # whisper-rs-sys CMakeCache.txt and CMake aborts on generator
-          # mismatch. Keying on ImageVersion forces a fresh build on bump.
-          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
+          # mismatch. Key on the runner label: `env.ImageOS`/`ImageVersion`
+          # are runner-side env vars and expand to "" in workflow
+          # expressions, so they never scoped anything. A macos-14 target/
+          # restored on macos-15 keeps ort-sys's cached
+          # `-L .../Xcode_15.4.app/.../lib/darwin` + `-lclang_rt.osx` and
+          # the link fails (`library 'clang_rt.osx' not found`).
+          key: ${{ matrix.os }}
           save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-      - name: Select Xcode 15.4 (macOS)
+      - name: Disable ggml native arch (macOS)
         if: runner.os == 'macOS'
-        # The runner's default Xcode 16.4 breaks the old vendored whisper.cpp
-        # build (pre-C++11 clang errors) and the clang_rt.osx link. Xcode 15.4
-        # (bundled on macos-14) builds + links it cleanly. Set before any cargo
-        # build so build scripts (cc/cmake) use the right toolchain.
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+        # Xcode 16's clang rejects ggml's `-mcpu=native`; mirrors release.yml.
+        run: |
+          echo 'set(GGML_NATIVE OFF CACHE BOOL "" FORCE)' > "$RUNNER_TEMP/ggml-no-native.cmake"
+          echo "CMAKE_TOOLCHAIN_FILE=$RUNNER_TEMP/ggml-no-native.cmake" >> "$GITHUB_ENV"
       - name: Install Linux system deps
         if: runner.os == 'Linux'
         run: |
@@ -441,11 +444,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS pinned to 14 (Apple Silicon): the macos-latest → macOS-26 image
-        # migration breaks the system-configuration-sys / lance build scripts
-        # ("cannot execute binary file", exit 126). The Test job pins macos-14
-        # for stability for the same reason.
-        os: [ubuntu-22.04, macos-14, windows-latest]
+        # macOS pinned to 15 (Apple Silicon), not macos-latest: the macOS-26
+        # image breaks the system-configuration-sys / lance build scripts
+        # ("cannot execute binary file", exit 126). macos-14 is being retired.
+        os: [ubuntu-22.04, macos-15, windows-latest]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -454,7 +456,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: mur-hub-gui/src-tauri
-          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
+          # Runner label, not env.ImageOS (empty in expressions) — see Test.
+          key: ${{ matrix.os }}
           # Restore-only on every OS (see CACHE BUDGET above): cold, even the
           # Windows leg (16-26m) ends inside the Windows test job's wall time.
           save-if: false
