@@ -476,11 +476,9 @@ pub fn dial_message_streaming_polled(
         // timeout: each `message/delta`/`step/*` notification during
         // generation resets it, so legitimately long-but-active turns are
         // unaffected; only a genuinely stalled peer trips it.
-        stream
-            .set_write_timeout(Some(timeout))
+        deadline::tolerate_hung_up(stream.set_write_timeout(Some(timeout)))
             .context("set write timeout")?;
-        stream
-            .set_read_timeout(Some(timeout))
+        deadline::tolerate_hung_up(stream.set_read_timeout(Some(timeout)))
             .context("set read timeout")?;
         let line = format!("{}\n", serde_json::to_string(&request)?);
         stream.write_all(line.as_bytes()).map_err(|e| {
@@ -498,8 +496,7 @@ pub fn dial_message_streaming_polled(
         // With a poll, read in short ticks and track the idle timeout here,
         // so the check also runs while the peer is silent.
         let tick = poll.as_ref().map_or(timeout, |p| p.every.min(timeout));
-        stream
-            .set_read_timeout(Some(tick))
+        deadline::tolerate_hung_up(stream.set_read_timeout(Some(tick)))
             .context("set read timeout")?;
         let mut reader = BufReader::new(stream.try_clone()?);
         let mut last_frame: Option<(String, String)> = None;
