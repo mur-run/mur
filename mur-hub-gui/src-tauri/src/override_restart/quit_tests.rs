@@ -90,3 +90,41 @@ fn run_claims_with_a_consumed_file_classifies_not_undoes() {
     assert!(a.contains("startup_override_unacknowledged"), "{a}");
     assert!(jobs.active_names().is_empty());
 }
+
+mod quit_action_tests {
+    use super::super::super::jobs::{JobState, OverrideJobs};
+    use super::super::{QuitAction, quit_action};
+
+    #[test]
+    fn no_state_or_no_jobs_exits_now() {
+        assert_eq!(quit_action(None), QuitAction::ExitNow);
+        assert_eq!(
+            quit_action(Some(&OverrideJobs::default())),
+            QuitAction::ExitNow
+        );
+    }
+
+    #[test]
+    fn active_job_prompts() {
+        let jobs = OverrideJobs::default();
+        let _entry = jobs.admit("a", "dashboard", JobState::Preparing).unwrap();
+        assert_eq!(quit_action(Some(&jobs)), QuitAction::Prompt);
+    }
+
+    #[test]
+    fn prompt_is_asked_once_while_open() {
+        let jobs = OverrideJobs::default();
+        assert!(jobs.begin_quit_prompt());
+        assert!(!jobs.begin_quit_prompt());
+        jobs.end_quit_prompt();
+        assert!(jobs.begin_quit_prompt());
+    }
+
+    #[test]
+    fn already_quitting_exits_now() {
+        let jobs = OverrideJobs::default();
+        let _entry = jobs.admit("a", "dashboard", JobState::Preparing).unwrap();
+        let _ = jobs.begin_quit();
+        assert_eq!(quit_action(Some(&jobs)), QuitAction::ExitNow);
+    }
+}

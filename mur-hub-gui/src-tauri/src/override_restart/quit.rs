@@ -41,10 +41,49 @@ pub fn on_exit_requested(app: &AppHandle, code: Option<i32>, api: &ExitRequestAp
         return;
     }
     api.prevent_exit();
+    prompt_and_quit(app, &jobs, &home);
+}
+
+/// Menu/tray Quit entry. `app.exit(0)` and the native `terminate:` selector
+/// both skip `ExitRequested`, so those entries call this instead: it asks once
+/// when a restart is in flight, otherwise exits straight away.
+///
+/// Known gap: the Dock's right-click Quit sends `terminate:` and tao's
+/// delegate implements only `applicationWillTerminate:` (already decided, not
+/// cancellable), so it bypasses this guard, as do force-quit and logout. A
+/// stale override file left that way is rejected as `stale` on the next boot.
+pub fn request_quit(app: &AppHandle) {
+    let jobs = app.try_state::<OverrideJobs>().map(|s| s.inner().clone());
+    match quit_action(jobs.as_ref()) {
+        QuitAction::ExitNow => app.exit(0),
+        QuitAction::Prompt => {
+            if let Some(jobs) = jobs {
+                prompt_and_quit(app, &jobs, &crate::mur_home_path());
+            }
+        }
+    }
+}
+
+/// What a menu/tray Quit does.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum QuitAction {
+    ExitNow,
+    Prompt,
+}
+
+/// Prompt only while a restart is in flight and no quit is already underway.
+pub(super) fn quit_action(jobs: Option<&OverrideJobs>) -> QuitAction {
+    match jobs {
+        Some(j) if !j.is_quitting() && !j.active_names().is_empty() => QuitAction::Prompt,
+        _ => QuitAction::ExitNow,
+    }
+}
+
+fn prompt_and_quit(app: &AppHandle, jobs: &OverrideJobs, home: &Path) {
     if !jobs.begin_quit_prompt() {
         return;
     }
-    let app = app.clone();
+    let (app, jobs, home) = (app.clone(), jobs.clone(), home.to_path_buf());
     std::thread::spawn(move || {
         let body = quit_body(&jobs.active_names());
         let dashboard = app.get_webview_window(DASHBOARD_LABEL);
