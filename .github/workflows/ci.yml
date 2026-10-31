@@ -134,7 +134,10 @@ jobs:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60 # hung build ≠ 6h default; normal runs are well under
+    # hung build ≠ 6h default. Warm-cache runs are well under 60; 75 leaves
+    # room for a cold cache (new runner image / cache-key change), where the
+    # macOS nextest step alone takes ~51 min.
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
