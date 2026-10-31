@@ -1,31 +1,44 @@
 name: CI
 
+# A title/body edit re-triggers this workflow. Those runs skip every job and
+# only mirror the PR's real run in `CI pass` (last job). The distinct run name
+# is how that job tells an edit run from a real one; keep it in sync with
+# EDIT_RUN_NAME in the `Mirror the PR's real CI run` step.
+run-name: ${{ (github.event.action == 'edited' && !github.event.changes.base) && 'CI (title/body edit)' || 'CI' }}
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-    # No `edited` here: it also fires on every title/body edit, and each one
-    # re-ran the 3-OS matrix and cancelled the in-flight run. Retargeting a
-    # stacked PR onto main fires only `edited`, so ci-retarget.yml listens
-    # for that one case (base changed) and dispatches this workflow.
-    types: [opened, synchronize, reopened]
-  # Dispatched by ci-retarget.yml on the PR head branch. Treated like push:
-  # every job runs, because there is no PR diff context for paths-filter.
+    # `edited` fires on every title/body edit AND when a stacked PR is
+    # retargeted onto main (GitHub sends only `edited`, with `changes.base`).
+    # The retarget needs a real `pull_request` run: a `workflow_dispatch` CI
+    # run goes green but its `CI pass` is not counted toward the PR's required
+    # check, so the PR stays BLOCKED. A title/body edit (no `changes.base`) is
+    # a no-op, see `Concurrency` and the per-job `if:` below.
+    types: [opened, synchronize, reopened, edited]
+  # Manual run on a branch. Treated like push: every job runs, because there
+  # is no PR diff context for paths-filter.
   workflow_dispatch:
 
 # A new commit on a PR obsoletes the in-flight run for the old commit —
-# cancel it instead of finishing a 3-OS matrix nobody will read. push:main
-# runs never cancel (post-merge validation must complete). The group keys on
-# the head branch, not refs/pull/N/merge, so a retarget dispatch (whose ref
-# is refs/heads/<branch>) shares a group with that PR's pull_request runs.
-# Both sides are prefixed with a repository: the PR's head repo, and this
-# repo for push/dispatch. Without it a fork PR from its own `main` lands in
-# ci-refs/heads/main and, since PR runs cancel in-progress, kills push:main
-# validation; two forks with the same branch name would cancel each other.
+# cancel it instead of finishing a 3-OS matrix nobody will read. A push:main
+# run never cancels one already in progress (post-merge validation must
+# complete), but GitHub keeps at most one pending run per group: a newer push
+# replaces a still-queued one. That is fine — the newer commit contains the
+# older one, so it is still validated. The group keys on the head branch, not
+# refs/pull/N/merge. Both sides are prefixed with a repository: the PR's head
+# repo, and this repo for push/dispatch. Without it a fork PR from its own
+# `main` lands in ci-refs/heads/main and, since PR runs cancel in-progress,
+# kills push:main validation; two forks with the same branch name would
+# cancel each other.
+#
+# A title/body edit (`edited` without `changes.base`) gets its own `-edit`
+# group and never cancels, so it cannot kill the PR's in-flight real run.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && format('{0}/refs/heads/{1}', github.event.pull_request.head.repo.full_name, github.head_ref) || format('{0}/{1}', github.repository, github.ref) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event_name == 'pull_request' && format('{0}/refs/heads/{1}', github.event.pull_request.head.repo.full_name, github.head_ref) || format('{0}/{1}', github.repository, github.ref) }}${{ (github.event.action == 'edited' && !github.event.changes.base) && '-edit' || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && !github.event.changes.base) }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -58,6 +71,10 @@ jobs:
   # cross-cutting break.
   changes:
     name: Detect changed paths
+    # Title/body edit: no job runs (everything else needs `changes`, or has
+    # the same guard), so the edit posts nothing and cannot cancel or mask
+    # the real run.
+    if: ${{ !(github.event.action == 'edited' && !github.event.changes.base) }}
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
@@ -331,6 +348,7 @@ jobs:
   fmt:
     name: Format
     # Always run — fmt is 17s and catches commit-hook bypasses.
+    if: ${{ !(github.event.action == 'edited' && !github.event.changes.base) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -548,6 +566,7 @@ jobs:
 
   freebsd-platform-audit:
     name: FreeBSD platform audit
+    if: ${{ !(github.event.action == 'edited' && !github.event.changes.base) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -557,6 +576,7 @@ jobs:
   required-reason-apis:
     name: Required Reason API gate
     # Always run — 5s, runs against any source change so safe to keep.
+    if: ${{ !(github.event.action == 'edited' && !github.event.changes.base) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -570,7 +590,13 @@ jobs:
   # the underlying jobs become advisory.
   ci-pass:
     name: CI pass
-    if: always()
+    if: ${{ always() }}
+    # An edit run waits for the real run, which is bounded by its slowest job
+    # (clippy: 90 min).
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
     needs: [changes, test, clippy, fmt, gui, hub_gui, e2e_quick, freebsd-platform-audit, required-reason-apis]
     runs-on: ubuntu-latest
     steps:
@@ -583,3 +609,46 @@ jobs:
         run: |
           echo '${{ toJson(needs) }}'
           exit 1
+
+      # A title/body edit skips every job above, and a skipped `CI pass` counts
+      # as satisfied: the PR would show CLEAN while the real run is still
+      # queued or even failing. So an edit run reports the real run's result
+      # instead — pending while it runs, red if it fails.
+      - name: Mirror the PR's real CI run
+        if: ${{ github.event.action == 'edited' && !github.event.changes.base }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          EDIT_RUN_NAME: 'CI (title/body edit)'
+          # The real run may not exist yet when an edit lands right after a push.
+          FIND_TIMEOUT_SECS: '180'
+          POLL_SECS: '30'
+        run: |
+          set -euo pipefail
+          query='[.workflow_runs[]
+                  | select(.id != ($cur|tonumber) and .display_title != $name)]
+                 | sort_by(.created_at) | last // empty
+                 | "\(.id) \(.status) \(.conclusion // "none")"'
+          start=$SECONDS
+          while true; do
+            line=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" \
+              | jq -r --arg cur "$CURRENT_RUN_ID" --arg name "$EDIT_RUN_NAME" "$query")
+            if [ -z "$line" ]; then
+              if [ $((SECONDS - start)) -ge "$FIND_TIMEOUT_SECS" ]; then
+                echo "No pull_request CI run found for $HEAD_SHA; failing closed."
+                exit 1
+              fi
+            else
+              read -r id status conclusion <<<"$line"
+              echo "real run $id: $status $conclusion"
+              if [ "$status" = completed ]; then
+                [ "$conclusion" = success ] && exit 0
+                echo "Real CI run $id finished as '$conclusion'."
+                exit 1
+              fi
+            fi
+            sleep "$POLL_SECS"
+          done
+
