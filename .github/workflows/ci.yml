@@ -5,27 +5,34 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-    # No `edited` here: it also fires on every title/body edit, and each one
-    # re-ran the 3-OS matrix and cancelled the in-flight run. Retargeting a
-    # stacked PR onto main fires only `edited`, so ci-retarget.yml listens
-    # for that one case (base changed) and dispatches this workflow.
-    types: [opened, synchronize, reopened]
-  # Dispatched by ci-retarget.yml on the PR head branch. Treated like push:
-  # every job runs, because there is no PR diff context for paths-filter.
+    # `edited` fires on every title/body edit AND when a stacked PR is
+    # retargeted onto main (GitHub sends only `edited`, with `changes.base`).
+    # The retarget needs a real `pull_request` run: a `workflow_dispatch` CI
+    # run goes green but its `CI pass` is not counted toward the PR's required
+    # check, so the PR stays BLOCKED. A title/body edit (no `changes.base`) is
+    # a no-op, see `Concurrency` and the per-job `if:` below.
+    types: [opened, synchronize, reopened, edited]
+  # Manual run on a branch. Treated like push: every job runs, because there
+  # is no PR diff context for paths-filter.
   workflow_dispatch:
 
 # A new commit on a PR obsoletes the in-flight run for the old commit —
-# cancel it instead of finishing a 3-OS matrix nobody will read. push:main
-# runs never cancel (post-merge validation must complete). The group keys on
-# the head branch, not refs/pull/N/merge, so a retarget dispatch (whose ref
-# is refs/heads/<branch>) shares a group with that PR's pull_request runs.
-# Both sides are prefixed with a repository: the PR's head repo, and this
-# repo for push/dispatch. Without it a fork PR from its own `main` lands in
-# ci-refs/heads/main and, since PR runs cancel in-progress, kills push:main
-# validation; two forks with the same branch name would cancel each other.
+# cancel it instead of finishing a 3-OS matrix nobody will read. A push:main
+# run never cancels one already in progress (post-merge validation must
+# complete), but GitHub keeps at most one pending run per group: a newer push
+# replaces a still-queued one. That is fine — the newer commit contains the
+# older one, so it is still validated. The group keys on the head branch, not
+# refs/pull/N/merge. Both sides are prefixed with a repository: the PR's head
+# repo, and this repo for push/dispatch. Without it a fork PR from its own
+# `main` lands in ci-refs/heads/main and, since PR runs cancel in-progress,
+# kills push:main validation; two forks with the same branch name would
+# cancel each other.
+#
+# A title/body edit (`edited` without `changes.base`) gets its own `-edit`
+# group and never cancels, so it cannot kill the PR's in-flight real run.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && format('{0}/refs/heads/{1}', github.event.pull_request.head.repo.full_name, github.head_ref) || format('{0}/{1}', github.repository, github.ref) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event_name == 'pull_request' && format('{0}/refs/heads/{1}', github.event.pull_request.head.repo.full_name, github.head_ref) || format('{0}/{1}', github.repository, github.ref) }}${{ (github.event.action == 'edited' && !github.event.changes.base) && '-edit' || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && !github.event.changes.base) }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -58,6 +65,10 @@ jobs:
   # cross-cutting break.
   changes:
     name: Detect changed paths
+    # Title/body edit: no job runs (everything else needs `changes`, or has
+    # the same guard), so the edit posts nothing and cannot cancel or mask
+    # the real run.
+    if: ${{ !(github.event.action == 'edited' && !github.event.changes.base) }}
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
@@ -331,6 +342,7 @@ jobs:
   fmt:
     name: Format
     # Always run — fmt is 17s and catches commit-hook bypasses.
+    if: ${{ !(github.event.action == 'edited' && !github.event.changes.base) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -548,6 +560,7 @@ jobs:
 
   freebsd-platform-audit:
     name: FreeBSD platform audit
+    if: ${{ !(github.event.action == 'edited' && !github.event.changes.base) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -557,6 +570,7 @@ jobs:
   required-reason-apis:
     name: Required Reason API gate
     # Always run — 5s, runs against any source change so safe to keep.
+    if: ${{ !(github.event.action == 'edited' && !github.event.changes.base) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -570,7 +584,7 @@ jobs:
   # the underlying jobs become advisory.
   ci-pass:
     name: CI pass
-    if: always()
+    if: ${{ always() && !(github.event.action == 'edited' && !github.event.changes.base) }}
     needs: [changes, test, clippy, fmt, gui, hub_gui, e2e_quick, freebsd-platform-audit, required-reason-apis]
     runs-on: ubuntu-latest
     steps:
