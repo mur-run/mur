@@ -5,12 +5,14 @@
 //! M-h4: onboarding wizard — wizard_open/set_persona/.../start_render/finish/cancel.
 //! M-h5: pet windows — pet_spawn_at/close/reposition/return_to_hub/list/get_expression.
 
+mod bootstrap;
 pub mod brain_badge;
 pub mod chat;
 pub mod chat_window;
 pub mod chatgpt_subscription;
 pub mod claude_subscription;
 pub mod cli_tools;
+mod commands;
 pub mod companion;
 pub mod companion_notify;
 pub mod dashboard;
@@ -50,173 +52,23 @@ pub mod upgrade_status;
 pub mod work;
 pub mod workflows_list;
 
+pub(crate) use bootstrap::mur_home_path;
+use bootstrap::{init_tracing, load_display_name_for_stub, write_host_path};
+pub use commands::{AgentState, SupervisorState};
+use commands::{open_dashboard, spawn_agent_watcher, spawn_runtime_watcher, toggle_popover};
 use companion::BridgeState;
-use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
+use mur_gui_core::discovery::AgentDiscovery;
 use mur_gui_core::event_bus::EventBus;
-use mur_gui_core::sidecar::{AgentRuntimeStatus, Supervisor};
+use mur_gui_core::sidecar::Supervisor;
 use mur_gui_core::stub;
 use pet::{EventBusState, PetState};
-use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{
-    AppHandle, Emitter, Manager, State,
+    Emitter, Manager,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-use tracing_subscriber::EnvFilter;
-
-/// Managed Tauri state: current agent metadata snapshot.
-pub struct AgentState(pub Mutex<Vec<AgentEntry>>);
-
-/// Managed Tauri state: sidecar supervisor handle.
-pub struct SupervisorState(pub Supervisor);
-
-// ─── Tauri commands ────────────────────────────────────────────────────────
-
-#[tauri::command]
-fn list_agents(state: State<'_, AgentState>) -> Vec<AgentEntry> {
-    state.0.lock().unwrap().clone()
-}
-
-/// The runtime snapshot as it stands right now.
-///
-/// `runtime-status-changed` only fires when the value *changes*, so a UI that
-/// mounts after the supervisor has settled sees nothing and renders every agent
-/// idle. `list_agents` above has always had this invoke-once-then-listen pair;
-/// runtime status was listen-only, which is what left the Agents page showing a
-/// resting flock while the agents were up.
-#[tauri::command]
-fn list_runtime_statuses(supervisor: State<'_, SupervisorState>) -> Vec<AgentRuntimeStatus> {
-    supervisor.0.status_receiver().borrow().clone()
-}
-
-#[tauri::command]
-async fn start_agent(
-    name: String,
-    supervisor: State<'_, SupervisorState>,
-    jobs: State<'_, override_restart::jobs::OverrideJobs>,
-) -> Result<(), String> {
-    jobs.refuse_if_busy(&name)?;
-    supervisor.0.start(&name).await
-}
-
-#[tauri::command]
-async fn stop_agent(
-    name: String,
-    supervisor: State<'_, SupervisorState>,
-    jobs: State<'_, override_restart::jobs::OverrideJobs>,
-) -> Result<(), String> {
-    jobs.refuse_if_busy(&name)?;
-    supervisor.0.stop(&name).await;
-    Ok(())
-}
-
-/// Show + focus the dashboard, then tell it where to go: `select-agent`
-/// (existing), `select-fleet`, and `open-page` are each emitted only when
-/// given. Detail windows use this as their "Show in Hub" / "Home" bridge.
-#[tauri::command]
-fn open_dashboard(
-    app: AppHandle,
-    agent_name: Option<String>,
-    fleet_name: Option<String>,
-    page: Option<String>,
-) {
-    let Some(win) = app.get_webview_window("dashboard") else {
-        return;
-    };
-    let _ = win.show();
-    let _ = win.set_focus();
-    if let Some(name) = agent_name {
-        let _ = app.emit("select-agent", name);
-    }
-    if let Some(name) = fleet_name {
-        let _ = app.emit("select-fleet", name);
-    }
-    if let Some(id) = page {
-        let _ = app.emit("open-page", id);
-    }
-}
-
-#[tauri::command]
-fn toggle_popover(app: AppHandle) {
-    if let Some(win) = app.get_webview_window("popover") {
-        if win.is_visible().unwrap_or(false) {
-            let _ = win.hide();
-        } else {
-            position_popover(&app, &win);
-            let _ = win.show();
-            let _ = win.set_focus();
-        }
-    }
-}
-
-// ─── Tray positioning ──────────────────────────────────────────────────────
-
-fn position_popover(app: &AppHandle, win: &tauri::WebviewWindow) {
-    let scale = win.scale_factor().unwrap_or(1.0);
-
-    let (px, py) = app
-        .tray_by_id("main")
-        .and_then(|tray| tray.rect().ok().flatten())
-        .map(|rect| {
-            let pos = rect.position.to_physical::<i32>(scale);
-            let sz = rect.size.to_physical::<u32>(scale);
-            #[cfg(target_os = "macos")]
-            {
-                (pos.x, pos.y + sz.height as i32)
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                let _ = sz;
-                (pos.x, pos.y - 480)
-            }
-        })
-        .unwrap_or_else(|| {
-            win.primary_monitor()
-                .ok()
-                .flatten()
-                .map(|m| {
-                    let s = m.size();
-                    (s.width as i32 - 300, 40)
-                })
-                .unwrap_or((20, 40))
-        });
-
-    let _ = win.set_position(tauri::PhysicalPosition::new(px, py));
-}
-
-// ─── Background event bridges ──────────────────────────────────────────────
-
-fn spawn_agent_watcher(app: AppHandle, mut rx: tokio::sync::watch::Receiver<Vec<AgentEntry>>) {
-    tokio::spawn(async move {
-        loop {
-            if rx.changed().await.is_err() {
-                break;
-            }
-            let entries = rx.borrow().clone();
-            if let Some(state) = app.try_state::<AgentState>() {
-                *state.0.lock().unwrap() = entries.clone();
-            }
-            let _ = app.emit("agents-updated", &entries);
-        }
-    });
-}
-
-fn spawn_runtime_watcher(
-    app: AppHandle,
-    mut rx: tokio::sync::watch::Receiver<Vec<AgentRuntimeStatus>>,
-) {
-    tokio::spawn(async move {
-        loop {
-            if rx.changed().await.is_err() {
-                break;
-            }
-            let statuses = rx.borrow().clone();
-            let _ = app.emit("runtime-status-changed", &statuses);
-        }
-    });
-}
 
 // ─── App bootstrap ─────────────────────────────────────────────────────────
 
@@ -670,8 +522,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            list_agents,
-            list_runtime_statuses,
+            commands::list_agents,
+            commands::list_runtime_statuses,
             panel::panel_sessions,
             panel::panel_insert,
             panel::open_panel_window,
@@ -685,8 +537,8 @@ pub fn run() {
             panel::data::panel_activities,
             panel::data::panel_recommend,
             panel::data::panel_recommend_input,
-            start_agent,
-            stop_agent,
+            commands::start_agent,
+            commands::stop_agent,
             proposal_chip::restart_agent,
             override_restart::commands::restart_agent_with_overrides,
             override_restart::commands::restart_agent_normally,
@@ -702,8 +554,8 @@ pub fn run() {
             hitl::hitl_pending_list,
             session_allow::hitl_session_allow,
             session_allow::hitl_session_reset,
-            open_dashboard,
-            toggle_popover,
+            commands::open_dashboard,
+            commands::toggle_popover,
             onboarding::render_agent_expressions,
             onboarding::first_launch::check_first_launch,
             onboarding::first_launch::mark_first_launch_done,
@@ -898,62 +750,4 @@ pub fn run() {
                 _ => {}
             }
         });
-}
-
-pub(crate) fn mur_home_path() -> PathBuf {
-    std::env::var("MUR_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".mur")
-        })
-}
-
-/// Atomically write `~/.mur/host_path` so per-agent launcher stubs can locate
-/// the Hub binary and detect version mismatches (spec §5.2).
-///
-/// Format: two lines — `<absolute_exe_path>\n<version>`.
-fn write_host_path(version: &str, mur_home: &std::path::Path) -> anyhow::Result<()> {
-    let exe = std::env::current_exe()?
-        .canonicalize()
-        .unwrap_or_else(|_| std::env::current_exe().unwrap());
-    std::fs::create_dir_all(mur_home).map_err(|e| anyhow::anyhow!("create mur_home: {e}"))?;
-    let tmp = mur_home.join("host_path.tmp");
-    std::fs::write(&tmp, format!("{}\n{}", exe.display(), version))
-        .map_err(|e| anyhow::anyhow!("write host_path.tmp: {e}"))?;
-    std::fs::rename(&tmp, mur_home.join("host_path"))
-        .map_err(|e| anyhow::anyhow!("rename host_path: {e}"))?;
-    Ok(())
-}
-
-fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .try_init();
-}
-
-fn load_display_name_for_stub(agent_dir: &std::path::Path) -> Option<String> {
-    let yaml = std::fs::read_to_string(agent_dir.join("profile.yaml")).ok()?;
-    for line in yaml.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("name:") {
-            let name = rest.trim().trim_matches('"').trim_matches('\'');
-            if !name.is_empty() {
-                return Some(name.to_string());
-            }
-        }
-    }
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn lib_links() {
-        let _ = super::init_tracing;
-        let _ = super::mur_home_path;
-    }
 }
