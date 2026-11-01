@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 mod probe;
 pub(crate) mod service_home;
-use service_home::ServiceHome;
+use service_home::{ServiceHome, ServiceHomes};
 
 /// launchd label of the murmurd job `install_launchd` registers.
 pub(crate) const LAUNCHD_LABEL: &str = "run.mur.murmurd";
@@ -61,15 +61,28 @@ pub(crate) enum Supervision {
 }
 
 impl Supervision {
-    /// Detect the supervision of the daemon for the caller's resolved MUR home.
+    /// Supervision of the daemon for the caller's resolved MUR home, as a
+    /// start or restart sees it: the service must serve this home both now
+    /// and after the (re)start.
     pub(crate) fn detect() -> Self {
+        Self::detect_with(ServiceHomes::for_start)
+    }
+
+    /// Supervision as a stop sees it: a stop acts on the instance running
+    /// now, so the home it serves is what counts, whatever a later start
+    /// would bring up.
+    pub(crate) fn detect_for_stop() -> Self {
+        Self::detect_with(ServiceHomes::for_stop)
+    }
+
+    fn detect_with(step: fn(ServiceHomes) -> ServiceHome) -> Self {
         let Some(caller) = mur_common::home::try_mur_home() else {
             return Self::None;
         };
-        let Some((service, home)) = DaemonService::registered() else {
+        let Some((service, homes)) = DaemonService::registered() else {
             return Self::None;
         };
-        match service_home::resolve(home) {
+        match service_home::resolve(step(homes)) {
             Ok(service_home) => Self::classify(service, service_home, &caller),
             Err(reason) => Self::Unknown { service, reason },
         }
@@ -94,7 +107,7 @@ impl DaemonService {
     /// The service manager that has murmurd registered and live on this
     /// machine, plus the `MUR_HOME` it effectively runs with (see
     /// [`service_home`] for why that is not just the unit file's value).
-    fn registered() -> Option<(Self, ServiceHome)> {
+    fn registered() -> Option<(Self, ServiceHomes)> {
         #[cfg(target_os = "macos")]
         {
             // The descriptor on disk is the test, NOT "the job is loaded":
