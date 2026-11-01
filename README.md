@@ -566,6 +566,21 @@ Agent** wizard offers the same catalog as a source.
   through. `mur agent doctor` lists every enabled remote server on an `off`
   agent with the fix: set the mode to `restricted` (each server's own host is
   still admitted for its client) or disable the server.
+- **Lend one ssh key for one host** — `mur agent ssh allow <agent> --key
+  SHA256:<fp> --host github.com` lets the agent sign with that key from your
+  own ssh-agent, for that host only, and every signature still goes through
+  HITL. The agent talks to a proxy socket, never to your ssh-agent: the proxy
+  checks the key, the host key the client verified, and that it is the same
+  SSH session, and refuses on any error. `--host` scans the host key once for
+  you to confirm and writes a pinned `known_hosts`; scripts pass `--host-key
+  SHA256:<fp> --yes` instead. `mur agent ssh list` (`--json`) shows the grants,
+  `revoke` takes them back. `mur agent status` says whether the proxy is a
+  real boundary for that agent (`ssh_proxy: boundary`) or audit-only, with
+  the reason. **Limits:** keys stay in your ssh-agent; unrestricted-network
+  agents and Linux are audit-only; on Windows the proxy does not start;
+  detection covers only the socket the proxy uses. Commit signing (SSHSIG),
+  `ssh -A`, and `ssh-add -h` keys are not supported. For git, HTTPS via
+  `gh auth setup-git` is still the simpler path.
 - **Grant a host when it is blocked** — when the browser is refused a host, the
   chat shows *this time* / *always* / *no* choices after the turn. *This time*
   lets it through until the agent restarts and writes nothing; *always* shows
@@ -1314,7 +1329,7 @@ mur
 ├── init / doctor / update / stats / verify
 ├── agent        create · start · stop · restart (--no-hitl · --net · --full-perms) · remove · cli · send · card · dial · who · limits ·
 │                export · install · install-service · addon · companion · voice · pair ·
-│                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal · intent-check) · secret · hitl (list · forget · pending · approve · deny) ·
+│                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal · intent-check) · ssh (allow · revoke · list) · secret · hitl (list · forget · pending · approve · deny) ·
 │                fallback · smart · routing · effort · trash · rollback · turn (list · undo) … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run [--run-id] · review · review-setup · review-resume · prune-reviews · set-loop · limits · send · jobs [--since] · stop · start · pause · resume [--detach]   (squads of agents over a shared channel)
