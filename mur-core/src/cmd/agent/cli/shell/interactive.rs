@@ -26,6 +26,11 @@ const INTERACTIVE_PREFIXES: &[&[&str]] = &[
     // Pickers for projects, languages and entry names, then `yes` (#2016);
     // `--yes` opts out (see `PIPED_OPT_OUTS`).
     &["mur", "code-nav", "setup", "--wizard"],
+    // Shows the scanned host key / resolved key and asks for a literal
+    // `yes` before granting; `--yes` (fingerprints only) opts out.
+    &["mur", "agent", "ssh", "allow"],
+    // A batch revoke (only --key or only --host-key) asks first.
+    &["mur", "agent", "ssh", "revoke"],
 ];
 
 /// Flags that make an otherwise interactive command safe on piped stdio, so
@@ -33,6 +38,8 @@ const INTERACTIVE_PREFIXES: &[&[&str]] = &[
 const PIPED_OPT_OUTS: &[(&[&str], &str)] = &[
     (&["mur", "fleet", "review-setup"], "--no-interactive"),
     (&["mur", "code-nav", "setup", "--wizard"], "--yes"),
+    (&["mur", "agent", "ssh", "allow"], "--yes"),
+    (&["mur", "agent", "ssh", "revoke"], "--yes"),
 ];
 
 /// `mur agent start|restart` asks the person to type the agent name only when
@@ -192,6 +199,19 @@ mod tests {
         // It is not mistaken for an attended review (that goes to /review).
         assert_eq!(review_redirect("mur fleet review-setup"), None);
         assert!(!needs_terminal("mur fleet review --main a --reviewer b t"));
+    }
+
+    #[test]
+    fn ssh_allow_hands_over_unless_yes() {
+        assert!(needs_terminal(
+            "mur agent ssh allow bot --key k --host github.com"
+        ));
+        assert!(needs_terminal("mur agent ssh revoke bot --key k"));
+        assert!(!needs_terminal(
+            "mur agent ssh allow bot --key SHA256:a --host-key SHA256:b --yes"
+        ));
+        assert!(!needs_terminal("mur agent ssh revoke bot --key k --yes"));
+        assert!(!needs_terminal("mur agent ssh list bot"));
     }
 
     #[test]

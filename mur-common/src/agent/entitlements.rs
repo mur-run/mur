@@ -52,10 +52,70 @@ pub struct SshKeyRule {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(from = "SshHostRuleWire")]
 pub struct SshHostRule {
     pub host_key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// The `known_hosts` entries the user confirmed for this host key, one
+    /// per name it was added under (`mur agent ssh allow --host`): an alias
+    /// or another port can present the same key, and each name needs its own
+    /// line. Kept so the CLI can regenerate `<agent home>/ssh/known_hosts` on
+    /// every later allow / revoke. Never read by the runtime and never used
+    /// for matching: `host_key` is the only host identity. Empty for a rule
+    /// added by fingerprint alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_hosts: Vec<SshKnownHost>,
+}
+
+impl SshHostRule {
+    /// Add `kh` unless an identical entry is already confirmed. Returns
+    /// whether it was added.
+    pub fn confirm_known_host(&mut self, kh: SshKnownHost) -> bool {
+        if self.known_hosts.contains(&kh) {
+            return false;
+        }
+        self.known_hosts.push(kh);
+        true
+    }
+}
+
+/// On-disk shape of [`SshHostRule`]. Also accepts the single `known_host`
+/// field written before `known_hosts` existed, so a profile saved by that
+/// build still parses, still matches its pin (the pin is compared after a
+/// round-trip through this schema) and keeps its entry.
+#[derive(Deserialize)]
+struct SshHostRuleWire {
+    host_key: String,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    known_hosts: Vec<SshKnownHost>,
+    #[serde(default)]
+    known_host: Option<SshKnownHost>,
+}
+
+impl From<SshHostRuleWire> for SshHostRule {
+    fn from(w: SshHostRuleWire) -> Self {
+        let mut rule = SshHostRule {
+            host_key: w.host_key,
+            label: w.label,
+            known_hosts: w.known_hosts,
+        };
+        if let Some(kh) = w.known_host {
+            rule.confirm_known_host(kh);
+        }
+        rule
+    }
+}
+
+/// One confirmed `known_hosts` line: `<host> <key_type> <key_base64>`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SshKnownHost {
+    /// As written in `known_hosts`: `name`, or `[name]:port` off port 22.
+    pub host: String,
+    pub key_type: String,
+    pub key_base64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

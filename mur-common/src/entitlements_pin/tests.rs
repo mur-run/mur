@@ -171,3 +171,29 @@ fn empty_ssh_block_is_not_serialized_so_existing_pins_still_match() {
         "empty ssh must not appear in pin JSON"
     );
 }
+
+/// A pin written by the build that stored one `known_host` per host rule must
+/// still match the same profile once `known_hosts` replaces it: both sides
+/// round-trip through the current schema, so the agent keeps starting.
+#[test]
+fn a_pin_with_the_old_single_known_host_still_matches() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = serde_yaml_ng::to_string(&AgentProfile::default_for_tests()).unwrap();
+    let mut v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&base).unwrap();
+    v["entitlements"]["ssh"] = serde_yaml_ng::from_str(
+        "keys:\n  - fingerprint: \"SHA256:k\"\n    allow_hosts:\n      - host_key: \"SHA256:h\"\n        known_host:\n          host: github.com\n          key_type: ssh-ed25519\n          key_base64: AAAA\n",
+    )
+    .unwrap();
+    let old_yaml = serde_yaml_ng::to_string(&v).unwrap();
+    // The pin file as the old build wrote it: its JSON carries `known_host`.
+    let mut pin_json = serde_json::to_value(ent()).unwrap();
+    pin_json["ssh"] = serde_json::to_value(&v["entitlements"]["ssh"]).unwrap();
+    let path = pin_path(tmp.path(), "a");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let body = serde_json::json!({ "version": PIN_VERSION, "entitlements": pin_json });
+    std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
+
+    let profile = entitlements_from_yaml(&old_yaml, Path::new("profile.yaml")).unwrap();
+    assert_eq!(profile.ssh.keys[0].allow_hosts[0].known_hosts.len(), 1);
+    assert_eq!(check(tmp.path(), "a", &profile).unwrap(), PinCheck::Match);
+}

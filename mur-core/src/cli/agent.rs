@@ -297,6 +297,11 @@ pub enum AgentAction {
         #[command(subcommand)]
         action: AgentPermAction,
     },
+    /// Which ssh keys the agent may sign with, per host (allow/revoke/list)
+    Ssh {
+        #[command(subcommand)]
+        action: super::agent_ssh::AgentSshAction,
+    },
     /// Export an agent to a portable `.muragent` (default, signed v2) or a
     /// legacy `.murpkg`. Recipients open it with the MUR Hub app or run it
     /// headless via `mur-agent-runtime --load <file>.muragent`.
