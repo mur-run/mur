@@ -499,17 +499,78 @@ Qwen3.5-4B-MLX-4bit) return empty turns on these jobs — no tool calls, no
 text — even when every command is supplied verbatim. Assign repo-manager
 roles a cloud or ≥14B local model, or route their jobs through a supervisor.
 
-**SSH remotes need an explicit spawn grant.** `git push` over an SSH remote
-execs `ssh`, which is not in the typical repo-manager spawn allowlist
-(`gh`, `git`, `glab`, `tea`, `bb`, `acli`, `curl`) — the push dies at the
-kernel-level exec check, not in git. Either:
+**SSH remotes go through the ssh-agent proxy.** `git push` over an SSH
+remote execs `ssh`, which is not in the typical repo-manager spawn allowlist
+(`gh`, `git`, `glab`, `tea`, `bb`, `acli`, `curl`). For git, HTTPS is still
+the simpler choice:
+`gh auth setup-git` makes `git` use gh's HTTPS credential helper and avoids
+`ssh` entirely. When the agent does need SSH, grant it one key for one host:
 
-- grant it: `mur agent perm allow-spawn <agent> ssh`, or
-- stay on HTTPS: `gh auth setup-git` so `git` uses gh's HTTPS credential
-  helper, avoiding `ssh` entirely (preferred for sandboxed agents).
+```bash
+mur agent ssh allow <agent> --key SHA256:<key-fp> --host github.com
+mur agent ssh list <agent> [--json]
+mur agent ssh revoke <agent> --key SHA256:<key-fp> --host-key SHA256:<host-fp>
+```
 
-A repo-manager profile should choose one of these deliberately; the default
-allowlist plus an SSH remote is a silent-failure combination.
+- `allow` is the only writer of `entitlements.ssh`. `profile.yaml`, the
+  entitlement pin and `<agent home>/ssh/known_hosts` change together or not
+  at all, so a hand edit trips the pin and the supervisor refuses to start.
+- `--key` takes a fingerprint from `ssh-add -l`, or a key comment that is
+  looked up in your ssh-agent and confirmed (the comment is not stored).
+- `--host H` scans the host key once, shows it for confirmation, and writes a
+  pinned `known_hosts` entry for the agent's ssh. It needs a terminal.
+  `--host-key <fp>` alone records the grant but writes no `known_hosts`
+  entry, so ssh fails host key checking for that host; add `--host` to write
+  one (the scanned key must match `<fp>`).
+- `--yes` is for scripts and requires `--key` and `--host-key` as
+  fingerprints. It never scans and never adds the spawn grant, and
+  `--host` together with `--yes` is rejected. From murmur, `allow --yes`
+  runs piped instead of through the terminal handover (`PIPED_OPT_OUTS`).
+- `revoke` with both `--key` and `--host-key` removes one pair; either one
+  alone removes every pair it names, after a confirmation (`--yes` skips it).
+- `--label` / `--host-label` are display only. The proxy matches fingerprints
+  and nothing else.
+- When the `ssh` spawn grant is missing, `allow` offers to add it (the
+  equivalent of `mur agent perm allow-spawn <agent> ssh`). Declining, or a run
+  without a terminal, prints that command instead.
+- Restart a running agent for the change to take effect.
+
+At start the supervisor connects to the upstream ssh-agent before the seal,
+then serves `<agent home>/ssh-agent.sock` to the agent. Each sign request is
+checked against the key, the host key the client verified with
+`session-bind`, and that bind's session ID, and then goes through HITL.
+Every error refuses the signature; there is no passthrough. The ssh client
+only sees `SSH_AGENT_FAILURE`, so the reason goes to the agent's channel and
+under `ssh_proxy refusals` in `mur agent status`.
+
+`mur agent status` also shows whether the proxy is a boundary for this agent:
+`ssh_proxy: boundary`, `ssh_proxy: audit-only (<reason>)`, or
+`ssh_proxy: off (<reason>)`. Audit-only means the agent can reach your
+ssh-agent socket directly, so the key and host filter and HITL still apply
+to `SSH_AUTH_SOCK` as given but do not stop an agent that dials the upstream.
+There is no setting to silence it.
+
+Known limitations (v1):
+
+- Keys stay in your existing ssh-agent. Key filtering is only as strong as
+  that socket's unreachability from the sandbox.
+- Unrestricted-network agents: audit-only (`unrestricted_network`).
+- Linux: audit-only (`platform_no_unix_socket_control`).
+- Windows: the proxy does not start, and is never a boundary.
+- Detection covers only the upstream socket the proxy uses. Pointing
+  `SSH_AUTH_SOCK` elsewhere after start is not re-checked.
+- Destination-constrained keys (`ssh-add -h`) cannot sign through the proxy.
+  They still appear in `ssh-add -l`, so the failure shows at sign time.
+- SSHSIG (`ssh-keygen -Y sign`, git commit signing with an agent-held key) is
+  refused with `sign_data_not_userauth`.
+- Agent forwarding (`ssh -A`) is refused with `forwarding_not_supported`.
+- ProxyJump works, but every hop's host key must be allowed for that key.
+- Only `ssh` run from bash and git (via `GIT_SSH_COMMAND`) get the pinned
+  `known_hosts`. An absolute-path `ssh` or a tool with its own SSH client
+  fails host key checking unless it disables it; the proxy's bind check still
+  decides.
+- A rotated server host key breaks connections until you run
+  `mur agent ssh allow --host` again.
 
 **Brokered push (`mur-git-broker`).** `mur-git-broker` is a Unix-only crate
 (empty library on Windows) holding the broker logic;
