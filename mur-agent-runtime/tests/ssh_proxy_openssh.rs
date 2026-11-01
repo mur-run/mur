@@ -236,7 +236,7 @@ impl Rig {
                     .map(|host_key| SshHostRule {
                         host_key,
                         label: None,
-                        known_host: None,
+                        known_hosts: Vec::new(),
                     })
                     .collect(),
             }],

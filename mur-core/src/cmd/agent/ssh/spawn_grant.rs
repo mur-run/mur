@@ -92,6 +92,8 @@ pub fn offer(agent: &str, yes: bool) -> Result<Offer> {
         attended,
         &mut std::io::stdin().lock(),
         &mut std::io::stderr(),
-        || grant_spawn(agent, SSH_SPAWN_BINARY),
+        // Locked like every ssh write: this is a load/save of the same
+        // profile, and racing a revoke it would restore the revoked grant.
+        || super::commit::with_lock(agent, || grant_spawn(agent, SSH_SPAWN_BINARY)),
     )
 }

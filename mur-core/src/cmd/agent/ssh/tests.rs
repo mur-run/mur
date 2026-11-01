@@ -11,11 +11,11 @@ use super::edit::{Grant, HostGrant, RevokeScope};
 use super::spawn_grant::{Offer, decide};
 use super::*;
 
-fn fp(c: char) -> String {
+pub(super) fn fp(c: char) -> String {
     format!("SHA256:{}", c.to_string().repeat(43))
 }
 
-fn write_agent(home: &Path, name: &str) -> AgentProfile {
+pub(super) fn write_agent(home: &Path, name: &str) -> AgentProfile {
     let dir = home.join("agents").join(name);
     fs::create_dir_all(&dir).unwrap();
     let p = AgentProfile::default_for_tests();
@@ -28,12 +28,12 @@ fn write_agent(home: &Path, name: &str) -> AgentProfile {
     p
 }
 
-fn on_disk(home: &Path, name: &str) -> AgentProfile {
+pub(super) fn on_disk(home: &Path, name: &str) -> AgentProfile {
     let y = fs::read_to_string(home.join("agents").join(name).join("profile.yaml")).unwrap();
     serde_yaml_ng::from_str(&y).unwrap()
 }
 
-fn named_grant(key: char, host: char, name: &str) -> Grant {
+pub(super) fn named_grant(key: char, host: char, name: &str) -> Grant {
     Grant {
         key_fp: fp(key),
         key_label: None,

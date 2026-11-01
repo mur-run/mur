@@ -46,9 +46,11 @@ pub fn render(agent: &str, ssh: &SshEntitlement) -> String {
             out.push_str("    (no hosts — signs for nothing)\n");
         }
         for h in &k.allow_hosts {
-            let kh = match &h.known_host {
-                Some(kh) => format!("known_hosts: {}", kh.host),
-                None => "no known_hosts entry".to_string(),
+            let kh = if h.known_hosts.is_empty() {
+                "no known_hosts entry".to_string()
+            } else {
+                let names: Vec<&str> = h.known_hosts.iter().map(|k| k.host.as_str()).collect();
+                format!("known_hosts: {}", names.join(", "))
             };
             out.push_str(&format!(
                 "    host {}{}  [{kh}]\n",

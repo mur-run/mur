@@ -146,3 +146,64 @@ fn revoking_the_last_host_leaves_known_hosts_empty() {
     .unwrap();
     assert_eq!(render_known_hosts(&e), "");
 }
+
+/// Review #2253 P2: the same host key under a second name (an alias, or
+/// another port) must keep the first name, or connections that worked fail
+/// strict host key checking once `known_hosts` is regenerated.
+#[test]
+fn a_second_name_for_one_host_key_keeps_the_first() {
+    let mut e = SshEntitlement::default();
+    allow(&mut e, &grant('A', Some(('H', Some("server.example")))));
+    assert_eq!(
+        allow(
+            &mut e,
+            &grant('A', Some(('H', Some("[server.example]:2222"))))
+        ),
+        AllowOutcome::Added,
+        "a new name is a change, not a label refresh"
+    );
+    let rule = &e.keys[0].allow_hosts[0];
+    assert_eq!(e.keys[0].allow_hosts.len(), 1, "still one host-key rule");
+    let names: Vec<&str> = rule.known_hosts.iter().map(|k| k.host.as_str()).collect();
+    assert_eq!(names, ["server.example", "[server.example]:2222"]);
+
+    let out = render_known_hosts(&e);
+    assert!(
+        out.contains("server.example ssh-ed25519 B64server.example\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("[server.example]:2222 ssh-ed25519 B64[server.example]:2222\n"),
+        "{out}"
+    );
+
+    // Re-allowing a name already there changes nothing.
+    assert_eq!(
+        allow(&mut e, &grant('A', Some(('H', Some("server.example"))))),
+        AllowOutcome::Updated
+    );
+    assert_eq!(e.keys[0].allow_hosts[0].known_hosts.len(), 2);
+}
+
+#[test]
+fn one_name_under_two_keys_renders_once() {
+    let mut e = SshEntitlement::default();
+    allow(&mut e, &grant('A', Some(('H', Some("gh")))));
+    allow(&mut e, &grant('B', Some(('H', Some("gh")))));
+    assert_eq!(render_known_hosts(&e).matches("gh ssh-ed25519").count(), 1);
+}
+
+/// A profile written before `known_hosts` existed carries one `known_host`.
+/// It must still parse and keep its entry.
+#[test]
+fn the_old_single_known_host_field_still_loads() {
+    let yaml = "host_key: SHA256:x\nknown_host:\n  host: github.com\n  key_type: ssh-ed25519\n  key_base64: AAAA\n";
+    let r: SshHostRule = serde_yaml_ng::from_str(yaml).unwrap();
+    assert_eq!(r.known_hosts.len(), 1);
+    assert_eq!(r.known_hosts[0].host, "github.com");
+    let back = serde_yaml_ng::to_string(&r).unwrap();
+    assert!(
+        back.contains("known_hosts:") && !back.contains("known_host:\n"),
+        "{back}"
+    );
+}

@@ -9,6 +9,7 @@ mod commit;
 mod edit;
 mod resolve;
 mod spawn_grant;
+mod stage;
 mod view;
 
 use std::io::Write;
@@ -308,3 +309,7 @@ pub fn cmd_ssh_revoke(a: &RevokeArgs) -> Result<()> {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "commit_tests.rs"]
+mod commit_tests;
