@@ -148,6 +148,19 @@ jobs:
         os: [ubuntu-latest, macos-15, windows-latest]
     steps:
       - uses: actions/checkout@v6
+      - name: Free disk space (Linux)
+        # A cold-cache build of the full workspace fills the ubuntu runner's
+        # root volume at link time ("No space left on device", ld Bus error;
+        # PR #2245 run 41230451008 attempt 1 had 88 MB left). Drop preinstalled
+        # SDKs this job never uses. Inline rather than a third-party action so
+        # nothing new runs with the job's token.
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          sudo docker image prune --all --force > /dev/null || true
+          df -h /
       - uses: dtolnay/rust-toolchain@stable
       - name: Expose runner image for cache key
         # ImageOS/ImageVersion are runner env vars, not part of the `env`
