@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::io::Cursor;
+use std::rc::Rc;
 
 use mur_common::agent::{McpNetMode, McpServerEntry, McpServerNetwork};
 
@@ -48,10 +50,16 @@ struct Fake {
     saves: Vec<Vec<McpServerEntry>>,
     bound: Vec<(String, Option<String>, String)>,
     fail_record: bool,
+    /// What another writer puts on disk while the confirmation is open; the
+    /// next `servers()` read sees it.
+    concurrent: Rc<RefCell<Option<Vec<McpServerEntry>>>>,
 }
 
 impl LiveOps for Fake {
     fn servers(&mut self) -> Result<Vec<McpServerEntry>> {
+        if let Some(newer) = self.concurrent.borrow_mut().take() {
+            self.servers = newer;
+        }
         Ok(self.servers.clone())
     }
     fn mcp_add(&mut self, _: &[String], _: McpServerNetwork) -> Result<String> {
@@ -61,6 +69,16 @@ impl LiveOps for Fake {
         self.saves.push(servers.clone());
         self.servers = servers;
         Ok((self.repairs.clone(), Effect::NextTurn))
+    }
+    fn save_if_unchanged(
+        &mut self,
+        expected: &[McpServerEntry],
+        servers: Vec<McpServerEntry>,
+    ) -> Result<Option<(Vec<String>, Effect)>> {
+        if self.servers()? != expected {
+            return Ok(None);
+        }
+        self.save(servers).map(Some)
     }
     fn pending_repairs(&mut self, _: &[McpServerEntry]) -> Result<Vec<String>> {
         Ok(self.repairs.clone())
@@ -464,4 +482,81 @@ fn resolve_agent_rejects_ambiguous_case_variants() {
         .to_string();
     assert!(e.contains("ambiguous"), "{e}");
     assert!(e.contains("Reviewer") && e.contains("reviewer"), "{e}");
+}
+
+/// Answers the confirmation, but first lets "another terminal" write `newer`
+/// to disk — the window the user spends reading the prompt.
+struct EditWhileConfirming {
+    answer: Cursor<Vec<u8>>,
+    disk: Rc<RefCell<Option<Vec<McpServerEntry>>>>,
+    newer: Option<Vec<McpServerEntry>>,
+}
+
+impl std::io::Read for EditWhileConfirming {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.answer.read(buf)
+    }
+}
+
+impl BufRead for EditWhileConfirming {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        if let Some(newer) = self.newer.take() {
+            *self.disk.borrow_mut() = Some(newer);
+        }
+        self.answer.fill_buf()
+    }
+    fn consume(&mut self, n: usize) {
+        self.answer.consume(n)
+    }
+}
+
+fn confirm_while_edited(f: &mut Fake, newer: Vec<McpServerEntry>) -> (Outcome, String) {
+    let mut input = EditWhileConfirming {
+        answer: Cursor::new(b"y\n".to_vec()),
+        disk: f.concurrent.clone(),
+        newer: Some(newer),
+    };
+    let mut out = Vec::new();
+    let outcome = bind_agent("mur", "x", &d(&["a.x.com"]), f, Some(&mut input), &mut out).unwrap();
+    (outcome, String::from_utf8(out).unwrap())
+}
+
+#[test]
+fn a_host_removed_during_confirmation_is_not_restored() {
+    let mut f = Fake {
+        servers: vec![restricted(&["*.x.com", "gitea.example"], None)],
+        ..Default::default()
+    };
+    let narrowed = vec![restricted(&["gitea.example"], None)];
+    let (outcome, out) = confirm_while_edited(&mut f, narrowed.clone());
+    assert_eq!(outcome, Outcome::Refused, "{out}");
+    assert!(f.saves.is_empty(), "the stale snapshot was written");
+    assert_eq!(f.servers, narrowed, "the newer policy survives");
+    assert!(f.bound.is_empty());
+    assert!(out.contains("changed while this was waiting"), "{out}");
+}
+
+#[test]
+fn an_entry_deleted_during_confirmation_is_not_recreated() {
+    let mut f = Fake {
+        servers: vec![restricted(&["*.x.com"], None)],
+        ..Default::default()
+    };
+    let (outcome, _) = confirm_while_edited(&mut f, Vec::new());
+    assert_eq!(outcome, Outcome::Refused);
+    assert!(f.saves.is_empty() && f.servers.is_empty());
+}
+
+#[test]
+fn another_mcp_entry_added_during_confirmation_is_not_lost() {
+    let mut f = Fake {
+        servers: vec![restricted(&["*.x.com"], None)],
+        ..Default::default()
+    };
+    let git: McpServerEntry =
+        serde_json::from_value(serde_json::json!({ "name": "git", "command": "mcp-git" })).unwrap();
+    let newer = vec![restricted(&["*.x.com"], None), git];
+    let (outcome, _) = confirm_while_edited(&mut f, newer.clone());
+    assert_eq!(outcome, Outcome::Refused);
+    assert_eq!(f.servers, newer);
 }

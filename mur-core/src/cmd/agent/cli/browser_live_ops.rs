@@ -59,17 +59,16 @@ impl LiveOps for ProfileOps<'_> {
         )
     }
     fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<(Vec<String>, Effect)> {
-        let fs = self.prepared_fs()?;
-        let (path, mut profile) = crate::cmd::agent::load_profile_for_edit(self.0)?;
-        let before = profile.clone();
-        let (servers_changed, notes) = apply_repairs(&mut profile, servers, &fs)?;
-        // Nothing to persist: skip the write so `updated_at` stays put and the
-        // caller can tell "no change" from "saved".
-        if servers_changed || !notes.is_empty() {
-            crate::cmd::agent::save_profile(&path, &mut profile)?;
-        }
-        // Classified like the running agent will: by the reload diff.
-        Ok((notes, Effect::of_write(&before, &profile)))
+        Ok(self
+            .locked_save(None, servers)?
+            .expect("an unconditional save is never stale"))
+    }
+    fn save_if_unchanged(
+        &mut self,
+        expected: &[McpServerEntry],
+        servers: Vec<McpServerEntry>,
+    ) -> anyhow::Result<Option<(Vec<String>, Effect)>> {
+        self.locked_save(Some(expected), servers)
     }
     fn pending_repairs(&mut self, servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>> {
         // Same computation as `save`, on a copy that is never written. No
@@ -124,6 +123,32 @@ fn apply_repairs(
 }
 
 impl ProfileOps<'_> {
+    /// Load, optionally compare, repair, and write `profile.yaml` while
+    /// holding [`PROFILE_LOCK`]. `None` back means `expected` no longer
+    /// matches what is on disk and nothing was written.
+    fn locked_save(
+        &self,
+        expected: Option<&[McpServerEntry]>,
+        servers: Vec<McpServerEntry>,
+    ) -> anyhow::Result<Option<(Vec<String>, Effect)>> {
+        let fs = self.prepared_fs()?;
+        let home = crate::cmd::agent::resolve_mur_home()?;
+        let _lock = lock_profile(&home.join("agents").join(self.0))?;
+        let (path, mut profile) = crate::cmd::agent::load_profile_for_edit(self.0)?;
+        if expected.is_some_and(|e| e != profile.mcp_servers.as_slice()) {
+            return Ok(None);
+        }
+        let before = profile.clone();
+        let (servers_changed, notes) = apply_repairs(&mut profile, servers, &fs)?;
+        // Nothing to persist: skip the write so `updated_at` stays put and the
+        // caller can tell "no change" from "saved".
+        if servers_changed || !notes.is_empty() {
+            crate::cmd::agent::save_profile(&path, &mut profile)?;
+        }
+        // Classified like the running agent will: by the reload diff.
+        Ok(Some((notes, Effect::of_write(&before, &profile))))
+    }
+
     fn record_research_event(&self) -> anyhow::Result<()> {
         let home = crate::cmd::agent::resolve_mur_home()?;
         crate::cmd::agent::mcp_network::record_broad_audited_enabled(
@@ -152,4 +177,26 @@ impl ProfileOps<'_> {
         }
         Ok(fs)
     }
+}
+
+/// Per-agent lock file serializing the browser writers' read-compare-write of
+/// `profile.yaml`. Separate from `running.lock`, whose pid contents mean
+/// "agent is running". Never removed.
+const PROFILE_LOCK: &str = "profile.yaml.lock";
+
+/// Exclusive `flock` on `<agent_dir>/profile.yaml.lock`, held until dropped.
+/// Blocking: holders only span one load-and-write. `fs2` for the reasons in
+/// `cli/login.rs::acquire_login_lock`.
+fn lock_profile(agent_dir: &std::path::Path) -> anyhow::Result<std::fs::File> {
+    use fs2::FileExt;
+    let path = agent_dir.join(PROFILE_LOCK);
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    f.lock_exclusive()
+        .with_context(|| format!("lock {}", path.display()))?;
+    Ok(f)
 }
