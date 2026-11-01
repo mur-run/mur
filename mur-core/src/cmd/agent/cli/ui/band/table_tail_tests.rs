@@ -107,20 +107,20 @@ fn app_tail_is_mid_table(chunk: &str) -> bool {
     chunk.contains('|')
 }
 
-#[test]
-fn every_row_around_a_table_survives_settling() {
+/// Every viewport height, chunk size and pause mode at one width. The matrix
+/// is split per width so nextest runs the widths in parallel: as one test the
+/// 150 cases ran past the 120 s slow-timeout on the Linux and Windows runners.
+fn every_row_survives_at(cols: u16) {
     let mut failures = Vec::new();
-    for cols in [60u16, 79, 80, 100, 127] {
-        for vh in [12u16, 16, 17, 20, 24] {
-            for chunk in [3usize, 7, 40] {
-                for pause in [false, true] {
-                    let out = run(cols, vh, chunk, pause);
-                    let missing: Vec<_> = MARKERS.iter().filter(|m| !out.contains(**m)).collect();
-                    if !missing.is_empty() {
-                        failures.push(format!(
-                            "cols={cols} vh={vh} chunk={chunk} pause={pause}: missing {missing:?}"
-                        ));
-                    }
+    for vh in [12u16, 16, 17, 20, 24] {
+        for chunk in [3usize, 7, 40] {
+            for pause in [false, true] {
+                let out = run(cols, vh, chunk, pause);
+                let missing: Vec<_> = MARKERS.iter().filter(|m| !out.contains(**m)).collect();
+                if !missing.is_empty() {
+                    failures.push(format!(
+                        "cols={cols} vh={vh} chunk={chunk} pause={pause}: missing {missing:?}"
+                    ));
                 }
             }
         }
@@ -131,4 +131,29 @@ fn every_row_around_a_table_survives_settling() {
         failures.len(),
         failures.join("\n")
     );
+}
+
+#[test]
+fn every_row_around_a_table_survives_settling_60_cols() {
+    every_row_survives_at(60);
+}
+
+#[test]
+fn every_row_around_a_table_survives_settling_79_cols() {
+    every_row_survives_at(79);
+}
+
+#[test]
+fn every_row_around_a_table_survives_settling_80_cols() {
+    every_row_survives_at(80);
+}
+
+#[test]
+fn every_row_around_a_table_survives_settling_100_cols() {
+    every_row_survives_at(100);
+}
+
+#[test]
+fn every_row_around_a_table_survives_settling_127_cols() {
+    every_row_survives_at(127);
 }
