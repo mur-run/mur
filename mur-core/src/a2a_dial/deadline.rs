@@ -58,6 +58,18 @@ pub(super) struct Bounded {
     pub(super) deadline: Option<Instant>,
 }
 
+/// Darwin refuses `SO_RCVTIMEO`/`SO_SNDTIMEO` with `EINVAL` once the peer has
+/// hung up. The call that follows cannot block then — it drains what is
+/// buffered, hits EOF, or fails with `EPIPE` — so the timeout has nothing left
+/// to bound. Every `set_*_timeout` on a dialed socket goes through this.
+#[cfg(unix)]
+pub(super) fn tolerate_hung_up(armed: std::io::Result<()>) -> std::io::Result<()> {
+    match armed {
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
+        other => other,
+    }
+}
+
 #[cfg(unix)]
 impl Bounded {
     fn arm(&self, write: bool) -> std::io::Result<()> {
@@ -72,14 +84,7 @@ impl Bounded {
         } else {
             self.stream.set_read_timeout(Some(t))
         };
-        match armed {
-            // Darwin refuses `SO_RCVTIMEO`/`SO_SNDTIMEO` with `EINVAL` once the
-            // peer has hung up. The call that follows cannot block then — it
-            // drains what is buffered, hits EOF, or fails with `EPIPE` — so
-            // the timeout has nothing left to bound.
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
-            other => other,
-        }
+        tolerate_hung_up(armed)
     }
 
     /// Whether the deadline, if any, has passed.
@@ -115,6 +120,17 @@ pub(super) fn passed(agent_name: &str, request: &Value) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hung_up_peer_einval_is_tolerated_but_other_errors_are_not() {
+        use std::io::{Error, ErrorKind};
+        // Darwin's EINVAL from setsockopt(SO_RCVTIMEO) on a hung-up socket.
+        assert!(tolerate_hung_up(Err(Error::from_raw_os_error(libc::EINVAL))).is_ok());
+        assert!(tolerate_hung_up(Ok(())).is_ok());
+        let e = tolerate_hung_up(Err(Error::from(ErrorKind::PermissionDenied))).unwrap_err();
+        assert_eq!(e.kind(), ErrorKind::PermissionDenied);
+    }
 
     #[test]
     fn the_socket_timeout_never_outlasts_the_deadline() {
