@@ -13,6 +13,7 @@ use super::super::restart::stop_timeout_for;
 use super::outcome::Step;
 use super::writer::{self, LockError};
 use super::{Mode, NOTHING_CHANGED, OverrideRequest, Prepared};
+use crate::cmd::init_daemon::service_home::descriptor_home;
 
 /// A refusal before anything is written.
 pub(in crate::cmd::agent) fn refusal(reason: String) -> Step {
@@ -105,40 +106,43 @@ fn live_lock(agent_dir: &Path) -> Option<LockFile> {
 }
 
 /// Check H: the service must read the same home this writer writes to.
+///
+/// The service's home is its *effective* environment (drop-ins, the
+/// manager environment, a running process), not the unit file alone; when
+/// that cannot be proven the override is refused rather than written to a
+/// home the service may never read.
 fn check_home(name: &str, home: &Path, unit: &Path, by: IssuedBy) -> Result<(), Step> {
-    let service_home = service_home(unit);
-    let same = match (&service_home, std::fs::canonicalize(home)) {
-        (Some(s), Ok(h)) => std::fs::canonicalize(s).is_ok_and(|s| s == h),
+    let this = match by {
+        IssuedBy::Cli => "this CLI",
+        IssuedBy::Hub => "this Hub",
+    };
+    let service_home = match descriptor_home(unit) {
+        Ok(h) => h,
+        Err(reason) => {
+            return Err(refusal(format!(
+                "'{name}' is installed as a service, but which MUR home it uses cannot be \
+                 told ({reason}), so {this} cannot know an override written to {} would \
+                 reach it; {NOTHING_CHANGED}",
+                home.display()
+            )));
+        }
+    };
+    let same = match (
+        std::fs::canonicalize(&service_home),
+        std::fs::canonicalize(home),
+    ) {
+        (Ok(s), Ok(h)) => s == h,
         _ => false,
     };
     if same {
         return Ok(());
     }
-    let shown =
-        service_home.map_or_else(|| "an unknown home".to_owned(), |p| p.display().to_string());
-    let this = match by {
-        IssuedBy::Cli => "this CLI",
-        IssuedBy::Hub => "this Hub",
-    };
     Err(refusal(format!(
-        "'{name}' is installed as a service that uses {shown}, but {this} uses {}. \
+        "'{name}' is installed as a service that uses {}, but {this} uses {}. \
          An override written here would never reach it; {NOTHING_CHANGED}",
+        service_home.display(),
         home.display()
     )))
-}
-
-/// `MUR_HOME` from the unit's environment if it sets one, else the default
-/// home a service started by the OS resolves.
-fn service_home(unit: &Path) -> Option<std::path::PathBuf> {
-    let text = std::fs::read_to_string(unit).ok();
-    let baked = text.as_deref().and_then(|t| {
-        if unit.extension().is_some_and(|e| e == "plist") {
-            crate::cmd::init_daemon::launchd_plist_mur_home(t)
-        } else {
-            crate::cmd::init_daemon::systemd_unit_mur_home(t)
-        }
-    });
-    baked.or_else(|| mur_common::home::resolve_from(None, dirs::home_dir().as_deref()))
 }
 
 #[cfg(test)]

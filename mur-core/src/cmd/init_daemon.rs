@@ -4,6 +4,8 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
 mod probe;
+pub(crate) mod service_home;
+use service_home::ServiceHome;
 
 /// launchd label of the murmurd job `install_launchd` registers.
 pub(crate) const LAUNCHD_LABEL: &str = "run.mur.murmurd";
@@ -48,6 +50,14 @@ pub(crate) enum Supervision {
         service: DaemonService,
         service_home: PathBuf,
     },
+    /// A service is registered, but which MUR home it runs cannot be proven
+    /// (`reason` says why). Neither routing through it nor starting a direct
+    /// daemon is safe: one may act on another home's daemon, the other may
+    /// fight the service for this home's lock.
+    Unknown {
+        service: DaemonService,
+        reason: String,
+    },
 }
 
 impl Supervision {
@@ -56,16 +66,13 @@ impl Supervision {
         let Some(caller) = mur_common::home::try_mur_home() else {
             return Self::None;
         };
-        let Some((service, unit_env_home)) = DaemonService::registered() else {
+        let Some((service, home)) = DaemonService::registered() else {
             return Self::None;
         };
-        let Some(service_home) = mur_common::home::resolve_from(
-            unit_env_home.map(Into::into),
-            dirs::home_dir().as_deref(),
-        ) else {
-            return Self::None;
-        };
-        Self::classify(service, service_home, &caller)
+        match service_home::resolve(home) {
+            Ok(service_home) => Self::classify(service, service_home, &caller),
+            Err(reason) => Self::Unknown { service, reason },
+        }
     }
 
     /// Pure ownership rule: the service owns the caller's daemon only when
@@ -85,9 +92,9 @@ impl Supervision {
 
 impl DaemonService {
     /// The service manager that has murmurd registered and live on this
-    /// machine, plus the `MUR_HOME` baked into its unit (`None` = the unit
-    /// sets none, so the daemon uses the default home).
-    fn registered() -> Option<(Self, Option<PathBuf>)> {
+    /// machine, plus the `MUR_HOME` it effectively runs with (see
+    /// [`service_home`] for why that is not just the unit file's value).
+    fn registered() -> Option<(Self, ServiceHome)> {
         #[cfg(target_os = "macos")]
         {
             // The descriptor on disk is the test, NOT "the job is loaded":
@@ -96,30 +103,19 @@ impl DaemonService {
             // unsupervised daemon that the job then crash-loops against at
             // the next login.
             if let Some(plist) = launchd_plist_path()
-                && let Ok(body) = std::fs::read_to_string(&plist)
+                // Bytes, not `read_to_string`: a binary plist (e.g. after
+                // `plutil -convert binary1`) is still a registered job and
+                // must come back as `Unknown`, not as "no service".
+                && let Ok(body) = std::fs::read(&plist)
             {
-                return Some((Self::Launchd, launchd_plist_mur_home(&body)));
+                return Some((Self::Launchd, service_home::launchd_job_home(&body)));
             }
         }
         #[cfg(target_os = "linux")]
         {
-            let out = std::process::Command::new("systemctl")
-                .args([
-                    "--user",
-                    "show",
-                    "--property=LoadState,ActiveState,UnitFileState,FragmentPath",
-                    SYSTEMD_UNIT,
-                ])
-                .stderr(std::process::Stdio::null())
-                .output()
-                .ok()?;
-            let show = String::from_utf8_lossy(&out.stdout);
-            if out.status.success() && systemd_owns_unit(&show) {
-                let unit = show_property(&show, "FragmentPath")
-                    .filter(|p| !p.is_empty())
-                    .and_then(|p| std::fs::read_to_string(p).ok())
-                    .unwrap_or_default();
-                return Some((Self::Systemd, systemd_unit_mur_home(&unit)));
+            let show = service_home::systemctl_show(SYSTEMD_UNIT)?;
+            if systemd_owns_unit(&show) {
+                return Some((Self::Systemd, service_home::systemd_unit_home(&show)));
             }
         }
         None
@@ -259,6 +255,18 @@ fn launchd_domain() -> String {
     format!("gui/{uid}")
 }
 
+/// stdout of a successful `program args…` run (stderr discarded), else `None`.
+fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(program)
+        .args(args)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 /// Value of `key` in `systemctl show` output (`Key=value` lines).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn show_property<'a>(show: &'a str, key: &str) -> Option<&'a str> {
@@ -283,25 +291,6 @@ fn systemd_owns_unit(show: &str) -> bool {
         Some("active" | "activating" | "reloading" | "deactivating")
     );
     enabled || live
-}
-
-/// `MUR_HOME` set by a systemd unit's `Environment=` lines (last wins), with
-/// systemd's double-quote / backslash quoting undone.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub(crate) fn systemd_unit_mur_home(unit: &str) -> Option<PathBuf> {
-    let prefix = format!("{}=", mur_common::home::MUR_HOME_ENV);
-    let mut found = None;
-    for line in unit.lines() {
-        let Some(rest) = line.trim().strip_prefix("Environment=") else {
-            continue;
-        };
-        for word in split_systemd_words(rest) {
-            if let Some(v) = word.strip_prefix(&prefix) {
-                found = (!v.is_empty()).then(|| PathBuf::from(v));
-            }
-        }
-    }
-    found
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]

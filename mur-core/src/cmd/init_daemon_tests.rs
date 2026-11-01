@@ -54,15 +54,15 @@ fn service_home_round_trips_through_installed_units() {
         systemd_env_line(Some(Path::new("/data/my \"mur\"")))
     );
     assert_eq!(
-        systemd_unit_mur_home(&unit),
-        Some(PathBuf::from("/data/my \"mur\""))
+        service_home::systemd_env_mur_home(&unit).as_deref(),
+        Some("/data/my \"mur\"")
     );
     assert_eq!(
-        systemd_unit_mur_home("Environment=FOO=1 MUR_HOME=/x\n"),
-        Some(PathBuf::from("/x"))
+        service_home::systemd_env_mur_home("Environment=FOO=1 MUR_HOME=/x\n").as_deref(),
+        Some("/x")
     );
     assert_eq!(
-        systemd_unit_mur_home("[Service]\nExecStart=/bin/murmurd\n"),
+        service_home::systemd_env_mur_home("[Service]\nExecStart=/bin/murmurd\n"),
         None
     );
 }
@@ -94,9 +94,7 @@ fn service_for_another_mur_home_is_not_routed_through() {
 #[test]
 fn systemd_ownership_is_liveness_or_enablement_not_enablement_alone() {
     let show = |load: &str, active: &str, file: &str| {
-        format!(
-            "LoadState={load}\nActiveState={active}\nUnitFileState={file}\nFragmentPath=/u\n"
-        )
+        format!("LoadState={load}\nActiveState={active}\nUnitFileState={file}\nFragmentPath=/u\n")
     };
     // Disabled while running: Restart=always still respawns it.
     assert!(systemd_owns_unit(&show("loaded", "active", "disabled")));
