@@ -108,7 +108,7 @@ impl DaemonService {
                 // must come back as `Unknown`, not as "no service".
                 && let Ok(body) = std::fs::read(&plist)
             {
-                return Some((Self::Launchd, service_home::launchd_job_home(&body)));
+                return Some((Self::Launchd, service_home::launchd_job_home(&plist, &body)));
             }
         }
         #[cfg(target_os = "linux")]
@@ -236,7 +236,7 @@ fn stop_outcome(err: anyhow::Error, is_loaded: impl FnOnce() -> Result<bool>) ->
 fn launchd_plist_path() -> Option<PathBuf> {
     Some(
         dirs::home_dir()?
-            .join("Library/LaunchAgents")
+            .join(service_home::LAUNCH_AGENTS_DIR)
             .join(format!("{LAUNCHD_LABEL}.plist")),
     )
 }
