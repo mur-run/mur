@@ -27,6 +27,8 @@ mod scrub_tests;
 #[cfg(test)]
 mod settled_md_tests;
 #[cfg(test)]
+mod table_tail_tests;
+#[cfg(test)]
 mod tests;
 
 /// Rows left for the live transcript band inside `viewport_h` once the
