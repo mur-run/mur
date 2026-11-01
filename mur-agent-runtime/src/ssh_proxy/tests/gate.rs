@@ -167,6 +167,7 @@ fn policy_carries_the_host_label_of_the_allowed_pair() {
     let host = |fp: &str, label: Option<&str>| SshHostRule {
         host_key: fp.into(),
         label: label.map(str::to_string),
+        known_host: None,
     };
     let p = Policy::build(
         &SshEntitlement {

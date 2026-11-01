@@ -182,6 +182,7 @@ pub(crate) fn policy_for(key_fp: &str, host_fp: &str) -> Policy {
                 allow_hosts: vec![SshHostRule {
                     host_key: host_fp.into(),
                     label: Some("test-host".into()),
+                    known_host: None,
                 }],
             }],
         },

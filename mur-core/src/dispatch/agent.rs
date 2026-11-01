@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "agent_ssh.rs"]
+mod agent_ssh;
+
 pub(super) async fn run_agent(action: AgentAction) -> Result<()> {
     match action {
         AgentAction::Create {
@@ -580,6 +583,7 @@ pub(super) async fn run_agent(action: AgentAction) -> Result<()> {
             cmd::deps::install::cmd_install_deps(&mur_home, &lines, program.as_deref(), yes)
                 .await?;
         }
+        AgentAction::Ssh { action } => agent_ssh::dispatch(action)?,
         AgentAction::Hitl { agent, action } => match action {
             crate::cli::AgentHitlAction::List { json } => cmd::agent::cmd_hitl_list(&agent, json)?,
             crate::cli::AgentHitlAction::Forget {

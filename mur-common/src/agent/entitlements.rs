@@ -56,6 +56,22 @@ pub struct SshHostRule {
     pub host_key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// The `known_hosts` entry the user confirmed when this host was added by
+    /// name (`mur agent ssh allow --host`), kept so the CLI can regenerate
+    /// `<agent home>/ssh/known_hosts` on every later allow / revoke. Never read
+    /// by the runtime and never used for matching: `host_key` is the only
+    /// host identity. Absent for a rule added by fingerprint alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub known_host: Option<SshKnownHost>,
+}
+
+/// One confirmed `known_hosts` line: `<host> <key_type> <key_base64>`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SshKnownHost {
+    /// As written in `known_hosts`: `name`, or `[name]:port` off port 22.
+    pub host: String,
+    pub key_type: String,
+    pub key_base64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

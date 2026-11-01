@@ -9,6 +9,7 @@ fn one_key() -> SshEntitlement {
             allow_hosts: vec![SshHostRule {
                 host_key: format!("SHA256:{}", "B".repeat(43)),
                 label: None,
+                known_host: None,
             }],
         }],
     }

@@ -92,6 +92,7 @@ pub mod skill_remote;
 pub mod skill_signer_trust;
 pub mod skill_verify;
 mod snapshot;
+mod ssh;
 pub mod stale;
 pub mod stats;
 
@@ -135,6 +136,10 @@ pub use perm::{
     cmd_perm_set_mode, cmd_perm_set_tool, cmd_perm_show, grant_read, grant_spawn, grant_spawn_dir,
 };
 pub(crate) use perm::{reject_ungrantable_path, warn_if_running};
+pub use ssh::{
+    AllowArgs as SshAllowArgs, RevokeArgs as SshRevokeArgs, cmd_ssh_allow, cmd_ssh_list,
+    cmd_ssh_revoke,
+};
 // Only `cli::perm_hint_tests` (bin crate) reads it.
 #[allow(unused_imports)]
 pub(crate) use perm::reseal_summary;
@@ -307,6 +312,13 @@ fn sync_model_block_from_disk(profile: &mut _AgentProfile) {
 }
 
 pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<()> {
+    save_profile_pinned(path, profile).map(|_| ())
+}
+
+/// [`save_profile`], returning whether the entitlement pin now matches what
+/// was written. A caller that must not leave a written-but-unpinned profile
+/// (the agent would refuse to start) rolls back on `false`.
+pub(crate) fn save_profile_pinned(path: &Path, profile: &mut _AgentProfile) -> Result<bool> {
     // Fail-closed guard (#717): a profile save must never *introduce* a skill
     // ref that does not resolve to an installed skill under the agent dir.
     // Only newly-added refs (relative to the profile currently on disk) are
@@ -337,7 +349,7 @@ pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<(
     profile.updated_at = chrono::Utc::now().to_rfc3339();
     let yaml = serde_yaml_ng::to_string(profile).context("serialize profile.yaml")?;
     write_atomic(path, yaml.as_bytes())?;
-    let _ = crate::store::entitlements_pin::advance_entitlements_pin(
+    let pinned = crate::store::entitlements_pin::advance_entitlements_pin(
         path,
         prior_ents.as_ref(),
         &profile.entitlements,
@@ -366,7 +378,7 @@ pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<(
         }
     }
 
-    Ok(())
+    Ok(pinned)
 }
 
 /// Used by stop/remove/rename to refuse mutation when the supervisor is alive.
