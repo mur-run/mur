@@ -32,6 +32,42 @@ pub(crate) enum ServiceHome {
     Unknown(String),
 }
 
+/// A service's `MUR_HOME` per lifecycle step. Stopping acts on the instance
+/// running now; starting or restarting brings up whatever the service
+/// manager would launch next. The two can differ, so each step gets its own
+/// answer instead of one verdict that is wrong for one of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ServiceHomes {
+    /// Home of the running instance; `None` when nothing is running.
+    pub(crate) running: Option<ServiceHome>,
+    /// Home the service manager's next start would get.
+    pub(crate) next_start: ServiceHome,
+}
+
+impl ServiceHomes {
+    fn both(reason: String) -> Self {
+        Self {
+            running: Some(ServiceHome::Unknown(reason.clone())),
+            next_start: ServiceHome::Unknown(reason),
+        }
+    }
+
+    /// Home a stop acts on: the running instance, else (nothing running)
+    /// the one a start would bring up.
+    pub(crate) fn for_stop(self) -> ServiceHome {
+        self.running.unwrap_or(self.next_start)
+    }
+
+    /// Home a start or restart authorizes: a running instance and the next
+    /// start must agree, since a restart replaces the one with the other.
+    pub(crate) fn for_start(self) -> ServiceHome {
+        match self.running {
+            None => self.next_start,
+            Some(live) => agree(live, self.next_start),
+        }
+    }
+}
+
 /// The data root a service with home `home` uses: its `MUR_HOME`, else the
 /// default home. `Err` carries the reason ownership cannot be proven.
 pub(crate) fn resolve(home: ServiceHome) -> Result<PathBuf, String> {
@@ -48,12 +84,13 @@ pub(crate) fn resolve(home: ServiceHome) -> Result<PathBuf, String> {
     }
 }
 
-/// The data root of the service whose descriptor is `unit` (a launchd plist
-/// or a systemd user unit file), as [`resolve`] answers it.
+/// The data root the service whose descriptor is `unit` (a launchd plist or
+/// a systemd user unit file) serves after its next (re)start, as [`resolve`]
+/// answers it.
 pub(crate) fn descriptor_home(unit: &Path) -> Result<PathBuf, String> {
     if unit.extension().is_some_and(|e| e == "plist") {
         return match std::fs::read(unit) {
-            Ok(body) => resolve(launchd_job_home(unit, &body)),
+            Ok(body) => resolve(launchd_job_home(unit, &body).for_start()),
             Err(e) => Err(format!("cannot read {}: {e}", unit.display())),
         };
     }
@@ -61,7 +98,7 @@ pub(crate) fn descriptor_home(unit: &Path) -> Result<PathBuf, String> {
         return Err(format!("{} names no systemd unit", unit.display()));
     };
     match systemctl_show(name) {
-        Some(show) => resolve(systemd_unit_home(&show)),
+        Some(show) => resolve(systemd_unit_home(&show).for_start()),
         None => Err(format!("cannot query systemd for {name}")),
     }
 }
@@ -75,7 +112,7 @@ pub(crate) fn systemctl_show(unit: &str) -> Option<String> {
 }
 
 /// [`systemd_service_home`] wired to `/proc` and the user manager.
-pub(crate) fn systemd_unit_home(show: &str) -> ServiceHome {
+pub(crate) fn systemd_unit_home(show: &str) -> ServiceHomes {
     systemd_service_home(
         show,
         |pid| std::fs::read(format!("/proc/{pid}/environ")).ok(),
@@ -86,23 +123,23 @@ pub(crate) fn systemd_unit_home(show: &str) -> ServiceHome {
 /// [`launchd_service_home`] for the plist at `path` (raw bytes `plist`),
 /// wired to `launchctl print` / the job's process and `launchctl getenv`.
 /// The job label is the plist's file stem, the naming `mur` installs with.
-pub(crate) fn launchd_job_home(path: &Path, plist: &[u8]) -> ServiceHome {
+pub(crate) fn launchd_job_home(path: &Path, plist: &[u8]) -> ServiceHomes {
     let label = path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or_default();
     launchd_service_home(
         &String::from_utf8_lossy(plist),
-        || launchd_job_pid(label),
+        launchd_job_print(label),
         process_environ,
         || command_stdout("launchctl", &["getenv", MUR_HOME_ENV]),
     )
 }
 
-/// Pid of the running launchd job `label` in the user's GUI domain:
-/// `Ok(None)` when it is not loaded or loaded but not running, `Err` when
-/// launchd could not tell. Off macOS there is no launchd, so never running.
-fn launchd_job_pid(label: &str) -> Result<Option<u32>, String> {
+/// `launchctl print` of the loaded launchd job `label` in the user's GUI
+/// domain: `Ok(None)` when launchd has no such job loaded, `Err` when it
+/// could not tell. Off macOS there is no launchd, so never loaded.
+fn launchd_job_print(label: &str) -> Result<Option<String>, String> {
     #[cfg(target_os = "macos")]
     {
         let target = format!("{}/{label}", super::launchd_domain());
@@ -112,10 +149,10 @@ fn launchd_job_pid(label: &str) -> Result<Option<u32>, String> {
             .output()
             .map_err(|e| format!("could not run `launchctl print {target}`: {e}"))?;
         match out.status.code() {
-            Some(0) => Ok(launchctl_print_pid(&String::from_utf8_lossy(&out.stdout))),
+            Some(0) => Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned())),
             Some(super::probe::LAUNCHCTL_NO_SUCH_SERVICE) => Ok(None),
             _ => Err(format!(
-                "`launchctl print {target}` could not tell whether the job is running"
+                "`launchctl print {target}` could not tell whether the job is loaded"
             )),
         }
     }
@@ -128,9 +165,6 @@ fn launchd_job_pid(label: &str) -> Result<Option<u32>, String> {
 
 /// The job's own `pid = N` line from `launchctl print` output. Only the
 /// top-level (single-tab) line counts; nested blocks can carry their own.
-/// Pure text parsing, so it stays compiled (and unit-tested) everywhere;
-/// only the live-job branch of the pid lookup above calls it.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn launchctl_print_pid(print: &str) -> Option<u32> {
     print.lines().find_map(|l| {
         let l = l.strip_prefix('\t').filter(|l| !l.starts_with('\t'))?;
@@ -159,35 +193,33 @@ fn known(v: &str) -> ServiceHome {
 }
 
 /// Effective `MUR_HOME` of the systemd unit described by `systemctl show
-/// --property=MainPID,Environment,EnvironmentFiles,UnsetEnvironment`.
+/// --property=MainPID,Environment,EnvironmentFiles,UnsetEnvironment`, per
+/// lifecycle step (see [`ServiceHomes`]).
 ///
-/// The answer is used to authorize a (re)start, so it must hold both for
-/// the instance running now and for the one systemd would start next.
 /// The next start reads the loaded unit's merged `Environment=` (fragment
 /// plus reloaded drop-ins), else the manager environment (`manager_env`,
-/// the `systemctl --user show-environment` text). A running unit is also
-/// read from its process environment (`read_environ` gets the main pid),
-/// and the two must agree: a drop-in reloaded but not yet applied, or a
-/// changed manager environment, would make a restart serve another home.
+/// the `systemctl --user show-environment` text). A running unit is read
+/// from its process environment (`read_environ` gets the main pid): a
+/// drop-in reloaded but not yet applied, or a changed manager environment,
+/// makes the two differ.
 pub(crate) fn systemd_service_home(
     show: &str,
     read_environ: impl FnOnce(u32) -> Option<Vec<u8>>,
     manager_env: impl FnOnce() -> Option<String>,
-) -> ServiceHome {
+) -> ServiceHomes {
     let pid = show_property(show, "MainPID")
         .and_then(|p| p.parse::<u32>().ok())
         .unwrap_or(0);
-    let next = systemd_next_start_home(show, manager_env);
-    if pid == 0 {
-        return next;
-    }
-    let live = match read_environ(pid) {
+    let running = (pid != 0).then(|| match read_environ(pid) {
         Some(env) => environ_mur_home(&env),
         None => ServiceHome::Unknown(format!(
             "cannot read the environment of the running murmurd (pid {pid})"
         )),
-    };
-    agree(live, next)
+    });
+    ServiceHomes {
+        running,
+        next_start: systemd_next_start_home(show, manager_env),
+    }
 }
 
 /// `MUR_HOME` the next start of the unit in `show` would receive.
@@ -265,43 +297,59 @@ fn manager_env_mur_home(env: &str) -> ServiceHome {
     }
 }
 
-/// Effective `MUR_HOME` of the launchd job whose plist is `plist`.
+/// Effective `MUR_HOME` of the launchd job whose plist is `plist`, per
+/// lifecycle step (see [`ServiceHomes`]).
 ///
-/// As on systemd, the answer must hold for the running instance and for
-/// the next start. The next start reads the plist's `EnvironmentVariables`,
-/// else launchd's user-domain environment (`launchctl setenv`, read through
-/// `domain_env`), which jobs inherit. A running job (`job_pid`) is also read
-/// from its process environment (`read_environ`), and the two must agree: a
-/// plist edited, or a `launchctl setenv` issued, after the job started would
-/// make a restart serve another home.
+/// `print` is `launchctl print` of the job (`Ok(None)`: not loaded). A
+/// loaded job is restarted (`kickstart -k`) from its LOADED definition:
+/// launchd reads the plist only at `bootstrap`, so an edited plist changes
+/// nothing until the job is booted out and bootstrapped again. Its next
+/// start therefore reads the `environment` block `print` shows, and only an
+/// unloaded job (whose start falls back to `bootstrap`) reads the plist on
+/// disk. Either way a job that does not set `MUR_HOME` inherits launchd's
+/// user-domain environment (`launchctl setenv`, read through `domain_env`).
+/// A running job is read from its process environment (`read_environ`).
 pub(crate) fn launchd_service_home(
     plist: &str,
-    job_pid: impl FnOnce() -> Result<Option<u32>, String>,
+    print: Result<Option<String>, String>,
     read_environ: impl FnOnce(u32) -> Option<Vec<String>>,
     domain_env: impl FnOnce() -> Option<String>,
-) -> ServiceHome {
-    let pid = match job_pid() {
-        Err(reason) => return ServiceHome::Unknown(reason),
-        Ok(pid) => pid,
+) -> ServiceHomes {
+    let print = match print {
+        Err(reason) => return ServiceHomes::both(reason),
+        Ok(print) => print,
     };
-    let next = launchd_next_start_home(plist, domain_env);
-    let Some(pid) = pid else {
-        return next;
+    let Some(print) = print else {
+        return ServiceHomes {
+            running: None,
+            next_start: launchd_bootstrap_home(plist, domain_env),
+        };
     };
-    let live = match read_environ(pid) {
+    let running = launchctl_print_pid(&print).map(|pid| match read_environ(pid) {
         Some(env) => environ_strings_mur_home(&env),
         None => ServiceHome::Unknown(format!(
             "cannot read the environment of the running service (pid {pid})"
         )),
+    });
+    let next_start = match launchctl_print_environment(&print) {
+        None => ServiceHome::Unknown(
+            "`launchctl print` shows no environment for the loaded job, so what its \
+             next start gets cannot be read"
+                .into(),
+        ),
+        Some(env) => match env.into_iter().find(|(k, _)| k == MUR_HOME_ENV) {
+            Some((_, v)) => known(&v),
+            None => launchd_domain_home(domain_env),
+        },
     };
-    agree(live, next)
+    ServiceHomes {
+        running,
+        next_start,
+    }
 }
 
-/// `MUR_HOME` the next start of the launchd job `plist` would receive.
-fn launchd_next_start_home(
-    plist: &str,
-    domain_env: impl FnOnce() -> Option<String>,
-) -> ServiceHome {
+/// `MUR_HOME` a `bootstrap` of the plist `plist` would give the job.
+fn launchd_bootstrap_home(plist: &str, domain_env: impl FnOnce() -> Option<String>) -> ServiceHome {
     if !plist.contains("<plist") {
         return ServiceHome::Unknown(
             "the launchd plist is not in XML form, so its MUR_HOME cannot be read".into(),
@@ -315,10 +363,34 @@ fn launchd_next_start_home(
             "the launchd plist sets MUR_HOME in a form MUR cannot read".into(),
         );
     }
+    launchd_domain_home(domain_env)
+}
+
+/// `MUR_HOME` from launchd's user-domain environment.
+fn launchd_domain_home(domain_env: impl FnOnce() -> Option<String>) -> ServiceHome {
     match domain_env() {
         Some(v) => known(launchctl_getenv_value(&v)),
         None => ServiceHome::Unknown("cannot read launchd's user-domain environment".into()),
     }
+}
+
+/// The loaded job's own `environment = { KEY => VALUE … }` block from
+/// `launchctl print` (the plist's `EnvironmentVariables` plus what launchd
+/// adds, e.g. `XPC_SERVICE_NAME`). `None` when there is no such block.
+/// `inherited environment` / `default environment` are other blocks.
+fn launchctl_print_environment(print: &str) -> Option<Vec<(String, String)>> {
+    let mut lines = print.lines();
+    lines.find(|l| *l == "\tenvironment = {")?;
+    let mut env = Vec::new();
+    for l in lines {
+        if l == "\t}" {
+            return Some(env);
+        }
+        let entry = l.strip_prefix("\t\t")?;
+        let (k, v) = entry.split_once(" => ")?;
+        env.push((k.to_string(), v.to_string()));
+    }
+    None
 }
 
 /// The value `launchctl getenv` printed. It appends exactly one newline;
@@ -365,225 +437,5 @@ fn environ_strings_mur_home(env: &[String]) -> ServiceHome {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::Path;
-
-    const STOPPED: &str = "MainPID=0\nEnvironmentFiles=\nUnsetEnvironment=\n";
-
-    fn no_proc(_: u32) -> Option<Vec<u8>> {
-        panic!("a stopped unit has no process environment to read")
-    }
-
-    #[test]
-    fn running_unit_is_owned_only_when_live_and_next_start_agree() {
-        let live = |home: &str| format!("HOME=/home/u\0MUR_HOME={home}\0PATH=/bin\0").into_bytes();
-
-        // Live process and the loaded unit agree: that home.
-        let show = "MainPID=42\nEnvironment=MUR_HOME=/data/a\n";
-        let got = systemd_service_home(show, |pid| (pid == 42).then(|| live("/data/a")), || None);
-        assert_eq!(got, ServiceHome::Known(Some("/data/a".into())));
-
-        // Neither sets one (manager environment empty too): the default home.
-        let show = "MainPID=42\nEnvironment=\n";
-        let got = systemd_service_home(
-            show,
-            |_| Some(b"HOME=/h\0".to_vec()),
-            || Some("LANG=C\n".into()),
-        );
-        assert_eq!(got, ServiceHome::Known(None));
-
-        // Regression (review P1): the service runs /data/a, a drop-in moved
-        // it to /data/b and was daemon-reloaded but not applied. A restart
-        // would serve /data/b, so /data/a must not be told it owns it.
-        let show = "MainPID=42\nEnvironment=MUR_HOME=/data/b\n";
-        let got = systemd_service_home(show, |_| Some(live("/data/a")), || None);
-        assert!(
-            matches!(&got, ServiceHome::Unknown(r) if r.contains("/data/b")),
-            "{got:?}"
-        );
-
-        // Same through the manager environment the unit inherits.
-        let show = "MainPID=42\nEnvironment=\n";
-        let got = systemd_service_home(
-            show,
-            |_| Some(live("/data/a")),
-            || Some("MUR_HOME=/data/b\n".into()),
-        );
-        assert!(matches!(got, ServiceHome::Unknown(_)), "{got:?}");
-
-        // Live unreadable, or next start unknowable: never a verdict.
-        let blind = systemd_service_home(show, |_| None, || Some(String::new()));
-        assert!(matches!(blind, ServiceHome::Unknown(_)), "{blind:?}");
-        let show = "MainPID=42\nEnvironmentFiles=/etc/m.env (ignore_errors=no)\n";
-        let got = systemd_service_home(show, |_| Some(live("/data/a")), || None);
-        assert!(matches!(got, ServiceHome::Unknown(_)), "{got:?}");
-    }
-
-    #[test]
-    fn dropin_override_of_mur_home_is_the_effective_home() {
-        // `systemctl show` merges fragment + drop-ins into one property: the
-        // installed default unit sets no MUR_HOME, the drop-in adds it.
-        let show = format!("{STOPPED}Environment=PATH=/usr/bin MUR_HOME=/data/alternate\n");
-        let got = systemd_service_home(&show, no_proc, || Some("MUR_HOME=/manager\n".into()));
-        assert_eq!(got, ServiceHome::Known(Some("/data/alternate".into())));
-
-        // The drop-in's quoted form, as `systemctl show` prints it.
-        let show = format!("{STOPPED}Environment=\"MUR_HOME=/data/my mur\"\n");
-        let got = systemd_service_home(&show, no_proc, || None);
-        assert_eq!(got, ServiceHome::Known(Some("/data/my mur".into())));
-
-        // An empty override still beats the manager environment.
-        let show = format!("{STOPPED}Environment=MUR_HOME=\n");
-        let got = systemd_service_home(&show, no_proc, || Some("MUR_HOME=/m\n".into()));
-        assert_eq!(got, ServiceHome::Known(None));
-    }
-
-    #[test]
-    fn stopped_unit_without_mur_home_inherits_the_manager_environment() {
-        let show = format!("{STOPPED}Environment=PATH=/usr/bin\n");
-        let got = systemd_service_home(&show, no_proc, || Some("MUR_HOME=/env/d\n".into()));
-        assert_eq!(got, ServiceHome::Known(Some("/env/d".into())));
-
-        let got = systemd_service_home(&show, no_proc, || Some("LANG=C\n".into()));
-        assert_eq!(got, ServiceHome::Known(None));
-
-        for unreadable in [None, Some("MUR_HOME=$'/a\\nb'\n".to_string())] {
-            let got = systemd_service_home(&show, no_proc, || unreadable);
-            assert!(matches!(got, ServiceHome::Unknown(_)), "{got:?}");
-        }
-    }
-
-    #[test]
-    fn overrides_mur_cannot_evaluate_refuse_ownership() {
-        let show = "MainPID=0\nEnvironmentFiles=/etc/murmurd.env (ignore_errors=no)\n\
-                    Environment=MUR_HOME=/x\n";
-        let got = systemd_service_home(show, no_proc, || Some(String::new()));
-        assert!(matches!(got, ServiceHome::Unknown(_)), "{got:?}");
-
-        let show = "MainPID=0\nUnsetEnvironment=MUR_HOME\nEnvironment=MUR_HOME=/x\n";
-        let got = systemd_service_home(show, no_proc, || Some(String::new()));
-        assert!(matches!(got, ServiceHome::Unknown(_)), "{got:?}");
-    }
-
-    fn stopped() -> Result<Option<u32>, String> {
-        Ok(None)
-    }
-
-    fn no_environ(_: u32) -> Option<Vec<String>> {
-        panic!("a job that is not running has no process environment to read")
-    }
-
-    #[test]
-    fn launchd_home_comes_from_plist_then_domain_environment() {
-        let plist = |env: &str| format!("<plist><dict>{env}\n</dict></plist>");
-        let set = plist(&super::super::launchd_env_block(Some(Path::new("/data/a"))));
-        assert_eq!(
-            launchd_service_home(&set, stopped, no_environ, || panic!("the plist answers")),
-            ServiceHome::Known(Some("/data/a".into()))
-        );
-        let unset = plist("<key>Label</key>");
-        assert_eq!(
-            launchd_service_home(&unset, stopped, no_environ, || Some(
-                "/setenv/home\n".into()
-            )),
-            ServiceHome::Known(Some("/setenv/home".into()))
-        );
-        assert_eq!(
-            launchd_service_home(&unset, stopped, no_environ, || Some("\n".into())),
-            ServiceHome::Known(None)
-        );
-        for (body, env) in [
-            (unset.as_str(), None),
-            ("bplist00 binary", Some(String::new())),
-            (
-                "<plist><key>MUR_HOME</key><data>x</data></plist>",
-                Some(String::new()),
-            ),
-        ] {
-            let got = launchd_service_home(body, stopped, no_environ, || env);
-            assert!(matches!(got, ServiceHome::Unknown(_)), "{got:?}");
-        }
-    }
-
-    #[test]
-    fn running_launchd_job_is_owned_only_when_live_and_next_start_agree() {
-        let plist = |home: &str| {
-            format!(
-                "<plist><dict>{}</dict></plist>",
-                super::super::launchd_env_block(Some(Path::new(home)))
-            )
-        };
-        let env = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-
-        let live = env(&["PATH=/usr/bin", "MUR_HOME=/data/a", "XPC_SERVICE_NAME=x"]);
-        let got = launchd_service_home(
-            &plist("/data/a"),
-            || Ok(Some(42)),
-            |pid| (pid == 42).then_some(live),
-            || panic!("the plist answers the next start"),
-        );
-        assert_eq!(got, ServiceHome::Known(Some("/data/a".into())));
-
-        // Regression (review P1): plist edited to /data/b after the job
-        // started from /data/a. `kickstart -k` would bring up /data/b.
-        let live = env(&["MUR_HOME=/data/a"]);
-        let got = launchd_service_home(&plist("/data/b"), || Ok(Some(7)), |_| Some(live), || None);
-        assert!(
-            matches!(&got, ServiceHome::Unknown(r) if r.contains("/data/b")),
-            "{got:?}"
-        );
-
-        // `launchctl setenv` changed after start; the plist sets nothing.
-        let bare = "<plist><key>Label</key></plist>";
-        let live = env(&["PATH=/usr/bin"]);
-        let got = launchd_service_home(
-            bare,
-            || Ok(Some(7)),
-            |_| Some(live),
-            || Some("/data/b\n".into()),
-        );
-        assert!(matches!(got, ServiceHome::Unknown(_)), "{got:?}");
-        let live = env(&["PATH=/usr/bin"]);
-        let got = launchd_service_home(bare, || Ok(Some(7)), |_| Some(live), || Some("\n".into()));
-        assert_eq!(got, ServiceHome::Known(None));
-
-        // Unreadable, undecodable, unreadable next start, or launchd unable
-        // to say: never a verdict.
-        let odd = env(&["MUR_HOME=/a\u{FFFD}b"]);
-        let ok = env(&["MUR_HOME=/data/a"]);
-        for got in [
-            launchd_service_home(&plist("/data/a"), || Ok(Some(7)), |_| None, || None),
-            launchd_service_home(&plist("/data/a"), || Ok(Some(7)), |_| Some(odd), || None),
-            launchd_service_home("bplist00", || Ok(Some(7)), |_| Some(ok), || None),
-            launchd_service_home(bare, || Err("launchd said 5".into()), no_environ, || None),
-        ] {
-            assert!(matches!(got, ServiceHome::Unknown(_)), "{got:?}");
-        }
-    }
-
-    #[test]
-    fn launchctl_getenv_keeps_spaces_that_belong_to_the_path() {
-        // Regression (review P2): only getenv's trailing newline is framing.
-        let bare = "<plist><key>Label</key></plist>";
-        for (out, want) in [
-            ("/data/mur \n", Some("/data/mur ")),
-            (" /data/mur\n", Some(" /data/mur")),
-            ("   \n", Some("   ")),
-            ("/data/mur", Some("/data/mur")),
-            ("\n", None),
-        ] {
-            let got = launchd_service_home(bare, stopped, no_environ, || Some(out.into()));
-            assert_eq!(got, ServiceHome::Known(want.map(PathBuf::from)), "{out:?}");
-        }
-    }
-
-    #[test]
-    fn launchctl_print_pid_reads_only_the_jobs_own_line() {
-        let print = "gui/501/run.mur.murmurd = {\n\tstate = running\n\
-                     \tendpoints = {\n\t\tpid = 1\n\t}\n\tpid = 86318\n}\n";
-        assert_eq!(launchctl_print_pid(print), Some(86318));
-        let idle = "gui/501/x = {\n\tstate = not running\n\t\tpid = 9\n}\n";
-        assert_eq!(launchctl_print_pid(idle), None);
-    }
-}
+#[path = "service_home_tests.rs"]
+mod tests;

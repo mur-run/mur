@@ -26,7 +26,11 @@ pub fn cmd_murmurd_status() -> Result<()> {
 pub fn cmd_murmurd_stop() -> Result<()> {
     // A supervised daemon is stopped THROUGH its service manager: a bare
     // SIGTERM is undone by KeepAlive / Restart=always a few seconds later.
-    let supervision = Supervision::detect();
+    // Stop asks about the RUNNING instance only: a service that serves this
+    // home now is stopped through its manager even if its next start would
+    // serve another home (that start is exactly what a bare SIGTERM would
+    // trigger under Restart=always).
+    let supervision = Supervision::detect_for_stop();
     if let Supervision::Owns(service) = supervision {
         service.stop()?;
         // Also reaps a lock holder the service does not own (an earlier
