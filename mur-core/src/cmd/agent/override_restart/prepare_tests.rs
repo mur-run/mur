@@ -131,3 +131,29 @@ fn check_home_compares_the_units_baked_home() {
     assert!(hub.contains("this Hub"), "{hub}");
     assert!(!hub.contains("CLI"), "{hub}");
 }
+
+#[test]
+fn check_home_refuses_when_the_services_home_cannot_be_told() {
+    let h = home();
+    let why = |unit: &Path, by| match check_home(NAME, h.path(), unit, by) {
+        Err(Step::Refusal { reason }) => reason,
+        other => panic!("{other:?}"),
+    };
+    // A binary plist: its MUR_HOME cannot be read, so the old "fall back to
+    // the default home" guess must not stand in for an answer.
+    let binary = h.path().join("run.mur.agent.x.plist");
+    std::fs::write(&binary, b"bplist00\x00\x01").unwrap();
+    let cli = why(&binary, IssuedBy::Cli);
+    assert!(cli.contains("cannot be told"), "{cli}");
+    assert!(cli.contains("not in XML form"), "{cli}");
+    assert!(cli.contains("this CLI"), "{cli}");
+    assert!(cli.contains(NOTHING_CHANGED), "{cli}");
+    let hub = why(&binary, IssuedBy::Hub);
+    assert!(hub.contains("this Hub"), "{hub}");
+    assert!(!hub.contains("CLI"), "{hub}");
+    // An unreadable descriptor is refused the same way, naming the file.
+    let missing = h.path().join("gone.plist");
+    let gone = why(&missing, IssuedBy::Cli);
+    assert!(gone.contains("cannot read"), "{gone}");
+    assert!(gone.contains("gone.plist"), "{gone}");
+}

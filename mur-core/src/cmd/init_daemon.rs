@@ -4,6 +4,8 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
 mod probe;
+pub(crate) mod service_home;
+use service_home::ServiceHome;
 
 /// launchd label of the murmurd job `install_launchd` registers.
 pub(crate) const LAUNCHD_LABEL: &str = "run.mur.murmurd";
@@ -48,6 +50,14 @@ pub(crate) enum Supervision {
         service: DaemonService,
         service_home: PathBuf,
     },
+    /// A service is registered, but which MUR home it runs cannot be proven
+    /// (`reason` says why). Neither routing through it nor starting a direct
+    /// daemon is safe: one may act on another home's daemon, the other may
+    /// fight the service for this home's lock.
+    Unknown {
+        service: DaemonService,
+        reason: String,
+    },
 }
 
 impl Supervision {
@@ -56,16 +66,13 @@ impl Supervision {
         let Some(caller) = mur_common::home::try_mur_home() else {
             return Self::None;
         };
-        let Some((service, unit_env_home)) = DaemonService::registered() else {
+        let Some((service, home)) = DaemonService::registered() else {
             return Self::None;
         };
-        let Some(service_home) = mur_common::home::resolve_from(
-            unit_env_home.map(Into::into),
-            dirs::home_dir().as_deref(),
-        ) else {
-            return Self::None;
-        };
-        Self::classify(service, service_home, &caller)
+        match service_home::resolve(home) {
+            Ok(service_home) => Self::classify(service, service_home, &caller),
+            Err(reason) => Self::Unknown { service, reason },
+        }
     }
 
     /// Pure ownership rule: the service owns the caller's daemon only when
@@ -85,9 +92,9 @@ impl Supervision {
 
 impl DaemonService {
     /// The service manager that has murmurd registered and live on this
-    /// machine, plus the `MUR_HOME` baked into its unit (`None` = the unit
-    /// sets none, so the daemon uses the default home).
-    fn registered() -> Option<(Self, Option<PathBuf>)> {
+    /// machine, plus the `MUR_HOME` it effectively runs with (see
+    /// [`service_home`] for why that is not just the unit file's value).
+    fn registered() -> Option<(Self, ServiceHome)> {
         #[cfg(target_os = "macos")]
         {
             // The descriptor on disk is the test, NOT "the job is loaded":
@@ -96,30 +103,19 @@ impl DaemonService {
             // unsupervised daemon that the job then crash-loops against at
             // the next login.
             if let Some(plist) = launchd_plist_path()
-                && let Ok(body) = std::fs::read_to_string(&plist)
+                // Bytes, not `read_to_string`: a binary plist (e.g. after
+                // `plutil -convert binary1`) is still a registered job and
+                // must come back as `Unknown`, not as "no service".
+                && let Ok(body) = std::fs::read(&plist)
             {
-                return Some((Self::Launchd, launchd_plist_mur_home(&body)));
+                return Some((Self::Launchd, service_home::launchd_job_home(&plist, &body)));
             }
         }
         #[cfg(target_os = "linux")]
         {
-            let out = std::process::Command::new("systemctl")
-                .args([
-                    "--user",
-                    "show",
-                    "--property=LoadState,ActiveState,UnitFileState,FragmentPath",
-                    SYSTEMD_UNIT,
-                ])
-                .stderr(std::process::Stdio::null())
-                .output()
-                .ok()?;
-            let show = String::from_utf8_lossy(&out.stdout);
-            if out.status.success() && systemd_owns_unit(&show) {
-                let unit = show_property(&show, "FragmentPath")
-                    .filter(|p| !p.is_empty())
-                    .and_then(|p| std::fs::read_to_string(p).ok())
-                    .unwrap_or_default();
-                return Some((Self::Systemd, systemd_unit_mur_home(&unit)));
+            let show = service_home::systemctl_show(SYSTEMD_UNIT)?;
+            if systemd_owns_unit(&show) {
+                return Some((Self::Systemd, service_home::systemd_unit_home(&show)));
             }
         }
         None
@@ -240,7 +236,7 @@ fn stop_outcome(err: anyhow::Error, is_loaded: impl FnOnce() -> Result<bool>) ->
 fn launchd_plist_path() -> Option<PathBuf> {
     Some(
         dirs::home_dir()?
-            .join("Library/LaunchAgents")
+            .join(service_home::LAUNCH_AGENTS_DIR)
             .join(format!("{LAUNCHD_LABEL}.plist")),
     )
 }
@@ -257,6 +253,18 @@ fn launchd_domain() -> String {
     #[cfg(not(unix))]
     let uid = 0;
     format!("gui/{uid}")
+}
+
+/// stdout of a successful `program args…` run (stderr discarded), else `None`.
+fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(program)
+        .args(args)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// Value of `key` in `systemctl show` output (`Key=value` lines).
@@ -283,25 +291,6 @@ fn systemd_owns_unit(show: &str) -> bool {
         Some("active" | "activating" | "reloading" | "deactivating")
     );
     enabled || live
-}
-
-/// `MUR_HOME` set by a systemd unit's `Environment=` lines (last wins), with
-/// systemd's double-quote / backslash quoting undone.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub(crate) fn systemd_unit_mur_home(unit: &str) -> Option<PathBuf> {
-    let prefix = format!("{}=", mur_common::home::MUR_HOME_ENV);
-    let mut found = None;
-    for line in unit.lines() {
-        let Some(rest) = line.trim().strip_prefix("Environment=") else {
-            continue;
-        };
-        for word in split_systemd_words(rest) {
-            if let Some(v) = word.strip_prefix(&prefix) {
-                found = (!v.is_empty()).then(|| PathBuf::from(v));
-            }
-        }
-    }
-    found
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -526,217 +515,5 @@ pub(crate) fn murmurd_bin_path() -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn failed_stop_of_unloaded_job_is_success() {
-        assert!(stop_outcome(anyhow::anyhow!("not loaded"), || Ok(false)).is_ok());
-    }
-
-    #[test]
-    fn failed_stop_of_loaded_job_is_an_error() {
-        let err = stop_outcome(anyhow::anyhow!("bootout denied"), || Ok(true)).unwrap_err();
-        assert!(err.to_string().contains("bootout denied"));
-    }
-
-    #[test]
-    fn failed_stop_with_failed_probe_is_an_error() {
-        let err = stop_outcome(anyhow::anyhow!("bootout denied"), || {
-            Err(anyhow::anyhow!("probe crashed"))
-        })
-        .unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("bootout denied") && msg.contains("probe crashed"));
-    }
-
-    #[test]
-    fn service_units_carry_mur_home_only_when_set() {
-        assert_eq!(launchd_env_block(None), "");
-        assert_eq!(systemd_env_line(None), "");
-        let b = launchd_env_block(Some(Path::new("/data/a&b")));
-        assert!(b.contains("<key>MUR_HOME</key>"), "{b}");
-        assert!(b.contains("<string>/data/a&amp;b</string>"), "{b}");
-        assert_eq!(
-            systemd_env_line(Some(Path::new("/data/my mur"))),
-            "Environment=\"MUR_HOME=/data/my mur\"\n"
-        );
-    }
-
-    #[test]
-    fn service_home_round_trips_through_installed_units() {
-        let plist = format!(
-            "<dict>{}\n</dict>",
-            launchd_env_block(Some(Path::new("/data/a&b")))
-        );
-        assert_eq!(
-            launchd_plist_mur_home(&plist),
-            Some(PathBuf::from("/data/a&b"))
-        );
-        assert_eq!(
-            launchd_plist_mur_home("<dict><key>Label</key></dict>"),
-            None
-        );
-
-        let unit = format!(
-            "[Service]\nExecStart=/bin/murmurd\n{}Restart=always\n",
-            systemd_env_line(Some(Path::new("/data/my \"mur\"")))
-        );
-        assert_eq!(
-            systemd_unit_mur_home(&unit),
-            Some(PathBuf::from("/data/my \"mur\""))
-        );
-        assert_eq!(
-            systemd_unit_mur_home("Environment=FOO=1 MUR_HOME=/x\n"),
-            Some(PathBuf::from("/x"))
-        );
-        assert_eq!(
-            systemd_unit_mur_home("[Service]\nExecStart=/bin/murmurd\n"),
-            None
-        );
-    }
-
-    #[test]
-    fn service_for_another_mur_home_is_not_routed_through() {
-        let s = DaemonService::Launchd;
-        assert_eq!(
-            Supervision::classify(
-                s,
-                PathBuf::from("/nonexistent/u/.mur"),
-                Path::new("/nonexistent/u/.mur/")
-            ),
-            Supervision::Owns(s)
-        );
-        assert_eq!(
-            Supervision::classify(
-                s,
-                PathBuf::from("/nonexistent/u/.mur"),
-                Path::new("/nonexistent/alt")
-            ),
-            Supervision::Other {
-                service: s,
-                service_home: PathBuf::from("/nonexistent/u/.mur")
-            }
-        );
-    }
-
-    #[test]
-    fn systemd_ownership_is_liveness_or_enablement_not_enablement_alone() {
-        let show = |load: &str, active: &str, file: &str| {
-            format!(
-                "LoadState={load}\nActiveState={active}\nUnitFileState={file}\nFragmentPath=/u\n"
-            )
-        };
-        // Disabled while running: Restart=always still respawns it.
-        assert!(systemd_owns_unit(&show("loaded", "active", "disabled")));
-        // Between respawns (SubState=auto-restart).
-        assert!(systemd_owns_unit(&show("loaded", "activating", "disabled")));
-        assert!(systemd_owns_unit(&show("loaded", "inactive", "enabled")));
-        assert!(systemd_owns_unit(&show(
-            "loaded",
-            "inactive",
-            "enabled-runtime"
-        )));
-        assert!(!systemd_owns_unit(&show("loaded", "inactive", "disabled")));
-        assert!(!systemd_owns_unit(&show("loaded", "failed", "disabled")));
-        assert!(!systemd_owns_unit(&show("not-found", "inactive", "")));
-    }
-
-    #[test]
-    fn service_start_argv_restarts_in_place() {
-        let t = "gui/501/run.mur.murmurd";
-        assert_eq!(
-            DaemonService::Launchd.start_argv(true, t),
-            ["launchctl", "kickstart", "-k", t]
-        );
-        assert_eq!(
-            DaemonService::Launchd.start_argv(false, t),
-            ["launchctl", "kickstart", t]
-        );
-        assert_eq!(
-            DaemonService::Systemd.start_argv(true, t),
-            ["systemctl", "--user", "restart", SYSTEMD_UNIT]
-        );
-        assert_eq!(
-            DaemonService::Systemd.start_argv(false, t),
-            ["systemctl", "--user", "start", SYSTEMD_UNIT]
-        );
-    }
-
-    #[test]
-    fn service_stop_goes_through_the_service_manager() {
-        let t = "gui/501/run.mur.murmurd";
-        assert_eq!(
-            DaemonService::Launchd.stop_argv(t),
-            ["launchctl", "bootout", t]
-        );
-        assert_eq!(
-            DaemonService::Systemd.stop_argv(t),
-            ["systemctl", "--user", "stop", SYSTEMD_UNIT]
-        );
-    }
-
-    #[test]
-    fn launchd_start_falls_back_to_bootstrap_because_stop_unloads_the_job() {
-        let plist = Path::new("/h/Library/LaunchAgents/run.mur.murmurd.plist");
-        // `bootstrap`, not `load -w`: the latter exits 0 on "Load failed".
-        assert_eq!(
-            DaemonService::Launchd
-                .load_fallback_argv("gui/501", plist)
-                .unwrap(),
-            [
-                "launchctl",
-                "bootstrap",
-                "gui/501",
-                "/h/Library/LaunchAgents/run.mur.murmurd.plist"
-            ]
-        );
-        assert!(
-            DaemonService::Systemd
-                .load_fallback_argv("gui/501", plist)
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn launchd_install_reloads_with_bootout_then_bootstrap() {
-        let plist = Path::new("/h/Library/LaunchAgents/run.mur.murmurd.plist");
-        let [out, boot] = launchd_reload_argvs("gui/501", plist);
-        assert_eq!(out, ["launchctl", "bootout", "gui/501/run.mur.murmurd"]);
-        assert_eq!(
-            boot,
-            [
-                "launchctl",
-                "bootstrap",
-                "gui/501",
-                "/h/Library/LaunchAgents/run.mur.murmurd.plist"
-            ]
-        );
-    }
-
-    #[test]
-    fn launchd_target_names_the_installed_label() {
-        let t = launchd_target();
-        assert!(
-            t.starts_with("gui/") && t.ends_with("/run.mur.murmurd"),
-            "{t}"
-        );
-    }
-
-    #[test]
-    fn murmurd_bin_path_returns_path() {
-        // Should never panic and should produce a path ending in "murmurd"
-        let p = murmurd_bin_path();
-        let name = p.file_name().unwrap_or_default().to_string_lossy();
-        assert!(
-            name.contains("murmurd"),
-            "expected murmurd in path, got: {p:?}"
-        );
-    }
-
-    #[test]
-    fn murmurd_bin_path_does_not_panic() {
-        // Test that murmurd_bin_path() can be called without panicking.
-        let _ = murmurd_bin_path();
-    }
-}
+#[path = "init_daemon_tests.rs"]
+mod tests;
