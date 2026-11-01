@@ -62,6 +62,7 @@ impl App {
     }
 
     pub fn append_delta(&mut self, text: &str, thinking: bool) {
+        rec_2020("delta", text, thinking, self.width);
         if self.streaming_agent_mut().is_none() {
             // Prior segment was frozen by a step card; start a new one.
             let mut m = ChatMsg::new(Role::Agent, "");
@@ -114,6 +115,7 @@ impl App {
     /// matched, so a late event that no longer has a live turn can't write a
     /// phantom line or thread a stale context id.
     pub fn finish_agent_turn(&mut self, reply: String, task_id: Option<String>) {
+        rec_2020("finish", &reply, false, self.width);
         let width = self.body_cols();
         let theme = self.theme;
         let mut body = None;
@@ -415,5 +417,31 @@ impl App {
             None,
             &[],
         );
+    }
+}
+
+/// [DEBUG-2020] When `MUR_BAND_REC` names a file, append every streamed delta
+/// and the final reply as one JSON line each (`{"t_ms","kind","thinking",
+/// "width","text"}`), so a turn that loses rows can be replayed exactly.
+fn rec_2020(kind: &str, text: &str, thinking: bool, width: u16) {
+    use std::io::Write;
+    use std::sync::OnceLock;
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    let Some(path) = std::env::var_os("MUR_BAND_REC") else {
+        return;
+    };
+    let t_ms = START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis();
+    let line = serde_json::json!({
+        "t_ms": t_ms, "kind": kind, "thinking": thinking, "width": width, "text": text,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(f, "{line}");
     }
 }

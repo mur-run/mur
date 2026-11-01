@@ -23,6 +23,10 @@ mod fence_head_tests;
 #[cfg(test)]
 mod ghost_tests;
 #[cfg(test)]
+mod pty_probe_tests; // [DEBUG-2020]
+#[cfg(test)]
+mod replay_tests; // [DEBUG-2020]
+#[cfg(test)]
 mod scrub_tests;
 #[cfg(test)]
 mod settled_md_tests;
@@ -388,6 +392,22 @@ fn emit_chunk<B: Backend>(
 ) -> std::io::Result<()> {
     let text = Text::from(lines);
     let block = || Block::default().padding(Padding::horizontal(pad));
+    // [DEBUG-2020] Rows the chunk really needs vs the height we give
+    // insert_before. Any `needed > rows` is text clipped into the void —
+    // never on screen, never in scrollback.
+    {
+        let w = terminal.size().map(|s| s.width).unwrap_or(1);
+        let inner = block().inner(Rect::new(0, 0, w.max(1), 1)).width.max(1);
+        let needed = Paragraph::new(text.clone())
+            .wrap(Wrap { trim: false })
+            .line_count(inner);
+        tracing::debug!(
+            target: "mur::band",
+            "[DEBUG-2020] emit: rows={rows} needed={needed} lines={} width={w}{}",
+            text.lines.len(),
+            if needed > rows as usize { " CLIPPED" } else { "" },
+        );
+    }
     terminal.insert_before(rows.max(1), |buf| {
         Paragraph::new(text)
             .wrap(Wrap { trim: false })
@@ -432,6 +452,16 @@ pub fn flush_finished<B: Backend>(
     let cap = u32::from(band_inner_rows(app, viewport_h));
 
     let mut skip = effective_skip(app);
+    // [DEBUG-2020] The committed prefix was re-located onto a different
+    // offset (final reply installed over the streamed text).
+    if app.flushed_bytes > 0 && skip != app.flushed_bytes {
+        tracing::debug!(
+            target: "mur::band",
+            "[DEBUG-2020] skip moved: flushed_bytes={} -> skip={skip} upto={}",
+            app.flushed_bytes,
+            app.flushed_upto,
+        );
+    }
     if app.flushed_bytes > 0 && skip == 0 {
         // The committed prefix no longer belongs to the message sitting there;
         // forget it and let that message flush whole. A visible duplicate of
@@ -491,6 +521,36 @@ pub fn flush_finished<B: Backend>(
     if protect_last && end == stop_at && end < settled && total > cap {
         total -= u32::from(rows[end - start]);
         end += 1;
+    }
+    // [DEBUG-2020] Still overflowing after the flush loop: this frame will
+    // paint "↑ N more · PgUp". Record which message pinned it and whether
+    // `cap` disagrees with what is left.
+    if total > cap {
+        let msgs: Vec<String> = app.messages[start..]
+            .iter()
+            .enumerate()
+            .take(12)
+            .map(|(n, m)| {
+                format!(
+                    "#{}:{:?}{}{} rows={}",
+                    start + n,
+                    m.role,
+                    if m.streaming { " STREAMING" } else { "" },
+                    if m.step.is_some() { " step" } else { "" },
+                    rows[n],
+                )
+            })
+            .collect();
+        tracing::debug!(
+            target: "mur::band",
+            "[DEBUG-2020] band overflow: start={start} end={end} settled={settled} \
+             stop_at={stop_at} protect_last={protect_last} app.streaming={} \
+             total={total} cap={cap} viewport_h={viewport_h} width={width} \
+             skip={skip} msgs={} [{}]",
+            app.streaming,
+            app.messages.len(),
+            msgs.join(", "),
+        );
     }
     if end > start {
         // Replay ceiling. A resize resets `flushed_upto` to 0 (the purge wiped
@@ -701,6 +761,24 @@ pub(super) fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let offset = max_scroll - app.scroll_back;
 
     f.render_widget(output.block(block).scroll((offset, 0)), area);
+    // [DEBUG-2020] Proves the log pipe is alive (once), then records every
+    // frame that paints the marker with render's own row accounting.
+    {
+        static ALIVE: std::sync::Once = std::sync::Once::new();
+        ALIVE.call_once(|| tracing::debug!(target: "mur::band", "[DEBUG-2020] render alive"));
+    }
+    if max_scroll > 0 {
+        tracing::debug!(
+            target: "mur::band",
+            "[DEBUG-2020] marker: total={total} visible={visible} max_scroll={max_scroll} \
+             scroll_back={} start={start} skip={skip} msgs={} app.streaming={} \
+             area_h={} inner_w={inner_width}",
+            app.scroll_back,
+            app.messages.len(),
+            app.streaming,
+            area.height,
+        );
+    }
     if let Some(marker) = scroll_marker(max_scroll, app.scroll_back) {
         let row = Rect { height: 1, ..inner };
         f.render_widget(Line::styled(marker, theme.muted).right_aligned(), row);
