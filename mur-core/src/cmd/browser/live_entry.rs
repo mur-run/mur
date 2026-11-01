@@ -77,6 +77,16 @@ pub(crate) trait LiveOps {
     /// Returns one note per grant added, and when the write reaches the
     /// running agent. `Err` means nothing was written.
     fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<(Vec<String>, Effect)>;
+    /// [`LiveOps::save`], but only if the profile's MCP entries still equal
+    /// `expected` — the snapshot the user confirmed. `Ok(None)` means another
+    /// writer changed them since, and nothing was written. The comparison and
+    /// the write happen under the same per-agent profile lock, so a confirmed
+    /// snapshot can never overwrite a newer policy (#2204 review).
+    fn save_if_unchanged(
+        &mut self,
+        expected: &[McpServerEntry],
+        servers: Vec<McpServerEntry>,
+    ) -> anyhow::Result<Option<(Vec<String>, Effect)>>;
     /// The notes [`LiveOps::save`] would report for `servers`, computed
     /// without writing — so a preview can tell "unchanged" from "needs repair".
     fn pending_repairs(&mut self, servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>>;

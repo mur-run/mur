@@ -5,6 +5,8 @@ fn s(v: &[&str]) -> Vec<String> {
     v.iter().map(|x| x.to_string()).collect()
 }
 
+type SaveIf = anyhow::Result<Option<(Vec<String>, Effect)>>;
+
 fn live_entry() -> McpServerEntry {
     McpServerEntry {
         name: LIVE_ENTRY.into(),
@@ -275,6 +277,9 @@ impl LiveOps for Fake {
         e.network = Some(network);
         self.servers.push(e);
         Ok("added".into())
+    }
+    fn save_if_unchanged(&mut self, _: &[McpServerEntry], _: Vec<McpServerEntry>) -> SaveIf {
+        panic!("`/browser live` saves unconditionally; only the binder compares")
     }
     fn save(
         &mut self,

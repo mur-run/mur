@@ -4,8 +4,10 @@
 //! Only [`BindPlan::Bind`] ever writes, and it only rewrites the entry's
 //! `--profile` argv — never its network policy. Every other plan is refused
 //! with the reason, and for `NeedsHosts` the full `/browser live` command to
-//! run instead. Writes go through [`LiveOps::save`], the same path as
-//! `/browser live`, and each one appends a `profile_bound` trace event.
+//! run instead. Writes go through [`LiveOps::save_if_unchanged`], which
+//! shares `/browser live`'s save path but refuses if the entries changed
+//! since the user reviewed them; each write appends a `profile_bound` trace
+//! event.
 
 use std::io::{BufRead, IsTerminal, Write};
 
@@ -109,6 +111,7 @@ pub(crate) fn bind_agent(
     out: &mut dyn Write,
 ) -> Result<Outcome> {
     let mut servers = ops.servers()?;
+    let reviewed = servers.clone();
     let entry = servers.iter().find(|e| e.name == LIVE_ENTRY);
     if entry.and_then(attached_profile) == Some(site) {
         writeln!(
@@ -152,9 +155,20 @@ pub(crate) fn bind_agent(
         }
     }
 
-    let (notes, effect) = ops
-        .save(servers)
-        .map_err(|e| e.context("could not save the browser profile binding"))?;
+    // Compare-and-write: the confirmation can sit open for minutes, and
+    // saving `servers` blindly would put back a host or entry another
+    // terminal removed meanwhile — widening egress the user never approved.
+    let Some((notes, effect)) = ops
+        .save_if_unchanged(&reviewed, servers)
+        .map_err(|e| e.context("could not save the browser profile binding"))?
+    else {
+        writeln!(
+            out,
+            "✗ {agent}'s MCP servers changed while this was waiting — not bound. \
+             Run `mur browser auth {site}` again to review the current entry."
+        )?;
+        return Ok(Outcome::Refused);
+    };
     for note in &notes {
         writeln!(out, "{note}")?;
     }
