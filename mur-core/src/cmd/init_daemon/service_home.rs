@@ -128,6 +128,9 @@ fn launchd_job_pid(label: &str) -> Result<Option<u32>, String> {
 
 /// The job's own `pid = N` line from `launchctl print` output. Only the
 /// top-level (single-tab) line counts; nested blocks can carry their own.
+/// Pure text parsing, so it stays compiled (and unit-tested) everywhere;
+/// only the live-job branch of the pid lookup above calls it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn launchctl_print_pid(print: &str) -> Option<u32> {
     print.lines().find_map(|l| {
         let l = l.strip_prefix('\t').filter(|l| !l.starts_with('\t'))?;
