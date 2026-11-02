@@ -545,10 +545,12 @@ under `ssh_proxy refusals` in `mur agent status`.
 
 `mur agent status` also shows whether the proxy is a boundary for this agent:
 `ssh_proxy: boundary`, `ssh_proxy: audit-only (<reason>)`, or
-`ssh_proxy: off (<reason>)`. Audit-only means the agent can reach your
-ssh-agent socket directly, so the key and host filter and HITL still apply
-to `SSH_AUTH_SOCK` as given but do not stop an agent that dials the upstream.
-There is no setting to silence it.
+`ssh_proxy: off (<reason>)`. Audit-only means MUR has not established that
+the upstream ssh-agent socket is unreachable from the agent: either it is
+reachable, or the check could not tell (for example `upstream_unresolved`
+or `probe_inconclusive`). The key and host filter and HITL still apply to
+requests sent through `SSH_AUTH_SOCK` as given, but direct access to the
+upstream may bypass them. There is no setting to silence it.
 
 Known limitations (v1):
 
