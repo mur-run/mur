@@ -1,10 +1,12 @@
 //! Write `profile.yaml`, the entitlement pin and `known_hosts` as one unit.
 //!
-//! The whole transaction runs under an exclusive per-agent lock, so two
-//! `mur agent ssh` commands for one agent never interleave. Without it, two
-//! commands could load the same profile and the later save would bring back
-//! a grant the earlier one revoked, and the pin would follow (the pin check
-//! compares disk to pin, not to the snapshot that was edited).
+//! The whole transaction runs under the agent's profile lock
+//! (`mur_common::entitlements_pin::lock_profile`), the same lock every pinned
+//! profile save takes, so no other entitlement writer can save in between.
+//! Writers that load without the lock (`mur agent perm ...`) are refused at
+//! save time if this transaction wrote after they loaded
+//! (`store::entitlements_pin::refuse_stale_entitlements`), so they cannot put
+//! back a grant this one revoked.
 //!
 //! Order under the lock, chosen so that the steps most likely to fail run
 //! before anything visible changes:
@@ -18,21 +20,16 @@
 //! A failure in 3 or 4 restores the profile and pin bytes captured before 3,
 //! so the agent is left exactly as it was.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use fs2::FileExt;
 use mur_common::agent::SshEntitlement;
-use mur_common::entitlements_pin::{self, PINS_DIR, PinCheck};
+use mur_common::entitlements_pin::{self, PinCheck, ProfileLock};
 
-use super::super::{load_profile_for_edit, resolve_mur_home, save_profile_pinned};
+use super::super::{load_profile_for_edit, resolve_mur_home, save_profile_pinned_held};
 use super::edit::render_known_hosts;
 use super::stage;
-
-/// Suffix of the per-agent lock file in [`PINS_DIR`]. That directory is denied
-/// to every agent, so an agent can neither hold the lock nor swap the file.
-const LOCK_SUFFIX: &str = "ssh.lock";
 
 /// Bytes of a file before the write, or `None` when it did not exist.
 struct Snapshot {
@@ -68,7 +65,7 @@ where
     F: FnOnce(&mut SshEntitlement) -> Result<()>,
 {
     let mur_home = resolve_mur_home()?;
-    let _lock = lock(&mur_home, agent)?;
+    let lock = lock(&mur_home, agent)?;
     let (profile_path, mut profile) = load_profile_for_edit(agent)?;
     require_trusted_pin(&mur_home, agent, &profile.entitlements)?;
 
@@ -92,7 +89,7 @@ where
         }
     };
 
-    match save_profile_pinned(&profile_path, &mut profile) {
+    match save_profile_pinned_held(&profile_path, &mut profile, &lock) {
         Ok(true) => {}
         Ok(false) => {
             return Err(rollback(anyhow::anyhow!(
@@ -108,40 +105,14 @@ where
     Ok(())
 }
 
-/// Holds `<mur_home>/entitlement-pins/<agent>.ssh.lock`. Dropping it, or the
-/// process dying, releases the `flock`. The file is never removed.
-struct AgentLock {
-    _file: File,
-}
-
-/// Take the lock, waiting for another `mur agent ssh` on `agent` to finish.
+/// Take `agent`'s profile lock, waiting for a writer already holding it.
 /// Holders never prompt while holding it (confirmation happens before), so
 /// the wait is the length of one write.
-fn lock(mur_home: &Path, agent: &str) -> Result<AgentLock> {
-    mur_common::agent_name::validate_agent_name(agent)
-        .map_err(|e| anyhow::anyhow!("invalid agent name '{agent}': {e}"))?;
-    let dir = mur_home.join(PINS_DIR);
-    fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-    let path = lock_path(mur_home, agent);
-    let file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&path)
-        .with_context(|| format!("open {}", path.display()))?;
-    if file.try_lock_exclusive().is_err() {
-        eprintln!("waiting for another `mur agent ssh` command on '{agent}' to finish…");
-        file.lock_exclusive()
-            .with_context(|| format!("lock {}", path.display()))?;
-    }
-    Ok(AgentLock { _file: file })
-}
-
-fn lock_path(mur_home: &Path, agent: &str) -> PathBuf {
-    mur_home
-        .join(PINS_DIR)
-        .join(format!("{agent}.{LOCK_SUFFIX}"))
+fn lock(mur_home: &Path, agent: &str) -> Result<ProfileLock> {
+    entitlements_pin::lock_profile(mur_home, agent, || {
+        eprintln!("waiting for another command changing '{agent}' to finish…");
+    })
+    .with_context(|| format!("lock the profile of '{agent}'"))
 }
 
 /// The ssh block is only as trustworthy as the pin, so refuse to build on a
@@ -161,14 +132,6 @@ fn require_trusted_pin(
         ),
         Err(e) => bail!("cannot read the entitlement pin for '{agent}': {e}. Nothing was changed."),
     }
-}
-
-/// Run `f` under the same per-agent lock as [`apply`]: for a profile write
-/// that is not an ssh edit but must not interleave with one (the `ssh` spawn
-/// grant `allow` offers). Never hold it across a prompt.
-pub(super) fn with_lock<T>(agent: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let _lock = lock(&resolve_mur_home()?, agent)?;
-    f()
 }
 
 #[cfg(test)]

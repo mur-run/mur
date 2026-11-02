@@ -319,16 +319,37 @@ pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<(
 /// was written. A caller that must not leave a written-but-unpinned profile
 /// (the agent would refuse to start) rolls back on `false`.
 pub(crate) fn save_profile_pinned(path: &Path, profile: &mut _AgentProfile) -> Result<bool> {
+    let _lock = crate::store::entitlements_pin::lock_for_profile(path)?;
+    save_profile_under_lock(path, profile)
+}
+
+/// [`save_profile_pinned`] for a caller that already holds this agent's
+/// profile lock across its whole load–edit–save (`mur agent ssh`). The guard
+/// is the proof: the lock is not reentrant, so taking it again would wait on
+/// itself.
+pub(crate) fn save_profile_pinned_held(
+    path: &Path,
+    profile: &mut _AgentProfile,
+    _held: &mur_common::entitlements_pin::ProfileLock,
+) -> Result<bool> {
+    save_profile_under_lock(path, profile)
+}
+
+fn save_profile_under_lock(path: &Path, profile: &mut _AgentProfile) -> Result<bool> {
+    let on_disk: Option<_AgentProfile> = fs::read_to_string(path)
+        .ok()
+        .and_then(|y| serde_yaml_ng::from_str(&y).ok());
+    crate::store::entitlements_pin::refuse_stale_entitlements(path, on_disk.as_ref(), profile)?;
+
     // Fail-closed guard (#717): a profile save must never *introduce* a skill
     // ref that does not resolve to an installed skill under the agent dir.
     // Only newly-added refs (relative to the profile currently on disk) are
     // validated, so unrelated edits to a profile that already carries a
     // legacy dangling ref still save.
     if let Some(agent_dir) = path.parent() {
-        let prior: std::collections::HashSet<String> = fs::read_to_string(path)
-            .ok()
-            .and_then(|y| serde_yaml_ng::from_str::<_AgentProfile>(&y).ok())
-            .map(|p| p.skills.into_iter().collect())
+        let prior: std::collections::HashSet<String> = on_disk
+            .as_ref()
+            .map(|p| p.skills.iter().cloned().collect())
             .unwrap_or_default();
         let added: Vec<String> = profile
             .skills
@@ -340,10 +361,7 @@ pub(crate) fn save_profile_pinned(path: &Path, profile: &mut _AgentProfile) -> R
     }
 
     // #712: entitlements on disk before this write, for the pin advance below.
-    let prior_ents = fs::read_to_string(path)
-        .ok()
-        .and_then(|y| serde_yaml_ng::from_str::<_AgentProfile>(&y).ok())
-        .map(|p| p.entitlements);
+    let prior_ents = on_disk.map(|p| p.entitlements);
 
     sync_model_block_from_disk(profile);
     profile.updated_at = chrono::Utc::now().to_rfc3339();

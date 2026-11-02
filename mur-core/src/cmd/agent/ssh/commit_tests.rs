@@ -168,3 +168,103 @@ fn an_allow_racing_a_revoke_does_not_restore_the_revoked_grant() {
         "{kh}"
     );
 }
+
+/// Hosts granted to the first key on disk.
+fn granted_hosts(home: &Path) -> Vec<String> {
+    on_disk(home, "bot").entitlements.ssh.keys[0]
+        .allow_hosts
+        .iter()
+        .map(|h| h.host_key.clone())
+        .collect()
+}
+
+fn revoke_h() -> anyhow::Result<()> {
+    commit::apply("bot", |e| {
+        edit::revoke(e, &RevokeScope::new(Some(fp('A')), Some(fp('H'))).unwrap()).map(|_| ())
+    })
+}
+
+/// #2253 re-review: an ordinary `perm` writer that loaded the profile before
+/// an ssh revoke must not save its stale copy afterwards. That save would put
+/// the revoked grant back, and the pin (which trusts disk) would follow it.
+/// Steps are the reviewer's interleaving, one by one.
+#[test]
+fn a_perm_writer_that_loaded_before_a_revoke_cannot_restore_the_grant() {
+    let (_env, tmp) = setup();
+    let home = tmp.path();
+    allow_named('H', "gh.example").unwrap();
+
+    // 1. `perm allow-spawn` loads a profile that still holds H.
+    let (path, mut stale) = crate::cmd::agent::load_profile_for_edit("bot").unwrap();
+    // 2. `ssh revoke` removes H: profile, pin and known_hosts.
+    revoke_h().unwrap();
+    // 3. The perm writer edits its copy and saves it.
+    stale
+        .entitlements
+        .processes
+        .spawn
+        .allowed
+        .push("/usr/bin/true".into());
+    let err = crate::cmd::agent::save_profile(&path, &mut stale).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("changed by another command"),
+        "{err:#}"
+    );
+
+    let p = on_disk(home, "bot");
+    assert!(granted_hosts(home).is_empty(), "H stays revoked");
+    assert!(
+        !p.entitlements
+            .processes
+            .spawn
+            .allowed
+            .iter()
+            .any(|b| b == "/usr/bin/true"),
+        "the stale save wrote nothing"
+    );
+    assert_eq!(
+        entitlements_pin::check(home, "bot", &p.entitlements).unwrap(),
+        PinCheck::Match,
+        "pin still matches the revoked state"
+    );
+}
+
+/// The same race through the real writer: `grant_spawn` started while a
+/// revoke holds the profile lock waits for it, then reloads, so both changes
+/// land and neither undoes the other.
+#[test]
+fn grant_spawn_racing_a_revoke_keeps_the_revoke() {
+    let (_env, tmp) = setup();
+    let home = tmp.path();
+    allow_named('H', "gh.example").unwrap();
+
+    let mut other = None;
+    commit::apply("bot", |e| {
+        other = Some(std::thread::spawn(|| {
+            crate::cmd::agent::perm::grant_spawn("bot", "/usr/bin/true")
+        }));
+        std::thread::sleep(RACE_WINDOW);
+        edit::revoke(e, &RevokeScope::new(Some(fp('A')), Some(fp('H'))).unwrap()).map(|_| ())
+    })
+    .unwrap();
+    // Whether it loaded before the revoke (refused) or after (saved), the
+    // grant must not come back. Retry once, as a user would on refusal.
+    if other.unwrap().join().unwrap().is_err() {
+        crate::cmd::agent::perm::grant_spawn("bot", "/usr/bin/true").unwrap();
+    }
+
+    let p = on_disk(home, "bot");
+    assert!(granted_hosts(home).is_empty(), "H stays revoked");
+    assert!(
+        p.entitlements
+            .processes
+            .spawn
+            .allowed
+            .iter()
+            .any(|b| b == "/usr/bin/true")
+    );
+    assert_eq!(
+        entitlements_pin::check(home, "bot", &p.entitlements).unwrap(),
+        PinCheck::Match
+    );
+}

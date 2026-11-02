@@ -21,6 +21,9 @@ use std::path::{Path, PathBuf};
 
 use crate::agent::{AgentProfile, Entitlements};
 
+mod lock;
+pub use lock::{ProfileLock, lock_path, lock_profile};
+
 /// Directory under `<mur_home>` holding one pin per agent.
 pub const PINS_DIR: &str = "entitlement-pins";
 
