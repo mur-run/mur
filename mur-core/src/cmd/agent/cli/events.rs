@@ -67,17 +67,25 @@ pub(super) async fn event_loop(
                 // that read doesn't hang (see the viewport comment in `run`).
                 drop(events);
                 // Fail-open: if the rebuild can't read the cursor position,
-                // keep the old terminal — ratatui's autoresize will leak a
-                // stale viewport copy (cosmetic), which beats exiting.
-                if let Ok(h) = rebuild_after_resize(terminal, app) {
-                    viewport_h = h;
-                }
+                // keep the old terminal rather than exiting. But do NOT record
+                // the new size as handled: the purge may already have run, and
+                // the old terminal still measures `insert_before` against the
+                // pre-resize height, which overwrites rows instead of scrolling
+                // them (#2020). Leaving `last_size` stale retries the rebuild
+                // on the next pass.
+                let rebuilt = rebuild_after_resize(terminal, app);
                 events = EventStream::new();
-                last_size = terminal.backend().size()?;
+                match rebuilt {
+                    Ok(h) => {
+                        viewport_h = h;
+                        last_size = terminal.backend().size()?;
+                    }
+                    Err(_) => force_rebuild = true,
+                }
                 // Cached replies were rendered for the old width; tables in
                 // them chose their columns from it. The rebuild replays the
                 // transcript from index 0, so re-render before that paint.
-                app.width = last_size.width.max(1);
+                app.width = terminal.backend().size()?.width.max(1);
                 app.rerender_markdown();
             }
         }
@@ -169,6 +177,13 @@ pub(super) async fn event_loop(
                 Err(e) => app.push_error(format!("{}: handover failed: {e:#}", req.label)),
             }
             app.needs_full_redraw = true;
+            // The child owned the terminal for as long as it liked, so the
+            // size checked at the top of this pass may be gone. Painting now
+            // would `insert_before` against the old height (#2020); go back
+            // up and let the resize check rebuild first.
+            if terminal.backend().size()? != last_size {
+                continue;
+            }
         }
         // Same shape as the handover above, and for the same reason: the
         // EventStream owns stdin and the child (here, rpassword's tty read)
@@ -193,6 +208,10 @@ pub(super) async fn event_loop(
                 Err(e) => app.push_error(format!("{key}: hidden read failed: {e:#}")),
             }
             app.needs_full_redraw = true;
+            // Same reason as after the handover above.
+            if terminal.backend().size()? != last_size {
+                continue;
+            }
         }
         if let Some(key) = app.pending_secret_delete.take() {
             secret_cmd::after_delete(app, key).await;
