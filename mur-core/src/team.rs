@@ -1,5 +1,7 @@
-#![allow(dead_code)]
-//! Team shared patterns — share and sync patterns within a team.
+//! Team membership lookups plus the read-only listing of legacy team patterns.
+//!
+//! Sharing/syncing patterns (`mur team share|sync`) was retired with the local
+//! Pattern store (Tier C3); skills go through the registry instead.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -36,21 +38,10 @@ pub struct TeamPattern {
 #[derive(Debug, Deserialize)]
 pub struct TeamListResponse {
     pub patterns: Vec<TeamPattern>,
+    /// Echoed by the server; kept so the wire shape stays documented.
     #[serde(default)]
+    #[allow(dead_code)]
     pub team_id: String,
-    #[serde(default)]
-    pub count: u64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct TeamShareResponse {
-    pub message: String,
-    pub pattern_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct TeamSyncResponse {
-    pub patterns: Vec<TeamPattern>,
     #[serde(default)]
     pub count: u64,
 }
@@ -63,7 +54,9 @@ pub struct UserTeam {
     pub slug: String,
     #[serde(default)]
     pub role: String,
+    /// Legacy pattern count reported by the server; not displayed since Tier C3.
     #[serde(default)]
+    #[allow(dead_code)]
     pub pattern_count: u64,
 }
 
@@ -132,7 +125,8 @@ pub async fn resolve_team_id(client: &reqwest::Client, team_id_or_slug: &str) ->
     )
 }
 
-/// List patterns shared in a team.
+/// List the legacy patterns shared in a team (via the retired `mur team share`).
+/// Skills are not served here; they live in the registry.
 pub async fn list_team_patterns(
     client: &reqwest::Client,
     team_id: &str,
@@ -154,59 +148,4 @@ pub async fn list_team_patterns(
     }
 
     resp.json().await.context("Invalid team patterns response")
-}
-
-/// Share a pattern to a team.
-pub async fn share_to_team(
-    client: &reqwest::Client,
-    team_id: &str,
-    name: &str,
-    description: &str,
-    content: &str,
-    tags: &[String],
-) -> Result<TeamShareResponse> {
-    let base = auth::server_url();
-    let url = format!("{}/api/v1/core/teams/{}/patterns", base, team_id);
-
-    let req = auth::auth_request(client, reqwest::Method::POST, &url).await?;
-
-    let resp = req
-        .json(&serde_json::json!({
-            "name": name,
-            "description": description,
-            "content": content,
-            "tags": tags,
-        }))
-        .send()
-        .await
-        .context("Failed to connect to mur server")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Share to team failed ({}): {}", status, body);
-    }
-
-    resp.json().await.context("Invalid team share response")
-}
-
-/// Sync (pull) latest team patterns.
-pub async fn sync_team(client: &reqwest::Client, team_id: &str) -> Result<TeamSyncResponse> {
-    let base = auth::server_url();
-    let url = format!("{}/api/v1/core/teams/{}/sync/pull?since=0", base, team_id);
-
-    let req = auth::auth_request(client, reqwest::Method::GET, &url).await?;
-
-    let resp = req
-        .send()
-        .await
-        .context("Failed to connect to mur server")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Team sync failed ({}): {}", status, body);
-    }
-
-    resp.json().await.context("Invalid team sync response")
 }

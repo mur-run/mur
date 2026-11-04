@@ -227,7 +227,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: SessionAction,
     },
-    /// Team shared skills
+    /// Team membership and default team (legacy shared patterns are listed with --team)
     Team {
         #[command(subcommand)]
         action: TeamAction,
