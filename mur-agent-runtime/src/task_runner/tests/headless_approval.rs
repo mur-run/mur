@@ -214,3 +214,92 @@ async fn a_parked_call_nobody_answers_is_approval_required() {
     assert!(e.message.contains("nobody answered"), "{}", e.message);
     assert_eq!(r.executed, 0, "fail-closed: never runs unapproved");
 }
+
+/// #2150: a `channel/delegate` turn is one step of a fleet run. An `Ask`
+/// call nobody can approve must not end the turn — the call is refused as a
+/// tool result (nothing runs, the tool is withdrawn for the rest of the turn)
+/// and the model finishes its deliverable, so the step keeps its output and
+/// downstream steps still run.
+async fn run_delegated() -> Run {
+    use crate::llm::stub::SequenceLlm;
+    let responses = vec![
+        tool_call_response("c-1", "echo hi"),
+        end_turn_response("POSITION: NO-GO"),
+    ];
+    let calls = Arc::new(AtomicU64::new(0));
+    let (ntx, mut nrx) = tokio::sync::mpsc::channel(16);
+    let runner = TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+        .with_tools(vec![Arc::new(CountingBashTool {
+            calls: calls.clone(),
+            seen_task: Default::default(),
+        })])
+        .with_tools_policy(vec![]) // default Ask
+        .with_pending_approvals(empty_pending_approvals())
+        .with_sandbox_enforcing(true)
+        .with_notifier(ntx.clone())
+        .with_decision_store(Arc::new(Fixed(None)))
+        .with_hitl_timeout_secs(30)
+        .with_iteration_ceiling(3);
+    runner.mark_unattended("t-delegated").await;
+    runner.mark_delegated("t-delegated").await;
+    let mut spec = loop_spec("delegated");
+    spec.task_id = Some("t-delegated".into());
+    spec.attended = false;
+    let runner = Arc::new(runner);
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), runner.run_sync(spec))
+        .await
+        .expect("a delegated turn must never wait on the HITL timeout");
+    let mut asked = false;
+    while let Ok(n) = nrx.try_recv() {
+        asked |= n["method"] == "tool/approval_needed";
+    }
+    Run {
+        outcome,
+        executed: calls.load(Ordering::Relaxed),
+        asked,
+    }
+}
+
+#[tokio::test]
+async fn a_delegated_turn_keeps_its_reply_when_a_call_needs_approval() {
+    let r = run_delegated().await;
+    let TaskOutcome::Completed(task) = &r.outcome else {
+        panic!(
+            "a refused side effect must not fail the step: {:?}",
+            r.outcome
+        );
+    };
+    let reply = task.messages.last().map(text_of).unwrap_or_default();
+    assert!(reply.contains("POSITION: NO-GO"), "{reply}");
+    assert_eq!(r.executed, 0, "fail-closed: never runs unapproved");
+    assert!(!r.asked, "nobody is there to answer");
+}
+
+/// The refusal the model reads: names the tool, says it did not run and is
+/// withdrawn, and tells the model to finish rather than retry. It must NOT
+/// carry the operator's `tool-allow` remedy — a read-only reviewer's model
+/// has no business widening its own permissions (#2150).
+#[test]
+fn the_delegate_refusal_tells_the_model_to_finish_not_retry() {
+    let entry = crate::tools::guarded::withheld_from_delegate("c-1", "write_file");
+    assert!(entry.is_error);
+    assert!(
+        matches!(
+            entry.status,
+            crate::tools::ToolStatus::Denied {
+                scope: crate::tools::DenialScope::Tool,
+                ..
+            }
+        ),
+        "{:?}",
+        entry.status
+    );
+    assert!(entry.content.contains("`write_file`"), "{}", entry.content);
+    assert!(entry.content.contains("did not run"), "{}", entry.content);
+    assert!(
+        entry.content.contains("do not call it again"),
+        "{}",
+        entry.content
+    );
+    assert!(!entry.content.contains("tool-allow"), "{}", entry.content);
+}

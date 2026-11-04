@@ -41,6 +41,8 @@ pub struct GuardedToolCall {
     pub(crate) approval_sinks:
         Arc<tokio::sync::Mutex<HashMap<String, crate::task_runner::ApprovalSink>>>,
     pub(crate) one_shot_approvals: crate::task_runner::OneShotApprovals,
+    /// #2150: see [`crate::task_runner::DelegatedTurns`].
+    pub(crate) delegated_turns: crate::task_runner::DelegatedTurns,
     pub(crate) agent_name: String,
     pub(crate) decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
     pub(crate) hitl_timeout_secs: u32,
@@ -77,6 +79,31 @@ pub struct GuardedToolCall {
 /// ended in (`advisory-only`, `macos-sbpl-failed`, …), and a seal that failed
 /// for a platform reason (no Landlock, `sandbox_init` refused) fails again on
 /// every restart.
+/// #2150: the tool result a `channel/delegate` turn's model reads when a call
+/// needed an approval nobody attached can give. Says the call did not run and
+/// the tool is gone for the turn; deliberately carries NO operator remedy
+/// (`tool-allow`, `--ask`) — those go to the operator's log line, and a model
+/// told how to widen its own permissions tends to ask for exactly that.
+pub(crate) fn withheld_from_delegate(
+    call_id: &str,
+    tool_name: &str,
+) -> crate::llm::ToolResultEntry {
+    crate::llm::ToolResultEntry {
+        call_id: call_id.to_string(),
+        content: format!(
+            "`{tool_name}` needs a human's approval and none can be given inside this delegated \
+             turn — the call did not run and `{tool_name}` is unavailable for the rest of this \
+             turn; do not call it again. Finish your reply with what you have."
+        ),
+        is_error: true,
+        status: crate::tools::ToolStatus::Denied {
+            detail: format!("`{tool_name}` needs approval; withheld from a delegated turn"),
+            scope: crate::tools::DenialScope::Tool,
+        },
+        images: Vec::new(),
+    }
+}
+
 fn refuse_unsandboxed(agent_name: &str, tool_name: &str) -> crate::hitl::HitlDecision {
     let agent = if agent_name.is_empty() {
         "<agent>"
@@ -422,6 +449,45 @@ impl GuardedToolCall {
                         refusal_code: None,
                     });
                     if decision.awaiting_human {
+                        // #2150: inside a fleet step nobody can answer, and
+                        // ending the turn here discards the deliverable the
+                        // model had already finished and skips every step
+                        // downstream. Refuse the call to the model instead:
+                        // nothing runs, the tool is withdrawn for the rest of
+                        // the turn (spec §3.8), and the model finishes with
+                        // what it has. Not a bypass: the operator's remedy is
+                        // unchanged, only who is told. A one-shot `mur agent
+                        // send` still fails the turn so its caller can approve
+                        // and resend.
+                        if self.delegated_turns.lock().await.contains(task_id) {
+                            tracing::warn!(
+                                task_id,
+                                tool = %call.tool_name,
+                                reason = decision.reason.as_deref().unwrap_or(""),
+                                "delegated turn: approval-needing call withheld from the model; turn continues"
+                            );
+                            let entry = withheld_from_delegate(&call.call_id, &call.tool_name);
+                            if let Some(ref n) = step_notifier {
+                                let _ = n
+                                    .send(step_notification(
+                                        "step/completed",
+                                        serde_json::json!({
+                                            "step_id": step_id,
+                                            "task_id": task_id,
+                                            "ok": false,
+                                            "output": entry.content,
+                                            "truncated": false,
+                                            "full_len": entry.content.len(),
+                                            "error": decision.reason,
+                                            "denied": true,
+                                            "running": false,
+                                            "duration_ms": 0,
+                                        }),
+                                    ))
+                                    .await;
+                            }
+                            return Ok(entry);
+                        }
                         return Err(task_error(
                             HITL_APPROVAL_REQUIRED,
                             approval_required_message(decision.reason.as_deref()),
