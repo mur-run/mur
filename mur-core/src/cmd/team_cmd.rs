@@ -1,10 +1,12 @@
-use anyhow::Result;
-use mur_common::knowledge::KnowledgeBase;
-use mur_common::pattern::*;
+//! `mur team list|use` — team membership and default-team selection.
+//!
+//! `mur team share` / `mur team sync` were retired with the local Pattern
+//! store (Tier C3); skills are shared through the registry
+//! (`mur skill publish` / `mur skill install`).
 
-use crate::community;
+use anyhow::Result;
+
 use crate::store::config as store_config;
-use crate::store::yaml::YamlStore;
 use crate::team;
 
 pub(crate) async fn cmd_team_use(slug: &str) -> Result<()> {
@@ -22,7 +24,6 @@ pub(crate) async fn cmd_team_use(slug: &str) -> Result<()> {
     } else {
         println!("  Default team set to: {}", team_id);
     }
-    println!("  Run `mur team sync` to pull patterns.");
     Ok(())
 }
 
@@ -51,127 +52,123 @@ pub(crate) async fn cmd_team_list_mine() -> Result<()> {
     Ok(())
 }
 
+/// `mur team list --team <id>`.
+///
+/// Lists the **legacy patterns** a team shared through the retired
+/// `mur team share` command. They are still served by
+/// `GET /api/v1/core/teams/{id}/patterns` so nobody loses sight of what was
+/// shared, but they are not skills: skills are published to the registry via
+/// `mur skill publish` and are not listed here.
 pub(crate) async fn cmd_team_list(team_id: &str) -> Result<()> {
     let client = reqwest::Client::new();
     let resp = team::list_team_patterns(&client, team_id).await?;
+    print!("{}", render_team_patterns(team_id, &resp));
+    Ok(())
+}
 
+/// Render the legacy-pattern listing. Pure so the wording is testable: this
+/// output must never call the entries "skills" — the data source is the
+/// legacy team-pattern endpoint, not the skill registry.
+pub(crate) fn render_team_patterns(team_id: &str, resp: &team::TeamListResponse) -> String {
+    let mut out = String::new();
     if resp.patterns.is_empty() {
-        println!("  No patterns shared in team '{}'.", team_id);
-        return Ok(());
+        out.push_str(&format!(
+            "  No legacy patterns shared in team '{}'.\n",
+            team_id
+        ));
+        out.push_str(SKILLS_HINT);
+        return out;
     }
 
-    println!("  {} pattern(s) in team '{}':\n", resp.count, team_id);
-    println!(
-        "  {:<30}  {:>8}  {:>12}  {:<15}  TAGS",
+    out.push_str(&format!(
+        "  {} legacy pattern(s) in team '{}' (shared via the retired `mur team share`):\n\n",
+        resp.count, team_id
+    ));
+    out.push_str(&format!(
+        "  {:<30}  {:>8}  {:>12}  {:<15}  TAGS\n",
         "NAME", "MEMBERS", "EFFECTIVENESS", "SHARED BY"
-    );
-    println!("  {}", "-".repeat(90));
+    ));
+    out.push_str(&format!("  {}\n", "-".repeat(90)));
     for p in &resp.patterns {
         let tags = p.tags.join(", ");
-        println!(
-            "  {:<30}  {:>8}  {:>11.1}%  {:<15}  {}",
+        out.push_str(&format!(
+            "  {:<30}  {:>8}  {:>11.1}%  {:<15}  {}\n",
             truncate(&p.name, 30),
             p.members_using,
             p.combined_effectiveness * 100.0,
             truncate(&p.shared_by, 15),
             truncate(&tags, 25),
-        );
+        ));
     }
-    Ok(())
+    out.push_str(SKILLS_HINT);
+    out
 }
 
-pub(crate) async fn cmd_team_share(name: &str, team_id: &str) -> Result<()> {
-    let store = YamlStore::default_store()?;
-    let pattern = store.get(name)?;
-
-    let mut tags: Vec<String> = pattern.base.tags.languages.clone();
-    tags.extend(pattern.base.tags.topics.clone());
-
-    // Sanitize before sharing
-    let mut sanitize_pattern = pattern.clone();
-    community::sanitize_pattern(&mut sanitize_pattern);
-
-    let sanitized_content = sanitize_pattern.base.content.as_text();
-    let sanitized_desc = sanitize_pattern.base.description.clone();
-
-    let client = reqwest::Client::new();
-    let resp = team::share_to_team(
-        &client,
-        team_id,
-        name,
-        &sanitized_desc,
-        &sanitized_content,
-        &tags,
-    )
-    .await?;
-
-    println!("  Shared '{}' to team '{}'!", name, team_id);
-    println!("  Pattern ID: {}", resp.pattern_id);
-    Ok(())
-}
-
-pub(crate) async fn cmd_team_sync(team_id: &str) -> Result<()> {
-    let client = reqwest::Client::new();
-    let resp = team::sync_team(&client, team_id).await?;
-
-    if resp.patterns.is_empty() {
-        println!("  No new patterns to sync from team '{}'.", team_id);
-        return Ok(());
-    }
-
-    let store = YamlStore::default_store()?;
-    let mut synced = 0;
-
-    for tp in &resp.patterns {
-        let slug = tp.name.to_lowercase().replace(' ', "-");
-        if store.exists(&slug) {
-            println!("  Skipped '{}' (already exists)", tp.name);
-            continue;
-        }
-
-        let pattern = Pattern {
-            base: KnowledgeBase {
-                name: slug,
-                description: tp.description.clone(),
-                content: Content::Plain(tp.content.clone()),
-                tier: Tier::Project,
-                tags: Tags {
-                    languages: vec![],
-                    topics: tp.tags.clone(),
-                    extra: std::collections::HashMap::new(),
-                },
-                ..Default::default()
-            },
-            kind: None,
-            #[allow(deprecated)] // transitional: user/platform fields being phased out
-            origin: Some(Origin {
-                source: format!("team:{}", team_id),
-                trigger: OriginTrigger::CommunityShared,
-                actor: None,
-                user: None,
-                platform: None,
-                confidence: 0.7,
-            }),
-            attachments: vec![],
-        };
-        store.save(&pattern)?;
-        println!("  Synced: {}", tp.name);
-        synced += 1;
-    }
-
-    println!(
-        "\n  Synced {} of {} patterns from team '{}'.",
-        synced,
-        resp.patterns.len(),
-        team_id
-    );
-    Ok(())
-}
+const SKILLS_HINT: &str = "  Skills are not listed here: publish with `mur skill publish`, find them with `mur skill search`.\n";
 
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
         format!("{}...", &s[..max - 3])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::team::{TeamListResponse, TeamPattern};
+
+    fn pattern(name: &str) -> TeamPattern {
+        TeamPattern {
+            id: "p1".into(),
+            name: name.into(),
+            description: String::new(),
+            content: String::new(),
+            tags: vec!["rust".into()],
+            team_id: "t1".into(),
+            shared_by: "alice".into(),
+            members_using: 3,
+            combined_effectiveness: 0.5,
+            total_sessions: 7,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    /// The listing reads the legacy team-pattern endpoint, so it must say so
+    /// and must never present those entries as skills (which live in the
+    /// registry and are not queried here).
+    #[test]
+    fn team_list_labels_entries_as_legacy_patterns_not_skills() {
+        let resp = TeamListResponse {
+            patterns: vec![pattern("retry-loop")],
+            team_id: "t1".into(),
+            count: 1,
+        };
+        let out = render_team_patterns("t1", &resp);
+        assert!(out.contains("1 legacy pattern(s) in team 't1'"), "{out}");
+        assert!(out.contains("retry-loop"), "{out}");
+        assert!(out.contains("mur skill publish"), "{out}");
+        assert!(
+            !out.contains("skill(s)"),
+            "must not label patterns as skills: {out}"
+        );
+    }
+
+    #[test]
+    fn team_list_empty_does_not_claim_no_skills() {
+        let resp = TeamListResponse {
+            patterns: vec![],
+            team_id: "t1".into(),
+            count: 0,
+        };
+        let out = render_team_patterns("t1", &resp);
+        assert!(
+            out.contains("No legacy patterns shared in team 't1'"),
+            "{out}"
+        );
+        assert!(!out.contains("No skills"), "{out}");
+        assert!(out.contains("mur skill publish"), "{out}");
     }
 }

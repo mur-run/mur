@@ -12,7 +12,7 @@ pub mod inbox;
 pub mod outbox;
 
 #[allow(unused_imports)]
-pub use client::{DraftRecord, DraftsPendingResponse, SyncClient};
+pub use client::SyncClient;
 pub use cursor::{CursorStore, FetchCursor};
 pub use inbox::Inbox;
 pub use outbox::Outbox;

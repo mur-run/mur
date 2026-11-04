@@ -17,8 +17,7 @@ pub(super) async fn list_pipelines(
 ) -> Result<impl IntoResponse, AppError> {
     let store = state.pipeline_store()?;
     let pipelines = store.list_all().map_err(AppError::Internal)?;
-    let p_store = state.pattern_store()?;
-    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    let count = state.skill_count();
     Ok(wrap(pipelines, count))
 }
 
@@ -30,8 +29,7 @@ pub(super) async fn get_pipeline(
     let pipeline = store
         .get(&id)
         .map_err(|_| AppError::NotFound(format!("Pipeline '{}' not found", id)))?;
-    let p_store = state.pattern_store()?;
-    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    let count = state.skill_count();
     Ok(wrap(pipeline, count))
 }
 
@@ -72,8 +70,7 @@ pub(super) async fn create_pipeline(
 
     store.save(&pipeline).map_err(AppError::Internal)?;
     notify(&state, "pipeline:created", &req.id);
-    let p_store = state.pattern_store()?;
-    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    let count = state.skill_count();
     Ok((StatusCode::CREATED, wrap(pipeline, count)))
 }
 
@@ -103,8 +100,7 @@ pub(super) async fn update_pipeline(
     pipeline.updated_at = chrono::Utc::now();
     store.save(&pipeline).map_err(AppError::Internal)?;
     notify(&state, "pipeline:updated", &id);
-    let p_store = state.pattern_store()?;
-    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    let count = state.skill_count();
     Ok(wrap(pipeline, count))
 }
 
@@ -153,8 +149,7 @@ pub(super) async fn run_pipeline(
         .await
         .map_err(AppError::Internal)?;
 
-    let p_store = state.pattern_store()?;
-    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    let count = state.skill_count();
     Ok(wrap(output, count))
 }
 
@@ -209,7 +204,6 @@ pub(super) async fn run_pipeline_expr(
         .await
         .map_err(AppError::Internal)?;
 
-    let p_store = state.pattern_store()?;
-    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    let count = state.skill_count();
     Ok(wrap(output, count))
 }

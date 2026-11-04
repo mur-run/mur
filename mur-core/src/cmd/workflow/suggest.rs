@@ -12,10 +12,10 @@ pub(crate) fn cmd_suggest(create: bool, accept: Option<&str>, dismiss: Option<&s
     }
 
     // Drain companion nudge responses before listing pending.
-    let _ = crate::nudge::companion::drain_nudge_responses_in(
-        &crate::store::yaml::default_mur_dir(),
-        &|c| create_draft_workflow(&c.suggested_name, &c.title, "", &c.evidence_session_ids),
-    );
+    let _ =
+        crate::nudge::companion::drain_nudge_responses_in(&crate::store::default_mur_dir(), &|c| {
+            create_draft_workflow(&c.suggested_name, &c.title, "", &c.evidence_session_ids)
+        });
 
     use evolve::cooccurrence::CooccurrenceMatrix;
 
@@ -93,7 +93,7 @@ pub(crate) fn cmd_suggest(create: bool, accept: Option<&str>, dismiss: Option<&s
 }
 
 pub(crate) fn cmd_suggest_accept(id: &str) -> Result<()> {
-    let config_path = crate::store::yaml::default_mur_dir().join("config.yaml");
+    let config_path = crate::store::default_mur_dir().join("config.yaml");
     let cfg = mur_common::config::Config::load_or_default(&config_path);
     let path = crate::nudge::NudgeLedger::default_path();
     let mut ledger = crate::nudge::NudgeLedger::load(&path)?;
@@ -114,7 +114,7 @@ pub(crate) fn cmd_suggest_accept(id: &str) -> Result<()> {
 }
 
 pub(crate) fn cmd_suggest_dismiss(id: &str) -> Result<()> {
-    let config_path = crate::store::yaml::default_mur_dir().join("config.yaml");
+    let config_path = crate::store::default_mur_dir().join("config.yaml");
     let cfg = mur_common::config::Config::load_or_default(&config_path);
     let path = crate::nudge::NudgeLedger::default_path();
     let mut ledger = crate::nudge::NudgeLedger::load(&path)?;

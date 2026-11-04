@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 
 use crate::capture;
 use crate::inject;
-use crate::store::yaml::YamlStore;
 
 mod device;
 mod skill_install;
@@ -274,8 +273,7 @@ pub(crate) async fn run_fetch(server_url: &str, dry_run: bool) -> anyhow::Result
         ids_to_ack.push(s.id.to_string());
     }
 
-    let store = YamlStore::default_store()?;
-    let report = inbox.apply_all(&store)?;
+    let report = inbox.apply_all()?;
 
     println!(
         "fetched: {} signal(s) — applied {}, skipped {}, errors {}",

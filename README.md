@@ -1324,11 +1324,10 @@ opaque database lock-in.
 
 ```bash
 mur daemon serve     # web dashboard at http://localhost:3847
-mur dashboard        # terminal TUI dashboard
 ```
 
 <details>
-<summary><b>Full command tree</b> (36 top-level commands)</summary>
+<summary><b>Full command tree</b> (35 top-level commands)</summary>
 
 ```
 mur
@@ -1344,7 +1343,7 @@ mur
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
 ├── deep-research  setup · secret · status · ask   (web research with wizard UX)
 ├── skill        install · search · show · doctor · generate · suggest · evolve · recombine ·
-│                publish · audit · trust · exchange · drafts · eval …
+│                publish · audit · trust · eval …
 ├── notes        create · search · list · show
 ├── workflow     run · suggest · list · schedule · show · search · new · publish · install
 ├── session      start · stop · record · status · list · review · show · export · push
@@ -1358,7 +1357,6 @@ mur
 ├── project      index · search   (semantic code search)
 ├── code-nav     setup · doctor   (ast-grep + opt-in serena LSP navigation for an agent, sandboxed under ~/.mur/tools)
 ├── daemon       start · stop · restart · status · serve · sleep
-├── dashboard    terminal dashboard
 ├── browser      record · replay · auth · broker · list · show · export · status · doctor · setup · prune   (browser work through Playwright MCP;
 │                `list` tables recorded runs with a summary, domain, steps and run count — `--json` for all fields)
 ├── channel      approve · verify · repair · backfill-purpose   (HITL approval; verify checks a log against its signed head, repair restarts a damaged one)

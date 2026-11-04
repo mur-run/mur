@@ -274,7 +274,7 @@ fn add_succeeds_when_the_probe_is_unknown_for_a_non_credential_reason() {
 }
 
 /// `mur monitor add` writes under `crate::paths::mur_root`; the daemon that
-/// polls monitors reads `crate::store::yaml::default_mur_dir()`. They used to
+/// polls monitors reads `crate::store::default_mur_dir()`. They used to
 /// disagree under `MUR_HOME` (the daemon ignored it), so a monitor added there
 /// sat `sleeping` forever. Both now resolve through `mur_common::home` (#1696).
 #[test]
@@ -284,9 +284,9 @@ fn cli_and_daemon_agree_on_mur_home() {
     envg.set_var("MUR_HOME", d.path());
     assert_eq!(
         crate::paths::mur_root(None),
-        crate::store::yaml::default_mur_dir()
+        crate::store::default_mur_dir()
     );
-    assert_eq!(crate::store::yaml::default_mur_dir(), d.path());
+    assert_eq!(crate::store::default_mur_dir(), d.path());
 }
 
 #[test]

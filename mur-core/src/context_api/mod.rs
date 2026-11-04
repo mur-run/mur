@@ -1,24 +1,21 @@
-//! Context API — programmatic retrieve/ingest/feedback interface.
+//! Context API — programmatic retrieve interface.
 //!
-//! This module wraps MUR's existing scoring, gating, and feedback pipeline
-//! into a clean request/response interface for external tools.
+//! Wraps MUR's skill scoring and gating pipeline into a clean
+//! request/response interface for external tools (`POST /api/v1/context`).
+//! The former `ingest` / `feedback` halves wrote to the local Pattern store
+//! and were retired with it (Tier C3); skills are authored via `mur skill`.
 
 use std::path::Path;
 
 use anyhow::Result;
-use chrono::Utc;
-use mur_common::knowledge::KnowledgeBase;
-use mur_common::pattern::{Content, Origin, OriginTrigger, Pattern, PatternKind, Tier};
 use mur_common::skill::stats::LifecycleState;
 use serde::{Deserialize, Serialize};
 
-use crate::evolve::feedback;
 use crate::inject::hook;
 use crate::retrieve::gate::{Tier as GateTier, evaluate_query};
 use crate::retrieve::scoring::score_and_rank_generic_with_config;
 use crate::retrieve::skill_candidates::load_skill_candidates;
 use crate::store::config::load_config;
-use crate::store::yaml::YamlStore;
 
 /// Scope for context retrieval. Kept for request compatibility; skills carry
 /// no per-user/platform origin, so it no longer filters results.
@@ -71,67 +68,6 @@ pub struct ContextResponse {
     pub tokens_used: usize,
     pub formatted: String,
     pub injection_ids: Vec<String>,
-}
-
-/// Category for ingested knowledge.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum IngestCategory {
-    Preference,
-    Fact,
-    Rule,
-    Procedure,
-    Correction,
-}
-
-/// Request to ingest new knowledge.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IngestRequest {
-    pub content: String,
-    pub category: IngestCategory,
-    pub source: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user: Option<String>,
-    #[serde(default)]
-    pub related: Vec<String>,
-}
-
-/// Action taken by ingest.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum IngestAction {
-    Created,
-    Updated,
-}
-
-/// Response from ingestion.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IngestResponse {
-    pub pattern_id: String,
-    pub action: IngestAction,
-    pub similar: Vec<String>,
-}
-
-/// Signal for feedback submission.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum ContextFeedbackSignal {
-    Success,
-    Override,
-    Referenced,
-    Rejected,
-}
-
-/// Request to submit feedback on a pattern.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeedbackRequest {
-    pub pattern_id: String,
-    pub signal: ContextFeedbackSignal,
-    pub source: String,
 }
 
 // ─── Implementation ─────────────────────────────────────────────
@@ -197,216 +133,11 @@ fn retrieve_with_config(
     })
 }
 
-/// Ingest new knowledge as a pattern.
-pub fn ingest(req: &IngestRequest, store: &YamlStore) -> Result<IngestResponse> {
-    let kind = match req.category {
-        IngestCategory::Preference => PatternKind::Preference,
-        IngestCategory::Fact => PatternKind::Fact,
-        IngestCategory::Rule => PatternKind::Behavioral,
-        IngestCategory::Procedure => PatternKind::Procedure,
-        IngestCategory::Correction => PatternKind::Technical,
-    };
-
-    // Generate name from content if not provided
-    let name = req.name.clone().unwrap_or_else(|| {
-        let slug: String = req
-            .content
-            .chars()
-            .take(50)
-            .map(|c| {
-                if c.is_alphanumeric() {
-                    c.to_ascii_lowercase()
-                } else {
-                    '-'
-                }
-            })
-            .collect();
-        let slug = slug.trim_matches('-').to_string();
-        // Deduplicate consecutive dashes
-        let mut result = String::new();
-        let mut last_dash = false;
-        for c in slug.chars() {
-            if c == '-' {
-                if !last_dash {
-                    result.push(c);
-                }
-                last_dash = true;
-            } else {
-                result.push(c);
-                last_dash = false;
-            }
-        }
-        if result.is_empty() {
-            format!("ingested-{}", Utc::now().timestamp())
-        } else {
-            result
-        }
-    });
-
-    let description = req
-        .description
-        .clone()
-        .unwrap_or_else(|| req.content.chars().take(100).collect());
-
-    // Check for correction — update existing pattern
-    if req.category == IngestCategory::Correction {
-        // Try to find and update existing related patterns
-        for related_name in &req.related {
-            if let Ok(mut existing) = store.get(related_name) {
-                existing.base.content = Content::Plain(req.content.clone());
-                existing.base.updated_at = Utc::now();
-                existing.base.confidence = (existing.base.confidence + 0.05).min(1.0);
-                store.save(&existing)?;
-                return Ok(IngestResponse {
-                    pattern_id: related_name.clone(),
-                    action: IngestAction::Updated,
-                    similar: vec![],
-                });
-            }
-        }
-    }
-
-    // Best-effort dedup: check for similar patterns by keyword match
-    let similar = find_similar_by_keywords(&name, &description, store);
-
-    let pattern = Pattern {
-        base: KnowledgeBase {
-            schema: 2,
-            name: name.clone(),
-            description,
-            content: Content::Plain(req.content.clone()),
-            tier: Tier::Session,
-            importance: 0.5,
-            confidence: 0.7,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            ..Default::default()
-        },
-        kind: Some(kind),
-        #[allow(deprecated)] // transitional: user/platform fields being phased out
-        origin: Some(Origin {
-            source: req.source.clone(),
-            trigger: OriginTrigger::UserExplicit,
-            actor: None,
-            user: req.user.clone(),
-            platform: None,
-            confidence: 1.0,
-        }),
-        attachments: vec![],
-    };
-
-    store.save(&pattern)?;
-
-    Ok(IngestResponse {
-        pattern_id: name,
-        action: IngestAction::Created,
-        similar,
-    })
-}
-
-/// Find patterns with similar names/descriptions via keyword overlap.
-fn find_similar_by_keywords(name: &str, description: &str, store: &YamlStore) -> Vec<String> {
-    let words: Vec<String> = format!("{} {}", name, description)
-        .split_whitespace()
-        .map(|w| w.to_lowercase())
-        .filter(|w| w.len() > 3)
-        .collect();
-
-    if words.is_empty() {
-        return vec![];
-    }
-
-    let patterns = match store.list_all() {
-        Ok(p) => p,
-        Err(_) => return vec![],
-    };
-
-    let mut similar = Vec::new();
-    for p in &patterns {
-        if p.name == name {
-            continue;
-        }
-        let target = format!("{} {}", p.name, p.description).to_lowercase();
-        let overlap = words.iter().filter(|w| target.contains(w.as_str())).count();
-        if overlap >= words.len() / 2 && overlap >= 2 {
-            similar.push(p.name.clone());
-        }
-    }
-    similar.truncate(5);
-    similar
-}
-
-/// Submit feedback on a pattern.
-pub fn submit_feedback(req: &FeedbackRequest, store: &YamlStore) -> Result<()> {
-    let mut pattern = store.get(&req.pattern_id)?;
-
-    let signal = match req.signal {
-        ContextFeedbackSignal::Success => feedback::FeedbackSignal::Success,
-        ContextFeedbackSignal::Override => feedback::FeedbackSignal::Override,
-        ContextFeedbackSignal::Referenced => feedback::FeedbackSignal::Helpful,
-        ContextFeedbackSignal::Rejected => feedback::FeedbackSignal::Unhelpful,
-    };
-
-    feedback::apply_feedback(&mut pattern, signal);
-    store.save(&pattern)?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn make_store_with_patterns() -> (TempDir, YamlStore) {
-        let tmp = TempDir::new().unwrap();
-        let store = YamlStore::new(tmp.path().to_path_buf()).unwrap();
-
-        // Create a few test patterns
-        let p1 = Pattern {
-            base: KnowledgeBase {
-                name: "swift-testing".into(),
-                description: "Use @Test macro for Swift testing".into(),
-                content: Content::Plain("Use @Test macro instead of XCTest".into()),
-                tier: Tier::Project,
-                importance: 0.8,
-                confidence: 0.9,
-                ..Default::default()
-            },
-            kind: Some(PatternKind::Technical),
-            origin: None,
-            attachments: vec![],
-        };
-        store.save(&p1).unwrap();
-
-        let p2 = Pattern {
-            base: KnowledgeBase {
-                name: "prefer-chinese".into(),
-                description: "User prefers Traditional Chinese".into(),
-                content: Content::Plain("Always respond in Traditional Chinese".into()),
-                tier: Tier::Core,
-                importance: 0.9,
-                confidence: 0.95,
-                ..Default::default()
-            },
-            kind: Some(PatternKind::Preference),
-            #[allow(deprecated)] // transitional: user/platform fields being phased out
-            origin: Some(Origin {
-                source: "commander".into(),
-                trigger: OriginTrigger::UserExplicit,
-                actor: None,
-                user: Some("david".into()),
-                platform: None,
-                confidence: 1.0,
-            }),
-            attachments: vec![],
-        };
-        store.save(&p2).unwrap();
-
-        (tmp, store)
-    }
-
-    /// One skill on disk, loaded through the production loader.
     fn skills_home_with(name: &str, description: &str, abstract_: &str) -> TempDir {
         let home = TempDir::new().unwrap();
         let dir = home.path().join("skills").join(name);
@@ -475,73 +206,5 @@ mod tests {
         };
         let resp = retrieve(&req, &home.path().join("skills"), home.path()).unwrap();
         assert!(resp.patterns.is_empty());
-    }
-
-    #[test]
-    fn test_ingest_creates_pattern() {
-        let (_tmp, store) = make_store_with_patterns();
-        let req = IngestRequest {
-            content: "Always run tests before deploying".into(),
-            category: IngestCategory::Procedure,
-            source: "commander".into(),
-            name: Some("run-tests-before-deploy".into()),
-            description: None,
-            user: Some("david".into()),
-            related: vec![],
-        };
-        let resp = ingest(&req, &store).unwrap();
-        assert_eq!(resp.action, IngestAction::Created);
-        assert_eq!(resp.pattern_id, "run-tests-before-deploy");
-
-        // Verify pattern was saved
-        let p = store.get("run-tests-before-deploy").unwrap();
-        assert_eq!(p.effective_kind(), PatternKind::Procedure);
-        assert!(p.origin.is_some());
-        assert_eq!(p.origin.unwrap().source, "commander");
-    }
-
-    #[test]
-    fn test_ingest_detects_similar() {
-        let (_tmp, store) = make_store_with_patterns();
-        let req = IngestRequest {
-            content: "Use Swift Testing framework with @Test".into(),
-            category: IngestCategory::Fact,
-            source: "cli".into(),
-            name: Some("swift-test-framework".into()),
-            description: Some("Swift testing with @Test macro usage".into()),
-            user: None,
-            related: vec![],
-        };
-        let resp = ingest(&req, &store).unwrap();
-        assert_eq!(resp.action, IngestAction::Created);
-        // Should detect "swift-testing" as similar
-        // Similar detection may or may not match depending on keyword overlap
-        let _ = resp.similar; // validated by ingest succeeding
-    }
-
-    #[test]
-    fn test_feedback_success() {
-        let (_tmp, store) = make_store_with_patterns();
-        let req = FeedbackRequest {
-            pattern_id: "swift-testing".into(),
-            signal: ContextFeedbackSignal::Success,
-            source: "test".into(),
-        };
-        submit_feedback(&req, &store).unwrap();
-
-        // Verify evidence was updated
-        let p = store.get("swift-testing").unwrap();
-        assert!(p.evidence.success_signals > 0);
-    }
-
-    #[test]
-    fn test_feedback_pattern_not_found() {
-        let (_tmp, store) = make_store_with_patterns();
-        let req = FeedbackRequest {
-            pattern_id: "nonexistent-pattern".into(),
-            signal: ContextFeedbackSignal::Success,
-            source: "test".into(),
-        };
-        assert!(submit_feedback(&req, &store).is_err());
     }
 }

@@ -1,5 +1,5 @@
 use super::*;
-use mur_common::pattern::*;
+use mur_common::knowledge::*;
 use tempfile::TempDir;
 
 const TEST_DIM: i32 = 64;
@@ -17,31 +17,6 @@ async fn make_store_for_conformance() -> LanceDbStore {
     // leaked temp dirs get cleaned by the OS on reboot.
     std::mem::forget(tmp);
     store
-}
-
-fn make_pattern(name: &str) -> Pattern {
-    Pattern {
-        base: mur_common::knowledge::KnowledgeBase {
-            schema: 2,
-            name: name.into(),
-            description: format!("About {}", name),
-            content: Content::Plain("test content".into()),
-            tier: Tier::Session,
-            importance: 0.5,
-            confidence: 0.5,
-            tags: Tags::default(),
-            applies: Applies::default(),
-            evidence: Evidence::default(),
-            links: Links::default(),
-            lifecycle: Lifecycle::default(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            ..Default::default()
-        },
-        kind: None,
-        origin: None,
-        attachments: vec![],
-    }
 }
 
 fn make_workflow(name: &str) -> Workflow {
@@ -77,21 +52,21 @@ async fn test_build_and_search() {
     let tmp = TempDir::new().unwrap();
     let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
 
-    let patterns = vec![
-        (make_pattern("pattern-a"), random_embedding()),
-        (make_pattern("pattern-b"), {
+    let workflows = vec![
+        (make_workflow("wf-a"), random_embedding()),
+        (make_workflow("wf-b"), {
             let mut v = random_embedding();
             v[0] += 1.0;
             v
         }),
     ];
 
-    store.build_index(&patterns).await.unwrap();
+    store.build_unified_index(&workflows).await.unwrap();
 
     let results = store.search(&random_embedding(), 5, None).await.unwrap();
     assert!(!results.is_empty());
-    assert_eq!(results[0].name, "pattern-a");
-    assert_eq!(results[0].item_type, "pattern");
+    assert_eq!(results[0].name, "wf-a");
+    assert_eq!(results[0].item_type, "workflow");
 }
 
 #[tokio::test]
@@ -107,67 +82,22 @@ async fn test_rebuild_index() {
     let tmp = TempDir::new().unwrap();
     let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
 
-    let patterns = vec![(make_pattern("first"), random_embedding())];
-    store.build_index(&patterns).await.unwrap();
+    let first = vec![(make_workflow("first"), random_embedding())];
+    store.build_unified_index(&first).await.unwrap();
 
-    let patterns2 = vec![
-        (make_pattern("second"), random_embedding()),
-        (make_pattern("third"), {
+    let second = vec![
+        (make_workflow("second"), random_embedding()),
+        (make_workflow("third"), {
             let mut v = random_embedding();
             v[0] += 0.5;
             v
         }),
     ];
-    store.build_index(&patterns2).await.unwrap();
+    store.build_unified_index(&second).await.unwrap();
 
     let results = store.search(&random_embedding(), 10, None).await.unwrap();
     assert_eq!(results.len(), 2);
     assert!(results.iter().all(|r| r.name != "first"));
-}
-
-#[test]
-fn test_content_with_attachment_descriptions() {
-    let mut p = make_pattern("attach-test");
-    assert_eq!(
-        super::content_with_attachment_descriptions(&p),
-        "test content"
-    );
-
-    // Add attachments with descriptions
-    p.attachments = vec![
-        mur_common::pattern::Attachment {
-            att_type: mur_common::pattern::AttachmentType::Diagram,
-            format: mur_common::pattern::AttachmentFormat::Mermaid,
-            path: "attach-test/arch.mermaid".into(),
-            description: "System architecture overview".into(),
-        },
-        mur_common::pattern::Attachment {
-            att_type: mur_common::pattern::AttachmentType::Image,
-            format: mur_common::pattern::AttachmentFormat::Png,
-            path: "attach-test/screen.png".into(),
-            description: "Dashboard screenshot".into(),
-        },
-    ];
-
-    let text = super::content_with_attachment_descriptions(&p);
-    assert!(text.contains("test content"));
-    assert!(text.contains("System architecture overview"));
-    assert!(text.contains("Dashboard screenshot"));
-}
-
-#[test]
-fn test_content_with_empty_attachment_descriptions() {
-    let mut p = make_pattern("empty-desc");
-    p.attachments = vec![mur_common::pattern::Attachment {
-        att_type: mur_common::pattern::AttachmentType::Diagram,
-        format: mur_common::pattern::AttachmentFormat::Mermaid,
-        path: "empty-desc/flow.mermaid".into(),
-        description: "".into(), // empty description
-    }];
-
-    let text = super::content_with_attachment_descriptions(&p);
-    // Should not add extra newlines for empty descriptions
-    assert_eq!(text, "test content");
 }
 
 #[tokio::test]
@@ -407,37 +337,27 @@ async fn sources_delete_operations_work() {
 }
 
 #[tokio::test]
-async fn test_unified_index() {
+async fn test_unified_index_filters_by_item_type() {
     let tmp = TempDir::new().unwrap();
     let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
 
-    let patterns = vec![(make_pattern("pat-a"), random_embedding())];
-    let workflows = vec![(make_workflow("wf-a"), {
-        let mut v = random_embedding();
-        v[0] += 1.0;
-        v
-    })];
+    let workflows = vec![(make_workflow("wf-a"), random_embedding())];
+    store.build_unified_index(&workflows).await.unwrap();
 
-    store
-        .build_unified_index(&patterns, &workflows)
-        .await
-        .unwrap();
-
-    // Search all
     let results = store.search(&random_embedding(), 10, None).await.unwrap();
-    assert_eq!(results.len(), 2);
+    assert_eq!(results.len(), 1);
 
-    // Filter to patterns only
+    // Pattern rows no longer exist: the legacy filter yields nothing.
     let pat_results = store
         .search(&random_embedding(), 10, Some("pattern"))
         .await
         .unwrap();
-    assert!(pat_results.iter().all(|r| r.item_type == "pattern"));
+    assert!(pat_results.is_empty());
 
-    // Filter to workflows only
     let wf_results = store
         .search(&random_embedding(), 10, Some("workflow"))
         .await
         .unwrap();
+    assert_eq!(wf_results.len(), 1);
     assert!(wf_results.iter().all(|r| r.item_type == "workflow"));
 }

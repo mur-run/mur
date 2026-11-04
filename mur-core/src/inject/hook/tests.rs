@@ -1,6 +1,6 @@
 use super::*;
+use mur_common::knowledge::Content;
 use mur_common::knowledge::KnowledgeBase;
-use mur_common::pattern::Content;
 use mur_common::workflow::Step;
 
 fn make_workflow(desc: &str) -> Workflow {

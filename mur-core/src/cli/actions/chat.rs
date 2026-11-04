@@ -238,38 +238,6 @@ pub enum ConversationsAction {
 }
 
 #[derive(Subcommand)]
-pub enum DraftsAction {
-    /// List pending pattern drafts in a compact table.
-    List {
-        /// Only include drafts created within the last N days (default 30).
-        #[arg(long, default_value_t = 30)]
-        since: u32,
-    },
-    /// Show the full YAML + metadata for a single draft by id-prefix.
-    Show {
-        /// Unambiguous prefix of the draft's uuid (e.g. first 8 chars).
-        id: String,
-    },
-    /// Accept a draft locally: saves the embedded Pattern to ~/.mur/patterns/
-    /// with maturity=emerging. Does NOT yet notify the server (MVP).
-    Accept {
-        /// Unambiguous prefix of the draft's uuid.
-        id: String,
-        /// Override tier: session | project | core.
-        #[arg(long = "as-tier")]
-        as_tier: Option<String>,
-    },
-    /// Reject a draft server-side with an optional reason.
-    Reject {
-        /// Unambiguous prefix of the draft's uuid.
-        id: String,
-        /// Optional human-readable reason recorded on the draft.
-        #[arg(long)]
-        reason: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
 pub enum DeployAction {
     /// Start services (docker compose up)
     Up {

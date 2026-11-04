@@ -24,7 +24,6 @@ pub fn cmd_agent_reconnect(name: &str) -> Result<()> {
     }
 
     let inbox = crate::sync::inbox::Inbox::default_location()?;
-    let store = crate::store::yaml::YamlStore::default_store()?;
 
     // Best-effort P2c-2 signing at the flush boundary, mirroring the runtime
     // sleep-cycle: the CLI runs as the user, who owns the agent's key. A
@@ -46,7 +45,7 @@ pub fn cmd_agent_reconnect(name: &str) -> Result<()> {
         received.push(path.clone());
     }
 
-    let report = inbox.apply_all(&store)?;
+    let report = inbox.apply_all()?;
     println!(
         "Reconnected '{name}': {} signals flushed, {} applied, {} skipped",
         pending.len(),

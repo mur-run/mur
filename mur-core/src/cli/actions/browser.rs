@@ -292,7 +292,7 @@ pub enum DeepResearchAction {
 
 #[derive(Subcommand)]
 pub enum TeamAction {
-    /// List your teams (or patterns in a specific team)
+    /// List your teams (or, with --team, the legacy patterns shared in one)
     List {
         /// Team ID or slug (optional — lists your teams if omitted)
         #[arg(long, env = "MUR_TEAM_ID")]
@@ -302,20 +302,6 @@ pub enum TeamAction {
     Use {
         /// Team slug or UUID
         team: String,
-    },
-    /// Share a pattern to your team
-    Share {
-        /// Pattern name
-        name: String,
-        /// Team ID or slug (falls back to default set by `mur team use`)
-        #[arg(long, env = "MUR_TEAM_ID")]
-        team: Option<String>,
-    },
-    /// Pull latest team patterns
-    Sync {
-        /// Team ID or slug (falls back to default set by `mur team use`)
-        #[arg(long, env = "MUR_TEAM_ID")]
-        team: Option<String>,
     },
 }
 

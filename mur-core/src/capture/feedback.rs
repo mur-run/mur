@@ -1,15 +1,17 @@
 #![allow(dead_code)]
 //! Post-session feedback analyzer.
 //!
-//! After an AI CLI session ends, analyze whether injected patterns were
-//! helpful, contradicted, or ignored — pure keyword/string matching, no LLM.
+//! After an AI CLI session ends, analyze whether injected items (skills)
+//! were helpful, contradicted, or ignored — pure keyword/string matching, no
+//! LLM. The ledger field is still called `patterns` on disk
+//! (`~/.mur/last_injection.json`) so older readers keep parsing.
 
 use serde::{Deserialize, Serialize};
 
-/// Record of a pattern that was injected into a session.
+/// Record of one item (a skill) that was injected into a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InjectedPatternRecord {
-    /// Pattern name (kebab-case)
+pub struct InjectedItemRecord {
+    /// Item name (kebab-case skill name)
     pub name: String,
     /// First 100 chars of what was injected
     pub snippet: String,
@@ -45,7 +47,7 @@ pub struct InjectionRecord {
     pub timestamp: String,
     pub query: String,
     pub project: String,
-    pub patterns: Vec<InjectedPatternRecord>,
+    pub patterns: Vec<InjectedItemRecord>,
 }
 
 // ─── Contradiction phrases ────────────────────────────────────────
@@ -85,7 +87,7 @@ const CONTRADICTION_ZH: &[&str] = &[
 /// Designed to complete in <10ms for typical transcripts.
 pub fn analyze_session_feedback(
     transcript: &str,
-    injected: &[InjectedPatternRecord],
+    injected: &[InjectedItemRecord],
 ) -> Vec<SessionFeedback> {
     if injected.is_empty() {
         return Vec::new();
@@ -101,7 +103,7 @@ pub fn analyze_session_feedback(
 }
 
 fn analyze_single_pattern(
-    record: &InjectedPatternRecord,
+    record: &InjectedItemRecord,
     transcript_lower: &str,
     transcript_lines: &[&str],
 ) -> SessionFeedback {
@@ -325,8 +327,8 @@ fn injection_record_path() -> std::path::PathBuf {
 mod tests {
     use super::*;
 
-    fn record(name: &str, snippet: &str) -> InjectedPatternRecord {
-        InjectedPatternRecord {
+    fn record(name: &str, snippet: &str) -> InjectedItemRecord {
+        InjectedItemRecord {
             name: name.into(),
             snippet: snippet.into(),
         }
@@ -489,7 +491,7 @@ AI: Updated to use tracing for structured logging.";
             timestamp: "2026-02-25T12:00:00Z".into(),
             query: "fix this bug".into(),
             project: "my-project".into(),
-            patterns: vec![InjectedPatternRecord {
+            patterns: vec![InjectedItemRecord {
                 name: "swift-testing".into(),
                 snippet: "Use @Test macro instead of...".into(),
             }],
@@ -516,7 +518,7 @@ AI: Updated to use tracing for structured logging.";
             timestamp: "2026-02-25T12:00:00Z".into(),
             query: "fix this bug".into(),
             project: "my-project".into(),
-            patterns: vec![InjectedPatternRecord {
+            patterns: vec![InjectedItemRecord {
                 name: "test-pat".into(),
                 snippet: "Test snippet content".into(),
             }],

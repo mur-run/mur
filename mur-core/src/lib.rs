@@ -28,7 +28,6 @@ pub mod community;
 pub mod context_api;
 pub mod conversations;
 pub mod cross_agent;
-pub mod dashboard;
 pub mod discovery;
 pub mod evolve;
 pub mod executor;
@@ -83,4 +82,3 @@ pub mod server_agents;
 
 pub use mur_common::config::Config;
 pub use mur_common::event::MurEvent;
-pub use mur_common::pattern::Pattern;

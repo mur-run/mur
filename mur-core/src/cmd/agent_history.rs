@@ -4,7 +4,7 @@ use crate::store::versioned::agent::VersionedAgentStore;
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use crate::store::yaml::default_mur_dir;
+use crate::store::default_mur_dir;
 
 fn agents_dir() -> std::path::PathBuf {
     default_mur_dir().join("agents")

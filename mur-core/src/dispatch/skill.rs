@@ -326,21 +326,6 @@ pub(super) async fn run_skill(action: crate::cli::SkillAction) -> Result<()> {
             });
             cmd::skill_credit::cmd_credit(&home, &agent_name, &name, json)?
         }
-        crate::cli::SkillAction::Exchange { action } => match action {
-            ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
-            ExchangeAction::ImportAll => cmd::misc::cmd_exchange_import_all()?,
-            ExchangeAction::Export { name, dir } => cmd::misc::cmd_exchange_export(&name, dir)?,
-        },
-        crate::cli::SkillAction::Drafts { action } => match action {
-            DraftsAction::List { since } => cmd::drafts::cmd_drafts_list(since).await?,
-            DraftsAction::Show { id } => cmd::drafts::cmd_drafts_show(&id).await?,
-            DraftsAction::Accept { id, as_tier } => {
-                cmd::drafts::cmd_drafts_accept(&id, as_tier.as_deref()).await?
-            }
-            DraftsAction::Reject { id, reason } => {
-                cmd::drafts::cmd_drafts_reject(&id, reason.as_deref()).await?
-            }
-        },
         crate::cli::SkillAction::Eval { action } => match action {
             EvalAction::Run { suite, format } => {
                 let code = cmd::eval::cmd_eval_run(&suite, &format)?;

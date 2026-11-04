@@ -37,7 +37,7 @@ pub(crate) async fn cmd_session_stop(_analyze: bool, _reflect: bool) -> Result<(
                             .filter_map(|id| ledger.get(id).and_then(|r| r.candidate.clone()))
                             .collect();
                         if let Ok(n) = crate::nudge::companion::deliver_nudges_to_companions(
-                            &crate::store::yaml::default_mur_dir(),
+                            &crate::store::default_mur_dir(),
                             &surfaced_cands,
                             "en",
                         ) && n > 0

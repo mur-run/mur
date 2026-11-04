@@ -56,12 +56,7 @@ pub(super) async fn list_sessions(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<SessionInfo>>>, AppError> {
     let recordings = crate::session::list_recordings().map_err(AppError::Internal)?;
-    let count = state
-        .pattern_store()
-        .ok()
-        .and_then(|s| s.list_names().ok())
-        .map(|n| n.len())
-        .unwrap_or(0);
+    let count = state.skill_count();
 
     let sessions: Vec<SessionInfo> = recordings
         .into_iter()
@@ -112,12 +107,7 @@ pub(super) async fn get_session(
 
     let events = crate::session::read_events(&id).map_err(AppError::Internal)?;
     let modified_at: chrono::DateTime<chrono::Utc> = rec.modified.into();
-    let count = state
-        .pattern_store()
-        .ok()
-        .and_then(|s| s.list_names().ok())
-        .map(|n| n.len())
-        .unwrap_or(0);
+    let count = state.skill_count();
 
     let (source, started_at, stopped_at, title, tools_used, user_turns, assistant_turns) =
         if let Some(ref m) = rec.meta {
@@ -164,12 +154,7 @@ pub(super) async fn get_session_events(
 ) -> Result<Json<ApiResponse<Vec<crate::session::SessionEvent>>>, AppError> {
     let events = crate::session::read_events(&id)
         .map_err(|_| AppError::NotFound(format!("Session '{}' not found", id)))?;
-    let count = state
-        .pattern_store()
-        .ok()
-        .and_then(|s| s.list_names().ok())
-        .map(|n| n.len())
-        .unwrap_or(0);
+    let count = state.skill_count();
     Ok(wrap(events, count))
 }
 
@@ -207,11 +192,6 @@ pub(super) async fn patch_session(
     }
     let meta = crate::session::update_meta(&id, body.title)
         .map_err(|_| AppError::NotFound(format!("Session '{}' meta not found", id)))?;
-    let count = state
-        .pattern_store()
-        .ok()
-        .and_then(|s| s.list_names().ok())
-        .map(|n| n.len())
-        .unwrap_or(0);
+    let count = state.skill_count();
     Ok(wrap(meta, count))
 }

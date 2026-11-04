@@ -59,38 +59,20 @@ pub(crate) async fn cmd_inject(query: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::store::yaml::YamlStore;
     use crate::sync::inbox::Inbox;
-    use mur_common::knowledge::KnowledgeBase;
-    use mur_common::pattern::{Content, Pattern, Tier};
     use mur_common::{
         Actor, ActorSource, SIGNAL_SCHEMA_VERSION, Scope, Signal, SignalKind, SignalTarget,
     };
     use uuid::Uuid;
 
-    fn make_pattern(name: &str) -> Pattern {
-        Pattern {
-            base: KnowledgeBase {
-                name: name.into(),
-                description: "test".into(),
-                content: Content::Plain("body".into()),
-                tier: Tier::Session,
-                ..Default::default()
-            },
-            kind: None,
-            origin: None,
-            attachments: vec![],
-        }
-    }
-
+    /// Legacy pattern-targeted signals (frozen wire v1) must still drain
+    /// cleanly: parsed, acknowledged as skipped, file removed — never an
+    /// error that would leave the inbox wedged.
     #[test]
-    fn inbox_drain_applies_signals_to_store() {
+    fn inbox_drain_skips_legacy_pattern_signals() {
         let tmp = tempfile::tempdir().unwrap();
-        let patterns_dir = tmp.path().join("patterns");
         let inbox_dir = tmp.path().join("inbox");
         std::fs::create_dir_all(&inbox_dir).unwrap();
-        let store = YamlStore::new(patterns_dir).unwrap();
-        store.save(&make_pattern("drain-test")).unwrap();
         let signal = Signal {
             id: Uuid::new_v4(),
             emitted_at: chrono::Utc::now(),
@@ -112,10 +94,11 @@ mod tests {
             key_version: 0,
         };
         let inbox = Inbox::new(&inbox_dir).unwrap();
-        inbox.receive(&signal).unwrap();
-        let report = inbox.apply_all(&store).unwrap();
-        assert_eq!(report.applied, 1);
-        let p = store.get("drain-test").unwrap();
-        assert_eq!(p.evidence.success_signals, 1);
+        let path = inbox.receive(&signal).unwrap();
+        let report = inbox.apply_all().unwrap();
+        assert_eq!(report.applied, 0);
+        assert_eq!(report.skipped, 1);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert!(!path.exists(), "skipped signal file must be removed");
     }
 }

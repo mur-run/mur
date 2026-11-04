@@ -112,7 +112,7 @@ fn open_review_url(session_id: &str) {
 pub(crate) fn record_nudges_for_candidates(
     candidates: &[crate::nudge::WorkflowCandidate],
 ) -> anyhow::Result<Vec<String>> {
-    let config_path = crate::store::yaml::default_mur_dir().join("config.yaml");
+    let config_path = crate::store::default_mur_dir().join("config.yaml");
     let cfg = mur_common::config::Config::load_or_default(&config_path);
     if !cfg.nudge.enabled || candidates.is_empty() {
         return Ok(vec![]);

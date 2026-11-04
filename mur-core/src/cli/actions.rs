@@ -138,37 +138,18 @@ pub enum MurmurdAction {
 }
 
 #[derive(Subcommand)]
-pub enum ExchangeAction {
-    /// Import a single MKEF file
-    Import {
-        /// Path to MKEF YAML file
-        file: String,
-    },
-    /// Import all MKEF files from ~/.mur/exchange/
-    ImportAll,
-    /// Export a pattern to MKEF format
-    Export {
-        /// Pattern name to export
-        name: String,
-        /// Output directory (default: ~/.mur/exchange/)
-        #[arg(long)]
-        dir: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
 pub enum InternalsAction {
-    /// Rebuild the LanceDB vector index from YAML skill files
+    /// Rebuild the LanceDB vector index from workflow YAML files
     Reindex {
-        /// Initialise the versioned git store and commit all existing skills
+        /// Initialise the agents git store and commit all existing profiles
         /// in one bootstrap commit.
         #[arg(long)]
         bootstrap: bool,
     },
     /// Rebuild the versioned-store history index from git log (recovery only)
     RebuildIndex {
-        /// Which layer: `knowledge` (patterns/workflows) or `agents`
-        #[arg(long, default_value = "knowledge")]
+        /// Which layer: `agents` (the `knowledge` layer was retired)
+        #[arg(long, default_value = "agents")]
         layer: String,
     },
     /// Run a raw git subcommand against the knowledge or agents repo

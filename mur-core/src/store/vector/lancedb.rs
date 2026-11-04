@@ -9,7 +9,6 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
-use mur_common::pattern::Pattern;
 use mur_common::workflow::Workflow;
 use std::path::Path;
 use std::sync::Arc;
@@ -63,103 +62,32 @@ impl LanceDbStore {
         Path::new(self.db.uri()).join(format!("{table}.lance"))
     }
 
-    /// Build/rebuild the entire index from patterns + their embeddings.
-    #[allow(dead_code)] // Public API, used by tests
-    pub async fn build_index(&self, patterns: &[(Pattern, Vec<f32>)]) -> Result<()> {
+    /// Build/rebuild the knowledge index from workflows and their embeddings.
+    ///
+    /// The index used to carry Pattern rows too (`item_type = "pattern"`);
+    /// those were retired with the Pattern store (Tier C3). Skills have their
+    /// own index under `skill_index/`.
+    pub async fn build_unified_index(&self, workflows: &[(Workflow, Vec<f32>)]) -> Result<()> {
         // Drop existing table if any
         let tables = self.db.table_names().execute().await?;
         if tables.contains(&TABLE_NAME.to_string()) {
             self.db.drop_table(TABLE_NAME, &[]).await?;
         }
 
-        if patterns.is_empty() {
+        if workflows.is_empty() {
             return Ok(());
         }
 
         let schema = Self::schema(self.dimensions);
 
-        let names: Vec<&str> = patterns.iter().map(|(p, _)| p.name.as_str()).collect();
-        let descriptions: Vec<&str> = patterns
-            .iter()
-            .map(|(p, _)| p.description.as_str())
-            .collect();
-        let contents: Vec<String> = patterns
-            .iter()
-            .map(|(p, _)| content_with_attachment_descriptions(p))
-            .collect();
-        let content_refs: Vec<&str> = contents.iter().map(|s| s.as_str()).collect();
-        let tiers: Vec<String> = patterns
-            .iter()
-            .map(|(p, _)| format!("{:?}", p.tier).to_lowercase())
-            .collect();
-        let tier_refs: Vec<&str> = tiers.iter().map(|s| s.as_str()).collect();
-        let importances: Vec<f32> = patterns.iter().map(|(p, _)| p.importance as f32).collect();
-        let item_types: Vec<&str> = vec!["pattern"; patterns.len()];
+        let mut names: Vec<String> = Vec::with_capacity(workflows.len());
+        let mut descriptions: Vec<String> = Vec::with_capacity(workflows.len());
+        let mut contents: Vec<String> = Vec::with_capacity(workflows.len());
+        let mut tiers: Vec<String> = Vec::with_capacity(workflows.len());
+        let mut importances: Vec<f32> = Vec::with_capacity(workflows.len());
+        let mut item_types: Vec<String> = Vec::with_capacity(workflows.len());
+        let mut all_vectors: Vec<f32> = Vec::new();
 
-        // Build FixedSizeList for vectors
-        let all_vectors: Vec<f32> = patterns.iter().flat_map(|(_, v)| v.clone()).collect();
-        let values = Float32Array::from(all_vectors);
-        let field = Arc::new(Field::new("item", DataType::Float32, true));
-        let vector_array = FixedSizeListArray::new(field, self.dimensions, Arc::new(values), None);
-
-        let batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![
-                Arc::new(StringArray::from(names)),
-                Arc::new(StringArray::from(descriptions)),
-                Arc::new(StringArray::from(content_refs)),
-                Arc::new(StringArray::from(tier_refs)),
-                Arc::new(Float32Array::from(importances)),
-                Arc::new(StringArray::from(item_types)),
-                Arc::new(vector_array),
-            ],
-        )?;
-
-        let batches = RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
-        let reader: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(batches);
-        self.db.create_table(TABLE_NAME, reader).execute().await?;
-
-        Ok(())
-    }
-
-    /// Build/rebuild a unified index from patterns AND workflows with their embeddings.
-    pub async fn build_unified_index(
-        &self,
-        patterns: &[(Pattern, Vec<f32>)],
-        workflows: &[(Workflow, Vec<f32>)],
-    ) -> Result<()> {
-        // Drop existing table if any
-        let tables = self.db.table_names().execute().await?;
-        if tables.contains(&TABLE_NAME.to_string()) {
-            self.db.drop_table(TABLE_NAME, &[]).await?;
-        }
-
-        let total = patterns.len() + workflows.len();
-        if total == 0 {
-            return Ok(());
-        }
-
-        let schema = Self::schema(self.dimensions);
-
-        // Collect fields from patterns
-        let mut names: Vec<String> = patterns.iter().map(|(p, _)| p.name.clone()).collect();
-        let mut descriptions: Vec<String> = patterns
-            .iter()
-            .map(|(p, _)| p.description.clone())
-            .collect();
-        let mut contents: Vec<String> = patterns
-            .iter()
-            .map(|(p, _)| content_with_attachment_descriptions(p))
-            .collect();
-        let mut tiers: Vec<String> = patterns
-            .iter()
-            .map(|(p, _)| format!("{:?}", p.tier).to_lowercase())
-            .collect();
-        let mut importances: Vec<f32> = patterns.iter().map(|(p, _)| p.importance as f32).collect();
-        let mut item_types: Vec<String> = vec!["pattern".into(); patterns.len()];
-        let mut all_vectors: Vec<f32> = patterns.iter().flat_map(|(_, v)| v.clone()).collect();
-
-        // Append fields from workflows
         for (w, v) in workflows {
             names.push(w.name.clone());
             descriptions.push(w.description.clone());
@@ -201,7 +129,7 @@ impl LanceDbStore {
     }
 
     /// Search for similar items by embedding vector.
-    /// Optionally filter by item_type ("pattern" or "workflow").
+    /// Optionally filter by item_type (`"workflow"`; `"pattern"` rows no longer exist).
     pub async fn search(
         &self,
         query_embedding: &[f32],
@@ -305,18 +233,6 @@ impl LanceDbStore {
             .context("creating sources table")?;
         Ok(())
     }
-}
-
-/// Build the content string for indexing, including attachment descriptions.
-fn content_with_attachment_descriptions(pattern: &Pattern) -> String {
-    let mut text = pattern.content.as_text().into_owned();
-    for att in &pattern.attachments {
-        if !att.description.is_empty() {
-            text.push_str("\n\n");
-            text.push_str(&att.description);
-        }
-    }
-    text
 }
 
 /// Result of a vector search.
