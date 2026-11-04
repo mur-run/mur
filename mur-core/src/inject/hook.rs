@@ -21,7 +21,7 @@
 
 use mur_common::workflow::Workflow;
 
-use crate::capture::feedback::{InjectedPatternRecord, InjectionRecord, write_injection_record};
+use crate::capture::feedback::{InjectedItemRecord, InjectionRecord, write_injection_record};
 use crate::evolve::cooccurrence::CooccurrenceMatrix;
 
 // ── InjectedItem: decoupled injection representation (Pattern→Skill migration) ─
@@ -355,7 +355,7 @@ pub fn format_unified_injection_items(
 
 /// Record injected items (Skill pathway).
 pub fn record_injection_items(query: &str, project: &str, items: &[InjectedItem]) {
-    let records: Vec<InjectedPatternRecord> = items
+    let records: Vec<InjectedItemRecord> = items
         .iter()
         .map(|item| {
             let snippet = if item.content_text.len() > 100 {
@@ -363,7 +363,7 @@ pub fn record_injection_items(query: &str, project: &str, items: &[InjectedItem]
             } else {
                 item.content_text.clone()
             };
-            InjectedPatternRecord {
+            InjectedItemRecord {
                 name: item.name.clone(),
                 snippet,
             }

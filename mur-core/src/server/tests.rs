@@ -6,11 +6,7 @@ use http_body_util::BodyExt;
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
-use mur_common::knowledge::KnowledgeBase;
-use mur_common::pattern::*;
-
 use super::*;
-use crate::store::yaml::YamlStore;
 
 fn test_state(tmp: &tempfile::TempDir) -> AppState {
     let patterns_dir = tmp.path().join("patterns");
@@ -58,27 +54,28 @@ fn skill_body(name: &str) -> serde_json::Value {
     })
 }
 
-fn make_test_pattern(name: &str) -> Pattern {
-    Pattern {
-        base: KnowledgeBase {
-            schema: 2,
-            name: name.to_string(),
-            description: format!("Test: {}", name),
-            content: Content::Plain(format!("Content for {}", name)),
-            tier: Tier::Session,
-            confidence: 0.8,
-            tags: Tags {
-                topics: vec!["rust".into(), "testing".into()],
-                ..Tags::default()
-            },
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            ..Default::default()
-        },
-        kind: None,
-        origin: None,
-        attachments: vec![],
+/// Write a minimal installed skill under `<mur_home>/skills/<name>/` with
+/// the given tags and `requires`, bypassing the HTTP create route.
+fn install_test_skill(state: &AppState, name: &str, tags: &[&str], requires: &[&str]) {
+    let dir = state.skills_dir().join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut yaml = format!(
+        "name: {name}\nversion: 1.0.0\npublisher: human:t\ndescription: Test {name}\ncategory: context\n"
+    );
+    if !tags.is_empty() {
+        yaml.push_str("tags:\n");
+        for t in tags {
+            yaml.push_str(&format!("  - {t}\n"));
+        }
     }
+    if !requires.is_empty() {
+        yaml.push_str("requires:\n");
+        for r in requires {
+            yaml.push_str(&format!("  - name: {r}\n"));
+        }
+    }
+    yaml.push_str("content:\n  abstract: a test skill body\n");
+    std::fs::write(dir.join("skill.yaml"), yaml).unwrap();
 }
 
 async fn body_json(resp: axum::response::Response) -> serde_json::Value {
@@ -266,9 +263,8 @@ async fn test_get_stats() {
     let tmp = tempfile::tempdir().unwrap();
     let state = test_state(&tmp);
 
-    let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
-    store.save(&make_test_pattern("stat-1")).unwrap();
-    store.save(&make_test_pattern("stat-2")).unwrap();
+    install_test_skill(&state, "stat-1", &[], &[]);
+    install_test_skill(&state, "stat-2", &[], &[]);
 
     let app = build_router(state);
 
@@ -285,6 +281,9 @@ async fn test_get_stats() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     assert_eq!(json["data"]["total_patterns"], 2);
+    assert_eq!(json["data"]["by_category"]["context"], 2);
+    assert_eq!(json["data"]["by_lifecycle"]["draft"], 2);
+    assert_eq!(json["meta"]["pattern_count"], 2);
 }
 
 #[tokio::test]
@@ -292,8 +291,7 @@ async fn test_get_tags() {
     let tmp = tempfile::tempdir().unwrap();
     let state = test_state(&tmp);
 
-    let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
-    store.save(&make_test_pattern("tagged-1")).unwrap();
+    install_test_skill(&state, "tagged-1", &["rust", "testing"], &[]);
 
     let app = build_router(state);
 
@@ -310,7 +308,9 @@ async fn test_get_tags() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     let tags = json["data"].as_array().unwrap();
-    assert!(!tags.is_empty());
+    assert_eq!(tags.len(), 2);
+    assert_eq!(tags[0]["name"], "rust");
+    assert_eq!(tags[0]["count"], 1);
 }
 
 #[tokio::test]
@@ -474,17 +474,14 @@ async fn test_get_links() {
     let tmp = tempfile::tempdir().unwrap();
     let state = test_state(&tmp);
 
-    let mut p = make_test_pattern("linked-pattern");
-    p.links.related = vec!["other-pattern".into()];
-    let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
-    store.save(&p).unwrap();
+    install_test_skill(&state, "linked-skill", &[], &["other-skill"]);
 
     let app = build_router(state);
 
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/v1/links/linked-pattern")
+                .uri("/api/v1/links/linked-skill")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -495,7 +492,7 @@ async fn test_get_links() {
     let json = body_json(resp).await;
     let related = json["data"]["related"].as_array().unwrap();
     assert_eq!(related.len(), 1);
-    assert_eq!(related[0], "other-pattern");
+    assert_eq!(related[0], "other-skill");
 }
 
 // ─── Context API endpoint tests ────────────────────────────
@@ -533,97 +530,29 @@ async fn test_context_retrieve_200() {
     assert!(json["data"]["formatted"].is_string());
 }
 
+/// `/api/v1/ingest` and `/api/v1/feedback` wrote to the retired Pattern
+/// store; they must be unmounted. As in `pattern_routes_are_gone`, an
+/// unmatched mutation has no handler and the GET-only SPA fallback answers
+/// 405 — a 2xx/4xx JSON body would mean a handler is still wired.
 #[tokio::test]
-async fn test_context_ingest_201() {
+async fn ingest_and_feedback_routes_are_gone() {
     let tmp = tempfile::tempdir().unwrap();
-    let state = test_state(&tmp);
-    let app = build_router(state);
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/ingest")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"content":"Run tests before deploy","category":"procedure","source":"test","name":"test-deploy-rule"}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::CREATED);
-    let json = body_json(resp).await;
-    assert_eq!(json["data"]["action"], "created");
-}
-
-#[tokio::test]
-async fn test_context_ingest_readonly_403() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = test_state_readonly(&tmp);
-    let app = build_router(state);
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/ingest")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"content":"test","category":"fact","source":"x"}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn test_context_feedback_200() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = test_state(&tmp);
-    let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
-    store.save(&make_test_pattern("fb-pattern")).unwrap();
-
-    let app = build_router(state);
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/feedback")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"pattern_id":"fb-pattern","signal":"success","source":"test"}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::OK);
-}
-
-#[tokio::test]
-async fn test_context_feedback_404() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = test_state(&tmp);
-    let app = build_router(state);
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/feedback")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"pattern_id":"nonexistent","signal":"success","source":"test"}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let app = build_router(test_state(&tmp));
+    for uri in ["/api/v1/ingest", "/api/v1/feedback"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED, "{uri}");
+    }
 }
 
 // ── Exchange rate handler tests ────────────────────────────────────────────

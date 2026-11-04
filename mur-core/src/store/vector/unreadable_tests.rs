@@ -172,7 +172,7 @@ async fn pattern_rebuild_replaces_unreadable_table() {
     assert!(is_unreadable(&err), "{err:#}");
 
     store
-        .build_unified_index(&[], &[])
+        .build_unified_index(&[])
         .await
         .expect("rebuild must replace an unreadable table");
     assert!(store.search(&[0.5; DIM as usize], 3, None).await.is_ok());

@@ -19,7 +19,11 @@ fn canonical_pair(a: &str, b: &str) -> (String, String) {
     }
 }
 
-/// A group of patterns that frequently co-occur.
+/// A group of items that frequently co-occur.
+///
+/// Its only consumer was the terminal dashboard, retired in Tier C3; the
+/// clustering stays as the seam for `mur workflow suggest`.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatternCluster {
     /// Pattern names in this cluster
@@ -75,6 +79,7 @@ impl CooccurrenceMatrix {
     }
 
     /// Get the co-occurrence count for a specific pair.
+    #[allow(dead_code)]
     pub fn get_count(&self, a: &str, b: &str) -> u32 {
         let key = Self::pair_key(a, b);
         self.pairs.get(&key).copied().unwrap_or(0)
@@ -100,6 +105,7 @@ impl CooccurrenceMatrix {
     /// 1. Start with all pairs above `min_cooccurrence`
     /// 2. Build adjacency from strong pairs
     /// 3. Find connected components as clusters
+    #[allow(dead_code)]
     pub fn find_clusters(&self, min_cooccurrence: u32) -> Vec<PatternCluster> {
         // Build adjacency list from pairs above threshold
         let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
@@ -204,8 +210,9 @@ impl CooccurrenceMatrix {
     }
 }
 
-/// Generate a workflow name from a cluster of pattern names.
+/// Generate a workflow name from a cluster of item names.
 /// Extracts common prefix segments from kebab-case names.
+#[allow(dead_code)]
 fn generate_cluster_name(names: &[String]) -> String {
     if names.is_empty() {
         return "unnamed-workflow".to_string();

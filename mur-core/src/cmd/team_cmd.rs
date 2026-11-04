@@ -1,10 +1,12 @@
-use anyhow::Result;
-use mur_common::knowledge::KnowledgeBase;
-use mur_common::pattern::*;
+//! `mur team list|use` — team membership and default-team selection.
+//!
+//! `mur team share` / `mur team sync` were retired with the local Pattern
+//! store (Tier C3); skills are shared through the registry
+//! (`mur skill publish` / `mur skill install`).
 
-use crate::community;
+use anyhow::Result;
+
 use crate::store::config as store_config;
-use crate::store::yaml::YamlStore;
 use crate::team;
 
 pub(crate) async fn cmd_team_use(slug: &str) -> Result<()> {
@@ -22,7 +24,6 @@ pub(crate) async fn cmd_team_use(slug: &str) -> Result<()> {
     } else {
         println!("  Default team set to: {}", team_id);
     }
-    println!("  Run `mur team sync` to pull patterns.");
     Ok(())
 }
 
@@ -56,11 +57,11 @@ pub(crate) async fn cmd_team_list(team_id: &str) -> Result<()> {
     let resp = team::list_team_patterns(&client, team_id).await?;
 
     if resp.patterns.is_empty() {
-        println!("  No patterns shared in team '{}'.", team_id);
+        println!("  No skills shared in team '{}'.", team_id);
         return Ok(());
     }
 
-    println!("  {} pattern(s) in team '{}':\n", resp.count, team_id);
+    println!("  {} skill(s) in team '{}':\n", resp.count, team_id);
     println!(
         "  {:<30}  {:>8}  {:>12}  {:<15}  TAGS",
         "NAME", "MEMBERS", "EFFECTIVENESS", "SHARED BY"
@@ -77,94 +78,6 @@ pub(crate) async fn cmd_team_list(team_id: &str) -> Result<()> {
             truncate(&tags, 25),
         );
     }
-    Ok(())
-}
-
-pub(crate) async fn cmd_team_share(name: &str, team_id: &str) -> Result<()> {
-    let store = YamlStore::default_store()?;
-    let pattern = store.get(name)?;
-
-    let mut tags: Vec<String> = pattern.base.tags.languages.clone();
-    tags.extend(pattern.base.tags.topics.clone());
-
-    // Sanitize before sharing
-    let mut sanitize_pattern = pattern.clone();
-    community::sanitize_pattern(&mut sanitize_pattern);
-
-    let sanitized_content = sanitize_pattern.base.content.as_text();
-    let sanitized_desc = sanitize_pattern.base.description.clone();
-
-    let client = reqwest::Client::new();
-    let resp = team::share_to_team(
-        &client,
-        team_id,
-        name,
-        &sanitized_desc,
-        &sanitized_content,
-        &tags,
-    )
-    .await?;
-
-    println!("  Shared '{}' to team '{}'!", name, team_id);
-    println!("  Pattern ID: {}", resp.pattern_id);
-    Ok(())
-}
-
-pub(crate) async fn cmd_team_sync(team_id: &str) -> Result<()> {
-    let client = reqwest::Client::new();
-    let resp = team::sync_team(&client, team_id).await?;
-
-    if resp.patterns.is_empty() {
-        println!("  No new patterns to sync from team '{}'.", team_id);
-        return Ok(());
-    }
-
-    let store = YamlStore::default_store()?;
-    let mut synced = 0;
-
-    for tp in &resp.patterns {
-        let slug = tp.name.to_lowercase().replace(' ', "-");
-        if store.exists(&slug) {
-            println!("  Skipped '{}' (already exists)", tp.name);
-            continue;
-        }
-
-        let pattern = Pattern {
-            base: KnowledgeBase {
-                name: slug,
-                description: tp.description.clone(),
-                content: Content::Plain(tp.content.clone()),
-                tier: Tier::Project,
-                tags: Tags {
-                    languages: vec![],
-                    topics: tp.tags.clone(),
-                    extra: std::collections::HashMap::new(),
-                },
-                ..Default::default()
-            },
-            kind: None,
-            #[allow(deprecated)] // transitional: user/platform fields being phased out
-            origin: Some(Origin {
-                source: format!("team:{}", team_id),
-                trigger: OriginTrigger::CommunityShared,
-                actor: None,
-                user: None,
-                platform: None,
-                confidence: 0.7,
-            }),
-            attachments: vec![],
-        };
-        store.save(&pattern)?;
-        println!("  Synced: {}", tp.name);
-        synced += 1;
-    }
-
-    println!(
-        "\n  Synced {} of {} patterns from team '{}'.",
-        synced,
-        resp.patterns.len(),
-        team_id
-    );
     Ok(())
 }
 

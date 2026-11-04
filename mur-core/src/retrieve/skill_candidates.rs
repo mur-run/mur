@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use mur_common::pattern::Tier;
+use mur_common::knowledge::Tier;
 use mur_common::skill::manifest::SkillManifest;
 use mur_common::skill::stats::{LifecycleState, SkillStats};
 use mur_common::skill::types::Priority;

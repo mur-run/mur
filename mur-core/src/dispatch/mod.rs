@@ -32,26 +32,13 @@ use crate::cli::{
     AgentSecretAction, AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction,
     BrowserAction, CapabilityAction, ChannelAction, ChatAction, Cli, CodeNavAction,
     CommanderAction, Commands, ConversationsAction, DaemonAction, DeepResearchAction, DeployAction,
-    DraftsAction, EvalAction, ExchangeAction, FleetAction, HookEvent, InternalsAction,
-    MurmurdAction, OfficialAction, OpenAction, ProjectAction, ScheduleAction, SessionAction,
-    SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    EvalAction, FleetAction, HookEvent, InternalsAction, MurmurdAction, OfficialAction, OpenAction,
+    ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction,
+    WorkflowAction,
 };
-use crate::store::config as store_config;
-use crate::{cmd, dashboard, team, verify};
+use crate::{cmd, team, verify};
 
 /// Resolve an optional --team arg, falling back to config's default team.
-fn resolve_team_arg(arg: Option<String>) -> Result<String> {
-    if let Some(t) = arg {
-        return Ok(t);
-    }
-    let cfg = store_config::load_config()?;
-    cfg.sync.team_id.ok_or_else(|| {
-        anyhow::anyhow!(
-            "No team specified. Pass --team <slug> or run `mur team use <slug>` to set a default."
-        )
-    })
-}
-
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         // Deprecated: use `mur notes search`
@@ -281,9 +268,6 @@ pub async fn run(cli: Cli) -> Result<()> {
                 .await?
         }
         Commands::Session { action } => run_session(action).await?,
-        Commands::Dashboard => {
-            dashboard::render_dashboard()?;
-        }
         Commands::Fleet { action } => run_fleet(action).await?,
         Commands::Capability { action } => match action {
             CapabilityAction::List { agent } => {
@@ -402,18 +386,6 @@ pub async fn run(cli: Cli) -> Result<()> {
                 None => cmd::team_cmd::cmd_team_list_mine().await?,
             },
             TeamAction::Use { team } => cmd::team_cmd::cmd_team_use(&team).await?,
-            TeamAction::Share { name, team } => {
-                let slug = resolve_team_arg(team)?;
-                let client = reqwest::Client::new();
-                let team_id = team::resolve_team_id(&client, &slug).await?;
-                cmd::team_cmd::cmd_team_share(&name, &team_id).await?
-            }
-            TeamAction::Sync { team } => {
-                let slug = resolve_team_arg(team)?;
-                let client = reqwest::Client::new();
-                let team_id = team::resolve_team_id(&client, &slug).await?;
-                cmd::team_cmd::cmd_team_sync(&team_id).await?
-            }
         },
         Commands::Init {
             hooks,
@@ -459,14 +431,6 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::notes::NotesAction::Show { name } => cmd::notes_cmd::cmd_show(&name)?,
         },
         // Deprecated: use `mur skill exchange`
-        Commands::Exchange { action } => {
-            eprintln!("# mur exchange: use `mur skill exchange`");
-            match action {
-                ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
-                ExchangeAction::ImportAll => cmd::misc::cmd_exchange_import_all()?,
-                ExchangeAction::Export { name, dir } => cmd::misc::cmd_exchange_export(&name, dir)?,
-            }
-        }
         Commands::Verify { file, all } => {
             // Initialize known commands from the clap tree so verify doesn't
             // need a hardcoded list.
@@ -500,19 +464,6 @@ pub async fn run(cli: Cli) -> Result<()> {
             cmd::sync_cmd::run_fetch(&config.server.url, dry_run).await?;
         }
         // Deprecated: use `mur skill drafts`
-        Commands::Drafts { action } => {
-            eprintln!("# mur drafts: use `mur skill drafts`");
-            match action {
-                DraftsAction::List { since } => cmd::drafts::cmd_drafts_list(since).await?,
-                DraftsAction::Show { id } => cmd::drafts::cmd_drafts_show(&id).await?,
-                DraftsAction::Accept { id, as_tier } => {
-                    cmd::drafts::cmd_drafts_accept(&id, as_tier.as_deref()).await?
-                }
-                DraftsAction::Reject { id, reason } => {
-                    cmd::drafts::cmd_drafts_reject(&id, reason.as_deref()).await?
-                }
-            }
-        }
         // Deprecated: use `mur session discard`
         Commands::Exit | Commands::Quit => {
             eprintln!("# mur exit/quit: use `mur session discard`");

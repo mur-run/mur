@@ -1,7 +1,5 @@
 use anyhow::Result;
 
-use crate::store::yaml::YamlStore;
-
 /// `mur stats` — a roll-up of the skill store.
 ///
 /// Reported Patterns until workflow-engine v2 removed that pipeline, after
@@ -588,42 +586,6 @@ fn embedding_probe_addr(emb: &mur_common::config::EmbeddingConfig) -> Option<Str
     } else {
         None
     }
-}
-
-pub(crate) fn cmd_exchange_import(file: &str) -> Result<()> {
-    let store = YamlStore::default_store()?;
-    let path = std::path::Path::new(file);
-    match crate::store::exchange::import_mkef_file(path, &store)? {
-        Some(name) => println!("✅ Imported pattern: {}", name),
-        None => println!("⏭️  Pattern already exists, skipped"),
-    }
-    Ok(())
-}
-
-pub(crate) fn cmd_exchange_import_all() -> Result<()> {
-    let store = YamlStore::default_store()?;
-    let exchange_dir = crate::store::exchange::default_exchange_dir();
-    let imported = crate::store::exchange::import_mkef_dir(&exchange_dir, &store)?;
-    if imported.is_empty() {
-        println!("No new patterns to import from {}", exchange_dir.display());
-    } else {
-        println!("✅ Imported {} patterns:", imported.len());
-        for name in &imported {
-            println!("  - {}", name);
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn cmd_exchange_export(name: &str, dir: Option<String>) -> Result<()> {
-    let store = YamlStore::default_store()?;
-    let pattern = store.get(name)?;
-    let exchange_dir = dir
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(crate::store::exchange::default_exchange_dir);
-    let path = crate::store::exchange::export_mkef(&pattern, &exchange_dir)?;
-    println!("✅ Exported to {}", path.display());
-    Ok(())
 }
 
 pub(crate) async fn cmd_login() -> Result<()> {

@@ -32,7 +32,7 @@ pub struct NudgeLedger {
 
 impl NudgeLedger {
     pub fn default_path() -> PathBuf {
-        Self::default_path_in(&crate::store::yaml::default_mur_dir())
+        Self::default_path_in(&crate::store::default_mur_dir())
     }
     pub fn default_path_in(mur_dir: &Path) -> PathBuf {
         mur_dir.join("nudges.json")

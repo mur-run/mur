@@ -298,7 +298,7 @@ Submodules:
 
 ## Skills System
 
-Skills are installable agent capabilities packaged as YAML or Markdown manifests. Each skill lives under `~/.mur/skills/<name>/skill.yaml` (or `skill.md`). The CLI surface is `mur skill {validate,fmt,list,show,remove,search,info,audit,trust,from-pattern,doctor,consolidate,reindex-vec,reindex-stats}`.
+Skills are installable agent capabilities packaged as YAML or Markdown manifests. Each skill lives under `~/.mur/skills/<name>/skill.yaml` (or `skill.md`). The CLI surface is `mur skill {validate,fmt,list,show,remove,search,info,audit,trust,doctor,consolidate,reindex-vec,reindex-stats}`.
 
 Key modules:
 
@@ -612,11 +612,11 @@ capture/ → store/ → retrieve/ → inject/
 
 - **`capture/`** — Noise filter, significance scoring, feedback extraction. Ambient session capture lives in `session/ambient.rs` (hooks record every event); the harvest gate (`harvest/`) turns idle sessions into workflow proposals.
 - **`store/`** — `YamlStore` (transitional Pattern store), `LanceDbStore` (vector index, always rebuildable), `WorkflowYamlStore`. Vector store abstracted via `store::vector::VectorStore` (`LanceDbStore` now; `QdrantStore` P1.3).
-- **`retrieve/`** — `score_and_rank_generic()` over the `Retrievable` trait (skills + workflows; Pattern transitional); applies recency / effectiveness / importance / decay / length normalization
+- **`retrieve/`** — `score_and_rank_generic()` over the `Retrievable` trait (skills + workflows); applies recency / effectiveness / importance / decay / length normalization
 - **`inject/`** — `hook.rs` formats skills + workflows for injection; `sync.rs` writes tool-specific configs (Claude Code hooks, Gemini CLI, etc.)
 - **`evolve/`** — Skill lifecycle (Draft→Emerging→Stable→Canonical), feedback, co-occurrence
 
-**Pattern removal (workflow-engine v2 P1a/P1b, 2026-06-11):** the legacy Pattern pipeline (emergence/fingerprint mining, pattern decay sweeps, pattern injection) is removed. `mur migrate --patterns` exports `~/.mur/patterns/` to markdown then deletes it. Skills (`category: Workflow` et al.) are the knowledge objects; `context_api::ingest`/`submit_feedback` still write transitional Patterns until the Notes migration (W3b+).
+**Pattern removal (workflow-engine v2 P1a/P1b, 2026-06-11):** the legacy Pattern pipeline (emergence/fingerprint mining, pattern decay sweeps, pattern injection) is removed. `mur migrate --patterns` exports `~/.mur/patterns/` to markdown then deletes it. Skills (`category: Workflow` et al.) are the knowledge objects. **Tier C3 (#2264)** deleted the `Pattern` type itself: `/api/v1/ingest` + `/api/v1/feedback`, `mur dashboard`, `mur team share|sync`, `mur skill exchange` (MKEF), and `mur skill drafts` went with it; the Signal wire stays frozen at v1 — `SignalTarget::Pattern` / `NewDraftPattern` still parse (the draft payload is now opaque JSON) and the inbox acknowledges and skips them.
 
 Sources pipeline: `mur-core/src/sources/` adapters (Obsidian / Notion / Joplin) feed the same retrieve pipeline.
 

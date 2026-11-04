@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use chrono::Utc;
 use mur_common::config::RetrievalConfig;
-use mur_common::pattern::Tier;
+use mur_common::knowledge::Tier;
 
 /// A retrievable knowledge item. The hybrid scorer is generic over this trait so
 /// skills and notes (both `LoadedSkill`) share one scoring pipeline.

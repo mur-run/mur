@@ -723,7 +723,7 @@ pub fn parameterize_workflow(
 
     // Replace in content
     let new_content = apply_parameterization(&workflow.base.content.as_text(), suggestions);
-    workflow.base.content = crate::pattern::Content::Plain(new_content);
+    workflow.base.content = crate::knowledge::Content::Plain(new_content);
 
     // Replace in steps
     for step in &mut workflow.steps {

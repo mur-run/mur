@@ -8,8 +8,8 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use mur_common::knowledge::Content;
 use mur_common::knowledge::KnowledgeBase;
-use mur_common::pattern::Content;
 use mur_common::workflow::{Step, VarType, Variable, Workflow};
 
 use crate::extract::{ExtractedWorkflow, extract_workflow};

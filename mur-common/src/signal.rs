@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::skill::manifest::SkillManifest;
-use crate::{Actor, Pattern, Scope};
+use crate::{Actor, Scope};
 
 // ─── FROZEN SCHEMA — v1 ──────────────────────────────────────────────────
 // This module is the canonical wire format between commander and mur.
@@ -151,11 +151,15 @@ pub struct SignalBatchResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SignalTarget {
-    /// Refers to an existing pattern by name within a scope.
+    /// Refers to a legacy pattern by name within a scope. The local Pattern
+    /// store was retired (Tier C3); receivers skip this target. The variant
+    /// stays so frozen-v1 signals from older peers still parse.
     Pattern { name: String, scope: Scope },
-    /// Carries a fully-formed Pattern as a draft proposal (Channel 2/3).
+    /// Legacy draft-pattern proposal (Channel 2/3). The payload used to be a
+    /// typed `Pattern`; it is now carried opaquely so the wire shape is
+    /// byte-for-byte unchanged while nothing on this side can consume it.
     /// Boxed to keep the enum variant sizes comparable.
-    NewDraftPattern { payload: Box<Pattern> },
+    NewDraftPattern { payload: Box<serde_json::Value> },
     /// Refers to an installed skill by name.
     Skill { name: String, scope: Scope },
     /// Carries a fully-formed SkillManifest as a draft proposal.
@@ -346,30 +350,24 @@ scope: { kind: personal }
 
     #[test]
     fn signal_with_new_draft_pattern_roundtrip() {
-        use crate::knowledge::KnowledgeBase;
-        use crate::pattern::{Content, Tier};
-
-        // Build a minimal Pattern to box into the target payload.
-        let kb = KnowledgeBase {
-            name: "draft-pat".into(),
-            description: "chat-extracted draft".into(),
-            content: Content::Plain("use pnpm not npm".into()),
-            tier: Tier::Session,
-            ..Default::default()
-        };
-        let pat = Pattern {
-            base: kb,
-            kind: None,
-            origin: None,
-            attachments: Vec::new(),
-        };
+        // The Pattern type is gone, but frozen-v1 peers still emit
+        // `new_draft_pattern` with a full pattern body. It must parse and
+        // re-serialize with the payload intact (opaque), so the wire is
+        // byte-for-byte unchanged.
+        let payload = serde_json::json!({
+            "schema": 2,
+            "name": "draft-pat",
+            "description": "chat-extracted draft",
+            "content": "use pnpm not npm",
+            "tier": "session"
+        });
 
         let sig = Signal {
             id: Uuid::new_v4(),
             emitted_at: Utc::now(),
             actor: sample_actor(),
             target: SignalTarget::NewDraftPattern {
-                payload: Box::new(pat.clone()),
+                payload: Box::new(payload.clone()),
             },
             kind: SignalKind::NewPatternProposal {
                 origin_context: "slack DM".into(),
@@ -382,10 +380,13 @@ scope: { kind: personal }
         };
         let y = serde_yaml::to_string(&sig).unwrap();
         assert!(y.contains("kind: new_draft_pattern"));
+        assert!(y.contains("name: draft-pat"));
         let back: Signal = serde_yaml::from_str(&y).unwrap();
         match back.target {
-            SignalTarget::NewDraftPattern { payload } => {
-                assert_eq!(payload.name, "draft-pat");
+            SignalTarget::NewDraftPattern {
+                payload: back_payload,
+            } => {
+                assert_eq!(*back_payload, payload);
             }
             _ => panic!("expected NewDraftPattern variant"),
         }

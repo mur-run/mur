@@ -2,8 +2,8 @@
 //!
 //! Pure business logic — no HTTP types. Called by the server handler.
 
+use mur_common::knowledge::Content;
 use mur_common::knowledge::KnowledgeBase;
-use mur_common::pattern::Content;
 use mur_common::workflow::{Step, VarType, Variable, Workflow};
 
 /// Result of extracting a workflow from session events.

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use mur_common::knowledge::KnowledgeBase;
-use mur_common::pattern::*;
+use mur_common::knowledge::*;
 use std::io::{self, Write};
 
 use crate::evolve;

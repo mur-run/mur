@@ -1,13 +1,12 @@
 //! Daemon-side sleep cycle — fires after `idle_threshold_minutes` of no events,
-//! drains the Signal inbox into the pattern store.
+//! drains the Signal inbox into per-skill stats.
 
 use anyhow::Result;
 use mur_core::store::config::load_config;
-use mur_core::store::yaml::YamlStore;
 use mur_core::sync::inbox::Inbox;
 
 /// Run one sleep-cycle pass:
-/// 1. Drain `~/.mur/inbox/` → apply all pending Signals to patterns.
+/// 1. Drain `~/.mur/inbox/` → apply all pending Signals to skill stats.
 ///
 /// Best-effort — errors are logged but never propagate to the event loop.
 pub fn run_sleep_cycle() {
@@ -17,9 +16,8 @@ pub fn run_sleep_cycle() {
 }
 
 fn try_run_sleep_cycle() -> Result<()> {
-    let store = YamlStore::default_store()?;
     let inbox = Inbox::default_location()?;
-    let report = inbox.apply_all(&store)?;
+    let report = inbox.apply_all()?;
     if report.applied > 0 || report.skipped > 0 {
         eprintln!(
             "murmurd sleep-cycle: inbox drained — applied={} skipped={} errors={}",

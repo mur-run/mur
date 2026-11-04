@@ -166,8 +166,8 @@ pub enum Commands {
     /// Rebuild index from YAML files
     #[command(hide = true)]
     Reindex {
-        /// Initialise the versioned git store and commit all existing patterns
-        /// in one bootstrap commit. Run once to enable `mur pattern history`.
+        /// Initialise the agents git store and commit all existing profiles
+        /// in one bootstrap commit. Run once to enable `mur agent history`.
         #[arg(long)]
         bootstrap: bool,
     },
@@ -194,8 +194,6 @@ pub enum Commands {
         #[arg(long, value_name = "ID")]
         dismiss: Option<String>,
     },
-    /// Terminal dashboard
-    Dashboard,
     /// Inject context-aware patterns (auto-detects project from pwd)
     #[command(hide = true)]
     Context {
@@ -265,12 +263,6 @@ pub enum Commands {
         /// Read-only mode (reject all write operations)
         #[arg(long)]
         readonly: bool,
-    },
-    /// Import/export patterns in MKEF (MUR Knowledge Exchange Format)
-    #[command(hide = true)]
-    Exchange {
-        #[command(subcommand)]
-        action: ExchangeAction,
     },
     /// Manage murmur agents (create, list, status, send, stop, ...)
     Agent {
@@ -363,12 +355,6 @@ see `mur skill <command> --help`.")]
         /// Preview what would be fetched without downloading
         #[arg(long)]
         dry_run: bool,
-    },
-    /// List / show / accept / reject pending pattern drafts (Channel 2/3 proposals).
-    #[command(hide = true)]
-    Drafts {
-        #[command(subcommand)]
-        action: DraftsAction,
     },
     /// Stop recording without export (alias: quit)
     #[command(hide = true)]

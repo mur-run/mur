@@ -24,7 +24,6 @@ mod conversations;
 #[allow(dead_code)]
 mod cross_agent;
 mod daemon;
-mod dashboard;
 mod dispatch;
 #[allow(dead_code)]
 mod mobile;

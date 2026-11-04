@@ -1,15 +1,13 @@
 //! Receive side of the sync protocol — reads Signal YAML files from
-//! `~/.mur/inbox/` and applies Evidence updates to patterns via [`YamlStore`].
+//! `~/.mur/inbox/` and applies skill signals to the per-skill event log and
+//! `stats.json`. Legacy pattern-targeted signals (frozen wire v1) are parsed,
+//! acknowledged, and skipped: the local Pattern store is gone (Tier C3).
 
 use anyhow::{Context, Result};
-use chrono::Utc;
-use mur_common::pattern::Contribution;
-use mur_common::{Signal, SignalKind, SignalTarget};
+use mur_common::{Signal, SignalTarget};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
-
-use crate::store::yaml::YamlStore;
 
 /// Subdirectory of the inbox holding signals received over the authenticated
 /// commander wire (bearer-token HTTP). See [`Inbox::receive_wire`].
@@ -25,7 +23,7 @@ pub fn signal_file_name(signal: &Signal) -> String {
 }
 
 /// Receive side of the sync protocol — reads Signal YAML files and applies
-/// Evidence updates to patterns via [`YamlStore`].
+/// skill signals to `~/.mur/skills/<name>/{events.jsonl,stats.json}`.
 pub struct Inbox {
     dir: PathBuf,
     mur_home: PathBuf,
@@ -173,7 +171,7 @@ impl Inbox {
     ///
     /// Signal IDs are tracked in `.seen.yaml` to prevent double-counting when
     /// the same signal UUID is re-emitted (e.g. after a retry in FlushService).
-    pub fn apply_all(&self, store: &YamlStore) -> Result<ApplyReport> {
+    pub fn apply_all(&self) -> Result<ApplyReport> {
         let mut report = ApplyReport::default();
         let require_sig = mur_common::signal::require_sig_from_env();
         let mut seen = self.load_seen_ids();
@@ -216,7 +214,7 @@ impl Inbox {
                 continue;
             }
 
-            match self.apply_one(store, &signal) {
+            match self.apply_one(&signal) {
                 Ok(true) => {
                     report.applied += 1;
                     newly_seen.push(signal.id);
@@ -266,64 +264,12 @@ impl Inbox {
         Ok(())
     }
 
-    fn apply_one(&self, store: &YamlStore, signal: &Signal) -> Result<bool> {
+    fn apply_one(&self, signal: &Signal) -> Result<bool> {
         match &signal.target {
-            SignalTarget::Pattern { name, .. } => {
-                if !store.exists(name) {
-                    // Pattern not present locally — skip (not an error)
-                    return Ok(false);
-                }
-                let mut pattern = store.get(name)?;
-
-                let actor_key = signal.actor.key();
-                let contribution = pattern
-                    .evidence
-                    .contributions
-                    .entry(actor_key)
-                    .or_insert_with(|| Contribution {
-                        success_signals: 0,
-                        override_signals: 0,
-                        last_seen: Utc::now(),
-                    });
-                contribution.last_seen = signal.emitted_at;
-
-                match &signal.kind {
-                    SignalKind::ExecutionSuccess => {
-                        contribution.success_signals += 1;
-                        pattern.evidence.success_signals += 1;
-                    }
-                    SignalKind::ExecutionFailure { .. } => {
-                        pattern.evidence.failure_signals += 1;
-                    }
-                    SignalKind::UserOverrideAtBreakpoint { .. } => {
-                        contribution.override_signals += 3; // spec §4.1 guard rail: 3x weight
-                        pattern.evidence.override_signals += 3;
-                    }
-                    SignalKind::AutoFixApplied { .. } => {
-                        contribution.override_signals += 1;
-                        pattern.evidence.override_signals += 1;
-                    }
-                    SignalKind::NewPatternProposal { .. } => {
-                        // A proposal should have arrived as NewDraftPattern target;
-                        // Pattern-targeted NewPatternProposal is a shape mismatch.
-                        return Ok(false);
-                    }
-                    // Skill signals are handled by apply_skill_signals.
-                    SignalKind::SkillExecutionSuccess
-                    | SignalKind::SkillExecutionFailure { .. }
-                    | SignalKind::NewDraftSkill { .. } => return Ok(false),
-                }
-                store.save(&pattern)?;
-                Ok(true)
-            }
-            SignalTarget::NewDraftPattern { payload } => {
-                // Never overwrite a pattern the user may have edited
-                if store.exists(&payload.name) {
-                    return Ok(false);
-                }
-                store.save(payload)?;
-                Ok(true)
-            }
+            // Legacy pattern targets (frozen wire v1). The local Pattern store
+            // was retired; the signal is acknowledged (so the peer stops
+            // retrying) but nothing is applied.
+            SignalTarget::Pattern { .. } | SignalTarget::NewDraftPattern { .. } => Ok(false),
             SignalTarget::NewDraftSkill { payload } => {
                 // Reject a path-traversal name from a remote peer before it
                 // touches the filesystem: the name is joined into
@@ -347,62 +293,14 @@ impl Inbox {
                 mur_common::skill::write_to_dir(&skill_dir, payload)?;
                 Ok(true)
             }
-            // Skill-targeted signals are handled by apply_skill_signals.
-            SignalTarget::Skill { .. } => Ok(false),
+            SignalTarget::Skill { .. } => self.apply_skill_one(signal),
         }
     }
 
-    /// Apply all skill-targeted signals in the inbox. Mutates `events.jsonl`
-    /// and `stats.json` for each target skill.
+    /// Apply every pending signal. Kept as an alias of [`Inbox::apply_all`]
+    /// for callers written when pattern and skill signals had separate passes.
     pub fn apply_skill_signals(&self) -> Result<ApplyReport> {
-        use mur_common::{Signal, SignalTarget};
-
-        let mut report = ApplyReport::default();
-        let require_sig = mur_common::signal::require_sig_from_env();
-        let mut seen = self.load_seen_ids();
-        let mut newly_seen: Vec<uuid::Uuid> = Vec::new();
-
-        for (p, require) in self.scan(require_sig)? {
-            let Ok(text) = std::fs::read_to_string(&p) else {
-                continue;
-            };
-            let Ok(signal) = serde_yaml::from_str::<Signal>(&text) else {
-                report.errors.push(format!("parse error: {}", p.display()));
-                continue;
-            };
-            if seen.contains(&signal.id) {
-                let _ = std::fs::remove_file(&p);
-                report.skipped += 1;
-                continue;
-            }
-            let target_is_skill = matches!(signal.target, SignalTarget::Skill { .. });
-            if !target_is_skill {
-                continue; // handled by apply_all (pattern branch)
-            }
-            // Signature gate (P2c-2) — same rules as apply_all.
-            if let Err(reason) = self.check_signal_sig(&signal, require) {
-                report.errors.push(format!("{}: {reason}", p.display()));
-                let _ = std::fs::remove_file(&p);
-                continue;
-            }
-            match self.apply_skill_one(&signal) {
-                Ok(true) => {
-                    report.applied += 1;
-                    newly_seen.push(signal.id);
-                    let _ = std::fs::remove_file(&p);
-                }
-                Ok(false) => {
-                    report.skipped += 1;
-                    let _ = std::fs::remove_file(&p);
-                }
-                Err(e) => {
-                    report.errors.push(format!("{}: {e}", p.display()));
-                }
-            }
-        }
-        seen.extend(newly_seen.iter().copied());
-        self.save_seen_ids(&seen)?;
-        Ok(report)
+        self.apply_all()
     }
 
     fn apply_skill_one(&self, signal: &mur_common::Signal) -> Result<bool> {

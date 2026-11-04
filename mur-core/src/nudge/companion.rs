@@ -125,7 +125,7 @@ pub fn drain_nudge_responses_in(
 ) -> anyhow::Result<usize> {
     use crate::nudge::{NudgeEmitter, NudgeLedger};
 
-    let config_path = crate::store::yaml::default_mur_dir().join("config.yaml");
+    let config_path = crate::store::default_mur_dir().join("config.yaml");
     let cfg = mur_common::config::Config::load_or_default(&config_path);
     let ledger_path = NudgeLedger::default_path_in(mur_dir);
     let mut ledger = NudgeLedger::load(&ledger_path)?;

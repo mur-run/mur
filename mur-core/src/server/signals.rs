@@ -27,12 +27,12 @@ pub struct RejectedSignal {
     pub reason: String,
 }
 
-/// Receive a batch of sync signals from commander and apply them to pattern evidence.
+/// Receive a batch of sync signals from commander and apply them to skill stats.
 ///
 /// # Concurrency note
 /// This endpoint uses a two-phase write: `receive` appends YAML files to the inbox,
-/// then `apply_all` reads and applies them. Under concurrent requests the last writer
-/// wins per pattern (the YAML store uses atomic rename). This is acceptable because
+/// then `apply_all` reads and applies them. Skill stats are merged under an
+/// exclusive file lock (`SkillStats::merge_in_place`). This is acceptable because
 /// the commander daemon runs as a single process with one `FlushService`, so concurrent
 /// batches from the same process are not expected in practice.
 pub async fn batch_signals(
@@ -43,7 +43,6 @@ pub async fn batch_signals(
         return Err(AppError::Readonly);
     }
 
-    let store = state.pattern_store()?;
     let inbox_dir = state
         .patterns_dir
         .parent()
@@ -65,7 +64,7 @@ pub async fn batch_signals(
     }
 
     if !accepted.is_empty()
-        && let Err(e) = inbox.apply_all(&store).map(|report| {
+        && let Err(e) = inbox.apply_all().map(|report| {
             if !report.errors.is_empty() {
                 tracing::warn!(
                     "signals/batch: {} signal(s) accepted but {} failed to apply: {:?}",
@@ -87,8 +86,6 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
-    use mur_common::knowledge::KnowledgeBase;
-    use mur_common::pattern::{Content, Pattern, Tier};
     use mur_common::{
         Actor, ActorSource, SIGNAL_SCHEMA_VERSION, Scope, Signal, SignalKind, SignalTarget,
     };
@@ -97,24 +94,19 @@ mod tests {
 
     use crate::server::build_router;
     use crate::server::tests::test_state_for_signals;
-    use crate::store::yaml::YamlStore;
 
-    fn make_pattern(name: &str) -> Pattern {
-        Pattern {
-            base: KnowledgeBase {
-                name: name.into(),
-                description: "test".into(),
-                content: Content::Plain("body".into()),
-                tier: Tier::Session,
-                ..Default::default()
-            },
-            kind: None,
-            origin: None,
-            attachments: vec![],
-        }
+    /// Stub an installed skill so the inbox applies signals to it.
+    fn install_stub_skill(mur_home: &std::path::Path, name: &str) {
+        let skill_dir = mur_home.join("skills").join(name);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("skill.yaml"),
+            format!("name: {name}\nversion: 1.0.0\n"),
+        )
+        .unwrap();
     }
 
-    fn exec_success_signal(pattern_name: &str) -> Signal {
+    fn exec_success_signal(skill_name: &str) -> Signal {
         Signal {
             id: Uuid::new_v4(),
             emitted_at: chrono::Utc::now(),
@@ -124,11 +116,11 @@ mod tests {
                 display_name: None,
                 resolved_user_id: None,
             },
-            target: SignalTarget::Pattern {
-                name: pattern_name.into(),
+            target: SignalTarget::Skill {
+                name: skill_name.into(),
                 scope: Scope::Personal,
             },
-            kind: SignalKind::ExecutionSuccess,
+            kind: SignalKind::SkillExecutionSuccess,
             scope: Scope::Personal,
             confidence: 0.9,
             schema_version: SIGNAL_SCHEMA_VERSION,
@@ -138,11 +130,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn batch_signals_accepted_and_updates_evidence() {
+    async fn batch_signals_accepted_and_updates_skill_stats() {
         let tmp = tempfile::tempdir().unwrap();
         let state = test_state_for_signals(&tmp);
-        let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
-        store.save(&make_pattern("p1")).unwrap();
+        install_stub_skill(tmp.path(), "p1");
 
         let app = build_router(state);
         let body = serde_json::json!({
@@ -166,11 +157,12 @@ mod tests {
         assert_eq!(json["accepted"].as_array().unwrap().len(), 1);
         assert_eq!(json["rejected"].as_array().unwrap().len(), 0);
 
-        let updated = YamlStore::new(tmp.path().join("patterns"))
-            .unwrap()
-            .get("p1")
-            .unwrap();
-        assert_eq!(updated.evidence.success_signals, 1);
+        let stats = mur_common::skill::stats::SkillStats::load(
+            &mur_common::skill::stats::SkillStats::path(tmp.path(), "p1"),
+        )
+        .unwrap()
+        .expect("stats.json written by the inbox");
+        assert_eq!(stats.success_count, 1);
     }
 
     #[tokio::test]

@@ -1,23 +1,17 @@
 //! `mur internals rebuild-index / git` — versioned store maintenance (E1 W3).
 
-use crate::store::versioned::{VersionedYamlStore, agent::VersionedAgentStore};
+use crate::store::versioned::agent::VersionedAgentStore;
 use anyhow::{Context, Result, bail};
 
-use crate::store::yaml::default_mur_dir;
+use crate::store::default_mur_dir;
 
 pub(crate) fn cmd_rebuild_index(layer: &str) -> Result<()> {
     let mur_dir = default_mur_dir();
     match layer {
-        "knowledge" => {
-            let root = &mur_dir;
-            let mut store = if root.join(".git").exists() {
-                VersionedYamlStore::open(root).with_context(|| "open knowledge versioned store")?
-            } else {
-                VersionedYamlStore::init(root).with_context(|| "init knowledge versioned store")?
-            };
-            store.rebuild_index()?;
-            println!("Rebuilt knowledge index at {}", root.display());
-        }
+        "knowledge" => bail!(
+            "The knowledge-layer versioned store (patterns) was retired; \
+             there is no index to rebuild. Use `--layer agents`."
+        ),
         "agents" => {
             let root = mur_dir.join("agents");
             let mut store = if root.join(".git").exists() {

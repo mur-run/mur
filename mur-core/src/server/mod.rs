@@ -28,7 +28,6 @@ use tower_http::cors::{AllowHeaders, AllowMethods, CorsLayer};
 use crate::store::pipeline_yaml::PipelineYamlStore;
 use crate::store::spot_rate::{fetch_usd_rate, fetch_usd_rates};
 use crate::store::workflow_yaml::WorkflowYamlStore;
-use crate::store::yaml::YamlStore;
 
 mod context;
 mod governance;
@@ -45,7 +44,7 @@ mod workflows;
 #[cfg(test)]
 mod tests;
 
-use context::{context_feedback, context_ingest, context_retrieve};
+use context::context_retrieve;
 use pipelines::{
     create_pipeline, delete_pipeline, get_pipeline, list_pipelines, run_pipeline,
     run_pipeline_expr, update_pipeline, validate_pipeline,
@@ -102,8 +101,10 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub(super) fn pattern_store(&self) -> Result<YamlStore, AppError> {
-        YamlStore::new(self.patterns_dir.clone()).map_err(AppError::Internal)
+    /// Number of installed skills — the `meta.pattern_count` envelope field
+    /// (historical name kept for client compatibility).
+    pub(super) fn skill_count(&self) -> usize {
+        stats::load_installed_skills(&self.skills_dir()).len()
     }
 
     pub(super) fn workflow_store(&self) -> Result<WorkflowYamlStore, AppError> {
@@ -114,7 +115,7 @@ impl AppState {
         PipelineYamlStore::new(self.pipelines_dir.clone()).map_err(AppError::Internal)
     }
 
-    /// `~/.mur/skills/` derived from `patterns_dir` sibling.
+    /// `~/.mur/skills/` — sibling of `patterns_dir` (which only anchors the home).
     pub(super) fn skills_dir(&self) -> std::path::PathBuf {
         self.patterns_dir
             .parent()
@@ -233,8 +234,6 @@ pub fn build_router_with_auth(state: AppState, auth_token: Option<Arc<str>>) -> 
         .route("/api/v1/workflows/search", post(search_workflows))
         // Context API (retrieve, ingest, feedback)
         .route("/api/v1/context", post(context_retrieve))
-        .route("/api/v1/ingest", post(context_ingest))
-        .route("/api/v1/feedback", post(context_feedback))
         // Cloud-mode signal ingestion
         .route("/api/v1/core/signals/batch", post(batch_signals))
         // Sessions

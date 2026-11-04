@@ -8,8 +8,8 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::Deserialize;
 
+use mur_common::knowledge::Content;
 use mur_common::knowledge::KnowledgeBase;
-use mur_common::pattern::Content;
 use mur_common::workflow::{Step, Variable, Workflow};
 
 use crate::store::config::load_config;
@@ -90,8 +90,7 @@ pub(super) async fn list_workflows(
 ) -> Result<impl IntoResponse, AppError> {
     let wf_store = state.workflow_store()?;
     let workflows = wf_store.list_all().map_err(AppError::Internal)?;
-    let p_store = state.pattern_store()?;
-    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    let count = state.skill_count();
     Ok(wrap(workflows, count))
 }
 
@@ -103,8 +102,7 @@ pub(super) async fn get_workflow(
     let workflow = store
         .get(&id)
         .map_err(|_| AppError::NotFound(format!("Workflow '{}' not found", id)))?;
-    let p_store = state.pattern_store()?;
-    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    let count = state.skill_count();
     Ok(wrap(workflow, count))
 }
 
@@ -178,8 +176,7 @@ pub(super) async fn create_workflow(
 
     store.save(&workflow).map_err(AppError::Internal)?;
     notify(&state, "workflow:created", &req.name);
-    let p_store = state.pattern_store()?;
-    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    let count = state.skill_count();
     Ok((StatusCode::CREATED, wrap(workflow, count)))
 }
 
@@ -245,8 +242,7 @@ pub(super) async fn update_workflow(
     }
 
     notify(&state, "workflow:updated", &workflow.name);
-    let p_store = state.pattern_store()?;
-    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    let count = state.skill_count();
     Ok(wrap(workflow, count))
 }
 
@@ -288,12 +284,7 @@ pub(super) async fn extract_workflow_from_session(
         crate::extract::extract_workflow(&session_id, &events)
     };
 
-    let count = state
-        .pattern_store()
-        .ok()
-        .and_then(|s| s.list_names().ok())
-        .map(|n| n.len())
-        .unwrap_or(0);
+    let count = state.skill_count();
 
     Ok(wrap(extracted.workflow, count))
 }

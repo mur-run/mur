@@ -116,7 +116,7 @@ async fn daemon_main() -> Result<()> {
     eprintln!("murmurd started (pid {})", state.pid);
 
     // §4.2.7 — startup store health checks (best-effort)
-    let mur_dir = mur_core::store::yaml::default_mur_dir();
+    let mur_dir = mur_core::store::default_mur_dir();
     store_health::run(&mur_dir);
     // Fleet run state moved out of `fleets/<name>/` into `fleet-state/`.
     // The daemon runs outside every agent sandbox, so this is the pass that

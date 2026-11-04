@@ -346,18 +346,6 @@ pub enum SkillAction {
         #[arg(long)]
         json: bool,
     },
-    #[command(display_order = 26)]
-    /// Import/export skills in MKEF format
-    Exchange {
-        #[command(subcommand)]
-        action: crate::cli::actions::ExchangeAction,
-    },
-    #[command(display_order = 27)]
-    /// Manage pending skill drafts
-    Drafts {
-        #[command(subcommand)]
-        action: crate::cli::actions::DraftsAction,
-    },
     #[command(display_order = 72)]
     /// Run eval suites
     Eval {
