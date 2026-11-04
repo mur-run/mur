@@ -399,10 +399,18 @@ pub(super) fn rebuild_after_resize(
     // only time the viewport height changes at all.
     let h = viewport_h_for(size.1);
     let banner = app.welcome_applies().then(|| app.welcome_banner());
-    purge_and_reanchor(terminal, h, banner.as_deref())?;
+    // Reset the flush cursor BEFORE the purge, not after: `purge_and_reanchor`
+    // wipes screen and scrollback first and only then queries the cursor
+    // position, which can fail (timeout) on a terminal that is still mid-
+    // reflow. If the reset sat after the `?`, that failure would leave the
+    // band believing its flushed rows still exist in scrollback when they
+    // have already been erased — and the caller's retry would never re-emit
+    // them. Resetting first is always safe: the worst case is one redundant
+    // re-flush of rows the next successful rebuild would redraw anyway.
     app.flushed_upto = 0;
     app.flushed_bytes = 0;
     app.flushed_raw = false;
+    purge_and_reanchor(terminal, h, banner.as_deref())?;
     Ok(h)
 }
 
