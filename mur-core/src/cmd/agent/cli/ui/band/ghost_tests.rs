@@ -148,6 +148,41 @@ fn a_rewritten_reply_is_not_spliced_onto_the_old_head() {
     assert_eq!(effective_skip(&app), 0);
 }
 
+/// End-to-end form of the case above (#2020): the head of a reply has already
+/// spilled to scrollback when `finish_agent_turn` installs a reply that does
+/// not share it. The worst allowed outcome is a duplicate — no line of either
+/// the streamed text or the final reply may be missing.
+#[test]
+fn a_rewritten_reply_after_a_spill_loses_no_line() {
+    let (mut app, mut term) = setup();
+    app.begin_user_turn("q");
+    let streamed: String = (0..40)
+        .map(|i| format!("streamed line s{i:02}\n\n"))
+        .collect();
+    stream(&mut app, &mut term, &streamed);
+    assert!(
+        app.flushed_bytes > 0,
+        "the head must have spilled mid-stream"
+    );
+    // Only what already reached scrollback must survive; the unspilled tail
+    // of the stream is legitimately replaced by the reply.
+    let spilled = app.flushed_text.clone();
+
+    let reply: String = (0..40).map(|i| format!("final line f{i:02}\n\n")).collect();
+    app.finish_agent_turn(reply, None);
+    paint(&mut app, &mut term);
+    paint(&mut app, &mut term);
+
+    let all = everything(&term);
+    let needles = (0..40)
+        .map(|i| format!("s{i:02}"))
+        .filter(|n| spilled.contains(n.as_str()))
+        .chain((0..40).map(|i| format!("f{i:02}")));
+    for needle in needles {
+        assert!(all.contains(&needle), "{needle:?} missing:\n{all}");
+    }
+}
+
 #[test]
 fn relocation_skips_whitespace_and_lands_on_the_next_block() {
     assert_eq!(relocate_prefix("a b\n\n\nc", "ab\n"), Some(6));
