@@ -12,11 +12,7 @@ use super::*;
 /// not propagate. Anything else still ends the session.
 ///
 /// `Ok(false)` means "paint skipped, rebuild before the next one".
-fn paint(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    app: &mut App,
-    viewport_h: u16,
-) -> Result<bool> {
+fn paint<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, viewport_h: u16) -> Result<bool> {
     if let Err(e) = ui::flush_finished(terminal, app, viewport_h) {
         let e = anyhow::Error::new(e).context("flush band");
         return match classify_paint_error(&e) {
@@ -32,6 +28,39 @@ fn paint(
         };
     }
     Ok(true)
+}
+
+/// True while painting would run against pre-resize geometry.
+///
+/// Only Inline mode rebuilds, so only Inline mode is gated (Fullscreen never
+/// clears the flag).
+pub(super) fn rebuild_pending(app: &App, force_rebuild: bool) -> bool {
+    force_rebuild && app.render_mode == RenderMode::Inline
+}
+
+/// `paint`, unless a viewport rebuild is still owed.
+///
+/// `flush_finished` — the first thing `paint` does — runs `insert_before`
+/// against `viewport_h` and the live terminal's geometry, both stale until
+/// `rebuild_after_resize` succeeds. Painting in that window overwrites rows
+/// instead of scrolling them (#2020), so a pending rebuild suppresses the paint
+/// entirely; the loop keeps handling input and retries the rebuild at the top
+/// of the next pass. A paint that loses the cursor-query race schedules the
+/// rebuild itself.
+pub(super) fn paint_gated<B: Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+    viewport_h: u16,
+    force_rebuild: &mut bool,
+) -> Result<()> {
+    if rebuild_pending(app, *force_rebuild) {
+        return Ok(());
+    }
+    if !paint(terminal, app, viewport_h)? {
+        *force_rebuild = true;
+        app.needs_full_redraw = true;
+    }
+    Ok(())
 }
 
 pub(super) async fn event_loop(
@@ -161,7 +190,7 @@ pub(super) async fn event_loop(
             }
             // Paint the "handing over" line before we suspend — otherwise it
             // only appears after the child exits, alongside the result.
-            force_rebuild |= !paint(terminal, app, viewport_h)?;
+            paint_gated(terminal, app, viewport_h, &mut force_rebuild)?;
             let outcome = handover::run(terminal, viewport_h, &req);
             events = EventStream::new();
             match outcome {
@@ -196,7 +225,7 @@ pub(super) async fn event_loop(
             if want_h != viewport_h && handover::reanchor(terminal, want_h).is_ok() {
                 viewport_h = want_h;
             }
-            force_rebuild |= !paint(terminal, app, viewport_h)?;
+            paint_gated(terminal, app, viewport_h, &mut force_rebuild)?;
             let read = handover::read_hidden(
                 terminal,
                 viewport_h,
@@ -239,16 +268,18 @@ pub(super) async fn event_loop(
         // Same ordering reason: retire a lapsed chip before painting it.
         proposal::tick(app, StdInstant::now());
         review::keys::poll_pending_cancel(app, &review::keys::cancel_via_tokio(tx.clone()));
-        if app.needs_full_redraw {
+        // A rebuild owed from this pass (failed rebuild, or a paint that lost
+        // the cursor race) means the terminal is on pre-resize geometry:
+        // neither clear nor paint until the next pass rebuilds it.
+        // `needs_full_redraw` stays set, so the clear still happens — just
+        // against the right geometry.
+        if !rebuild_pending(app, force_rebuild) && app.needs_full_redraw {
             terminal.clear()?;
             app.needs_full_redraw = false;
         }
-        if !paint(terminal, app, viewport_h)? {
-            // Lost the cursor-query race with a resize: rebuild at the top of
-            // the next pass instead of dying on it.
-            force_rebuild = true;
-            app.needs_full_redraw = true;
-        }
+        // On a lost cursor-query race this schedules the rebuild at the top of
+        // the next pass instead of dying on it.
+        paint_gated(terminal, app, viewport_h, &mut force_rebuild)?;
         if app.should_quit {
             return Ok(());
         }
@@ -303,6 +334,9 @@ pub(super) async fn event_loop(
         let chip_at = chip_wake
             .map(TokioInstant::from_std)
             .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
+        // With a rebuild owed the paint is suppressed, so nothing else may
+        // wake an idle loop to retry it; poll at the spinner cadence.
+        let rebuild_armed = rebuild_pending(app, force_rebuild);
         tokio::select! {
             maybe = events.next() => match maybe {
                 Some(Ok(ev)) => {
@@ -320,6 +354,7 @@ pub(super) async fn event_loop(
             Some(f) = panel_rx.recv() => match f {
                 mur_common::panel::HubFrame::Insert { text } => app.set_input(&text),
             },
+            _ = tokio::time::sleep(Duration::from_millis(SPINNER_MS)), if rebuild_armed => {}
             _ = spinner.tick(), if app.streaming || app.shell.is_running() || app.manage_busy.is_some() => app.tick_spinner(),
             // P3b-§6.3 step 2: wake to fire a won abort's cancel once its id lands.
             _ = tokio::time::sleep(Duration::from_millis(SPINNER_MS)), if review::keys::cancel_pending(app) => {}
