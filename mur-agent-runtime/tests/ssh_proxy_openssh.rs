@@ -503,7 +503,9 @@ async fn real_openssh_login_is_signed_only_when_approved() {
         rig.entitlement(vec![host_fp.clone()]),
         gate_b.clone(),
         Method::Hostbound,
-        "approved-hostbound",
+        // Tags stay short: on macOS the tempdir alone eats ~70 of the 104
+        // bytes a unix socket path may have (`listener::socket_path_fits`).
+        "ok-hb",
     )
     .await;
     assert!(
@@ -528,7 +530,7 @@ async fn real_openssh_login_is_signed_only_when_approved() {
         rig.entitlement(vec![host_fp.clone()]),
         gate_b,
         Method::Publickey,
-        "approved-publickey",
+        "ok-pk",
     )
     .await;
     assert!(
