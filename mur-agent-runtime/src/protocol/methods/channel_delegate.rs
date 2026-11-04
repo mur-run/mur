@@ -225,6 +225,10 @@ impl MethodHandler for ChannelDelegateHandler {
             crate::protocol::heartbeat::spawn(n.clone(), task_id.clone(), self.heartbeat_interval)
         });
         self.runner.mark_unattended(&task_id).await;
+        // #2150: one step of a fleet run. A call nobody can approve is refused
+        // to the model and the turn goes on, so the step keeps its reply and
+        // `synthesis`-style downstream steps still get their input.
+        self.runner.mark_delegated(&task_id).await;
 
         // Run the turn (non-streaming path; v3d-2 does not need per-delta
         // forwarding for delegated specialist replies).

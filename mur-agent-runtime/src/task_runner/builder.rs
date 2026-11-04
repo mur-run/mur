@@ -77,6 +77,7 @@ impl TaskRunner {
             approval_sinks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             one_shot_approvals: Default::default(),
             turn_flags: Default::default(),
+            delegated_turns: Default::default(),
             pending_wrappers: Default::default(),
             steering: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             hitl_timeout_secs: 300,
@@ -530,6 +531,7 @@ impl TaskRunner {
         self.client_notifiers.lock().await.remove(task_id);
         self.approval_sinks.lock().await.remove(task_id);
         self.one_shot_approvals.lock().await.remove(task_id);
+        self.delegated_turns.lock().await.remove(task_id);
         self.turn_flags
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -546,6 +548,20 @@ impl TaskRunner {
     /// [`Self::unregister_client_notifier`].
     pub async fn mark_one_shot_approvals(&self, task_id: &str) {
         self.one_shot_approvals
+            .lock()
+            .await
+            .insert(task_id.to_string());
+    }
+
+    /// #2150: this turn is one step of a fleet run (`channel/delegate`). An
+    /// `Ask` call nobody can approve is refused to the model as a withdrawn
+    /// tool — nothing runs, the model is told to finish without it — instead
+    /// of ending the turn with `hitl_approval_required`, which threw away the
+    /// deliverable the model had already finished and skipped every step
+    /// downstream. Pair with [`Self::mark_unattended`]. Cleared by
+    /// [`Self::unregister_client_notifier`].
+    pub async fn mark_delegated(&self, task_id: &str) {
+        self.delegated_turns
             .lock()
             .await
             .insert(task_id.to_string());
