@@ -29,8 +29,8 @@ impl ToolExecutor for ProposeTool {
                 act. Kinds: `{KIND_SHELL}` (a shell command; the user presses Tab to put \
                 it in their input, reviews it, and sends it), `{KIND_SLASH}` (a slash \
                 command, same Tab flow), `{KIND_RESTART}` (restart YOU, the current agent, \
-                e.g. after your profile changed; the user presses Enter to run it; takes \
-                no command and cannot target another agent). The command must be a \
+                e.g. after your profile changed; it is inserted as `!mur agent restart` plus your \
+                name, same Tab flow; takes no command and cannot target another agent). The command must be a \
                 single line with concrete values — no placeholders like <name> or \
                 {{agent}}, no secrets. Your message must still say what the command is \
                 for; the chip is a shortcut, not the explanation. A later call replaces \

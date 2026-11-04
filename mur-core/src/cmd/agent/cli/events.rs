@@ -523,7 +523,7 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
             // dismiss keys; everything else falls through to normal editing and
             // re-filters the menu at the end of this handler.
             // Tab reaches an insert-only chip even over the reply chooser.
-            if proposal::owns_tab_over_chooser(app, &key) && proposal::handle_key(app, &key, tx) {
+            if proposal::owns_tab_over_chooser(app, &key) && proposal::handle_key(app, &key) {
                 return;
             }
             if app.completion.is_some() {
@@ -615,7 +615,7 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
             }
             // Proposal chip (the ghost is one too): after HITL and the
             // completion overlay (spec §2 priority).
-            if proposal::handle_key(app, &key, tx) {
+            if proposal::handle_key(app, &key) {
                 return;
             }
             match key.code {

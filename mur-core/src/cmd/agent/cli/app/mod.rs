@@ -381,8 +381,6 @@ pub struct App {
     /// (`ProposalKind::Reply`) rendered as placeholder text. Its own field,
     /// not part of `completion`: the overlay's Enter sends a leaf.
     pub proposal: Option<mur_common::proposal::Proposal>,
-    /// A chip-triggered `/restart` is running; turn submission is locked.
-    pub restart_in_flight: bool,
     /// The code-nav setup tip was already considered this session
     /// (`code_nav_tip.rs`): shown once, or the agent is already set up.
     pub code_nav_tip_shown: bool,
@@ -543,7 +541,6 @@ impl App {
             suggestions_deferred_noted: false,
             egress_chips: Default::default(),
             proposal: None,
-            restart_in_flight: false,
             code_nav_tip_shown: false,
             manage_busy: None,
             proposal_deadline: None,

@@ -339,7 +339,7 @@ fn run_adds_once_with_per_agent_run_and_offers_restart() {
             "browser", "record", "--run", "live-bob", "--mode", "live"
         ])]
     );
-    assert!(chip.is_some_and(|p| p.is_executable()), "{text}");
+    assert_eq!(chip, Some(Proposal::restart(RESTART_LABEL)), "{text}");
     let (text, _) = run("bob", &s(&["--yes", "new.example.com"]), true, &mut f).unwrap();
     assert_eq!(f.adds.len(), 1, "second call must not re-add");
     assert!(text.contains("old.example.com"), "{text}");
