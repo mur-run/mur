@@ -294,7 +294,7 @@ async fn off_refuses_remote_connect() {
         ..Default::default()
     };
     assert!(off.network_off());
-    let err = McpClient::connect(&entry, &off, None)
+    let err = McpClient::connect(&entry, &off, None, None)
         .await
         .err()
         .expect("Off must refuse");
