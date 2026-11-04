@@ -12,7 +12,7 @@ use std::path::Path;
 use mur_common::agent::McpServerEntry;
 use mur_common::proposal::Proposal;
 
-pub(super) use crate::cmd::browser::live_entry::attached_profile;
+pub(super) use crate::cmd::browser::live_entry::attached_profiles;
 use crate::cmd::browser::live_entry::{norm, within};
 
 /// One saved `mur browser auth` profile and the hosts it was made for.
@@ -90,7 +90,7 @@ pub(super) fn hint(
     hosts: &[String],
     profiles: &[SavedProfile],
 ) -> Option<Hint> {
-    if attached_profile(entry).is_some() || hosts.is_empty() {
+    if !attached_profiles(entry).is_empty() || hosts.is_empty() {
         return None;
     }
     let sites = matching(profiles, hosts);
@@ -129,11 +129,18 @@ pub(super) fn hint(
     }
 }
 
-/// `/browser status` line: which saved session the browser launches with.
+/// `/browser status` line: which saved session(s) the browser launches with.
 pub(super) fn status_line(entry: &McpServerEntry) -> String {
-    match attached_profile(entry) {
-        Some(site) => format!("browser profile: `{site}`"),
-        None => "browser profile: none (launches with no cookies)".to_owned(),
+    match attached_profiles(entry).as_slice() {
+        [] => "browser profile: none (launches with no cookies)".to_owned(),
+        [site] => format!("browser profile: `{site}`"),
+        many => format!(
+            "browser profiles: {} (merged into one session)",
+            many.iter()
+                .map(|s| format!("`{s}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 

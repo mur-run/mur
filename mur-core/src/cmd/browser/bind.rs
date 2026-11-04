@@ -2,9 +2,11 @@
 //! right after `mur browser auth` (#2199).
 //!
 //! Only [`BindPlan::Bind`] ever writes, and it only rewrites the entry's
-//! `--profile` argv — never its network policy. Every other plan is refused
-//! with the reason, and for `NeedsHosts` the full `/browser live` command to
-//! run instead. Writes go through [`LiveOps::save_if_unchanged`], which
+//! `--profile` argv — never its network policy. A profile is **added
+//! alongside** the ones already bound when their domains are disjoint
+//! (#2263); `replace` drops them instead, and an overlap without `replace` is
+//! refused. Every other plan is refused with the reason, and for `NeedsHosts`
+//! the full `/browser live` command to run instead. Writes go through [`LiveOps::save_if_unchanged`], which
 //! shares `/browser live`'s save path but refuses if the entries changed
 //! since the user reviewed them; each write appends a `profile_bound` trace
 //! event.
@@ -14,14 +16,15 @@ use std::io::{BufRead, IsTerminal, Write};
 use anyhow::Result;
 use mur_common::agent::{McpNetMode, McpServerEntry};
 
+use super::bind_plan::BoundDomains;
 use super::bind_plan::{BindPlan, plan_bind, warning};
-use super::live_entry::{LIVE_ENTRY, LiveOps, attached_profile, set_profile};
+use super::live_entry::{LIVE_ENTRY, LiveOps, attached_profiles, set_profiles};
 
 /// One agent offered in the menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Candidate {
     pub agent: String,
-    pub current: Option<String>,
+    pub current: Vec<String>,
     pub plan: BindPlan,
 }
 
@@ -40,18 +43,31 @@ pub(crate) fn candidates(
     agents: Vec<(String, Vec<McpServerEntry>)>,
     site: &str,
     domains: &[String],
+    bound: &BoundDomains<'_>,
 ) -> Vec<Candidate> {
     agents
         .into_iter()
         .filter_map(|(agent, servers)| {
             let entry = servers.into_iter().find(|e| e.name == LIVE_ENTRY)?;
             Some(Candidate {
-                current: attached_profile(&entry).map(str::to_owned),
-                plan: plan_bind(Some(&entry), site, domains),
+                current: attached_profiles(&entry)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+                plan: plan_bind(Some(&entry), site, domains, bound, false),
                 agent,
             })
         })
         .collect()
+}
+
+/// `none`, or the bound profiles joined for a status row.
+pub(crate) fn current_label(current: &[String]) -> String {
+    if current.is_empty() {
+        "none".to_owned()
+    } else {
+        current.join(", ")
+    }
 }
 
 /// Print the current bindings and ask which agent gets `site`. Enter, EOF, or
@@ -72,7 +88,7 @@ pub(crate) fn menu(
         let warn = warning(&c.plan)
             .map(|w| format!("  ⚠ {w}"))
             .unwrap_or_default();
-        let current = c.current.as_deref().unwrap_or("none");
+        let current = current_label(&c.current);
         writeln!(out, "  [{}] {:w$}  → {current}{warn}", i + 1, c.agent)?;
     }
     loop {
@@ -99,13 +115,17 @@ pub(crate) fn menu(
 
 /// Bind `site` to `agent`'s live entry. The plan is recomputed from what
 /// `ops` reads now, not from the menu's snapshot, so a concurrent
-/// `/browser live` can never turn a refusal into a write. `confirm` is the
-/// interactive reader; `None` writes without asking (the `--bind` flag is the
-/// consent).
+/// `/browser live` can never turn a refusal into a write. `bound` resolves
+/// the domains of profiles already on the entry; `replace` drops them instead
+/// of adding `site` alongside. `confirm` is the interactive reader; `None`
+/// writes without asking (the `--bind` flag is the consent).
+#[allow(clippy::too_many_arguments)] // one call site per flow; the args are the plan's inputs
 pub(crate) fn bind_agent(
     agent: &str,
     site: &str,
     domains: &[String],
+    bound: &BoundDomains<'_>,
+    replace: bool,
     ops: &mut dyn LiveOps,
     confirm: Option<&mut dyn BufRead>,
     out: &mut dyn Write,
@@ -113,35 +133,46 @@ pub(crate) fn bind_agent(
     let mut servers = ops.servers()?;
     let reviewed = servers.clone();
     let entry = servers.iter().find(|e| e.name == LIVE_ENTRY);
-    if entry.and_then(attached_profile) == Some(site) {
+    let before: Vec<String> = entry
+        .map(|e| {
+            attached_profiles(e)
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    // Already carrying `site`: with `replace` the others still go; without
+    // it there is nothing to change.
+    if before.iter().any(|p| p == site) && (!replace || before.len() == 1) {
         writeln!(
             out,
             "{agent} already launches with {site:?}; nothing to bind."
         )?;
         return Ok(Outcome::Unchanged);
     }
-    let plan = plan_bind(entry, site, domains);
-    let BindPlan::Bind { replaces } = plan else {
+    let plan = plan_bind(entry, site, domains, bound, replace);
+    let BindPlan::Bind {
+        alongside,
+        replaces,
+    } = plan
+    else {
         writeln!(out, "{}", refusal(agent, site, &plan))?;
         return Ok(Outcome::Refused);
     };
-    let undo = undo_line(
-        agent,
-        entry.expect("Bind implies an entry"),
-        replaces.as_deref(),
-    );
+    let undo = undo_line(agent, entry.expect("Bind implies an entry"), &before);
     let entry = servers
         .iter_mut()
         .find(|e| e.name == LIVE_ENTRY)
         .expect("Bind implies an entry");
-    set_profile(entry, site);
+    let mut after = alongside.clone();
+    after.push(site.to_owned());
+    set_profiles(entry, &after);
+    // The trace's `old` is what this write dropped, if anything.
+    let replaced = (!replaces.is_empty()).then(|| replaces.join(","));
 
     let repairs = ops.pending_repairs(&servers)?;
     if let Some(input) = confirm {
-        match &replaces {
-            Some(old) => writeln!(out, "bind {site:?} to {agent}, replacing {old:?}")?,
-            None => writeln!(out, "bind {site:?} to {agent}")?,
-        }
+        writeln!(out, "{}", intent_line(agent, site, &alongside, &replaces))?;
         if !repairs.is_empty() {
             writeln!(out, "also repairs:\n  {}", repairs.join("\n  "))?;
         }
@@ -172,13 +203,10 @@ pub(crate) fn bind_agent(
     for note in &notes {
         writeln!(out, "{note}")?;
     }
-    match &replaces {
-        Some(old) => writeln!(out, "bound {site:?} to {agent} (was {old:?})")?,
-        None => writeln!(out, "bound {site:?} to {agent}")?,
-    }
+    writeln!(out, "{}", done_line(agent, site, &alongside, &replaces))?;
     writeln!(out, "{}", effect.applied_line())?;
     // Telemetry must not undo a write that already succeeded.
-    if let Err(e) = ops.record_profile_bound(agent, replaces.as_deref(), site) {
+    if let Err(e) = ops.record_profile_bound(agent, replaced.as_deref(), site) {
         writeln!(
             out,
             "could not record the profile-binding audit event: {e:#}"
@@ -188,13 +216,48 @@ pub(crate) fn bind_agent(
     Ok(Outcome::Bound)
 }
 
+fn quoted(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|n| format!("{n:?}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The confirmation prompt's first line: what the write will do.
+fn intent_line(agent: &str, site: &str, alongside: &[String], replaces: &[String]) -> String {
+    if !replaces.is_empty() {
+        format!("bind {site:?} to {agent}, replacing {}", quoted(replaces))
+    } else if !alongside.is_empty() {
+        format!("bind {site:?} to {agent} alongside {}", quoted(alongside))
+    } else {
+        format!("bind {site:?} to {agent}")
+    }
+}
+
+/// What the write did, after it succeeded.
+fn done_line(agent: &str, site: &str, alongside: &[String], replaces: &[String]) -> String {
+    if !replaces.is_empty() {
+        format!("bound {site:?} to {agent} (was {})", quoted(replaces))
+    } else if !alongside.is_empty() {
+        format!("bound {site:?} to {agent} alongside {}", quoted(alongside))
+    } else {
+        format!("bound {site:?} to {agent}")
+    }
+}
+
 /// How to put the old binding back: a `/browser live` rerun with the same
-/// scope that re-points the entry at the replaced profile, or drops the
-/// profile (`--no-profile`) when there was none.
-fn undo_line(agent: &str, entry: &McpServerEntry, replaces: Option<&str>) -> String {
-    let profile = match replaces {
-        Some(old) => format!("--profile {old}"),
-        None => "--no-profile".to_owned(),
+/// scope that re-points the entry at exactly the profiles it had, or drops
+/// them all (`--no-profile`) when there were none.
+fn undo_line(agent: &str, entry: &McpServerEntry, before: &[String]) -> String {
+    let profile = if before.is_empty() {
+        "--no-profile".to_owned()
+    } else {
+        before
+            .iter()
+            .map(|old| format!("--profile {old}"))
+            .collect::<Vec<_>>()
+            .join(" ")
     };
     let scope = match entry.network.as_ref().map(|n| n.mode) {
         Some(McpNetMode::BroadAudited) => "--research".to_owned(),
@@ -221,6 +284,17 @@ fn refusal(agent: &str, site: &str, plan: &BindPlan) -> String {
                  /browser live {} --profile {site}",
                 missing.join(", "),
                 hosts.join(" ")
+            )
+        }
+        BindPlan::Overlaps { with, .. } => {
+            // Adding would merge two logins for one host; replacing is a
+            // choice the user makes explicitly, with the whole profile list.
+            format!(
+                "✗ {agent}: {why} — not bound. One live session cannot hold two logins \
+                 for the same host. To use {site:?} instead of {with:?}, run inside \
+                 murmur, in the {agent} conversation:\n  \
+                 /browser live <hosts> --profile {site}\n  \
+                 or rerun `mur browser auth {site} --bind {agent} --replace`."
             )
         }
         BindPlan::Denied { .. } => {
@@ -254,11 +328,13 @@ pub(crate) fn bind_flag(
     home: &std::path::Path,
     site: &str,
     agent: &str,
+    replace: bool,
     out: &mut dyn Write,
 ) -> Result<()> {
     let domains = saved_domains(home, site)?;
+    let bound = bound_domains(home);
     let mut ops = crate::cmd::agent::cli::browser_live_cmd::ProfileOps(agent);
-    let outcome = bind_agent(agent, site, &domains, &mut ops, None, out)?;
+    let outcome = bind_agent(agent, site, &domains, &bound, replace, &mut ops, None, out)?;
     out.flush()?;
     flag_result(&outcome, agent, site)
 }
@@ -303,9 +379,17 @@ fn saved_domains(home: &std::path::Path, site: &str) -> Result<Vec<String>> {
         .ok_or_else(|| anyhow::anyhow!("the profile names no host"))
 }
 
+/// The planner's lookup for profiles already bound to an entry: their saved
+/// domains, or `None` when the metadata is missing or unreadable.
+pub(crate) fn bound_domains(home: &std::path::Path) -> impl Fn(&str) -> Option<Vec<String>> {
+    let home = home.to_path_buf();
+    move |site: &str| saved_domains(&home, site).ok()
+}
+
 fn offer(home: &std::path::Path, site: &str, tty: bool, out: &mut dyn Write) -> Result<()> {
     let domains = saved_domains(home, site)?;
-    let cands = candidates(live_agents(home), site, &domains);
+    let bound = bound_domains(home);
+    let cands = candidates(live_agents(home), site, &domains, &bound);
     if !tty {
         if cands.is_empty() {
             writeln!(out, "{}", no_agents_hint(site))?;
@@ -328,7 +412,17 @@ fn offer(home: &std::path::Path, site: &str, tty: bool, out: &mut dyn Write) -> 
     };
     let agent = &cands[i].agent;
     let mut ops = crate::cmd::agent::cli::browser_live_cmd::ProfileOps(agent);
-    bind_agent(agent, site, &domains, &mut ops, Some(&mut input), out)?;
+    // The menu is the add path; an overlap tells the user how to replace.
+    bind_agent(
+        agent,
+        site,
+        &domains,
+        &bound,
+        false,
+        &mut ops,
+        Some(&mut input),
+        out,
+    )?;
     Ok(())
 }
 

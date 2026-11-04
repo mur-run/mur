@@ -48,16 +48,17 @@ use mur_browser::{
 #[cfg(unix)]
 pub async fn record(
     run: &str,
-    profile: Option<&str>,
+    profiles: &[String],
     mode: &str,
     trace: bool,
     extra: &[String],
 ) -> Result<()> {
     mur_browser::paths::validate_name(run)?;
-    if let Some(profile) = profile {
+    for profile in profiles {
         mur_browser::paths::validate_name(profile)?;
     }
     let mode = mode.parse::<Mode>()?;
+    let profile = recorded_profile(profiles, mode)?;
 
     // Live mode (Gap 0): Chromium ignores HTTP_PROXY, so the runtime's egress
     // token is handed over in a 0600 `--config` file instead. Refusing when
@@ -110,7 +111,7 @@ pub async fn record(
     // This is not live-only: recording a test or automation run against an
     // admin area is exactly the case that needs a session, and asking the
     // person to log in by hand inside each recording defeats `browser auth`.
-    let injected = live_state::prepare(&mur_home()?, profile)?;
+    let injected = live_state::prepare(&mur_home()?, profiles)?;
     let state_args = live_state::args(injected.as_ref(), &args);
     args.extend(state_args);
     // Without this, test/automation recording fell through to
@@ -181,8 +182,16 @@ pub async fn record(
         actions = %paths::run_actions(&mur_home, run).display(),
         "browser record started"
     );
-    // A profile session hands its rotated state back on exit (`refresh`).
-    let scratch = match profile {
+    // A single-profile session hands its rotated state back on exit
+    // (`refresh`). A merged session is not written back: the export holds
+    // every profile's cookies and `refresh_profile` would store them all
+    // under each one (#2263, "re-auth of one profile must not touch the
+    // others"). Splitting the export per profile is future work.
+    let refresh_site = match profiles {
+        [one] => Some(one.as_str()),
+        _ => None,
+    };
+    let scratch = match refresh_site {
         Some(_) => Some(mur_browser::refresh::scratch_dir(&mur_home)?),
         None => None,
     };
@@ -190,7 +199,7 @@ pub async fn record(
         .as_ref()
         .map(|dir| mur_browser::refresh::export_path(dir.path()));
     let result = run_stdio_exporting(server, hook, export.clone()).await;
-    if let (Some(site), Some(export)) = (profile, &export) {
+    if let (Some(site), Some(export)) = (refresh_site, &export) {
         mur_browser::refresh::report(
             site,
             mur_browser::refresh::refresh_profile(
@@ -236,10 +245,67 @@ fn live_config_for(
     }
 }
 
+/// The profile a recording is filed under. A run's `profile` field names one
+/// profile and replay resolves exactly that one, so a test or automation
+/// recording made with several profiles could capture logins on every site
+/// and then replay with only the first — losing the others' sessions and
+/// checking their navigation against the first's allowlist. Several profiles
+/// are therefore live-only (#2263), where nothing is replayed.
+fn recorded_profile(profiles: &[String], mode: Mode) -> Result<Option<&str>> {
+    match profiles {
+        [] => Ok(None),
+        [one] => Ok(Some(one.as_str())),
+        [first, ..] if mode == Mode::Live => Ok(Some(first.as_str())),
+        many => bail!(
+            "several --profile values ({}) are only supported in live mode: a \
+             {mode:?} recording is replayed with one profile's session and host \
+             policy, so the others would be lost on replay; record with a single \
+             --profile",
+            many.join(", ")
+        ),
+    }
+}
+
+#[cfg(test)]
+mod recorded_profile_tests {
+    use super::*;
+
+    fn p(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn none_and_one_pass_through_in_every_mode() {
+        for mode in [Mode::Test, Mode::Automation, Mode::Live] {
+            assert_eq!(recorded_profile(&[], mode).unwrap(), None);
+            assert_eq!(recorded_profile(&p(&["a"]), mode).unwrap(), Some("a"));
+        }
+    }
+
+    #[test]
+    fn live_files_a_multi_profile_session_under_the_first() {
+        assert_eq!(
+            recorded_profile(&p(&["a", "b"]), Mode::Live).unwrap(),
+            Some("a")
+        );
+    }
+
+    #[test]
+    fn replayable_modes_refuse_several_profiles_and_name_them() {
+        for mode in [Mode::Test, Mode::Automation] {
+            let err = recorded_profile(&p(&["a", "b"]), mode)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("a, b"), "{err}");
+            assert!(err.contains("live mode"), "{err}");
+        }
+    }
+}
+
 #[cfg(not(unix))]
 pub async fn record(
     _run: &str,
-    _profile: Option<&str>,
+    _profiles: &[String],
     _mode: &str,
     _trace: bool,
     _extra: &[String],

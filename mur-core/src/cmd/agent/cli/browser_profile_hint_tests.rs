@@ -18,39 +18,41 @@ fn saved(site: &str, domains: &[&str]) -> SavedProfile {
 }
 
 #[test]
-fn attached_profile_reads_the_launch_argv() {
-    assert_eq!(attached_profile(&entry(&["browser", "record"])), None);
+fn attached_profiles_reads_the_launch_argv() {
+    assert!(attached_profiles(&entry(&["browser", "record"])).is_empty());
     assert_eq!(
-        attached_profile(&entry(&["browser", "record", "--profile", "deepseek"])),
-        Some("deepseek")
+        attached_profiles(&entry(&["browser", "record", "--profile", "deepseek"])),
+        ["deepseek"]
+    );
+    // Several profiles (#2263), in argv order.
+    assert_eq!(
+        attached_profiles(&entry(&["--profile", "a", "--profile", "b"])),
+        ["a", "b"]
     );
     // A trailing flag with no value is not a profile.
-    assert_eq!(attached_profile(&entry(&["--profile"])), None);
+    assert!(attached_profiles(&entry(&["--profile"])).is_empty());
 }
 
 #[test]
-fn attached_profile_reads_the_equals_form_and_stops_at_double_dash() {
+fn attached_profiles_reads_the_equals_form_and_stops_at_double_dash() {
     // Clap's long option also accepts `--profile=<site>` (#2203).
     assert_eq!(
-        attached_profile(&entry(&["browser", "record", "--profile=deepseek"])),
-        Some("deepseek")
+        attached_profiles(&entry(&["browser", "record", "--profile=deepseek"])),
+        ["deepseek"]
     );
-    assert_eq!(attached_profile(&entry(&["--profile="])), None);
+    assert!(attached_profiles(&entry(&["--profile="])).is_empty());
     // After `--` every token is positional, never an option.
-    assert_eq!(
-        attached_profile(&entry(&[
+    assert!(
+        attached_profiles(&entry(&[
             "browser",
             "record",
             "--",
             "--profile",
             "deepseek"
-        ])),
-        None
+        ]))
+        .is_empty()
     );
-    assert_eq!(
-        attached_profile(&entry(&["--", "--profile=deepseek"])),
-        None
-    );
+    assert!(attached_profiles(&entry(&["--", "--profile=deepseek"])).is_empty());
 }
 
 #[test]
@@ -114,6 +116,10 @@ fn status_line_shows_the_attached_profile_or_none() {
         "browser profile: `deepseek`"
     );
     assert!(status_line(&entry(&[])).starts_with("browser profile: none"));
+    assert_eq!(
+        status_line(&entry(&["--profile", "a", "--profile", "b"])),
+        "browser profiles: `a`, `b` (merged into one session)"
+    );
 }
 
 #[test]

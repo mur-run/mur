@@ -8,17 +8,30 @@
 //! every profile domain. Coverage uses [`host_allowed`], the matcher the
 //! egress proxy enforces with — not the two-way overlap the profile
 //! recommender uses.
+//!
+//! One entry may carry several profiles (#2263): their storage states are
+//! merged at launch, so a new profile is only added **alongside** the bound
+//! ones when no cookie domain is shared — otherwise the merge would silently
+//! pick one identity, and the plan is [`BindPlan::Overlaps`] instead.
 
 use mur_browser::auth::ProfileMeta;
 use mur_common::agent::{McpNetMode, McpServerEntry};
 use mur_common::net::host_allowed;
 
-use super::live_entry::{attached_profile, norm};
+use super::live_entry::{attached_profiles, norm, within};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BindPlan {
-    /// Every profile domain is reachable under the entry's policy. Safe to write.
-    Bind { replaces: Option<String> },
+    /// Every profile domain is reachable under the entry's policy. Safe to
+    /// write. `alongside` are the profiles already bound that stay; with
+    /// `replace`, `replaces` names the ones dropped instead.
+    Bind {
+        alongside: Vec<String>,
+        replaces: Vec<String>,
+    },
+    /// A bound profile shares a domain with `site`; adding would merge two
+    /// identities for the same host. Never written without `--replace`.
+    Overlaps { with: String, domains: Vec<String> },
     /// `Restricted` entry; some profile domains fail `host_allowed`. Never written.
     NeedsHosts {
         current: Vec<String>,
@@ -46,28 +59,59 @@ pub(crate) fn profile_domains(meta: &ProfileMeta) -> Option<Vec<String>> {
     (!domains.is_empty()).then_some(domains)
 }
 
+/// The domains of each profile already bound to an entry, looked up by the
+/// caller (the planner is pure). A profile whose metadata cannot be read maps
+/// to `None`: it cannot be checked for overlap, so adding alongside it is
+/// refused with `--replace` as the way out.
+pub(crate) type BoundDomains<'a> = dyn Fn(&str) -> Option<Vec<String>> + 'a;
+
 /// Plan attaching profile `site` (whose hosts are `domains`, from
 /// [`profile_domains`]) to `entry`. `entry` is the agent's live entry, or
-/// `None` when it has none.
+/// `None` when it has none. `bound` resolves the domains of profiles the
+/// entry already carries; `replace` drops them instead of adding alongside.
 pub(crate) fn plan_bind(
     entry: Option<&McpServerEntry>,
     site: &str,
     domains: &[String],
+    bound: &BoundDomains<'_>,
+    replace: bool,
 ) -> BindPlan {
     let Some(entry) = entry else {
         return BindPlan::NoLiveEntry;
+    };
+    let bind = |entry: &McpServerEntry| bind(entry, site, domains, bound, replace);
+    // The policy has to hold for the session that results, not just for the
+    // profile being added (#2263): a retained profile whose hosts the entry
+    // no longer covers would otherwise ride along unreachable. `--replace`
+    // drops the others, so only the replacement is checked then. Unreadable
+    // metadata contributes nothing here; `bind` refuses it as an overlap.
+    let checked: Vec<String> = if replace {
+        domains.to_vec()
+    } else {
+        let mut all = domains.to_vec();
+        for other in attached_profiles(entry) {
+            if other == site {
+                continue;
+            }
+            if let Some(theirs) = bound(other) {
+                all.extend(theirs);
+            }
+        }
+        all.sort();
+        all.dedup();
+        all
     };
     let network = entry.network.as_ref();
     match network.map(|n| n.mode) {
         Some(McpNetMode::Restricted) => {
             let allow = &network.expect("mode came from it").allow_hosts;
-            let missing: Vec<String> = domains
+            let missing: Vec<String> = checked
                 .iter()
                 .filter(|d| !host_allowed(d, allow))
                 .cloned()
                 .collect();
             if missing.is_empty() {
-                bind(entry, site)
+                bind(entry)
             } else {
                 BindPlan::NeedsHosts {
                     current: allow.clone(),
@@ -77,13 +121,13 @@ pub(crate) fn plan_bind(
         }
         Some(McpNetMode::BroadAudited) => {
             let deny = &network.expect("mode came from it").deny_hosts;
-            let hosts: Vec<String> = domains
+            let hosts: Vec<String> = checked
                 .iter()
                 .filter(|d| host_allowed(d, deny))
                 .cloned()
                 .collect();
             if hosts.is_empty() {
-                bind(entry, site)
+                bind(entry)
             } else {
                 BindPlan::Denied { hosts }
             }
@@ -94,18 +138,62 @@ pub(crate) fn plan_bind(
     }
 }
 
-fn bind(entry: &McpServerEntry, site: &str) -> BindPlan {
-    BindPlan::Bind {
-        replaces: attached_profile(entry)
-            .filter(|old| *old != site)
-            .map(str::to_owned),
+fn bind(
+    entry: &McpServerEntry,
+    site: &str,
+    domains: &[String],
+    bound: &BoundDomains<'_>,
+    replace: bool,
+) -> BindPlan {
+    let others: Vec<String> = attached_profiles(entry)
+        .into_iter()
+        .filter(|old| *old != site)
+        .map(str::to_owned)
+        .collect();
+    if replace {
+        return BindPlan::Bind {
+            alongside: Vec::new(),
+            replaces: others,
+        };
     }
+    for other in &others {
+        let shared = match bound(other) {
+            // Unreadable metadata: treat as overlapping everything, since
+            // nothing proves the two logins are for different hosts.
+            None => domains.to_vec(),
+            Some(theirs) => overlap(domains, &theirs),
+        };
+        if !shared.is_empty() {
+            return BindPlan::Overlaps {
+                with: other.clone(),
+                domains: shared,
+            };
+        }
+    }
+    BindPlan::Bind {
+        alongside: others,
+        replaces: Vec::new(),
+    }
+}
+
+/// Domains of `a` that a cookie for some domain of `b` would also be sent to
+/// (either is the other or a subdomain of it): `deepseek.com` and
+/// `chat.deepseek.com` overlap; `deepseek.com` and `gitea.example` do not.
+fn overlap(a: &[String], b: &[String]) -> Vec<String> {
+    a.iter()
+        .filter(|x| b.iter().any(|y| within(x, y) || within(y, x)))
+        .cloned()
+        .collect()
 }
 
 /// One-line reason a plan is not `Bind`, for status warnings. `None` for `Bind`.
 pub(crate) fn warning(plan: &BindPlan) -> Option<String> {
     match plan {
         BindPlan::Bind { .. } => None,
+        BindPlan::Overlaps { with, domains } => Some(format!(
+            "shares {} with bound profile {with:?}",
+            domains.join(", ")
+        )),
         BindPlan::NeedsHosts { missing, .. } => {
             Some(format!("allow_hosts lacks {}", missing.join(", ")))
         }

@@ -200,6 +200,7 @@ pub async fn auth(
     requested_browser: Option<BrowserEngine>,
     allow_domain: &[String],
     bind: Option<&str>,
+    replace: bool,
 ) -> Result<()> {
     let install_dir = mur_browser::server::install_dir(&mur_home()?);
     let browsers = mur_browser::chromium::system_browsers_dir();
@@ -246,7 +247,7 @@ pub async fn auth(
     println!("saved encrypted browser profile {site:?}");
     let mut out = std::io::stdout();
     match bind {
-        Some(agent) => super::bind::bind_flag(&home, site, &agent, &mut out),
+        Some(agent) => super::bind::bind_flag(&home, site, &agent, replace, &mut out),
         None => {
             super::bind::after_auth(&home, site, &mut out);
             Ok(())
