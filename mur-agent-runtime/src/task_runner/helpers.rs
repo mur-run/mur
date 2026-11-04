@@ -14,6 +14,12 @@ use super::*;
 /// gets a free per-turn record when it wants one.
 pub(super) const TURN_LEDGER_MIME: &str = "application/vnd.mur.turn-ledger+json";
 
+/// `Task.usage` key set on a failed or cancelled turn the runtime remembered
+/// (#2071). A client that sees it may thread its next turn onto this task id;
+/// an older runtime never stores such a turn, and threading onto a key with
+/// no history would start the conversation over, so the flag is the gate.
+pub const REMEMBERED_KEY: &str = "remembered";
+
 pub(super) fn settle(text: String, ledger: &crate::turn_ledger::TurnLedger) -> Message {
     // The gate is evaluated here because this is the one place the reply
     // text and the ledger meet (spec 2026-09-19-unverified-claim-card §4).

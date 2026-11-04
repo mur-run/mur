@@ -377,6 +377,16 @@ impl App {
         self.turn_started = None;
     }
 
+    /// Thread the next turn onto a failed or cancelled one the runtime
+    /// remembered (#2071), and persist the marker under that task id so a
+    /// reload (`load_history`) restores the same threading. Without this the
+    /// next send threaded onto the turn *before* the failure, and the agent
+    /// had no record of the request it had been working on.
+    pub fn thread_ended_turn(&mut self, cause: &str, task_id: &str) {
+        self.context_task_id = Some(task_id.to_string());
+        self.persist_turn("agent", &format!("turn ended: {cause}"), Some(task_id), &[]);
+    }
+
     /// Drop the binding to a turn that no longer exists on the runtime (it
     /// restarted; tasks live in memory only). Removes an empty streaming
     /// placeholder, freezes any partial text already streamed, and clears the

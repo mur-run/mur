@@ -616,9 +616,11 @@ async fn text_before_a_real_tool_stays_out_of_the_reply() {
 }
 
 /// Counterpart: a failure before the user saw anything is still a plain
-/// failure — nothing to keep, nothing to remember.
+/// failure — but it is remembered (#2071): the user message, a `turn
+/// ended:` marker in the reply slot, and a narrative-only ledger, so the
+/// next turn can thread onto it and knows nothing ran.
 #[tokio::test]
-async fn llm_failure_before_any_output_still_fails_and_forgets() {
+async fn llm_failure_before_any_output_still_fails_but_is_remembered() {
     struct AlwaysEmpty;
     #[async_trait::async_trait]
     impl crate::llm::LlmClient for AlwaysEmpty {
@@ -654,10 +656,21 @@ async fn llm_failure_before_any_output_still_fails_and_forgets() {
         .lock()
         .unwrap()
         .prior(Some("t-nothing"));
-    assert!(
-        prior.is_empty(),
-        "failed turn must not be remembered: {prior:?}"
-    );
+    assert_eq!(prior.len(), 3, "user, marker, ledger: {prior:?}");
+    match &prior[1] {
+        crate::llm::RichMessage::Text { role, content } => {
+            assert_eq!(role, "agent");
+            assert!(content.starts_with("turn ended: failed"), "{content}");
+            assert!(content.contains("empty streamed response"), "{content}");
+        }
+        other => panic!("expected the end marker, got {other:?}"),
+    }
+    match &prior[2] {
+        crate::llm::RichMessage::TurnLedger { memory, .. } => {
+            assert!(memory.narrative_only, "nothing ran before the failure");
+        }
+        other => panic!("expected TurnLedger, got {other:?}"),
+    }
 }
 
 #[tokio::test]

@@ -529,6 +529,22 @@ pub fn task_outcome(task: &Value) -> Result<(String, Option<String>), String> {
     Ok((reply, task_id))
 }
 
+/// The id of a failed or cancelled task the runtime says it remembered
+/// (`usage.remembered`, #2071) — the next turn may thread onto it. `None`
+/// for an older runtime, which drops such turns: threading onto a key it
+/// never stored would start the conversation over.
+pub fn remembered_task_id(task: &Value) -> Option<String> {
+    let remembered = task
+        .get("usage")
+        .and_then(|u| u.get("remembered"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !remembered {
+        return None;
+    }
+    task.get("id").and_then(Value::as_str).map(str::to_string)
+}
+
 fn extract_text(message: &Value) -> String {
     message
         .get("parts")
@@ -649,6 +665,26 @@ mod tests {
         let (reply, id) = extract_reply(&task);
         assert_eq!(reply, "Hello world");
         assert_eq!(id.as_deref(), Some("task-9"));
+    }
+
+    /// #2071: a failed turn threads only when the runtime says it stored it.
+    #[test]
+    fn remembered_task_id_requires_the_runtime_flag() {
+        let failed = json!({
+            "id": "task-7",
+            "state": "failed",
+            "error": { "message": "tool call denied: timed out" },
+            "usage": { "input_tokens": 1, "remembered": true }
+        });
+        assert_eq!(remembered_task_id(&failed).as_deref(), Some("task-7"));
+        // An older runtime: no flag, no threading.
+        let old = json!({
+            "id": "task-7",
+            "state": "failed",
+            "error": { "message": "tool call denied: timed out" },
+            "usage": { "input_tokens": 1 }
+        });
+        assert_eq!(remembered_task_id(&old), None);
     }
 
     #[test]

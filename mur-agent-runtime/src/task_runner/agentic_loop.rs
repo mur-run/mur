@@ -290,6 +290,8 @@ impl TaskRunner {
                             return Ok((self.settle_turn(task_id, text, &ledger).await, None));
                         }
                         Err(e) => {
+                            ledger.iterations = iteration;
+                            self.park_partial_ledger(task_id, &ledger);
                             return Err(task_error("llm_error", format!("{e}"), true));
                         }
                     }
@@ -386,6 +388,8 @@ impl TaskRunner {
             // Not recoverable: the same request against the same client
             // reproduces it, so a retry only repeats the lie (#938).
             if resp.stop_reason == StopReason::ToolUse && resp.tool_calls.is_empty() {
+                ledger.iterations = iteration;
+                self.park_partial_ledger(task_id, &ledger);
                 return Err(task_error(
                     "llm_error",
                     format!(
@@ -537,7 +541,41 @@ impl TaskRunner {
                         ran_step_ids.push(Some(step_id));
                         results.push(entry);
                     }
-                    Err(e) => return Err(e),
+                    Err(e) => {
+                        // #2071: the turn is about to fail. Put the calls of
+                        // this response that already ran, and the one that
+                        // was refused, on the record before the ledger is
+                        // dropped with the loop, then park it for the run
+                        // wrapper to remember the turn.
+                        for (ran, entry) in resp.tool_calls.iter().zip(results.iter()) {
+                            ledger.record(crate::turn_ledger::Action {
+                                tool: ran.tool_name.clone(),
+                                target: crate::turn_ledger::describe_target_with_result(
+                                    &ran.tool_name,
+                                    &ran.input,
+                                    &entry.content,
+                                ),
+                                outcome: crate::turn_ledger::classify(
+                                    &entry.content,
+                                    entry.is_error,
+                                    &entry.status,
+                                ),
+                                excerpt: None,
+                            });
+                        }
+                        ledger.record(crate::turn_ledger::Action {
+                            tool: call.tool_name.clone(),
+                            target: crate::turn_ledger::describe_target(
+                                &call.tool_name,
+                                &call.input,
+                            ),
+                            outcome: crate::turn_ledger::Outcome::Denied(e.message.clone()),
+                            excerpt: None,
+                        });
+                        ledger.iterations = iteration;
+                        self.park_partial_ledger(task_id, &ledger);
+                        return Err(e);
+                    }
                 }
             }
 
@@ -659,6 +697,10 @@ impl TaskRunner {
             }
 
             history.push(RichMessage::ToolResults { results });
+            // #2071: checkpoint for a `tasks/cancel`, which drops this future
+            // wherever it is parked. What ran so far is then still remembered.
+            ledger.iterations = iteration;
+            self.park_partial_ledger(task_id, &ledger);
 
             // Note: `suggest_replies` does NOT hard-end the turn. Whether to stop
             // and wait for the user's pick, or keep going, is the model's call —

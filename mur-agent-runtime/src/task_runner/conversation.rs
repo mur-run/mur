@@ -379,6 +379,63 @@ impl TaskRunner {
         store.remember(key.to_string(), h);
     }
 
+    /// Park the loop's ledger for turn `turn` so a failure can still be
+    /// remembered (#2071). Called by the loop right before it returns `Err`;
+    /// overwrites, so the newest copy wins.
+    pub(super) fn park_partial_ledger(&self, turn: &str, ledger: &crate::turn_ledger::TurnLedger) {
+        let mut slot = self
+            .partial_ledgers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        slot.insert(turn.to_string(), ledger.clone());
+    }
+
+    /// Take turn `turn`'s parked ledger. Taken on every outcome so the table
+    /// never grows past the turns in flight.
+    pub(super) fn take_partial_ledger(&self, turn: &str) -> Option<crate::turn_ledger::TurnLedger> {
+        let mut slot = self
+            .partial_ledgers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        slot.remove(turn)
+    }
+
+    /// Persist a turn that ended without a reply — failed or cancelled —
+    /// as `[user, marker, ledger]` (#2071). The marker (`turn ended: …`)
+    /// stands in for the agent text so the history keeps its `[user, agent,
+    /// ledger]` shape and the next turn threads onto this one. The ledger is
+    /// whatever the loop had recorded before it stopped: the five bash steps
+    /// that ran before the sixth timed out are the fact the next turn needs.
+    pub(super) fn remember_ended_turn(
+        &self,
+        key: &str,
+        ctx: Option<&str>,
+        input: &Message,
+        stop: crate::turn_ledger::StopKind,
+    ) {
+        let mut ledger = self.take_partial_ledger(key).unwrap_or_default();
+        ledger.stop = stop;
+        // A ledger carries the agent name once the loop has started; a turn
+        // that failed before the loop (bounds parse, cli-spawn) has none.
+        if ledger.agent.is_empty() {
+            ledger.agent = self.agent_name.clone();
+        }
+        let text = format!("turn ended: {}", end_marker(&ledger));
+        let reply = settle(text, &ledger);
+        self.remember_turn(key, ctx, input, &reply);
+    }
+}
+
+/// `<stop> — <remedy>` for the end marker, or just `<stop>` when the kind
+/// carries no remedy.
+fn end_marker(ledger: &crate::turn_ledger::TurnLedger) -> String {
+    match ledger.stop.remedy(&ledger.agent) {
+        Some(r) => format!("{} — {r}", ledger.stop.as_str()),
+        None => ledger.stop.as_str().to_string(),
+    }
+}
+
+impl TaskRunner {
     /// Open this turn's cwd slot: the caller's `cwd` when one was supplied and
     /// it is entitled, else the directory of the turn it continues
     /// (`context_task_id`), else the agent home. Absent means "a client with
