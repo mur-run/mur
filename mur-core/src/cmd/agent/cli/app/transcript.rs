@@ -53,6 +53,7 @@ impl App {
         self.saw_step_this_turn = false;
         self.saw_hitl_this_turn = false;
         self.pending_suggestions.clear();
+        self.suggestions_deferred_noted = false;
         self.scroll_back = 0;
         // Placeholder agent message that deltas accumulate into.
         let mut m = ChatMsg::new(Role::Agent, "");

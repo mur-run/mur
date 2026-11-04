@@ -745,6 +745,9 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                 }
             }
             refresh_completion(app);
+            // Options deferred because the user had typed ahead (#2260)
+            // surface the moment the composer is empty again.
+            app.reveal_deferred_suggestions();
         }
         Event::Paste(text) => {
             // How Cmd+V image paste works: the terminal eats Cmd+V and pastes

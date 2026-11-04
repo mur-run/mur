@@ -56,18 +56,41 @@ pub fn parse_suggestions(args: &serde_json::Value) -> Vec<Suggestion> {
 /// How to surface a set of pending suggestions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reveal {
-    /// Nothing to show (empty, or the composer already has text).
+    /// Nothing to show (no suggestions).
     None,
+    /// The composer already has text (the user typed ahead while the agent
+    /// was still running). The options must not vanish: list them as a
+    /// transcript line now and keep them pending until the composer empties
+    /// (#2260).
+    Defer(Vec<Suggestion>),
     /// A single suggestion → ghost placeholder text (the `text`, no description).
     Ghost(String),
     /// Two or more → a chooser overlay.
     Chooser(Vec<Suggestion>),
 }
 
+/// The transcript line used when the composer is occupied: the options as
+/// plain text, so the information is never silently lost (same principle as
+/// the egress chooser's `text_fallback`, #1907).
+pub fn text_fallback(items: &[Suggestion]) -> String {
+    let list = items
+        .iter()
+        .map(|s| match &s.desc {
+            Some(d) => format!("`{}` — {}", s.text, d),
+            None => format!("`{}`", s.text),
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    format!("Suggested replies (shown once the composer is empty): {list}")
+}
+
 /// Decide how to reveal `pending` given whether the composer is empty.
 pub fn plan_reveal(pending: Vec<Suggestion>, input_empty: bool) -> Reveal {
-    if pending.is_empty() || !input_empty {
+    if pending.is_empty() {
         return Reveal::None;
+    }
+    if !input_empty {
+        return Reveal::Defer(pending);
     }
     if pending.len() == 1 {
         Reveal::Ghost(pending.into_iter().next().unwrap().text)
@@ -148,8 +171,36 @@ mod tests {
     }
 
     #[test]
-    fn reveal_skips_when_input_not_empty_or_pending_empty() {
-        assert_eq!(plan_reveal(vec![sugg("a")], false), Reveal::None);
+    fn reveal_skips_when_pending_empty() {
         assert_eq!(plan_reveal(Vec::new(), true), Reveal::None);
+        assert_eq!(plan_reveal(Vec::new(), false), Reveal::None);
+    }
+
+    /// #2260: a non-empty composer defers the options instead of dropping them.
+    #[test]
+    fn reveal_defers_when_input_not_empty() {
+        assert_eq!(
+            plan_reveal(vec![sugg("a")], false),
+            Reveal::Defer(vec![sugg("a")])
+        );
+        assert_eq!(
+            plan_reveal(vec![sugg("a"), sugg("b")], false),
+            Reveal::Defer(vec![sugg("a"), sugg("b")])
+        );
+    }
+
+    #[test]
+    fn text_fallback_lists_every_option_with_descriptions() {
+        let t = text_fallback(&[
+            sugg("merge"),
+            Suggestion {
+                text: "rebase".into(),
+                desc: Some("linear history".into()),
+            },
+        ]);
+        assert_eq!(
+            t,
+            "Suggested replies (shown once the composer is empty): `merge` · `rebase` — linear history"
+        );
     }
 }
