@@ -208,3 +208,56 @@ fn a_split_request_audits_the_read_role_for_prefetch_and_the_write_role_for_push
         ]
     );
 }
+
+/// The host refuses the enrolled write token at push time (a token the host does not let push,
+/// such as a read-only one enrolled as `--secret`). The prefetch still succeeds with the read
+/// login, the approval is spent, and the push fails *loudly*: `on_approval` returns an error,
+/// the row ends `rejected`, the remote ref is untouched, and neither token is echoed.
+#[test]
+fn a_write_token_the_host_refuses_fails_the_push_out_loud_not_silently() {
+    let r = rig_split(true, READ_TOKEN, WRONG, None);
+    let (k, h) = submit(&r).expect("intake reads with the read login, so it still succeeds");
+    let err = r.b.on_approval(&k, proof("e1", "r1", &h)).unwrap_err();
+    assert!(matches!(err, BrokerError::Rejected(_)), "{err:?}");
+    let shown = format!("{err:?} {err}");
+    for secret in [WRONG, READ_TOKEN, WRITE_TOKEN] {
+        assert!(!shown.contains(secret), "{shown}");
+    }
+    assert_eq!(
+        remote_ref(&r),
+        r.e.old,
+        "a refused push moved the remote ref"
+    );
+    assert_eq!(
+        r.b.store().get(&k).unwrap().unwrap().state,
+        State::Rejected,
+        "the failure must be recorded, not left pending or marked succeeded"
+    );
+    let trail = kinds_and_roles(&r, &k);
+    assert_eq!(
+        trail.last().cloned(),
+        Some((audit_ended(State::Rejected), None)),
+        "{trail:#?}"
+    );
+    assert!(
+        trail.contains(&(
+            AUDIT_PUSH_WITH_CREDENTIAL.to_string(),
+            Some(CredentialRole::Write)
+        )),
+        "the push attempt itself is audited under the write role: {trail:#?}"
+    );
+    let seen = r.seen.lock().unwrap();
+    assert!(
+        seen.iter()
+            .filter(|s| s.leg == Leg::Push)
+            .any(|s| s.carried == Carried::Wrong),
+        "the refused write login was never offered, so the refusal proved nothing: {seen:#?}"
+    );
+    assert!(
+        seen.iter()
+            .filter(|s| s.leg == Leg::Push)
+            .all(|s| s.carried != Carried::Read),
+        "the read login must never be used for the push: {seen:#?}"
+    );
+    assert!(seen.iter().all(|s| !s.leaked_token_in_line), "{seen:#?}");
+}
