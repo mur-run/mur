@@ -90,12 +90,17 @@ impl SshClientEnv {
             .join(" ")
     }
 
+    /// `GIT_SSH_COMMAND` for any child that runs git — bash and MCP alike.
+    pub fn git_env_pair(&self) -> (String, String) {
+        (GIT_SSH_COMMAND_ENV.to_string(), self.command_line())
+    }
+
     /// The two env keys for the bash child. The function does not `exec`:
     /// inside a function that would replace the caller's whole shell.
     pub fn env_pairs(&self) -> [(String, String); 2] {
-        let cmd = self.command_line();
+        let (git_k, cmd) = self.git_env_pair();
         [
-            (GIT_SSH_COMMAND_ENV.to_string(), cmd.clone()),
+            (git_k, cmd.clone()),
             (
                 BASH_FUNC_SSH_ENV.to_string(),
                 format!("() {{ {cmd} \"$@\"; }}"),
