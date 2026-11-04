@@ -6,8 +6,9 @@ pub enum BrowserAction {
     Record {
         #[arg(long)]
         run: String,
-        /// Saved profile to launch with (repeatable). Several profiles are
-        /// merged into one session; their cookie domains must be disjoint.
+        /// Saved profile to launch with (repeatable in live mode only, where
+        /// the profiles are merged into one session and their cookie domains
+        /// must be disjoint; a test/automation recording takes one).
         #[arg(long)]
         profile: Vec<String>,
         /// `test` | `automation` | `live` (interactive, behind the egress proxy).
