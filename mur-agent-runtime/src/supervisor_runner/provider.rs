@@ -105,7 +105,7 @@ pub async fn build_provider_runner(
     // BEFORE the kernel sandbox sealed, so its port is carved into the
     // profile and sandboxed children can dial it. See mur_common::agent::entries_need_egress.
     let egress = egress_proxy;
-    let pool = McpPool::new(enabled_mcp.clone(), sandbox_policy, egress);
+    let pool = McpPool::new(enabled_mcp.clone(), sandbox_policy, egress, ssh.clone());
     // MUR_HOME-aware home dir — same expression as `prepare_runtime`/`supervisor/mod.rs`
     // (the old inline "local"-arm recompute below ignored MUR_HOME; unifying on
     // this shared value is a disclosed, intentional bug-fix — see task-7-report.md).

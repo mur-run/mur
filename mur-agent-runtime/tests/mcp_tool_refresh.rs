@@ -45,7 +45,7 @@ struct Rig {
 
 async fn rig(rules: &[ToolRule]) -> Rig {
     let boot = mock(&[]);
-    let pool = McpPool::new(vec![boot.clone()], SandboxPolicy::default(), None);
+    let pool = McpPool::new(vec![boot.clone()], SandboxPolicy::default(), None, None);
     let served = Arc::new(Mutex::new(boot.clone()));
     let source = served.clone();
     pool.attach_live(Box::new(move |name| {
