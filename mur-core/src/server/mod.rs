@@ -1,6 +1,6 @@
 //! Local API server for MUR — `mur serve`.
 //!
-//! Exposes the pattern and workflow stores over HTTP so the web dashboard
+//! Exposes the skill and workflow stores over HTTP so the web dashboard
 //! (mur.run SPA or localhost dev) can read and write data.
 //!
 //! Handlers are split per resource into sibling modules; this file owns
@@ -33,7 +33,6 @@ use crate::store::yaml::YamlStore;
 mod context;
 mod governance;
 mod mobile;
-mod patterns;
 mod pipelines;
 mod schedules;
 mod search;
@@ -47,12 +46,11 @@ mod workflows;
 mod tests;
 
 use context::{context_feedback, context_ingest, context_retrieve};
-use patterns::{create_pattern, delete_pattern, get_pattern, list_patterns, update_pattern};
 use pipelines::{
     create_pipeline, delete_pipeline, get_pipeline, list_pipelines, run_pipeline,
     run_pipeline_expr, update_pipeline, validate_pipeline,
 };
-use search::search_patterns;
+use search::search_skills;
 use sessions::{
     bulk_delete_sessions, delete_session, get_session, get_session_events, list_sessions,
     patch_session,
@@ -212,12 +210,6 @@ pub fn build_router_with_auth(state: AppState, auth_token: Option<Arc<str>>) -> 
     let router = Router::new()
         // Health
         .route("/api/v1/health", get(health))
-        // Patterns CRUD
-        .route("/api/v1/patterns", get(list_patterns))
-        .route("/api/v1/patterns", post(create_pattern))
-        .route("/api/v1/patterns/{id}", get(get_pattern))
-        .route("/api/v1/patterns/{id}", put(update_pattern))
-        .route("/api/v1/patterns/{id}", delete(delete_pattern))
         // Skills CRUD
         .route("/api/v1/skills", get(list_skills))
         .route("/api/v1/skills", post(create_skill))
@@ -237,7 +229,7 @@ pub fn build_router_with_auth(state: AppState, auth_token: Option<Arc<str>>) -> 
         .route("/api/v1/tags", get(get_tags))
         .route("/api/v1/links/{id}", get(get_links))
         // Search
-        .route("/api/v1/search", post(search_patterns))
+        .route("/api/v1/search", post(search_skills))
         .route("/api/v1/workflows/search", post(search_workflows))
         // Context API (retrieve, ingest, feedback)
         .route("/api/v1/context", post(context_retrieve))
