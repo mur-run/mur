@@ -9,7 +9,10 @@
 //! What this proves with real bytes, not fixtures: the client's
 //! `session-bind@openssh.com` verifies, the sign request it sends passes
 //! every binding rule (2-5) and the policy, and reaches the approval gate
-//! with the server's real host key. Approved, the upstream's signature goes
+//! with the server's real host key — once for each userauth method the
+//! parser accepts, `publickey` and `publickey-hostbound-v00@openssh.com`,
+//! chosen with `PubkeyAuthentication=unbound|host-bound` and confirmed from
+//! the client's own debug line, not assumed from the server version. Approved, the upstream's signature goes
 //! back and the login succeeds; denied, nothing is signed and the login
 //! fails `hitl_denied`. A run with the host key left out of policy must
 //! refuse `host_not_allowed` without asking, so the host fingerprint is the
@@ -44,6 +47,36 @@ const CI_ENV_VAR: &str = "CI";
 /// Where unprivileged `sshd` usually lives; `PATH` is tried first.
 const SSHD_FALLBACKS: [&str; 2] = ["/usr/sbin/sshd", "/usr/local/sbin/sshd"];
 /// Codes that would mean the real client's bytes broke a binding rule.
+/// Which userauth request the client signs (RFC 4252 §7 vs. OpenSSH
+/// `PROTOCOL` §2.5). `ssh -vvv` names the method it used in
+/// `sign_and_send_pubkey: using <method> with <keytype> <fp>`; the test
+/// reads that line so a server that does not offer hostbound cannot make
+/// the hostbound case pass silently as plain publickey.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Method {
+    Publickey,
+    Hostbound,
+}
+
+impl Method {
+    fn ssh_option(self) -> &'static str {
+        match self {
+            Method::Publickey => "PubkeyAuthentication=unbound",
+            Method::Hostbound => "PubkeyAuthentication=host-bound",
+        }
+    }
+    fn wire_name(self) -> &'static str {
+        match self {
+            Method::Publickey => "publickey",
+            Method::Hostbound => "publickey-hostbound-v00@openssh.com",
+        }
+    }
+    /// The `debug3` line `sshconnect2.c` prints just before signing.
+    fn debug_line(self) -> String {
+        format!("using {} with ", self.wire_name())
+    }
+}
+
 const BINDING_CODES: [RefusalCode; 6] = [
     RefusalCode::NoSessionBind,
     RefusalCode::SessionBindUnverified,
@@ -245,7 +278,7 @@ impl Rig {
 
     /// `ssh … true` through the proxy at `proxy_sock`, server host key
     /// pinned in a private known_hosts, no user config, agent key only.
-    fn ssh(&self, proxy_sock: &Path) -> Command {
+    fn ssh(&self, proxy_sock: &Path, method: Method) -> Command {
         let known_hosts = self.dir.join("known_hosts");
         let host_pub = pub_line(&self.host_key);
         let mut f = host_pub.split_whitespace();
@@ -260,7 +293,8 @@ impl Rig {
             .expect("USER or LOGNAME");
         let mut cmd = Command::new("ssh");
         cmd.env("SSH_AUTH_SOCK", proxy_sock)
-            .args(["-F", "none", "-T", "-v"])
+            .args(["-F", "none", "-T", "-vvv"])
+            .args(["-o", method.ssh_option()])
             .args(["-o", "BatchMode=yes"])
             .args(["-o", "StrictHostKeyChecking=yes"])
             .args(["-o", "PreferredAuthentications=publickey"])
@@ -374,6 +408,7 @@ async fn login_through_proxy(
     rig: &Rig,
     ent: SshEntitlement,
     approvals: Arc<dyn SignGate>,
+    method: Method,
     tag: &str,
 ) -> (Output, Vec<SshRefusal>) {
     let home = rig.dir.join(format!("home-{tag}"));
@@ -399,13 +434,36 @@ async fn login_through_proxy(
 
     // Async, so the proxy keeps serving while `ssh` runs; a child of this
     // process, so the production peer gate admits it.
-    let ssh = tokio::process::Command::from(rig.ssh(&sock)).output();
+    let ssh = tokio::process::Command::from(rig.ssh(&sock, method)).output();
     let out = tokio::time::timeout(SSH_TIMEOUT, ssh)
         .await
         .expect("ssh timed out")
         .expect("ssh spawn");
     serving.abort();
     (out, ssh_proxy_refusals::read(&home))
+}
+
+/// The client signed a `method` request: its debug line says so, and no
+/// other method's line appears (a fallback after a refused first attempt
+/// would print both).
+fn assert_signed_with(out: &Output, method: Method, rig: &Rig) {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&method.debug_line()),
+        "ssh did not sign a {} request\n{}",
+        method.wire_name(),
+        explain(out, rig)
+    );
+    let other = match method {
+        Method::Publickey => Method::Hostbound,
+        Method::Hostbound => Method::Publickey,
+    };
+    assert!(
+        !stderr.contains(&other.debug_line()),
+        "ssh also signed a {} request\n{}",
+        other.wire_name(),
+        explain(out, rig)
+    );
 }
 
 fn explain(out: &Output, rig: &Rig) -> String {
@@ -437,21 +495,24 @@ async fn real_openssh_login_is_signed_only_when_approved() {
     // Allowed key, allowed host, approved through the production gate B:
     // every binding rule and the policy pass, one `tool/approval_needed`
     // goes out, the answer comes back by `hitl_id`, and the upstream's
-    // signature logs in.
+    // signature logs in. Hostbound first: the request carries the server
+    // host key, so rule 4's host-key half is exercised with real bytes.
     let (gate_b, prompts) = approving_gate_b();
     let (out, refusals) = login_through_proxy(
         &rig,
         rig.entitlement(vec![host_fp.clone()]),
         gate_b.clone(),
-        "approved",
+        Method::Hostbound,
+        "approved-hostbound",
     )
     .await;
     assert!(
         out.status.success(),
-        "approved login failed; refusals {:?}\n{}",
+        "approved hostbound login failed; refusals {:?}\n{}",
         refusals.iter().map(|r| &r.code).collect::<Vec<_>>(),
         explain(&out, &rig)
     );
+    assert_signed_with(&out, Method::Hostbound, &rig);
     assert!(
         refusals.is_empty(),
         "an approved login recorded refusals: {:?}",
@@ -459,15 +520,29 @@ async fn real_openssh_login_is_signed_only_when_approved() {
     );
     assert_eq!(prompts.load(std::sync::atomic::Ordering::SeqCst), 1);
 
-    // Same pair again, inside the TTL: remembered, so no second prompt.
-    let (out, _) = login_through_proxy(
+    // Same pair, plain `publickey` (no host key in the signed data): the
+    // parser's other accepted shape passes rules 2-4 too. Inside the TTL
+    // the approval is remembered, so no second prompt.
+    let (out, refusals) = login_through_proxy(
         &rig,
         rig.entitlement(vec![host_fp.clone()]),
         gate_b,
-        "remembered",
+        Method::Publickey,
+        "approved-publickey",
     )
     .await;
-    assert!(out.status.success(), "{}", explain(&out, &rig));
+    assert!(
+        out.status.success(),
+        "plain publickey login failed; refusals {:?}\n{}",
+        refusals.iter().map(|r| &r.code).collect::<Vec<_>>(),
+        explain(&out, &rig)
+    );
+    assert_signed_with(&out, Method::Publickey, &rig);
+    assert!(
+        refusals.is_empty(),
+        "a plain publickey login recorded refusals: {:?}",
+        refusals.iter().map(|r| &r.code).collect::<Vec<_>>()
+    );
     assert_eq!(
         prompts.load(std::sync::atomic::Ordering::SeqCst),
         1,
@@ -481,6 +556,7 @@ async fn real_openssh_login_is_signed_only_when_approved() {
         &rig,
         rig.entitlement(vec![host_fp.clone()]),
         probe.clone(),
+        Method::Hostbound,
         "asked",
     )
     .await;
@@ -496,6 +572,7 @@ async fn real_openssh_login_is_signed_only_when_approved() {
         &rig,
         rig.entitlement(vec![host_fp.clone()]),
         Answering::new(GateOutcome::Deny),
+        Method::Hostbound,
         "denied",
     )
     .await;
@@ -528,8 +605,14 @@ async fn real_openssh_login_is_signed_only_when_approved() {
     // server key, so the lookup must miss.
     // The gate must never be asked: a policy refusal is not a prompt.
     let never = Answering::new(GateOutcome::Allow);
-    let (out, refusals) =
-        login_through_proxy(&rig, rig.entitlement(Vec::new()), never.clone(), "no-host").await;
+    let (out, refusals) = login_through_proxy(
+        &rig,
+        rig.entitlement(Vec::new()),
+        never.clone(),
+        Method::Hostbound,
+        "no-host",
+    )
+    .await;
     assert!(!out.status.success());
     let last = refusals
         .first()
