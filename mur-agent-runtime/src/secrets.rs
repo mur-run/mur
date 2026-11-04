@@ -105,20 +105,7 @@ impl SecretVault {
     /// The system-prompt section. Names only. `None` when there is nothing to
     /// say, so an agent with no secrets pays no tokens for this.
     pub fn prompt_fragment(&self) -> Option<String> {
-        let names = self.names();
-        if names.is_empty() {
-            return None;
-        }
-        let list: Vec<String> = names.iter().map(|n| format!("${n}")).collect();
-        Some(format!(
-            "\n\n## Secrets available to the bash tool\n\
-             These environment variables are set for every bash command you run: {}.\n\
-             Use them by name (e.g. `curl -H \"Authorization: token $NAME\"`). \
-             Never print their values, never put one into a URL or a remote (it would \
-             land in `.git/config`), and prefer a git credential helper over embedding \
-             a token in a clone URL.",
-            list.join(", ")
-        ))
+        crate::prompt_rules::secrets_fragment(&self.names())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, SecretString>> {

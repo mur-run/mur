@@ -220,6 +220,8 @@ P6 (input-driven suggestions): murmur debounces the message input (200 ms) and p
 
 The per-agent supervisor lives in `mur-agent-runtime/`. Each agent has a directory under `~/.mur/agents/<name>/` (`profile.yaml`, `sys_prompt.md`, `skills/`, `running.lock`, `telemetry/<date>.jsonl`) and a symlink in `MUR_AGENT_BIN_DIR` (default `~/.local/bin`) named `mur_agent_<name>`. The symlink is the runtime binary; argv[0] tells it which profile to load.
 
+`sys_prompt.md` is only the authored half of the system prompt. At turn time the runtime appends the sections in `mur-agent-runtime/src/prompt_rules.rs` (`## Output locations` with the agent's scratch dir, `## Secrets available to the bash tool` when the profile lists secrets), then the per-turn blocks (`## Working directory`, the artifact rule, ranked skills/memories). `mur agent prompt show <name>` renders the authored file plus the static sections from that same module under a `[runtime-injected]` marker, then the `## Working directory` / project-instructions templates with `{path}` left unresolved (the real path is per-turn); `--authored` prints the file byte-exact, which is the form to round-trip through `prompt set -f`.
+
 - **Plan:** `docs/superpowers/plans/archive/2026-04-22-murmur-p0a-agent-runtime-plan.md` (+ `-part2.md`, `-COMPLETE.md`, `-e2e-coverage.md`)
 - **Crate README:** `mur-agent-runtime/README.md`
 - **E2E runner:** `scripts/e2e/run-all.sh`
