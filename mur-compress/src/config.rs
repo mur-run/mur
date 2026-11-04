@@ -38,8 +38,6 @@ pub struct CompressConfig {
     pub auto: AutoCfg,
     #[serde(default)]
     pub json: JsonCfg,
-    #[serde(default)]
-    pub fallback: FallbackCfg,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,23 +77,6 @@ impl Default for JsonCfg {
     }
 }
 
-/// `fallback:` section — knobs for the Generic path.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FallbackCfg {
-    /// Generic inputs whose exactly-computable savings ratio is below this
-    /// are skipped (passthrough) instead of compressed.
-    pub min_save_ratio: f32,
-}
-
-impl Default for FallbackCfg {
-    fn default() -> Self {
-        Self {
-            min_save_ratio: 0.05,
-        }
-    }
-}
-
 impl Default for CompressConfig {
     fn default() -> Self {
         Self {
@@ -112,7 +93,6 @@ impl Default for CompressConfig {
             stats: StatsCfg::default(),
             auto: AutoCfg::default(),
             json: JsonCfg::default(),
-            fallback: FallbackCfg::default(),
         }
     }
 }
@@ -236,7 +216,6 @@ mod tests {
     fn new_sections_default() {
         let cfg = CompressConfig::default();
         assert_eq!(cfg.json.max_string_tokens, 200);
-        assert!((cfg.fallback.min_save_ratio - 0.05).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -246,6 +225,5 @@ mod tests {
         std::fs::write(dir.path().join("compress.yaml"), "enabled: true\n").unwrap();
         let cfg = CompressConfig::load(dir.path());
         assert_eq!(cfg.json.max_string_tokens, 200);
-        assert!((cfg.fallback.min_save_ratio - 0.05).abs() < f32::EPSILON);
     }
 }
