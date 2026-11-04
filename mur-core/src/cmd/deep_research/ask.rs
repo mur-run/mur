@@ -121,11 +121,12 @@ fn backfill_artifact_path(mur_home: &Path, run_id: &str, path: &std::path::Path)
     progress.save(mur_home, DEFAULT_FLEET_NAME);
 }
 
-/// Resolve this invocation's run id: an externally-supplied `MUR_RUN_ID`
-/// (e.g. set by the `fleet_run` MCP tool before spawning this process) when
-/// present and non-empty, else a freshly minted v7 uuid — mirrors
-/// `loop_run::resolve_run_id_from` (`mur_common::fleet::RUN_ID_ENV` is the
-/// shared join key both honour).
+/// Resolve this invocation's run id when no `--run-id` was given: an
+/// externally-supplied `MUR_RUN_ID` (`mur_common::fleet::RUN_ID_ENV`, set by
+/// the `/deep-research` slash command in `agent/cli/deep_research.rs` before
+/// spawning this process) when present and non-empty, else a freshly minted
+/// v7 uuid. The `fleet_run` MCP tool passes `--run-id` on argv instead and
+/// never reaches this fallback.
 fn resolve_run_id() -> String {
     match std::env::var(mur_common::fleet::RUN_ID_ENV).ok() {
         Some(v) if !v.is_empty() => v,
@@ -136,8 +137,9 @@ fn resolve_run_id() -> String {
 pub async fn cmd_ask(mur_home: &Path, question: &str, run_id: Option<String>) -> Result<()> {
     let run_id = run_id.unwrap_or_else(resolve_run_id);
     // Same `set_var` block as `MUR_HOME` below (single-shot CLI process) —
-    // so the loop this process spawns (Task 2, `loop_run.rs:420`) sees the
-    // same id, whether it was handed to us or we just minted it.
+    // so anything this process spawns inherits the same id, whether it was
+    // handed to us or we just minted it. The loop itself gets `run_id` as an
+    // explicit argument (see `ask_inner`), not via the env.
     unsafe {
         std::env::set_var(mur_common::fleet::RUN_ID_ENV, &run_id);
     }
