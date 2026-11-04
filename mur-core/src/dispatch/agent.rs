@@ -124,7 +124,9 @@ pub(super) async fn run_agent(action: AgentAction) -> Result<()> {
             cmd::agent::cmd_install_service(&name, dry_run)?
         }
         AgentAction::Prompt { action } => match action {
-            AgentPromptAction::Show { name } => cmd::agent::cmd_prompt_show(&name)?,
+            AgentPromptAction::Show { name, authored } => {
+                cmd::agent::cmd_prompt_show(&name, authored)?
+            }
             AgentPromptAction::Edit { name } => cmd::agent::cmd_prompt_edit(&name)?,
             AgentPromptAction::Set {
                 name,

@@ -33,7 +33,7 @@ fn prompt_show_prints_sys_prompt_contents() {
     let mur = env!("CARGO_BIN_EXE_mur");
     let out = Command::new(mur)
         .env("MUR_HOME", mur_home.path())
-        .args(["agent", "prompt", "show", "agent_x"])
+        .args(["agent", "prompt", "show", "agent_x", "--authored"])
         .output()
         .expect("spawn mur prompt show");
     assert!(
@@ -43,6 +43,45 @@ fn prompt_show_prints_sys_prompt_contents() {
     );
     let body = String::from_utf8(out.stdout).unwrap();
     assert_eq!(body, "# Marker\nhello world");
+}
+
+/// #2268: the default `show` prints what the agent actually receives — the
+/// authored file first, then the runtime's static sections under a
+/// `[runtime-injected]` marker, with the scratch dir resolved for THIS agent.
+#[test]
+fn prompt_show_default_appends_runtime_injected_sections() {
+    let mur_home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    mur_create(mur_home.path(), bin_dir.path(), "agent_x");
+    let prompt_path = mur_home.path().join("agents/agent_x/sys_prompt.md");
+    std::fs::write(&prompt_path, "# Marker\nhello world").unwrap();
+
+    let mur = env!("CARGO_BIN_EXE_mur");
+    let out = Command::new(mur)
+        .env("MUR_HOME", mur_home.path())
+        .args(["agent", "prompt", "show", "agent_x"])
+        .output()
+        .expect("spawn mur prompt show");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let body = String::from_utf8(out.stdout).unwrap();
+    assert!(body.starts_with("# Marker\nhello world"), "{body}");
+    let marker = body.find("[runtime-injected]").expect("marker present");
+    let rule = body.find("## Output locations").expect("rule present");
+    assert!(rule > marker, "rule sits under the marker");
+    let scratch = mur_home.path().join("tmp/agent_x");
+    assert!(
+        body.contains(&format!("`{}`", scratch.display())),
+        "scratch dir resolved for this agent: {body}"
+    );
+    assert!(
+        !body.contains("## Secrets available"),
+        "no secrets configured, so no secrets section: {body}"
+    );
+    assert!(body.contains("Also appended per turn"), "{body}");
 }
 
 #[test]

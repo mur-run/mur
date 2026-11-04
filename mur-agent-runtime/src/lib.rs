@@ -45,6 +45,7 @@ pub mod multimodal;
 pub mod oauth;
 pub mod profile;
 pub mod project_instructions;
+pub mod prompt_rules;
 pub mod protocol;
 pub mod retry;
 pub mod sandbox;

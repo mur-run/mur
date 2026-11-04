@@ -457,8 +457,14 @@ pub enum AgentAddonAction {
 
 #[derive(Subcommand)]
 pub enum AgentPromptAction {
-    /// Print the agent's sys_prompt.md contents to stdout
-    Show { name: String },
+    /// Print the system prompt the agent receives: sys_prompt.md followed by
+    /// the sections the runtime appends (marked `[runtime-injected]`)
+    Show {
+        name: String,
+        /// Print only sys_prompt.md, byte-exact (for `show > f && set -f f`)
+        #[arg(long)]
+        authored: bool,
+    },
     /// Open $EDITOR on sys_prompt.md
     Edit { name: String },
     /// Write sys_prompt.md, preserving a .bak copy of the previous value
