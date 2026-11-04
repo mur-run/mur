@@ -45,6 +45,19 @@ pub(super) fn test_state_for_signals(tmp: &tempfile::TempDir) -> AppState {
     test_state(tmp)
 }
 
+fn skill_body(name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "manifest": {
+            "name": name,
+            "version": "1.0.0",
+            "publisher": "human:t",
+            "description": "A test skill",
+            "category": "context",
+            "content": { "abstract": "a test skill body" }
+        }
+    })
+}
+
 fn make_test_pattern(name: &str) -> Pattern {
     Pattern {
         base: KnowledgeBase {
@@ -95,24 +108,54 @@ async fn test_health() {
 }
 
 #[tokio::test]
-async fn test_list_patterns_empty() {
+async fn pattern_routes_are_gone() {
+    // Tier B4 of the Pattern -> Skill retirement (#2264): the dashboard reads
+    // `/api/v1/skills`; the legacy pattern CRUD must no longer be mounted.
+    // Unmatched GETs fall through to the SPA fallback (HTML, never JSON);
+    // unmatched mutations have no handler at all.
     let tmp = tempfile::tempdir().unwrap();
     let app = build_router(test_state(&tmp));
 
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/patterns")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    for uri in ["/api/v1/patterns", "/api/v1/patterns/x"] {
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .map(|v| v.to_str().unwrap().to_string())
+            .unwrap_or_default();
+        assert!(
+            !ct.contains("json"),
+            "GET {uri} still served by an API handler ({ct})"
+        );
+    }
 
-    assert_eq!(resp.status(), StatusCode::OK);
-    let json = body_json(resp).await;
-    assert_eq!(json["data"], serde_json::json!([]));
-    assert_eq!(json["meta"]["pattern_count"], 0);
+    for (method, uri) in [
+        ("POST", "/api/v1/patterns"),
+        ("PUT", "/api/v1/patterns/x"),
+        ("DELETE", "/api/v1/patterns/x"),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{method} {uri}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -161,7 +204,7 @@ async fn auth_token_enforced_on_api_when_configured() {
     let app = build_router_with_auth(test_state(&tmp), Some(token));
 
     let api_req = |auth: Option<&str>| {
-        let mut b = Request::builder().uri("/api/v1/patterns");
+        let mut b = Request::builder().uri("/api/v1/skills");
         if let Some(a) = auth {
             b = b.header("authorization", a);
         }
@@ -199,148 +242,17 @@ async fn auth_token_enforced_on_api_when_configured() {
 }
 
 #[tokio::test]
-async fn test_create_and_get_pattern() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = test_state(&tmp);
-    let app = build_router(state.clone());
-
-    // Create
-    let body = serde_json::json!({
-        "name": "test-pattern",
-        "description": "A test",
-        "technical": "Use this for testing",
-        "tags": ["rust", "test"]
-    });
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/patterns")
-                .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_string(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::CREATED);
-
-    // Get
-    let app2 = build_router(state);
-    let resp = app2
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/patterns/test-pattern")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    let json = body_json(resp).await;
-    assert_eq!(json["data"]["name"], "test-pattern");
-}
-
-#[tokio::test]
-async fn test_update_pattern() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = test_state(&tmp);
-
-    // Seed a pattern
-    let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
-    store.save(&make_test_pattern("update-me")).unwrap();
-
-    let app = build_router(state);
-
-    let body = serde_json::json!({
-        "description": "Updated description",
-        "confidence": 0.95
-    });
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("PUT")
-                .uri("/api/v1/patterns/update-me")
-                .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_string(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    let json = body_json(resp).await;
-    assert_eq!(json["data"]["description"], "Updated description");
-    assert_eq!(json["data"]["confidence"], 0.95);
-}
-
-#[tokio::test]
-async fn test_delete_pattern() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = test_state(&tmp);
-
-    let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
-    store.save(&make_test_pattern("to-delete")).unwrap();
-
-    let app = build_router(state.clone());
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("DELETE")
-                .uri("/api/v1/patterns/to-delete")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-
-    // Verify it's gone
-    let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
-    assert!(!store.exists("to-delete"));
-}
-
-#[tokio::test]
-async fn test_pattern_not_found() {
-    let tmp = tempfile::tempdir().unwrap();
-    let app = build_router(test_state(&tmp));
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/patterns/nonexistent")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
 async fn test_readonly_rejects_writes() {
     let tmp = tempfile::tempdir().unwrap();
     let app = build_router(test_state_readonly(&tmp));
 
-    let body = serde_json::json!({
-        "name": "blocked",
-        "description": "Should fail",
-        "technical": "content"
-    });
-
     let resp = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/patterns")
+                .uri("/api/v1/skills")
                 .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .body(Body::from(skill_body("blocked").to_string()))
                 .unwrap(),
         )
         .await
@@ -441,39 +353,6 @@ async fn test_search() {
 }
 
 #[tokio::test]
-async fn test_filter_by_tier() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = test_state(&tmp);
-
-    let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
-    let mut p1 = make_test_pattern("session-pat");
-    p1.tier = Tier::Session;
-    store.save(&p1).unwrap();
-
-    let mut p2 = make_test_pattern("core-pat");
-    p2.tier = Tier::Core;
-    store.save(&p2).unwrap();
-
-    let app = build_router(state);
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/patterns?tier=core")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    let json = body_json(resp).await;
-    let data = json["data"].as_array().unwrap();
-    assert_eq!(data.len(), 1);
-    assert_eq!(data[0]["name"], "core-pat");
-}
-
-#[tokio::test]
 async fn test_workflow_crud() {
     let tmp = tempfile::tempdir().unwrap();
     let state = test_state(&tmp);
@@ -570,33 +449,23 @@ async fn test_cors_headers() {
 }
 
 #[tokio::test]
-async fn test_duplicate_pattern_rejected() {
+async fn test_duplicate_skill_rejected() {
     let tmp = tempfile::tempdir().unwrap();
-    let state = test_state(&tmp);
+    let app = build_router(test_state(&tmp));
 
-    let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
-    store.save(&make_test_pattern("existing")).unwrap();
+    let post = || {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/skills")
+            .header("Content-Type", "application/json")
+            .body(Body::from(skill_body("existing").to_string()))
+            .unwrap()
+    };
 
-    let app = build_router(state);
+    let resp = app.clone().oneshot(post()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
 
-    let body = serde_json::json!({
-        "name": "existing",
-        "description": "duplicate",
-        "technical": "content"
-    });
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/patterns")
-                .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_string(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
+    let resp = app.oneshot(post()).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 

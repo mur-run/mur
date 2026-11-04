@@ -34,7 +34,7 @@ pub(super) struct SearchResult {
     pub confidence: f64,
 }
 
-pub(super) async fn search_patterns(
+pub(super) async fn search_skills(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SearchRequest>,
 ) -> Result<impl IntoResponse, AppError> {
