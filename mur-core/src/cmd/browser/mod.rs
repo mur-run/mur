@@ -57,10 +57,8 @@ pub async fn record(
     for profile in profiles {
         mur_browser::paths::validate_name(profile)?;
     }
-    // The run's own `profile` field names one profile; with several bound
-    // (#2263) the first is the one the recording is filed under.
-    let profile = profiles.first().map(String::as_str);
     let mode = mode.parse::<Mode>()?;
+    let profile = recorded_profile(profiles, mode)?;
 
     // Live mode (Gap 0): Chromium ignores HTTP_PROXY, so the runtime's egress
     // token is handed over in a 0600 `--config` file instead. Refusing when
@@ -244,6 +242,63 @@ fn live_config_for(
             )?))
         }
         Mode::Test | Mode::Automation => Ok(None),
+    }
+}
+
+/// The profile a recording is filed under. A run's `profile` field names one
+/// profile and replay resolves exactly that one, so a test or automation
+/// recording made with several profiles could capture logins on every site
+/// and then replay with only the first — losing the others' sessions and
+/// checking their navigation against the first's allowlist. Several profiles
+/// are therefore live-only (#2263), where nothing is replayed.
+fn recorded_profile(profiles: &[String], mode: Mode) -> Result<Option<&str>> {
+    match profiles {
+        [] => Ok(None),
+        [one] => Ok(Some(one.as_str())),
+        [first, ..] if mode == Mode::Live => Ok(Some(first.as_str())),
+        many => bail!(
+            "several --profile values ({}) are only supported in live mode: a \
+             {mode:?} recording is replayed with one profile's session and host \
+             policy, so the others would be lost on replay; record with a single \
+             --profile",
+            many.join(", ")
+        ),
+    }
+}
+
+#[cfg(test)]
+mod recorded_profile_tests {
+    use super::*;
+
+    fn p(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn none_and_one_pass_through_in_every_mode() {
+        for mode in [Mode::Test, Mode::Automation, Mode::Live] {
+            assert_eq!(recorded_profile(&[], mode).unwrap(), None);
+            assert_eq!(recorded_profile(&p(&["a"]), mode).unwrap(), Some("a"));
+        }
+    }
+
+    #[test]
+    fn live_files_a_multi_profile_session_under_the_first() {
+        assert_eq!(
+            recorded_profile(&p(&["a", "b"]), Mode::Live).unwrap(),
+            Some("a")
+        );
+    }
+
+    #[test]
+    fn replayable_modes_refuse_several_profiles_and_name_them() {
+        for mode in [Mode::Test, Mode::Automation] {
+            let err = recorded_profile(&p(&["a", "b"]), mode)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("a, b"), "{err}");
+            assert!(err.contains("live mode"), "{err}");
+        }
     }
 }
 

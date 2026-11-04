@@ -96,10 +96,13 @@ impl LiveOps for Fake {
     }
 }
 
-/// Bound-profile lookup for tests: whatever is already bound lives on a host
-/// no test site uses, so adding alongside is the ordinary outcome.
+/// Bound-profile lookup for tests: whatever is already bound has no domains
+/// of its own, so it neither overlaps the incoming site nor needs covering by
+/// the entry's allowlist (#2263 checks the union), and adding alongside is
+/// the ordinary outcome. `bind_plan_tests` covers a retained profile whose
+/// hosts are no longer allowed.
 fn disjoint(_: &str) -> Option<Vec<String>> {
-    Some(vec!["elsewhere.invalid".into()])
+    Some(Vec::new())
 }
 
 fn run(f: &mut Fake, site: &str, domains: &[&str], answer: Option<&str>) -> (Outcome, String) {

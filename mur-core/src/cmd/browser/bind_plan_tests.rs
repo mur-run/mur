@@ -274,3 +274,48 @@ fn warnings_are_none_only_for_bind() {
         "network mode broadaudited is not host-scoped"
     );
 }
+
+/// #2263: the policy check covers the union of every retained profile's
+/// domains plus the incoming one. A retained profile whose hosts the entry
+/// no longer allows blocks adding even a disjoint, fully covered profile.
+#[test]
+fn restricted_refuses_when_a_retained_profile_is_no_longer_covered() {
+    let e = entry(Some(McpNetMode::Restricted), &["b.com"], &[], Some("a"));
+    let bound = |site: &str| (site == "a").then(|| d(&["a.com"]));
+    assert_eq!(
+        plan_bind(Some(&e), "b", &d(&["b.com"]), &bound, false),
+        BindPlan::NeedsHosts {
+            current: d(&["b.com"]),
+            missing: d(&["a.com"]),
+        }
+    );
+}
+
+/// With `--replace` the retained profiles are dropped, so only the
+/// replacement has to be covered.
+#[test]
+fn replace_checks_only_the_replacement_against_the_policy() {
+    let e = entry(Some(McpNetMode::Restricted), &["b.com"], &[], Some("a"));
+    let bound = |site: &str| (site == "a").then(|| d(&["a.com"]));
+    assert_eq!(
+        plan_bind(Some(&e), "b", &d(&["b.com"]), &bound, true),
+        BindPlan::Bind {
+            alongside: Vec::new(),
+            replaces: d(&["a"]),
+        }
+    );
+}
+
+/// Broad-audited mirrors restricted: a retained profile on a denied host
+/// blocks the add.
+#[test]
+fn broad_audited_refuses_when_a_retained_profile_is_denied() {
+    let e = entry(Some(McpNetMode::BroadAudited), &[], &["a.com"], Some("a"));
+    let bound = |site: &str| (site == "a").then(|| d(&["a.com"]));
+    assert_eq!(
+        plan_bind(Some(&e), "b", &d(&["b.com"]), &bound, false),
+        BindPlan::Denied {
+            hosts: d(&["a.com"])
+        }
+    );
+}

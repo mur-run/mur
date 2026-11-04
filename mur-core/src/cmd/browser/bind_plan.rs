@@ -80,11 +80,32 @@ pub(crate) fn plan_bind(
         return BindPlan::NoLiveEntry;
     };
     let bind = |entry: &McpServerEntry| bind(entry, site, domains, bound, replace);
+    // The policy has to hold for the session that results, not just for the
+    // profile being added (#2263): a retained profile whose hosts the entry
+    // no longer covers would otherwise ride along unreachable. `--replace`
+    // drops the others, so only the replacement is checked then. Unreadable
+    // metadata contributes nothing here; `bind` refuses it as an overlap.
+    let checked: Vec<String> = if replace {
+        domains.to_vec()
+    } else {
+        let mut all = domains.to_vec();
+        for other in attached_profiles(entry) {
+            if other == site {
+                continue;
+            }
+            if let Some(theirs) = bound(other) {
+                all.extend(theirs);
+            }
+        }
+        all.sort();
+        all.dedup();
+        all
+    };
     let network = entry.network.as_ref();
     match network.map(|n| n.mode) {
         Some(McpNetMode::Restricted) => {
             let allow = &network.expect("mode came from it").allow_hosts;
-            let missing: Vec<String> = domains
+            let missing: Vec<String> = checked
                 .iter()
                 .filter(|d| !host_allowed(d, allow))
                 .cloned()
@@ -100,7 +121,7 @@ pub(crate) fn plan_bind(
         }
         Some(McpNetMode::BroadAudited) => {
             let deny = &network.expect("mode came from it").deny_hosts;
-            let hosts: Vec<String> = domains
+            let hosts: Vec<String> = checked
                 .iter()
                 .filter(|d| host_allowed(d, deny))
                 .cloned()
