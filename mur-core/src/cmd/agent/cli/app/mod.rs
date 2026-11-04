@@ -371,6 +371,9 @@ pub struct App {
     /// Replies captured from a `suggest_replies` tool call this turn, revealed
     /// after the turn finishes (see `reveal_suggestions`).
     pub pending_suggestions: Vec<super::suggest::Suggestion>,
+    /// Whether this turn's deferred options were already listed in the
+    /// transcript, so the fallback line is printed once per turn (#2260).
+    pub suggestions_deferred_noted: bool,
     /// Egress-denial chips state for this session (#1907).
     pub egress_chips: super::egress_denied::EgressChips,
     /// The agent's current `propose` chip (see `cli/proposal.rs`), or the
@@ -537,6 +540,7 @@ impl App {
             menu_ctx: super::complete::MenuContext::default(),
             path_bins: None,
             pending_suggestions: Vec::new(),
+            suggestions_deferred_noted: false,
             egress_chips: Default::default(),
             proposal: None,
             restart_in_flight: false,

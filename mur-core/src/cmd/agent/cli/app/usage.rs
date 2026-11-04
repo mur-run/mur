@@ -175,13 +175,21 @@ impl App {
     }
 
     /// Reveal suggestions captured this turn: one → ghost placeholder, many →
-    /// completion overlay. No-op unless the composer is empty. Clears
-    /// `pending_suggestions` either way.
+    /// completion overlay. With text already in the composer (the user typed
+    /// ahead), the options are listed as a transcript line and stay pending
+    /// until the composer empties (#2260) — never dropped silently.
     pub fn reveal_suggestions(&mut self) {
         let pending = std::mem::take(&mut self.pending_suggestions);
         let input_empty = self.input_text().is_empty();
         match super::super::suggest::plan_reveal(pending, input_empty) {
             super::super::suggest::Reveal::None => {}
+            super::super::suggest::Reveal::Defer(items) => {
+                if !self.suggestions_deferred_noted {
+                    self.push_system(super::super::suggest::text_fallback(&items));
+                    self.suggestions_deferred_noted = true;
+                }
+                self.pending_suggestions = items;
+            }
             // A chip the agent proposed this turn outranks the ghost (spec
             // §2 priority); the one slot holds only one of them.
             super::super::suggest::Reveal::Ghost(text) if self.proposal.is_none() => {
@@ -207,6 +215,17 @@ impl App {
                 });
             }
         }
+    }
+
+    /// Surface options deferred by `reveal_suggestions` once the composer is
+    /// empty again. Called after every key; a no-op while a turn is still
+    /// streaming (the options belong to the finished reply, not a live one)
+    /// or when nothing is pending.
+    pub fn reveal_deferred_suggestions(&mut self) {
+        if self.streaming || self.pending_suggestions.is_empty() || !self.input_text().is_empty() {
+            return;
+        }
+        self.reveal_suggestions();
     }
 
     /// Whether the proposal slot holds the ghost (a `suggest_replies` reply).

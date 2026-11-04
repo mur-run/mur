@@ -114,3 +114,74 @@ fn new_runtime_with_steps_shows_no_hint() {
     assert!(!a.step_hint_shown);
     assert!(!a.messages.iter().any(|m| m.text.contains("restart")));
 }
+
+/// #2260: options arriving while the user has typed ahead are neither shown
+/// as a chooser nor dropped — they go to the transcript as text and stay
+/// pending; once the composer empties they surface as the chooser.
+#[test]
+fn reveal_with_typed_ahead_composer_defers_then_shows_when_empty() {
+    use super::super::super::suggest::Suggestion;
+    let mut a = App::test_fixture();
+    a.begin_user_turn("hi");
+    a.input.insert_str("next question");
+    a.pending_suggestions = vec![
+        Suggestion {
+            text: "yes".into(),
+            desc: None,
+        },
+        Suggestion {
+            text: "no".into(),
+            desc: Some("skip it".into()),
+        },
+    ];
+    a.finish_agent_turn("ok".into(), None);
+    a.reveal_suggestions();
+    assert!(
+        a.completion.is_none(),
+        "no chooser over a non-empty composer"
+    );
+    assert_eq!(a.pending_suggestions.len(), 2, "options stay pending");
+    let fallback = a
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::System && m.text.contains("Suggested replies"))
+        .count();
+    assert_eq!(fallback, 1, "options listed once in the transcript");
+    assert!(a.messages.last().unwrap().text.contains("`no` — skip it"));
+
+    // Still non-empty: a second reveal neither repeats the line nor opens.
+    a.reveal_deferred_suggestions();
+    assert!(a.completion.is_none());
+    assert_eq!(
+        a.messages
+            .iter()
+            .filter(|m| m.role == Role::System && m.text.contains("Suggested replies"))
+            .count(),
+        1
+    );
+
+    // Composer emptied → chooser opens, pending drained.
+    a.clear_input();
+    a.reveal_deferred_suggestions();
+    assert!(
+        a.completion
+            .as_ref()
+            .is_some_and(|c| c.spaced && c.items.len() == 2)
+    );
+    assert!(a.pending_suggestions.is_empty());
+}
+
+/// #2260: deferred options are not surfaced while a new turn is streaming.
+#[test]
+fn deferred_suggestions_wait_while_streaming() {
+    use super::super::super::suggest::Suggestion;
+    let mut a = App::test_fixture();
+    a.pending_suggestions = vec![Suggestion {
+        text: "yes".into(),
+        desc: None,
+    }];
+    a.streaming = true;
+    a.reveal_deferred_suggestions();
+    assert!(a.proposal.is_none());
+    assert_eq!(a.pending_suggestions.len(), 1);
+}
