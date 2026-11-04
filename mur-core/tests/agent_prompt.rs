@@ -81,7 +81,22 @@ fn prompt_show_default_appends_runtime_injected_sections() {
         !body.contains("## Secrets available"),
         "no secrets configured, so no secrets section: {body}"
     );
-    assert!(body.contains("Also appended per turn"), "{body}");
+    // The per-turn rule templates are shown with `{path}` unresolved, after
+    // the static sections and before the closing note.
+    let wd = body
+        .find("## Working directory")
+        .expect("working-dir template");
+    assert!(wd > rule, "per-turn templates follow the static sections");
+    assert!(
+        body.contains("`{path}`"),
+        "placeholder left unresolved: {body}"
+    );
+    assert!(
+        body.contains("<project_instructions>"),
+        "project-instructions template present: {body}"
+    );
+    let note = body.find("Also appended per turn").expect("note present");
+    assert!(note > wd, "note comes last");
 }
 
 #[test]

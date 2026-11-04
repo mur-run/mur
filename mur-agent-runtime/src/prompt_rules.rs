@@ -93,10 +93,20 @@ Your complete final output for this turn must be written to `{path}` using write
 In your reply, state ONLY the file path and a one-line summary of what was written.\n\
 Do NOT include the file content in your reply — the caller will read the file directly.";
 
-/// One line naming what `static_sections` cannot show: the blocks that only
-/// exist once a turn is running. `mur agent prompt show` prints it after the
-/// static sections so nobody mistakes them for the whole injection.
-pub const PER_TURN_NOTE: &str = "Also appended per turn, not shown here: `## Working directory` (the session cwd and the project-instructions note), `## Artifact output path` when a caller asks for one, and skills/memories ranked for that turn's context.";
+/// The per-turn rule templates with `{path}` left unresolved, for
+/// `mur agent prompt show`: the working-directory block and the
+/// project-instructions note are appended on every turn that has a session
+/// cwd, so the text is worth showing even though the path is not known
+/// until a turn runs. Exactly the bytes the runtime substitutes into.
+pub fn per_turn_templates() -> String {
+    format!("{WORKING_DIR_RULE}{PROJECT_INSTRUCTIONS_RULE}")
+}
+
+/// One line naming what `static_sections` and `per_turn_templates` cannot
+/// show: the blocks that only exist once a turn is running. `mur agent
+/// prompt show` prints it last so nobody mistakes the above for the whole
+/// injection.
+pub const PER_TURN_NOTE: &str = "Also appended per turn, not shown here: `## Artifact output path` when a caller asks for one, and skills/memories ranked for that turn's context.";
 
 #[cfg(test)]
 mod tests {
@@ -110,6 +120,14 @@ mod tests {
         let with = static_sections(Some(p), &["GITEA_TOKEN".into()]);
         assert!(with.starts_with(&none));
         assert!(with.ends_with(&secrets_fragment(&["GITEA_TOKEN".into()]).unwrap()));
+    }
+
+    #[test]
+    fn per_turn_templates_keep_path_placeholder() {
+        let t = per_turn_templates();
+        assert!(t.starts_with(WORKING_DIR_RULE), "{t}");
+        assert!(t.ends_with(PROJECT_INSTRUCTIONS_RULE), "{t}");
+        assert!(t.contains("`{path}`"), "placeholder must survive: {t}");
     }
 
     #[test]
