@@ -527,6 +527,13 @@ impl TaskRunner {
                 let step_id = step_ids
                     .remove(&call.call_id)
                     .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
+                // #2071: a `tasks/cancel` drops this future while the call
+                // below is awaited. Park the calls of this batch that already
+                // completed first, so a cancel between two calls does not
+                // forget the first one (review P2 on #2275). The real ledger
+                // records the batch once it settles; the parked copy is a
+                // snapshot, so nothing is counted twice.
+                self.checkpoint_batch(task_id, &ledger, iteration, &resp.tool_calls, &results);
                 match self
                     .handle_tool_call(
                         task_id,
@@ -547,22 +554,11 @@ impl TaskRunner {
                         // was refused, on the record before the ledger is
                         // dropped with the loop, then park it for the run
                         // wrapper to remember the turn.
-                        for (ran, entry) in resp.tool_calls.iter().zip(results.iter()) {
-                            ledger.record(crate::turn_ledger::Action {
-                                tool: ran.tool_name.clone(),
-                                target: crate::turn_ledger::describe_target_with_result(
-                                    &ran.tool_name,
-                                    &ran.input,
-                                    &entry.content,
-                                ),
-                                outcome: crate::turn_ledger::classify(
-                                    &entry.content,
-                                    entry.is_error,
-                                    &entry.status,
-                                ),
-                                excerpt: None,
-                            });
-                        }
+                        super::conversation::record_completed(
+                            &mut ledger,
+                            &resp.tool_calls,
+                            &results,
+                        );
                         ledger.record(crate::turn_ledger::Action {
                             tool: call.tool_name.clone(),
                             target: crate::turn_ledger::describe_target(

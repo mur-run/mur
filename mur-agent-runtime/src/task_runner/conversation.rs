@@ -390,6 +390,27 @@ impl TaskRunner {
         slot.insert(turn.to_string(), ledger.clone());
     }
 
+    /// Checkpoint a tool batch that is still running (#2071, review P2 on
+    /// #2275). `results` holds the calls of `calls` that have completed so
+    /// far, positionally; the loop's own `ledger` does not have them yet —
+    /// it records the whole batch once it settles. A `tasks/cancel` drops
+    /// the loop between two calls, so the parked copy is a clone of the
+    /// ledger with those completed calls appended. The clone is what keeps
+    /// the real ledger free of duplicates when the batch does settle.
+    pub(super) fn checkpoint_batch(
+        &self,
+        turn: &str,
+        ledger: &crate::turn_ledger::TurnLedger,
+        iteration: u32,
+        calls: &[crate::llm::ToolCallResult],
+        results: &[crate::llm::ToolResultEntry],
+    ) {
+        let mut snapshot = ledger.clone();
+        record_completed(&mut snapshot, calls, results);
+        snapshot.iterations = iteration;
+        self.park_partial_ledger(turn, &snapshot);
+    }
+
     /// Take turn `turn`'s parked ledger. Taken on every outcome so the table
     /// never grows past the turns in flight.
     pub(super) fn take_partial_ledger(&self, turn: &str) -> Option<crate::turn_ledger::TurnLedger> {
@@ -432,6 +453,28 @@ fn end_marker(ledger: &crate::turn_ledger::TurnLedger) -> String {
     match ledger.stop.remedy(&ledger.agent) {
         Some(r) => format!("{} — {r}", ledger.stop.as_str()),
         None => ledger.stop.as_str().to_string(),
+    }
+}
+
+/// Put the completed prefix of a tool batch on `ledger`: `results[i]` is the
+/// result of `calls[i]`, so the zip stops at the first call still running.
+/// No excerpt — that is settlement detail; memory only needs what ran.
+pub(super) fn record_completed(
+    ledger: &mut crate::turn_ledger::TurnLedger,
+    calls: &[crate::llm::ToolCallResult],
+    results: &[crate::llm::ToolResultEntry],
+) {
+    for (call, entry) in calls.iter().zip(results.iter()) {
+        ledger.record(crate::turn_ledger::Action {
+            tool: call.tool_name.clone(),
+            target: crate::turn_ledger::describe_target_with_result(
+                &call.tool_name,
+                &call.input,
+                &entry.content,
+            ),
+            outcome: crate::turn_ledger::classify(&entry.content, entry.is_error, &entry.status),
+            excerpt: None,
+        });
     }
 }
 
