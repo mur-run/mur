@@ -504,8 +504,15 @@ async fn test_get_links() {
 async fn test_context_retrieve_200() {
     let tmp = tempfile::tempdir().unwrap();
     let state = test_state(&tmp);
-    let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
-    store.save(&make_test_pattern("ctx-pattern")).unwrap();
+    let skill = tmp.path().join("skills").join("ctx-skill");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("skill.yaml"),
+        "name: ctx-skill\nversion: 1.0.0\npublisher: human:test\n\
+         description: rust testing with nextest\ncategory: context\npriority: normal\n\
+         tags: [rust, testing]\ncontent:\n  abstract: rust testing with nextest\n  context: x\n",
+    )
+    .unwrap();
 
     let app = build_router(state);
     let resp = app
@@ -522,7 +529,7 @@ async fn test_context_retrieve_200() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
-    assert!(json["data"]["patterns"].is_array());
+    assert_eq!(json["data"]["patterns"][0]["name"], "ctx-skill");
     assert!(json["data"]["formatted"].is_string());
 }
 

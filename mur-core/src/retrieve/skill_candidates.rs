@@ -271,9 +271,6 @@ impl Retrievable for LoadedSkill {
             LifecycleState::Deprecated | LifecycleState::Archived
         )
     }
-
-    // adjust_score uses the trait default (identity) — skills have no
-    // Pattern-specific scope/lang/kind boosts.
 }
 
 #[cfg(test)]
@@ -336,7 +333,6 @@ mod tests {
     }
 
     use super::*;
-    use crate::retrieve::scoring::ScoringHints;
     use chrono::Duration;
     use mur_common::skill::manifest::{Content, Visibility};
     use mur_common::skill::types::Category;
@@ -439,16 +435,6 @@ mod tests {
         let mut s = fake_loaded("k", Priority::Normal);
         s.stats.lifecycle_state = LifecycleState::Archived;
         assert!(!s.is_active());
-    }
-
-    #[test]
-    fn adjust_score_is_identity_for_skills() {
-        let s = fake_loaded("k", Priority::Normal);
-        let scope = ScoringHints::default();
-        assert_eq!(
-            s.adjust_score(0.42, &["q"], Some(&scope), Some("rust")),
-            0.42
-        );
     }
 
     #[test]

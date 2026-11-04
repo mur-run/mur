@@ -1,4 +1,4 @@
-//! Unified pattern + sources search handler. Extracted from `main.rs`.
+//! Unified skill + sources search handler. Extracted from `main.rs`.
 #![allow(dead_code)]
 
 #[cfg(feature = "sources")]
@@ -114,21 +114,22 @@ pub async fn cmd_search_unified(
     Ok(())
 }
 
-/// Thin adapter that reuses the existing pattern scoring pipeline and returns
-/// `(pattern_name, score)` pairs. Falls back to an empty vec on error so the
-/// source-retrieval section still renders.
+/// Thin adapter over the skill scoring pipeline; returns `(skill_name, score)`
+/// pairs. Falls back to an empty vec on error so the source-retrieval section
+/// still renders.
 #[cfg(feature = "sources")]
 async fn existing_pattern_search_names(query: &str) -> anyhow::Result<Vec<(String, f64)>> {
-    use crate::{retrieve::scoring::score_and_rank_generic, store::yaml::YamlStore};
+    use crate::retrieve::{
+        scoring::score_and_rank_generic, skill_candidates::load_skill_candidates,
+    };
 
-    let store = YamlStore::default_store()?;
-    let patterns = store.list_all()?;
-    let scored = score_and_rank_generic(query, patterns);
-    let results = scored
+    let home = mur_common::home::mur_home_or_err()?;
+    let candidates = load_skill_candidates(&home.join("skills"), &home)?;
+    let scored = score_and_rank_generic(query, candidates);
+    Ok(scored
         .into_iter()
-        .map(|sp| (sp.item.name.clone(), sp.score))
-        .collect();
-    Ok(results)
+        .map(|s| (s.item.manifest.name.clone(), s.score))
+        .collect())
 }
 
 #[cfg(not(feature = "sources"))]

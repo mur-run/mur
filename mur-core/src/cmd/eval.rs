@@ -1,15 +1,14 @@
 use anyhow::{Result, bail};
 use chrono::Utc;
 use mur_common::config::RetrievalConfig;
-use mur_common::knowledge::KnowledgeBase;
-use mur_common::pattern::{Content, Pattern, Tier};
+use mur_common::skill::types::Priority;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::federation::snapshot::read_snapshot_ref;
 use crate::retrieve::scoring::score_and_rank_generic_with_config;
-use crate::store::yaml::YamlStore;
+use crate::retrieve::skill_candidates::load_skill_candidates;
 
 pub fn cmd_eval_run(suite: &str, format: &str) -> Result<i32> {
     match suite {
@@ -195,71 +194,66 @@ struct FederationAgentResult {
     flush_rate_pct: f64,
 }
 
-fn make_pattern(
+/// Write one skill under `skills_dir` so the eval goes through the production
+/// loader rather than a hand-built manifest.
+fn write_skill(
+    skills_dir: &std::path::Path,
     name: &str,
     description: &str,
-    content: &str,
-    tier: Tier,
-    importance: f64,
-) -> Pattern {
-    Pattern {
-        base: KnowledgeBase {
-            name: name.to_string(),
-            description: description.to_string(),
-            content: Content::Plain(content.to_string()),
-            tier,
-            importance,
-            ..Default::default()
-        },
-        kind: None,
-        origin: None,
-        attachments: vec![],
-    }
+    abstract_: &str,
+    priority: Priority,
+) -> Result<()> {
+    let dir = skills_dir.join(name);
+    std::fs::create_dir_all(&dir)?;
+    let priority = format!("{priority:?}").to_lowercase();
+    std::fs::write(
+        dir.join("skill.yaml"),
+        format!(
+            "name: {name}\nversion: 1.0.0\npublisher: human:eval\n\
+             description: {description}\ncategory: context\npriority: {priority}\n\
+             tags: []\ncontent:\n  abstract: {abstract_}\n  context: {abstract_}\n"
+        ),
+    )?;
+    Ok(())
 }
 
-fn seed_patterns() -> Vec<(&'static str, &'static str, &'static str, Tier, f64)> {
+fn seed_skills() -> Vec<(&'static str, &'static str, &'static str, Priority)> {
     vec![
         (
             "swift-testing",
             "Use @Test macro for Swift unit tests",
             "Use @Test macro instead of XCTest for Swift Testing framework",
-            Tier::Project,
-            0.8,
+            Priority::High,
         ),
         (
             "rust-error-handling",
             "Use anyhow for error propagation in Rust binaries",
             "Use anyhow::Result for application-level error handling",
-            Tier::Core,
-            0.9,
+            Priority::Critical,
         ),
         (
             "prefer-chinese",
             "Reply in Traditional Chinese",
             "Always respond to the user in Traditional Chinese (zh-TW)",
-            Tier::Core,
-            0.9,
+            Priority::Critical,
         ),
         (
             "git-commit-format",
             "Conventional commit messages",
             "Use conventional commits: feat/fix/docs/refactor scope message",
-            Tier::Project,
-            0.7,
+            Priority::Normal,
         ),
         (
             "no-comments",
             "Avoid unnecessary code comments",
             "Do not add comments unless the WHY is non-obvious",
-            Tier::Core,
-            0.8,
+            Priority::Critical,
         ),
         (
             "test-before-commit",
             "Run tests before committing",
             "Always run cargo test --workspace before creating a git commit",
-            Tier::Project,
-            0.8,
+            Priority::High,
         ),
     ]
 }
@@ -311,20 +305,19 @@ impl Drop for TempDir {
 
 fn run_retrieval_eval(format: &str) -> Result<i32> {
     let tmp = TempDir::create()?;
-    let store = YamlStore::new(tmp.path().clone())?;
+    let skills_dir = tmp.path().join("skills");
 
-    for (name, desc, content, tier, importance) in seed_patterns() {
-        let p = make_pattern(name, desc, content, tier, importance);
-        store.save(&p)?;
+    for (name, desc, content, priority) in seed_skills() {
+        write_skill(&skills_dir, name, desc, content, priority)?;
     }
 
-    let patterns = store.list_all()?;
+    let skills = load_skill_candidates(&skills_dir, tmp.path())?;
     let config = RetrievalConfig {
         max_patterns: 3,
         min_score: 0.0,
         max_tokens: 10000,
         mmr_threshold: 0.85,
-        reserved_note_slots: 0, // eval ranks patterns only; no notes to reserve for
+        reserved_note_slots: 0, // eval ranks context skills only; no notes to reserve for
     };
 
     let queries = test_queries();
@@ -332,10 +325,10 @@ fn run_retrieval_eval(format: &str) -> Result<i32> {
     let mut results: Vec<QueryResult> = Vec::new();
 
     for (query, expected) in &queries {
-        let scored = score_and_rank_generic_with_config(query, patterns.clone(), &config);
+        let scored = score_and_rank_generic_with_config(query, skills.clone(), &config);
         let rank = scored
             .iter()
-            .position(|sp| sp.item.name == *expected)
+            .position(|sp| sp.item.manifest.name == *expected)
             .map(|i| i + 1);
         let hit = rank.is_some();
         if hit {
@@ -395,22 +388,6 @@ fn run_retrieval_eval(format: &str) -> Result<i32> {
     }
 
     Ok(if pass { 0 } else { 1 })
-}
-
-#[allow(dead_code)]
-fn new_pattern(name: &str) -> Pattern {
-    Pattern {
-        base: KnowledgeBase {
-            name: name.to_string(),
-            description: "eval test pattern".to_string(),
-            content: Content::Plain("test".to_string()),
-            tier: Tier::Session,
-            ..Default::default()
-        },
-        kind: None,
-        origin: None,
-        attachments: vec![],
-    }
 }
 
 fn run_maturity_eval(_format: &str) -> Result<i32> {
