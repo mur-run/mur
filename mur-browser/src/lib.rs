@@ -26,6 +26,7 @@ pub mod guard;
 pub mod heal;
 pub mod live_proxy;
 pub mod locator;
+pub mod merge;
 pub mod nav_confirm;
 pub mod nav_stall;
 pub mod paths;

@@ -138,6 +138,37 @@ fn equals_form_profile_is_reported_as_bound() {
     assert_eq!(rows(t.path()), [r("x", "deepseek", None)]);
 }
 
+/// #2263: several bound profiles are listed together; a row is clean when
+/// every one is covered and no two share a host.
+#[test]
+fn several_bound_profiles_are_listed_and_checked_for_overlap() {
+    let t = tempfile::tempdir().unwrap();
+    saved(t.path(), "deepseek", "https://chat.deepseek.com/");
+    saved(t.path(), "gitea", "https://gitea.example/");
+    let network = Some(McpServerNetwork {
+        mode: McpNetMode::Restricted,
+        allow_hosts: vec!["*.deepseek.com".into(), "gitea.example".into()],
+        ..Default::default()
+    });
+    let yaml = live("x", Some("deepseek"), network.clone())
+        .replace("- deepseek\n", "- deepseek\n  - --profile\n  - gitea\n");
+    assert!(yaml.contains("- gitea"), "{yaml}");
+    agent(t.path(), "x", &yaml);
+    assert_eq!(rows(t.path()), [r("x", "deepseek, gitea", None)]);
+
+    // Two profiles for the same host: flagged, naming the offending profile.
+    saved(t.path(), "ds2", "https://deepseek.com/");
+    let yaml = live("y", Some("deepseek"), network)
+        .replace("- deepseek\n", "- deepseek\n  - --profile\n  - ds2\n");
+    agent(t.path(), "y", &yaml);
+    let rows = rows(t.path());
+    assert_eq!(rows[1].profile, "deepseek, ds2");
+    assert_eq!(
+        rows[1].warning.as_deref(),
+        Some("deepseek: shares chat.deepseek.com with bound profile \"ds2\"")
+    );
+}
+
 #[test]
 fn incomplete_profile_is_flagged_before_hosts() {
     let t = tempfile::tempdir().unwrap();

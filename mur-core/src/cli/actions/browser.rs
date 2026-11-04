@@ -6,8 +6,10 @@ pub enum BrowserAction {
     Record {
         #[arg(long)]
         run: String,
+        /// Saved profile to launch with (repeatable). Several profiles are
+        /// merged into one session; their cookie domains must be disjoint.
         #[arg(long)]
-        profile: Option<String>,
+        profile: Vec<String>,
         /// `test` | `automation` | `live` (interactive, behind the egress proxy).
         #[arg(long, default_value = "test")]
         mode: String,
@@ -63,6 +65,10 @@ pub enum BrowserAction {
         /// binding would need wider egress or the agent has no live entry.
         #[arg(long, value_name = "AGENT")]
         bind: Option<String>,
+        /// With `--bind`: drop the agent's other bound profiles instead of
+        /// adding this one alongside them.
+        #[arg(long, requires = "bind")]
+        replace: bool,
     },
     /// Run the secret broker (needs MUR_BROWSER_BROKER_TOKEN; `record` starts its own).
     Broker,

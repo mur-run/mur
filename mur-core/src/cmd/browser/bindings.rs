@@ -11,8 +11,9 @@ use std::path::Path;
 use mur_browser::paths;
 use mur_common::AgentProfile;
 
+use super::bind::{bound_domains, current_label};
 use super::bind_plan::{plan_bind, profile_domains, warning};
-use super::live_entry::{LIVE_ENTRY, attached_profile};
+use super::live_entry::{LIVE_ENTRY, attached_profiles};
 
 /// `bindings:` header plus one row per agent that has a live entry.
 pub(super) fn section(home: &Path) -> Vec<String> {
@@ -36,7 +37,8 @@ pub(super) fn section(home: &Path) -> Vec<String> {
 #[derive(Debug, PartialEq, Eq)]
 struct Row {
     agent: String,
-    /// Attached profile, or `none`; `?` when the agent profile is unreadable.
+    /// Attached profiles joined by `, `, or `none`; `?` when the agent
+    /// profile is unreadable.
     profile: String,
     warning: Option<String>,
 }
@@ -76,21 +78,39 @@ fn row(home: &Path, agent: String) -> Option<Row> {
         }
     };
     let entry = profile.mcp_servers.iter().find(|e| e.name == LIVE_ENTRY)?;
-    let Some(site) = attached_profile(entry) else {
+    let sites: Vec<String> = attached_profiles(entry)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    if sites.is_empty() {
         return Some(Row {
             agent,
             profile: "none".into(),
             warning: None,
         });
-    };
-    let warning = profile_warning(home, site).or_else(|| {
-        let meta = super::read_profile_meta(&paths::profile_meta(home, site)).ok()?;
-        let domains = profile_domains(&meta)?;
-        warning(&plan_bind(Some(entry), site, &domains))
+    }
+    // Each bound profile is re-planned as if it were being added to the
+    // others, so a stale overlap (one profile's domains widened after both
+    // were bound) is flagged exactly like the binder would refuse it.
+    let bound = bound_domains(home);
+    let warning = sites.iter().find_map(|site| {
+        profile_warning(home, site)
+            .or_else(|| {
+                let meta = super::read_profile_meta(&paths::profile_meta(home, site)).ok()?;
+                let domains = profile_domains(&meta)?;
+                warning(&plan_bind(Some(entry), site, &domains, &bound, false))
+            })
+            .map(|w| {
+                if sites.len() > 1 {
+                    format!("{site}: {w}")
+                } else {
+                    w
+                }
+            })
     });
     Some(Row {
         agent,
-        profile: site.to_owned(),
+        profile: current_label(&sites),
         warning,
     })
 }

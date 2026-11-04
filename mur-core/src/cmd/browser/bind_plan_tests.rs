@@ -27,10 +27,27 @@ fn d(hosts: &[&str]) -> Vec<String> {
     hosts.iter().map(|s| s.to_string()).collect()
 }
 
+/// Bound-profile lookup for tests: every already-bound profile is for a host
+/// nothing else uses, so the plans below exercise the policy checks alone.
+fn disjoint(_: &str) -> Option<Vec<String>> {
+    Some(vec!["elsewhere.invalid".into()])
+}
+
+fn add(entry: Option<&McpServerEntry>, site: &str, domains: &[String]) -> BindPlan {
+    plan_bind(entry, site, domains, &disjoint, false)
+}
+
+fn bind_none() -> BindPlan {
+    BindPlan::Bind {
+        alongside: Vec::new(),
+        replaces: Vec::new(),
+    }
+}
+
 #[test]
 fn no_entry_is_no_live_entry() {
     assert_eq!(
-        plan_bind(None, "ds", &d(&["deepseek.com"])),
+        add(None, "ds", &d(&["deepseek.com"])),
         BindPlan::NoLiveEntry
     );
 }
@@ -44,8 +61,8 @@ fn restricted_binds_only_when_every_domain_passes_the_proxy_matcher() {
         None,
     );
     assert_eq!(
-        plan_bind(Some(&e), "ds", &d(&["chat.deepseek.com", "deepseek.com"])),
-        BindPlan::Bind { replaces: None }
+        add(Some(&e), "ds", &d(&["chat.deepseek.com", "deepseek.com"])),
+        bind_none()
     );
 }
 
@@ -60,7 +77,7 @@ fn restricted_exact_subdomain_does_not_cover_the_parent() {
         None,
     );
     assert_eq!(
-        plan_bind(Some(&e), "ds", &d(&["deepseek.com"])),
+        add(Some(&e), "ds", &d(&["deepseek.com"])),
         BindPlan::NeedsHosts {
             current: d(&["chat.deepseek.com"]),
             missing: d(&["deepseek.com"])
@@ -72,7 +89,7 @@ fn restricted_exact_subdomain_does_not_cover_the_parent() {
 fn restricted_with_empty_allow_hosts_needs_every_domain() {
     let e = entry(Some(McpNetMode::Restricted), &[], &[], None);
     assert_eq!(
-        plan_bind(Some(&e), "ds", &d(&["deepseek.com"])),
+        add(Some(&e), "ds", &d(&["deepseek.com"])),
         BindPlan::NeedsHosts {
             current: vec![],
             missing: d(&["deepseek.com"])
@@ -86,10 +103,7 @@ fn broad_audited_with_empty_allow_hosts_binds() {
     // allow_hosts alone would call this "allows nothing" and suggest a two-host
     // `/browser live` that silently drops research mode.
     let e = entry(Some(McpNetMode::BroadAudited), &[], &[], None);
-    assert_eq!(
-        plan_bind(Some(&e), "ds", &d(&["deepseek.com"])),
-        BindPlan::Bind { replaces: None }
-    );
+    assert_eq!(add(Some(&e), "ds", &d(&["deepseek.com"])), bind_none());
 }
 
 #[test]
@@ -101,7 +115,7 @@ fn broad_audited_refuses_a_denied_domain() {
         None,
     );
     assert_eq!(
-        plan_bind(Some(&e), "ds", &d(&["chat.deepseek.com", "example.org"])),
+        add(Some(&e), "ds", &d(&["chat.deepseek.com", "example.org"])),
         BindPlan::Denied {
             hosts: d(&["chat.deepseek.com"])
         }
@@ -113,7 +127,7 @@ fn unscoped_modes_are_refused() {
     for mode in [None, Some(McpNetMode::Inherit), Some(McpNetMode::Off)] {
         let e = entry(mode, &["deepseek.com"], &[], None);
         assert_eq!(
-            plan_bind(Some(&e), "ds", &d(&["deepseek.com"])),
+            add(Some(&e), "ds", &d(&["deepseek.com"])),
             BindPlan::NotHostScoped { mode },
             "{mode:?}"
         );
@@ -121,23 +135,100 @@ fn unscoped_modes_are_refused() {
 }
 
 #[test]
-fn bind_names_the_profile_it_replaces_but_not_itself() {
+fn disjoint_profile_is_added_alongside_the_bound_one_but_never_itself() {
     let e = entry(
         Some(McpNetMode::Restricted),
-        &["deepseek.com"],
+        &["deepseek.com", "gitea.example"],
         &[],
-        Some("old"),
+        Some("gitea"),
     );
+    let gitea = |s: &str| (s == "gitea").then(|| d(&["gitea.example"]));
     assert_eq!(
-        plan_bind(Some(&e), "ds", &d(&["deepseek.com"])),
+        plan_bind(Some(&e), "ds", &d(&["deepseek.com"]), &gitea, false),
         BindPlan::Bind {
-            replaces: Some("old".into())
+            alongside: vec!["gitea".into()],
+            replaces: Vec::new(),
         }
     );
     assert_eq!(
-        plan_bind(Some(&e), "old", &d(&["deepseek.com"])),
-        BindPlan::Bind { replaces: None }
+        plan_bind(Some(&e), "gitea", &d(&["gitea.example"]), &gitea, false),
+        bind_none()
     );
+}
+
+#[test]
+fn replace_drops_every_bound_profile_instead_of_adding() {
+    let mut e = entry(
+        Some(McpNetMode::Restricted),
+        &["deepseek.com", "gitea.example", "x.com"],
+        &[],
+        Some("gitea"),
+    );
+    e.args.extend(["--profile".to_string(), "x".to_string()]);
+    assert_eq!(
+        plan_bind(Some(&e), "ds", &d(&["deepseek.com"]), &disjoint, true),
+        BindPlan::Bind {
+            alongside: Vec::new(),
+            replaces: vec!["gitea".into(), "x".into()],
+        }
+    );
+}
+
+/// Two logins for one host cannot share a session: the merge would keep one
+/// cookie and silently pick an identity. Either direction of subdomain counts.
+#[test]
+fn overlapping_domains_refuse_the_add_and_name_the_shared_host() {
+    let e = entry(
+        Some(McpNetMode::Restricted),
+        &["*.deepseek.com", "deepseek.com"],
+        &[],
+        Some("old-ds"),
+    );
+    let old = |s: &str| (s == "old-ds").then(|| d(&["deepseek.com"]));
+    assert_eq!(
+        plan_bind(Some(&e), "ds", &d(&["chat.deepseek.com"]), &old, false),
+        BindPlan::Overlaps {
+            with: "old-ds".into(),
+            domains: d(&["chat.deepseek.com"]),
+        }
+    );
+    let old = |s: &str| (s == "old-ds").then(|| d(&["chat.deepseek.com"]));
+    assert!(matches!(
+        plan_bind(Some(&e), "ds", &d(&["deepseek.com"]), &old, false),
+        BindPlan::Overlaps { .. }
+    ));
+    // `--replace` is the way past an overlap.
+    assert!(matches!(
+        plan_bind(Some(&e), "ds", &d(&["deepseek.com"]), &old, true),
+        BindPlan::Bind { .. }
+    ));
+}
+
+/// A bound profile whose metadata is gone cannot be proven disjoint, so it
+/// counts as overlapping everything rather than merging blind.
+#[test]
+fn unreadable_bound_profile_counts_as_an_overlap() {
+    let e = entry(Some(McpNetMode::Restricted), &["x.com"], &[], Some("ghost"));
+    let gone = |_: &str| None;
+    assert_eq!(
+        plan_bind(Some(&e), "x", &d(&["x.com"]), &gone, false),
+        BindPlan::Overlaps {
+            with: "ghost".into(),
+            domains: d(&["x.com"]),
+        }
+    );
+}
+
+/// The policy check comes first: an uncovered host is reported as such even
+/// when the profile would also overlap.
+#[test]
+fn needs_hosts_is_reported_before_overlap() {
+    let e = entry(Some(McpNetMode::Restricted), &["a.com"], &[], Some("old"));
+    let gone = |_: &str| None;
+    assert!(matches!(
+        plan_bind(Some(&e), "x", &d(&["x.com"]), &gone, false),
+        BindPlan::NeedsHosts { .. }
+    ));
 }
 
 #[test]
@@ -159,7 +250,14 @@ fn profile_domains_default_to_login_host_and_normalize() {
 
 #[test]
 fn warnings_are_none_only_for_bind() {
-    assert_eq!(warning(&BindPlan::Bind { replaces: None }), None);
+    assert_eq!(warning(&bind_none()), None);
+    assert_eq!(
+        warning(&BindPlan::Overlaps {
+            with: "old".into(),
+            domains: d(&["a.x.com", "x.com"]),
+        }),
+        Some("shares a.x.com, x.com with bound profile \"old\"".into())
+    );
     assert_eq!(
         warning(&BindPlan::NeedsHosts {
             current: vec![],

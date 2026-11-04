@@ -59,29 +59,31 @@ pub(super) fn route(args: &[String]) -> Route {
     }
 }
 
-/// What the rerun says about the entry's saved profile.
+/// What the rerun says about the entry's saved profiles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ProfileArg {
     /// Neither flag: a new entry starts sessionless, an existing one keeps
-    /// whatever profile it has.
+    /// whatever profiles it has.
     Keep,
-    /// `--profile <site>`: launch with that saved session.
-    Set(String),
-    /// `--no-profile`: drop the saved session (the undo for a first bind).
+    /// `--profile <site>` (repeatable, #2263): launch with exactly these
+    /// saved sessions, merged. Naming a subset of the bound ones is how one
+    /// profile is unbound while the others stay.
+    Set(Vec<String>),
+    /// `--no-profile`: drop every saved session (the undo for a first bind).
     Clear,
 }
 
 impl ProfileArg {
-    fn site(&self) -> Option<&str> {
+    fn sites(&self) -> &[String] {
         match self {
-            Self::Set(site) => Some(site),
-            Self::Keep | Self::Clear => None,
+            Self::Set(sites) => sites,
+            Self::Keep | Self::Clear => &[],
         }
     }
 }
 
-/// Split `--profile <site>` / `--no-profile` out of the argument list,
-/// leaving the hosts.
+/// Split `--profile <site>` (repeatable) / `--no-profile` out of the
+/// argument list, leaving the hosts.
 ///
 /// Without a profile the live browser launches with no cookies, so every
 /// authenticated page redirects to its login form. That is a missing
@@ -90,7 +92,7 @@ impl ProfileArg {
 /// branded Chrome.
 pub(super) fn split_profile(args: &[String]) -> Result<(Vec<String>, ProfileArg), String> {
     let mut hosts = Vec::new();
-    let mut profile = None;
+    let mut profiles: Vec<String> = Vec::new();
     let mut clear = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -99,27 +101,29 @@ pub(super) fn split_profile(args: &[String]) -> Result<(Vec<String>, ProfileArg)
                 let site = it.next().ok_or_else(|| {
                     format!("`--profile` needs a saved profile name, e.g. `{USAGE_EXAMPLE} --profile my-site`")
                 })?;
-                if profile.replace(site.clone()).is_some() {
-                    return Err("`--profile` was given twice; name one profile".to_owned());
+                if !profiles.contains(site) {
+                    profiles.push(site.clone());
                 }
             }
             "--no-profile" => clear = true,
             _ => hosts.push(a.clone()),
         }
     }
-    match (profile, clear) {
-        (Some(_), true) => {
+    match (profiles.is_empty(), clear) {
+        (false, true) => {
             Err("`--profile` and `--no-profile` contradict each other; give one".to_owned())
         }
-        (Some(site), false) => {
+        (false, false) => {
             // Same charset the profile directory uses; a bad name must fail
             // here, before anything is written, not at launch inside the agent.
-            mur_browser::paths::validate_name(&site)
-                .map_err(|e| format!("`--profile {site}`: {e}"))?;
-            Ok((hosts, ProfileArg::Set(site)))
+            for site in &profiles {
+                mur_browser::paths::validate_name(site)
+                    .map_err(|e| format!("`--profile {site}`: {e}"))?;
+            }
+            Ok((hosts, ProfileArg::Set(profiles)))
         }
-        (None, true) => Ok((hosts, ProfileArg::Clear)),
-        (None, false) => Ok((hosts, ProfileArg::Keep)),
+        (true, true) => Ok((hosts, ProfileArg::Clear)),
+        (true, false) => Ok((hosts, ProfileArg::Keep)),
     }
 }
 
@@ -377,7 +381,7 @@ fn same_policy(a: &McpServerNetwork, b: &McpServerNetwork) -> bool {
 /// `--run` for the live entry: `live-<agent>`. Agent names are already
 /// restricted to `[A-Za-z0-9_-]` (`validate_agent_name`), so no sanitizing;
 /// per-agent so two agents never share a run even if runs are global.
-pub(super) fn live_argv(agent: &str, profile: Option<&str>) -> Vec<String> {
+pub(super) fn live_argv(agent: &str, profiles: &[String]) -> Vec<String> {
     // Order matters: `--run` before `--mode`, as `cli/actions.rs` declares.
     let mut argv: Vec<String> = [
         "browser",
@@ -390,12 +394,12 @@ pub(super) fn live_argv(agent: &str, profile: Option<&str>) -> Vec<String> {
     .iter()
     .map(|s| s.to_string())
     .collect();
-    // The saved session, injected as `--storage-state` by `cmd::browser::
-    // live_state`. Absent = no cookies, which authenticated sites answer with
-    // a redirect to their login page.
-    if let Some(site) = profile {
+    // The saved sessions, merged and injected as `--storage-state` by
+    // `cmd::browser::live_state`. Absent = no cookies, which authenticated
+    // sites answer with a redirect to their login page.
+    for site in profiles {
         argv.push("--profile".to_owned());
-        argv.push(site.to_owned());
+        argv.push(site.clone());
     }
     argv
 }
@@ -546,7 +550,7 @@ pub(super) fn confirm_command(
     }
     cmd.extend(hosts_args.iter().cloned());
     match profile {
-        ProfileArg::Set(site) => cmd.push(format!("--profile {site}")),
+        ProfileArg::Set(sites) => cmd.extend(sites.iter().map(|s| format!("--profile {s}"))),
         ProfileArg::Clear => cmd.push("--no-profile".to_owned()),
         ProfileArg::Keep => {}
     }
@@ -623,7 +627,7 @@ pub(super) fn run(
         // write path below decides, so `save` can still backfill grants.
         let profile_same = match &profile {
             ProfileArg::Keep => true,
-            p => existing.is_some_and(|e| e.args == live_argv(agent, p.site())),
+            p => existing.is_some_and(|e| e.args == live_argv(agent, p.sites())),
         };
         let policy_same =
             existing.is_some_and(|e| e.network.as_ref().is_some_and(|n| same_policy(n, &after)));
@@ -668,7 +672,7 @@ pub(super) fn run(
         if profile != ProfileArg::Keep
             && let Some(entry) = servers.iter_mut().find(|e| e.name == LIVE_ENTRY)
         {
-            entry.args = live_argv(agent, profile.site());
+            entry.args = live_argv(agent, profile.sites());
         }
         let entry_changed = servers != before;
         let (saved, effect) = ops
@@ -687,7 +691,7 @@ pub(super) fn run(
         // it `Restricted` (so it runs behind the egress proxy, #1639), and
         // there is no on-disk moment where `browser` exists unrestricted — so
         // no rollback path is needed.
-        notes.push(ops.mcp_add(&live_argv(agent, profile.site()), after.clone())?);
+        notes.push(ops.mcp_add(&live_argv(agent, profile.sites()), after.clone())?);
         // D3: a new MCP server is a restart.
         (Vec::new(), Effect::Restart)
     };
@@ -705,7 +709,16 @@ pub(super) fn run(
         notes.push(format!("browser live mode may reach: {}", reach.join(", ")));
     }
     match &profile {
-        ProfileArg::Set(site) => notes.push(format!("signed in as the saved profile `{site}`")),
+        ProfileArg::Set(sites) => notes.push(match sites.as_slice() {
+            [site] => format!("signed in as the saved profile `{site}`"),
+            many => format!(
+                "signed in as the saved profiles {} (merged into one session)",
+                many.iter()
+                    .map(|s| format!("`{s}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }),
         ProfileArg::Clear => notes.push(
             "profile unbound: the browser now carries no session; the saved profile itself \
              is kept, so `--profile <site>` binds it again."
@@ -759,7 +772,7 @@ pub(crate) fn ensure_entry(agent: &str) -> anyhow::Result<Option<String>> {
     if ops.servers()?.iter().any(|e| e.name == LIVE_ENTRY) {
         return Ok(None);
     }
-    ops.mcp_add(&live_argv(agent, None), live_network(&[]))
+    ops.mcp_add(&live_argv(agent, &[]), live_network(&[]))
         .map(Some)
 }
 

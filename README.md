@@ -651,8 +651,13 @@ Agent** wizard offers the same catalog as a source.
   After saving, on a terminal, `mur browser auth` lists every agent with a live browser
   entry and the profile each one launches with, and asks which agent should
   use the new profile; Enter skips, and nothing is bound without a `[y/N]`
-  confirmation that names any profile being replaced. Binding only changes
-  the entry's `--profile`, never its network policy: an agent whose
+  confirmation. One agent can carry several profiles: a profile for other
+  hosts is added alongside the bound ones and their sessions are merged at
+  launch, so one live browser is logged in to every site at once. Two
+  profiles that share a host are refused (the merge would silently pick one
+  login); `--bind <agent> --replace` drops the bound profiles instead.
+  Binding only changes the entry's `--profile`, never its network policy: an
+  agent whose
   `allow_hosts` do not cover the profile's host is refused with the full
   `/browser live <hosts> --profile <site>` command to run instead, and a denied
   host or a non-host-scoped entry is refused outright. The reply says when the
@@ -662,8 +667,9 @@ Agent** wizard offers the same catalog as a source.
   `--bind <agent>` does the same without asking, for scripts; when it is
   refused nothing is written, the command to run is printed, and it exits
   non-zero.
-  To unbind, rerun `/browser live <hosts> --no-profile`; the saved profile
-  stays on disk.
+  To unbind everything, rerun `/browser live <hosts> --no-profile`; to keep
+  some, name only those (`--profile a --profile b`). The saved profiles stay
+  on disk.
 - **Human-in-the-loop** — tool calls pause for your approval in Hub. In
   `mur agent cli` a session starts with auto-approve ON (the status bar's
   `AUTO` badge says so); `--ask` or `/auto off` makes it ask first. AUTO only

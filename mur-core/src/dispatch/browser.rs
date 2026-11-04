@@ -8,7 +8,7 @@ pub(super) async fn run_browser(action: BrowserAction) -> Result<()> {
             mode,
             trace,
             extra,
-        } => cmd::browser::record(&run, profile.as_deref(), &mode, trace, &extra).await?,
+        } => cmd::browser::record(&run, &profile, &mode, trace, &extra).await?,
         BrowserAction::Replay {
             name,
             profile,
@@ -23,8 +23,18 @@ pub(super) async fn run_browser(action: BrowserAction) -> Result<()> {
             browser,
             allow_domain,
             bind,
+            replace,
         } => {
-            cmd::browser::auth(&site, &url, reauth, browser, &allow_domain, bind.as_deref()).await?
+            cmd::browser::auth(
+                &site,
+                &url,
+                reauth,
+                browser,
+                &allow_domain,
+                bind.as_deref(),
+                replace,
+            )
+            .await?
         }
         BrowserAction::Broker => cmd::browser::broker().await?,
         BrowserAction::List {

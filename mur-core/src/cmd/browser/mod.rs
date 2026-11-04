@@ -48,15 +48,18 @@ use mur_browser::{
 #[cfg(unix)]
 pub async fn record(
     run: &str,
-    profile: Option<&str>,
+    profiles: &[String],
     mode: &str,
     trace: bool,
     extra: &[String],
 ) -> Result<()> {
     mur_browser::paths::validate_name(run)?;
-    if let Some(profile) = profile {
+    for profile in profiles {
         mur_browser::paths::validate_name(profile)?;
     }
+    // The run's own `profile` field names one profile; with several bound
+    // (#2263) the first is the one the recording is filed under.
+    let profile = profiles.first().map(String::as_str);
     let mode = mode.parse::<Mode>()?;
 
     // Live mode (Gap 0): Chromium ignores HTTP_PROXY, so the runtime's egress
@@ -110,7 +113,7 @@ pub async fn record(
     // This is not live-only: recording a test or automation run against an
     // admin area is exactly the case that needs a session, and asking the
     // person to log in by hand inside each recording defeats `browser auth`.
-    let injected = live_state::prepare(&mur_home()?, profile)?;
+    let injected = live_state::prepare(&mur_home()?, profiles)?;
     let state_args = live_state::args(injected.as_ref(), &args);
     args.extend(state_args);
     // Without this, test/automation recording fell through to
@@ -181,8 +184,16 @@ pub async fn record(
         actions = %paths::run_actions(&mur_home, run).display(),
         "browser record started"
     );
-    // A profile session hands its rotated state back on exit (`refresh`).
-    let scratch = match profile {
+    // A single-profile session hands its rotated state back on exit
+    // (`refresh`). A merged session is not written back: the export holds
+    // every profile's cookies and `refresh_profile` would store them all
+    // under each one (#2263, "re-auth of one profile must not touch the
+    // others"). Splitting the export per profile is future work.
+    let refresh_site = match profiles {
+        [one] => Some(one.as_str()),
+        _ => None,
+    };
+    let scratch = match refresh_site {
         Some(_) => Some(mur_browser::refresh::scratch_dir(&mur_home)?),
         None => None,
     };
@@ -190,7 +201,7 @@ pub async fn record(
         .as_ref()
         .map(|dir| mur_browser::refresh::export_path(dir.path()));
     let result = run_stdio_exporting(server, hook, export.clone()).await;
-    if let (Some(site), Some(export)) = (profile, &export) {
+    if let (Some(site), Some(export)) = (refresh_site, &export) {
         mur_browser::refresh::report(
             site,
             mur_browser::refresh::refresh_profile(
@@ -239,7 +250,7 @@ fn live_config_for(
 #[cfg(not(unix))]
 pub async fn record(
     _run: &str,
-    _profile: Option<&str>,
+    _profiles: &[String],
     _mode: &str,
     _trace: bool,
     _extra: &[String],

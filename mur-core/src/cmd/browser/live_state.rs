@@ -10,6 +10,10 @@
 //! The decrypted copy lives in a 0600 temp file that is unlinked when the
 //! returned guard drops, exactly as in `cmd::browser::replay`: Playwright
 //! reads it once during launch, so it only has to outlive the spawn.
+//!
+//! Several profiles (#2263) are decrypted one by one and joined by
+//! [`mur_browser::merge::merge_states`] into the single file Playwright
+//! accepts; a cookie collision between them refuses the launch.
 
 use anyhow::{Context, Result};
 use mur_browser::{paths, state::KeychainStateKeyStore, state::read_state};
@@ -26,37 +30,54 @@ impl InjectedState {
     }
 }
 
-/// Decrypt `site`'s saved state for a live launch. `None` for no profile —
-/// a live session without one is legitimate (public pages), so this is not
-/// an error. An unreadable profile IS an error: silently launching without a
-/// session is what produced the login-page bounce this exists to fix.
-pub fn prepare(mur_home: &Path, site: Option<&str>) -> Result<Option<InjectedState>> {
-    let Some(site) = site else {
+/// Decrypt the saved state of every profile in `sites` for a live launch and
+/// merge them into one file. `None` for no profile — a live session without
+/// one is legitimate (public pages), so this is not an error. An unreadable
+/// profile IS an error: silently launching without a session is what
+/// produced the login-page bounce this exists to fix.
+pub fn prepare(mur_home: &Path, sites: &[String]) -> Result<Option<InjectedState>> {
+    if sites.is_empty() {
         return Ok(None);
-    };
-    let path = paths::profile_state(mur_home, site);
-    // Check for the file before touching the Keychain: a profile that was never
-    // saved is the common case, and decrypting first would make it an opaque
-    // key-access failure (and, on a locked/headless Keychain, a hang).
-    if !path.exists() {
-        anyhow::bail!(
-            "no saved browser profile {site:?} for live mode ({}) — run `mur browser auth {site} --url <login url>` first",
-            path.display()
-        );
     }
-    let state = read_state(&path, &KeychainStateKeyStore).with_context(|| {
-        format!(
-            "decrypt browser profile {site:?} for live mode ({}) — run `mur browser auth {site} --url <login url>` first",
-            path.display()
-        )
-    })?;
+    let mut states: Vec<Vec<u8>> = Vec::with_capacity(sites.len());
+    for site in sites {
+        let path = paths::profile_state(mur_home, site);
+        // Check for the file before touching the Keychain: a profile that was
+        // never saved is the common case, and decrypting first would make it
+        // an opaque key-access failure (and, on a locked/headless Keychain, a
+        // hang).
+        if !path.exists() {
+            anyhow::bail!(
+                "no saved browser profile {site:?} for live mode ({}) — run `mur browser auth {site} --url <login url>` first",
+                path.display()
+            );
+        }
+        states.push(read_state(&path, &KeychainStateKeyStore).with_context(|| {
+            format!(
+                "decrypt browser profile {site:?} for live mode ({}) — run `mur browser auth {site} --url <login url>` first",
+                path.display()
+            )
+        })?);
+    }
+    let parts: Vec<mur_browser::merge::Part<'_>> = sites
+        .iter()
+        .zip(&states)
+        .map(|(site, state)| mur_browser::merge::Part {
+            site,
+            state: state.as_slice(),
+        })
+        .collect();
+    let merged = mur_browser::merge::merge_states(&parts)
+        .context("merge the bound browser profiles into one live session")?;
+    drop(parts);
+    drop(states);
     // 0600 by construction, unlinked on drop.
     let mut file = tempfile::Builder::new()
         .prefix("mur-browser-live-state-")
         .suffix(".json")
         .tempfile()?;
-    std::io::Write::write_all(&mut file, &state)?;
-    drop(state);
+    std::io::Write::write_all(&mut file, &merged)?;
+    drop(merged);
     Ok(Some(InjectedState(file)))
 }
 
@@ -97,7 +118,7 @@ mod tests {
     #[test]
     fn no_profile_injects_nothing() {
         let home = tempfile::tempdir().unwrap();
-        let state = prepare(home.path(), None).unwrap();
+        let state = prepare(home.path(), &[]).unwrap();
         assert!(state.is_none());
         assert!(args(state.as_ref(), &[]).is_empty());
     }
@@ -107,7 +128,7 @@ mod tests {
     #[test]
     fn missing_profile_is_an_error_not_a_silent_skip() {
         let home = tempfile::tempdir().unwrap();
-        let err = prepare(home.path(), Some("nope")).unwrap_err();
+        let err = prepare(home.path(), &["nope".to_owned()]).unwrap_err();
         let text = format!("{err:#}");
         assert!(text.contains("mur browser auth nope"), "{text}");
     }

@@ -96,19 +96,42 @@ impl LiveOps for Fake {
     }
 }
 
+/// Bound-profile lookup for tests: whatever is already bound lives on a host
+/// no test site uses, so adding alongside is the ordinary outcome.
+fn disjoint(_: &str) -> Option<Vec<String>> {
+    Some(vec!["elsewhere.invalid".into()])
+}
+
 fn run(f: &mut Fake, site: &str, domains: &[&str], answer: Option<&str>) -> (Outcome, String) {
+    run_with(f, site, domains, &disjoint, false, answer)
+}
+
+fn run_with(
+    f: &mut Fake,
+    site: &str,
+    domains: &[&str],
+    bound: &BoundDomains<'_>,
+    replace: bool,
+    answer: Option<&str>,
+) -> (Outcome, String) {
     let mut out = Vec::new();
     let mut input = answer.map(|a| Cursor::new(a.as_bytes().to_vec()));
     let outcome = bind_agent(
         "mur",
         site,
         &d(domains),
+        bound,
+        replace,
         f,
         input.as_mut().map(|c| c as &mut dyn BufRead),
         &mut out,
     )
     .unwrap();
     (outcome, String::from_utf8(out).unwrap())
+}
+
+fn profiles_of(e: &McpServerEntry) -> Vec<&str> {
+    attached_profiles(e)
 }
 
 #[test]
@@ -135,8 +158,10 @@ fn bind_rewrites_only_the_profile_argv_and_records_a_trace() {
     );
 }
 
+/// #2263: a second profile for other hosts joins the first instead of
+/// evicting it, and the undo re-points the entry at exactly what it had.
 #[test]
-fn replacing_a_profile_prints_a_working_undo_with_the_full_host_list() {
+fn a_disjoint_profile_is_added_alongside_and_the_undo_restores_the_old_list() {
     let mut f = Fake {
         servers: vec![restricted(
             &["*.deepseek.com", "gitea.example"],
@@ -146,21 +171,93 @@ fn replacing_a_profile_prints_a_working_undo_with_the_full_host_list() {
     };
     let (outcome, out) = run(&mut f, "deepseek", &["deepseek.com"], None);
     assert_eq!(outcome, Outcome::Bound);
+    assert_eq!(profiles_of(&f.saves[0][0]), ["gitea", "deepseek"]);
     assert_eq!(
-        f.saves[0][0]
-            .args
-            .iter()
-            .filter(|a| *a == "--profile")
-            .count(),
-        1
+        f.saves[0][0].network,
+        restricted(&["*.deepseek.com", "gitea.example"], None).network
     );
-    assert_eq!(f.saves[0][0].args.last().unwrap(), "deepseek");
-    assert_eq!(f.bound[0].1.as_deref(), Some("gitea"));
-    assert!(out.contains("(was \"gitea\")"), "{out}");
+    // Nothing was replaced, so the trace's `old` is empty.
+    assert_eq!(f.bound[0].1, None);
+    assert!(
+        out.contains("bound \"deepseek\" to mur alongside \"gitea\""),
+        "{out}"
+    );
     assert!(
         out.contains("/browser live *.deepseek.com gitea.example --profile gitea"),
         "{out}"
     );
+    assert!(!out.contains("replacing"), "{out}");
+}
+
+#[test]
+fn replace_drops_the_bound_profiles_and_prints_a_working_undo() {
+    let mut f = Fake {
+        servers: vec![restricted(
+            &["*.deepseek.com", "gitea.example", "x.com"],
+            Some("gitea"),
+        )],
+        ..Default::default()
+    };
+    f.servers[0]
+        .args
+        .extend(["--profile".to_string(), "x".to_string()]);
+    let (outcome, out) = run_with(&mut f, "deepseek", &["deepseek.com"], &disjoint, true, None);
+    assert_eq!(outcome, Outcome::Bound);
+    assert_eq!(profiles_of(&f.saves[0][0]), ["deepseek"]);
+    assert_eq!(f.bound[0].1.as_deref(), Some("gitea,x"));
+    assert!(out.contains("(was \"gitea\", \"x\")"), "{out}");
+    assert!(
+        out.contains(
+            "/browser live *.deepseek.com gitea.example x.com --profile gitea --profile x"
+        ),
+        "{out}"
+    );
+}
+
+/// Two logins for one host never share a session: the add is refused, the
+/// message names the clash and both ways to replace, and nothing is written.
+#[test]
+fn an_overlapping_profile_is_refused_without_replace() {
+    let mut f = Fake {
+        servers: vec![restricted(
+            &["*.deepseek.com", "deepseek.com"],
+            Some("old-ds"),
+        )],
+        ..Default::default()
+    };
+    let old = |s: &str| (s == "old-ds").then(|| d(&["deepseek.com"]));
+    let (outcome, out) = run_with(&mut f, "ds", &["chat.deepseek.com"], &old, false, None);
+    assert_eq!(outcome, Outcome::Refused);
+    assert!(f.saves.is_empty() && f.bound.is_empty());
+    assert!(
+        out.contains("shares chat.deepseek.com with bound profile \"old-ds\""),
+        "{out}"
+    );
+    assert!(out.contains("--bind mur --replace"), "{out}");
+    assert!(out.contains("/browser live <hosts> --profile ds"), "{out}");
+
+    let (outcome, _) = run_with(&mut f, "ds", &["chat.deepseek.com"], &old, true, None);
+    assert_eq!(outcome, Outcome::Bound);
+    assert_eq!(profiles_of(&f.saves[0][0]), ["ds"]);
+}
+
+/// `--replace` on an entry that already carries the site still drops the
+/// others; without it, an already-bound site is a no-op.
+#[test]
+fn replace_with_the_site_already_bound_drops_only_the_others() {
+    let mut f = Fake {
+        servers: vec![restricted(&["x.com", "y.com"], Some("x"))],
+        ..Default::default()
+    };
+    f.servers[0]
+        .args
+        .extend(["--profile".to_string(), "y".to_string()]);
+    let (outcome, _) = run(&mut f, "x", &["x.com"], None);
+    assert_eq!(outcome, Outcome::Unchanged);
+    let (outcome, out) = run_with(&mut f, "x", &["x.com"], &disjoint, true, None);
+    assert_eq!(outcome, Outcome::Bound, "{out}");
+    assert_eq!(profiles_of(&f.saves[0][0]), ["x"]);
+    assert_eq!(f.bound[0].1.as_deref(), Some("y"));
 }
 
 #[test]
@@ -249,7 +346,7 @@ fn confirm_shows_repairs_and_only_yes_writes() {
         };
         let (outcome, out) = run(&mut f, "x", &["a.x.com"], Some(answer));
         assert_eq!(outcome, want, "answer {answer:?}");
-        assert!(out.contains("replacing \"old\""), "{out}");
+        assert!(out.contains("alongside \"old\""), "{out}");
         assert!(
             out.contains("also repairs:\n  re-pinned the command"),
             "{out}"
@@ -286,14 +383,16 @@ fn candidates_list_only_agents_with_a_live_entry() {
         ],
         "x",
         &d(&["a.x.com"]),
+        &disjoint,
     );
     let names: Vec<_> = cands.iter().map(|c| c.agent.as_str()).collect();
     assert_eq!(names, ["a", "c"]);
-    assert_eq!(cands[0].current.as_deref(), Some("old"));
+    assert_eq!(cands[0].current, ["old"]);
     assert_eq!(
         cands[0].plan,
         BindPlan::Bind {
-            replaces: Some("old".into())
+            alongside: vec!["old".into()],
+            replaces: Vec::new(),
         }
     );
     assert!(matches!(cands[1].plan, BindPlan::NeedsHosts { .. }));
@@ -317,6 +416,7 @@ fn menu_enter_or_eof_skips_and_bad_input_reasks() {
         vec![("mur".into(), vec![restricted(&["y.com"], None)])],
         "x",
         &d(&["a.x.com"]),
+        &disjoint,
     );
     assert_eq!(pick(&cands, "\n").0, None);
     assert_eq!(pick(&cands, "").0, None);
@@ -337,12 +437,29 @@ fn menu_with_no_candidates_prints_the_hint_and_reads_nothing() {
 }
 
 #[test]
-fn set_profile_appends_or_replaces_in_place() {
+fn set_profiles_writes_exactly_the_given_list_in_place() {
     let mut e = restricted(&[], None);
-    set_profile(&mut e, "a");
-    set_profile(&mut e, "b");
-    assert_eq!(e.args.iter().filter(|x| *x == "--profile").count(), 1);
-    assert_eq!(e.args.last().unwrap(), "b");
+    set_profiles(&mut e, &d(&["a"]));
+    set_profiles(&mut e, &d(&["a", "b"]));
+    assert_eq!(e.args.iter().filter(|x| *x == "--profile").count(), 2);
+    assert_eq!(profiles_of(&e), ["a", "b"]);
+    set_profiles(&mut e, &d(&["b"]));
+    assert_eq!(profiles_of(&e), ["b"]);
+    assert_eq!(&e.args[4..], &["--profile", "b"]);
+    set_profiles(&mut e, &[]);
+    assert_eq!(e.args.len(), 4);
+}
+
+#[test]
+fn attached_profiles_reads_both_spellings_in_argv_order() {
+    let mut e = restricted(&[], None);
+    e.args.extend([
+        "--profile=one".to_string(),
+        "--headless".to_string(),
+        "--profile".to_string(),
+        "two".to_string(),
+    ]);
+    assert_eq!(profiles_of(&e), ["one", "two"]);
 }
 
 /// A hand-edited entry may spell the flag `--profile=old` (clap accepts both).
@@ -362,29 +479,29 @@ fn profile_flags(e: &McpServerEntry) -> usize {
 #[test]
 fn equals_style_profile_is_read_as_the_attached_profile() {
     let e = restricted_eq(&["*.x.com"], "old");
-    assert_eq!(attached_profile(&e), Some("old"));
+    assert_eq!(profiles_of(&e), ["old"]);
 }
 
 #[test]
-fn set_profile_rewrites_an_equals_style_flag_in_place() {
+fn set_profiles_rewrites_an_equals_style_flag_in_place() {
     let mut e = restricted_eq(&[], "old");
-    set_profile(&mut e, "new");
+    set_profiles(&mut e, &d(&["new"]));
     assert_eq!(profile_flags(&e), 1, "{:?}", e.args);
-    assert_eq!(e.args.last().unwrap(), "--profile=new");
-    assert_eq!(attached_profile(&e), Some("new"));
+    assert_eq!(&e.args[e.args.len() - 2..], &["--profile", "new"]);
+    assert_eq!(profiles_of(&e), ["new"]);
 }
 
 #[test]
-fn rebinding_an_equals_style_entry_names_the_old_profile_and_keeps_one_flag() {
+fn replacing_an_equals_style_entry_names_the_old_profile_and_keeps_one_flag() {
     let mut f = Fake {
         servers: vec![restricted_eq(&["*.deepseek.com", "gitea.example"], "gitea")],
         ..Default::default()
     };
-    let (outcome, out) = run(&mut f, "deepseek", &["deepseek.com"], None);
+    let (outcome, out) = run_with(&mut f, "deepseek", &["deepseek.com"], &disjoint, true, None);
     assert_eq!(outcome, Outcome::Bound);
     let after = &f.saves[0][0];
     assert_eq!(profile_flags(after), 1, "{:?}", after.args);
-    assert_eq!(attached_profile(after), Some("deepseek"));
+    assert_eq!(profiles_of(after), ["deepseek"]);
     assert_eq!(f.bound[0].1.as_deref(), Some("gitea"));
     assert!(out.contains("(was \"gitea\")"), "{out}");
     assert!(
@@ -405,15 +522,15 @@ fn equals_style_entry_already_bound_is_unchanged_without_a_write() {
 }
 
 #[test]
-fn set_profile_never_writes_past_a_double_dash() {
+fn set_profiles_never_writes_past_a_double_dash() {
     let mut e = restricted(&[], None);
     e.args
         .extend(["--".to_string(), "--profile=pos".to_string()]);
-    set_profile(&mut e, "new");
+    set_profiles(&mut e, &d(&["new"]));
     let dd = e.args.iter().position(|a| a == "--").unwrap();
     assert_eq!(&e.args[dd - 2..dd], &["--profile", "new"]);
     assert_eq!(e.args.last().unwrap(), "--profile=pos");
-    assert_eq!(attached_profile(&e), Some("new"));
+    assert_eq!(profiles_of(&e), ["new"]);
 }
 
 #[test]
@@ -517,7 +634,17 @@ fn confirm_while_edited(f: &mut Fake, newer: Vec<McpServerEntry>) -> (Outcome, S
         newer: Some(newer),
     };
     let mut out = Vec::new();
-    let outcome = bind_agent("mur", "x", &d(&["a.x.com"]), f, Some(&mut input), &mut out).unwrap();
+    let outcome = bind_agent(
+        "mur",
+        "x",
+        &d(&["a.x.com"]),
+        &disjoint,
+        false,
+        f,
+        Some(&mut input),
+        &mut out,
+    )
+    .unwrap();
     (outcome, String::from_utf8(out).unwrap())
 }
 

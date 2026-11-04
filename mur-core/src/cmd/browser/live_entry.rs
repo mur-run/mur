@@ -14,44 +14,63 @@ pub(crate) const LIVE_ENTRY: &str = "browser";
 /// Long option the live browser's launch argv attaches a saved profile with.
 const PROFILE_OPT: &str = "--profile";
 
-/// The `--profile` value in the entry's launch argv, if any. Accepts both
-/// spellings Clap's long option takes (`--profile <site>` and
+/// Every `--profile` value in the entry's launch argv, in argv order.
+/// Accepts both spellings Clap's long option takes (`--profile <site>` and
 /// `--profile=<site>`) and stops at `--`, after which tokens are positional.
-pub(crate) fn attached_profile(entry: &McpServerEntry) -> Option<&str> {
+/// One entry may carry several profiles (#2263); a legacy entry carries one.
+pub(crate) fn attached_profiles(entry: &McpServerEntry) -> Vec<&str> {
+    let mut out = Vec::new();
     let mut args = entry.args.iter().take_while(|a| *a != "--");
     while let Some(a) = args.next() {
         let Some(rest) = a.strip_prefix(PROFILE_OPT) else {
             continue;
         };
         if rest.is_empty() {
-            return args.next().map(String::as_str);
-        }
-        if let Some(site) = rest.strip_prefix('=') {
-            return (!site.is_empty()).then_some(site);
+            if let Some(site) = args.next() {
+                out.push(site.as_str());
+            }
+        } else if let Some(site) = rest.strip_prefix('=')
+            && !site.is_empty()
+        {
+            out.push(site);
         }
     }
-    None
+    out
 }
 
-/// Point the entry's `--profile` at `site`, in place and in whichever
-/// spelling the argv already uses (`--profile <site>` or `--profile=<site>`);
-/// otherwise insert `--profile <site>` before any `--`. Never leaves a second
-/// `--profile` behind, which Clap rejects at launch. Nothing else changes.
-pub(crate) fn set_profile(entry: &mut McpServerEntry, site: &str) {
+/// Make `sites` exactly the profiles the entry launches with: every existing
+/// `--profile` (either spelling) before any `--` is dropped and `--profile
+/// <site>` pairs are written where the first one stood, or before `--` when
+/// there was none. Nothing else changes, and nothing past `--` is touched.
+pub(crate) fn set_profiles(entry: &mut McpServerEntry, sites: &[String]) {
     let args = &mut entry.args;
     let end = args.iter().position(|a| a == "--").unwrap_or(args.len());
     let eq = format!("{PROFILE_OPT}=");
-    match args[..end]
-        .iter()
-        .position(|a| a == PROFILE_OPT || a.starts_with(&eq))
-    {
-        Some(i) if args[i] != PROFILE_OPT => args[i] = format!("{eq}{site}"),
-        Some(i) if i + 1 < end => args[i + 1] = site.to_owned(),
-        Some(i) => args.insert(i + 1, site.to_owned()),
-        None => {
-            args.splice(end..end, [PROFILE_OPT.to_owned(), site.to_owned()]);
+    let mut kept: Vec<String> = Vec::with_capacity(args.len() + 2 * sites.len());
+    let mut at: Option<usize> = None;
+    let mut i = 0;
+    while i < end {
+        let a = &args[i];
+        if a == PROFILE_OPT {
+            at.get_or_insert(kept.len());
+            i += 2;
+            continue;
         }
+        if a.starts_with(&eq) {
+            at.get_or_insert(kept.len());
+            i += 1;
+            continue;
+        }
+        kept.push(a.clone());
+        i += 1;
     }
+    let at = at.unwrap_or(kept.len());
+    let flags = sites
+        .iter()
+        .flat_map(|s| [PROFILE_OPT.to_owned(), s.clone()]);
+    kept.splice(at..at, flags);
+    kept.extend(args.drain(end.min(args.len())..));
+    *args = kept;
 }
 
 pub(crate) fn norm(host: &str) -> String {
@@ -93,6 +112,8 @@ pub(crate) trait LiveOps {
     /// Append the `broad_audited_enabled` trace event after a `--research` write.
     fn record_research(&mut self, agent: &str) -> anyhow::Result<()>;
     /// Append the `profile_bound` trace event after a binder write (#2199).
+    /// `old` is the profile the write replaced; `None` when `new` was added
+    /// alongside the existing ones or there were none (#2263).
     fn record_profile_bound(
         &mut self,
         agent: &str,
