@@ -95,6 +95,8 @@ The FFI is kept to a single function returning the raw status, with the policy i
 
 Rules 6 and 11 read `enabled_mcp_servers()`, not every entry in the profile. A disabled server never reaches `McpPool`, so letting one refuse startup made `mur agent mcp disable` — the recovery the failure message itself points at — unable to recover anything. (#1326)
 
+**ssh in an MCP child.** The spawn strips the runtime's inherited `SSH_AUTH_SOCK` and sets it to the agent's ssh-agent proxy socket, with `GIT_SSH_COMMAND` pinned to the agent's `known_hosts` when a real `ssh` is in the seal's exec dirs. No `BASH_FUNC_ssh%%` — MCP servers are not bash. The pins are best-effort; every signature is still judged by the proxy's policy + HITL, the same gate a bash child passes.
+
 ### Vendoring: a MUR-owned install, fingerprinted by the lockfile
 
 `mur agent mcp vendor` installs the exact version under `~/.mur/mcp-packages/<agent>/<server>/` and repoints the entry at the installed script. The agent then starts with no resolution step and no network.

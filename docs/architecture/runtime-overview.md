@@ -541,7 +541,11 @@ checked against the key, the host key the client verified with
 `session-bind`, and that bind's session ID, and then goes through HITL.
 Every error refuses the signature; there is no passthrough. The ssh client
 only sees `SSH_AGENT_FAILURE`, so the reason goes to the agent's channel and
-under `ssh_proxy refusals` in `mur agent status`.
+under `ssh_proxy refusals` in `mur agent status`. Bash children and stdio MCP
+children both receive the proxy socket as `SSH_AUTH_SOCK` (plus
+`GIT_SSH_COMMAND`); neither ever sees the runtime's inherited agent. The
+boundary is the proxy's per-request key→host policy and HITL, not the
+environment variable.
 
 `mur agent status` also shows whether the proxy is a boundary for this agent:
 `ssh_proxy: boundary`, `ssh_proxy: audit-only (<reason>)`, or
