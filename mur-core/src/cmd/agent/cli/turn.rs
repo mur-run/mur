@@ -4,12 +4,6 @@
 use super::*;
 
 pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
-    // A chip-triggered restart is draining the agent; a turn sent now would
-    // race it. The draft stays in the composer for after.
-    if app.restart_in_flight {
-        app.push_warn("restart in progress — send again once it finishes");
-        return;
-    }
     app.clear_suggestion_ghost();
     // §5.2 / §7.1 / §8 step 4: the send gate, the ruling prompt or
     // `Paused — continue?` owns the next line, the empty one included (Enter

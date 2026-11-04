@@ -13,30 +13,27 @@ fn err(v: serde_json::Value) -> VetError {
 fn shell_is_insert_only_with_bang_prefix() {
     let p = ok(json!({"label": "check status", "kind": "shell", "command": "git status"}));
     assert_eq!(p.kind, ProposalKind::Shell("git status".into()));
-    assert!(!p.is_executable());
-    assert_eq!(p.insert_text().as_deref(), Some("!git status"));
+    assert_eq!(p.insert_text("a"), "!git status");
 }
 
 #[test]
 fn shell_prefix_is_not_doubled() {
     let p = ok(json!({"label": "x", "kind": "shell", "command": "! ls -la"}));
-    assert_eq!(p.insert_text().as_deref(), Some("!ls -la"));
+    assert_eq!(p.insert_text("a"), "!ls -la");
 }
 
 #[test]
 fn slash_is_insert_only_with_slash_prefix() {
     let p = ok(json!({"label": "switch model", "kind": "slash", "command": "/model"}));
     assert_eq!(p.kind, ProposalKind::Slash("model".into()));
-    assert!(!p.is_executable());
-    assert_eq!(p.insert_text().as_deref(), Some("/model"));
+    assert_eq!(p.insert_text("a"), "/model");
 }
 
 #[test]
-fn restart_is_executable_and_has_no_insert_text() {
+fn restart_inserts_the_restart_command_for_the_proposing_agent() {
     let p = ok(json!({"label": "restart to apply", "kind": "restart"}));
     assert_eq!(p.kind, ProposalKind::Restart);
-    assert!(p.is_executable());
-    assert_eq!(p.insert_text(), None);
+    assert_eq!(p.insert_text("mur"), "!mur agent restart mur");
 }
 
 #[test]
@@ -169,8 +166,7 @@ fn every_error_tells_the_model_what_to_change() {
 fn reply_is_insert_only_verbatim_and_not_vettable() {
     let p = Proposal::reply("yes please");
     assert!(p.is_reply());
-    assert!(!p.is_executable());
-    assert_eq!(p.insert_text().as_deref(), Some("yes please"));
+    assert_eq!(p.insert_text("a"), "yes please");
     // `reply` is murmur-internal: the model cannot propose it.
     let err =
         vet(&serde_json::json!({"label": "x", "kind": "reply", "command": "hi"})).unwrap_err();

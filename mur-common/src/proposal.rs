@@ -1,11 +1,11 @@
 //! Agent-proposed commands and actions — the `propose` tool's shared model.
 //!
 //! An agent that needs the user to run something calls `propose`; murmur shows
-//! it as a chip above the composer. Two families:
-//!
-//! - **insert-only** (`shell`, `slash`): `Tab` puts the text into an empty
-//!   composer; the user reviews and sends it. Never sent by a single key.
-//! - **executable** (`restart`): `Enter` on an empty, idle composer runs it.
+//! it as a chip above the composer. Every kind is **insert-only**: `Tab`
+//! puts the text into an empty composer; the user reviews and sends it.
+//! Nothing is ever run by a single key. `restart` inserts
+//! `!mur agent restart <agent>` like any other shell command, so all chips
+//! share one gesture.
 //!
 //! [`vet`] is the one gate. The runtime calls it inside the tool's `execute`
 //! (a rejection goes back to the model as a tool error) and murmur calls it on
@@ -68,7 +68,8 @@ pub enum ProposalKind {
     Shell(String),
     /// Slash command, inserted as `/<cmd>`. Insert-only.
     Slash(String),
-    /// Restart the proposing agent. Executable. No target by construction.
+    /// Restart the proposing agent. Inserted as `!mur agent restart <agent>`
+    /// with the proposing agent filled in — no target by construction.
     Restart,
     /// A single suggested reply (murmur's ghost), inserted verbatim.
     /// Insert-only. Never built by [`vet`] — `reply` is not in [`KINDS`];
@@ -107,19 +108,20 @@ impl Proposal {
         matches!(self.kind, ProposalKind::Reply(_))
     }
 
-    /// Whether `Enter` may run this proposal. Only native actions qualify;
-    /// insert-only kinds never run on a single key (spec principle C).
-    pub fn is_executable(&self) -> bool {
-        matches!(self.kind, ProposalKind::Restart)
+    /// The shell command a `restart` chip stands for, for `agent`.
+    pub fn restart_command(agent: &str) -> String {
+        format!("mur agent restart {agent}")
     }
 
-    /// Text `Tab` puts into an empty composer, or `None` for executable kinds.
-    pub fn insert_text(&self) -> Option<String> {
+    /// Text `Tab` puts into an empty composer. `agent` is the proposing
+    /// agent, which only `Restart` needs (principle C: the user sees the
+    /// exact command before it runs).
+    pub fn insert_text(&self, agent: &str) -> String {
         match &self.kind {
-            ProposalKind::Shell(cmd) => Some(format!("!{cmd}")),
-            ProposalKind::Slash(cmd) => Some(format!("/{cmd}")),
-            ProposalKind::Reply(text) => Some(text.clone()),
-            ProposalKind::Restart => None,
+            ProposalKind::Shell(cmd) => format!("!{cmd}"),
+            ProposalKind::Slash(cmd) => format!("/{cmd}"),
+            ProposalKind::Reply(text) => text.clone(),
+            ProposalKind::Restart => format!("!{}", Self::restart_command(agent)),
         }
     }
 }

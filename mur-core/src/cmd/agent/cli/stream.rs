@@ -41,9 +41,6 @@ pub enum StreamMsg {
     /// An out-of-band notice not tied to a turn (e.g. a failed HITL/cancel
     /// dial). Always shown regardless of the active turn.
     Note(String),
-    /// A chip-triggered restart finished (`cli/proposal.rs`). Not
-    /// turn-scoped: it outlives whatever turn was on screen.
-    RestartDone(super::proposal::RestartOutcome),
     /// The in-flight turn no longer exists on the runtime (it restarted and
     /// tasks live in memory only, or it stopped). The UI must drop the dead
     /// task binding; `resend` carries user text (a failed steer) to replay as
@@ -135,7 +132,6 @@ impl StreamMsg {
             | StreamMsg::StepTokens { task_id, .. } => Some(task_id),
             StreamMsg::Note(_)
             | StreamMsg::EgressDenied(_)
-            | StreamMsg::RestartDone(_)
             | StreamMsg::Expired { .. }
             | StreamMsg::ShellOutput { .. }
             | StreamMsg::ShellDone { .. }
@@ -675,7 +671,7 @@ mod tests {
             ]}]
         });
         let p = attached_proposal(&task).expect("chip");
-        assert!(p.is_executable());
+        assert_eq!(p.kind, mur_common::proposal::ProposalKind::Restart);
         assert_eq!(task_outcome(&task).unwrap().0, "needs a restart");
     }
 

@@ -148,7 +148,6 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             }
         }
         StreamMsg::Note(text) => app.push_system(text),
-        StreamMsg::RestartDone(outcome) => proposal::finish_restart(app, outcome),
         StreamMsg::Expired { tool, retry } => {
             // The gate auto-denied `tool` at timeout before this approval
             // landed (#8). Stash the user's last message so [Ctrl+R] can

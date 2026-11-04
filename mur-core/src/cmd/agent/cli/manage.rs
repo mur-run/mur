@@ -290,7 +290,7 @@ mod tests {
         assert!(mur_common::proposal::vet(&args).is_ok());
         let (text, chip) = applied("removed skill 'x'");
         assert!(text.ends_with(RESTART_HINT), "{text}");
-        assert!(chip.is_some_and(|p| p.is_executable()));
+        assert!(chip.is_some_and(|p| p.kind == mur_common::proposal::ProposalKind::Restart));
     }
 
     #[test]

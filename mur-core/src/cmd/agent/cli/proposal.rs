@@ -1,11 +1,12 @@
 //! The proposal chip: one agent-proposed command or action shown under the
-//! composer (`propose` tool). Key handling and the `/restart` worker live
-//! here so `events.rs` only gains a dispatch hook (CLAUDE.md rule 5).
+//! composer (`propose` tool). Key handling lives here so `events.rs` only
+//! gains a dispatch hook (CLAUDE.md rule 5).
 //!
 //! Principle C: nothing runs that the user has not seen as the thing being
-//! run. Insert-only chips (`shell`, `slash`) are only ever put into an empty
-//! composer by `Tab`; `Enter` never sends them. Only an executable chip
-//! (`restart`, always the current agent) runs on `Enter`, and only when idle.
+//! run. Every chip is insert-only: `Tab` puts its text into an empty
+//! composer, the user reviews it and sends it. `Enter` never acts on a chip.
+//! A `restart` chip inserts `!mur agent restart <agent>` — the same gesture
+//! as a `shell` chip, so there is one behaviour to learn.
 //!
 //! Design: `docs/superpowers/specs/2026-09-28-murmur-proposal-chip-design.md`.
 
@@ -16,9 +17,6 @@ use mur_common::proposal::Proposal;
 /// Long enough to read the command; short enough that a stale suggestion does
 /// not squat on the composer for the rest of the session.
 pub(super) const PROPOSAL_TTL: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// Outcome of a chip-triggered restart, as delivered to the UI loop.
-pub(crate) type RestartOutcome = std::result::Result<crate::cmd::agent::QuietRestart, String>;
 
 /// Whether `Tab` belongs to the chip even though the completion overlay is
 /// open. The `suggest_replies` chooser (`spaced`) never advertises Tab — its
@@ -31,10 +29,7 @@ pub(super) fn owns_tab_over_chooser(app: &App, key: &crossterm::event::KeyEvent)
         && key.modifiers.is_empty()
         && app.completion.as_ref().is_some_and(|c| c.spaced)
         && app.input_text().is_empty()
-        && app
-            .proposal
-            .as_ref()
-            .is_some_and(|p| !p.is_reply() && p.insert_text().is_some())
+        && app.proposal.as_ref().is_some_and(|p| !p.is_reply())
 }
 
 /// Handle a keypress for the chip. `true` means the key was consumed.
@@ -42,22 +37,7 @@ pub(super) fn owns_tab_over_chooser(app: &App, key: &crossterm::event::KeyEvent)
 /// Called after HITL and the completion overlay have had their turn —
 /// priority HITL > overlay > chip. The ghost is a chip too
 /// (`ProposalKind::Reply`); it only ever answers `Tab`, as it always has.
-pub(super) fn handle_key(
-    app: &mut App,
-    key: &crossterm::event::KeyEvent,
-    tx: &mpsc::Sender<StreamMsg>,
-) -> bool {
-    handle_key_with(app, key, tx, run_restart)
-}
-
-/// [`handle_key`] with the restart runner injected, so tests never restart
-/// a real agent.
-pub(super) fn handle_key_with(
-    app: &mut App,
-    key: &crossterm::event::KeyEvent,
-    tx: &mpsc::Sender<StreamMsg>,
-    runner: fn(&str) -> RestartOutcome,
-) -> bool {
+pub(super) fn handle_key(app: &mut App, key: &crossterm::event::KeyEvent) -> bool {
     let Some(chip) = app.proposal.as_ref() else {
         return false;
     };
@@ -76,32 +56,22 @@ pub(super) fn handle_key_with(
         return false;
     }
     match key.code {
-        KeyCode::Tab if empty => match chip.insert_text() {
-            Some(text) => {
-                app.set_input(&text);
-                app.proposal = None;
-                // The inserted command is now the draft. A reply chooser left
-                // open would still own Enter and send its highlighted reply
-                // instead of the command the user just reviewed (#2125).
-                if app.completion.as_ref().is_some_and(|c| c.spaced) {
-                    app.completion = None;
-                }
-                true
+        KeyCode::Tab if empty => {
+            let text = chip.insert_text(&app.agent);
+            app.set_input(&text);
+            app.proposal = None;
+            // The inserted command is now the draft. A reply chooser left
+            // open would still own Enter and send its highlighted reply
+            // instead of the command the user just reviewed (#2125).
+            if app.completion.as_ref().is_some_and(|c| c.spaced) {
+                app.completion = None;
             }
-            // Executable chips have nothing to insert; Tab keeps its
-            // ordinary meaning (slash menu).
-            None => false,
-        },
-        // An image-only send is still a send; let `submit` have it.
-        KeyCode::Enter if empty && app.pending_image.is_none() => {
-            if chip.is_executable() && !app.streaming && !app.restart_in_flight {
-                let label = chip.label.clone();
-                start_restart(app, tx, label, runner);
-            }
-            // Insert-only: nothing sent, nothing inserted. Executable while a
-            // turn streams: inert (Q7) — the chip hint says why.
             true
         }
+        // An image-only send is still a send; let `submit` have it.
+        // Otherwise Enter on an empty composer does nothing: a chip is
+        // never sent or inserted by Enter (principle C).
+        KeyCode::Enter if empty && app.pending_image.is_none() => true,
         KeyCode::Esc if empty && !app.streaming => {
             app.proposal = None;
             true
@@ -122,57 +92,6 @@ fn is_pin_key(key: &crossterm::event::KeyEvent) -> bool {
 fn toggle_pin(app: &mut App) {
     app.proposal_pinned = !app.proposal_pinned;
     app.proposal_deadline = None;
-}
-
-/// Run the restart on a worker thread; the result comes back as
-/// `StreamMsg::RestartDone`. Locks turn submission until it lands.
-fn start_restart(
-    app: &mut App,
-    tx: &mpsc::Sender<StreamMsg>,
-    label: String,
-    runner: fn(&str) -> RestartOutcome,
-) {
-    app.proposal = None;
-    app.restart_in_flight = true;
-    let agent = app.agent.clone();
-    app.push_system(format!("↻ restarting {agent} — {label}"));
-    let tx = tx.clone();
-    std::thread::spawn(move || {
-        let outcome = runner(&agent);
-        let _ = tx.blocking_send(StreamMsg::RestartDone(outcome));
-    });
-}
-
-fn run_restart(agent: &str) -> RestartOutcome {
-    crate::cmd::agent::restart_quiet(agent).map_err(|e| format!("{e:#}"))
-}
-
-/// Apply a finished restart: unlock submission and render the progress lines
-/// the CLI would have printed. The conversation id is left alone — the
-/// runtime's `ConversationStore` is disk-backed, so the next turn resumes it.
-pub(super) fn finish_restart(app: &mut App, outcome: RestartOutcome) {
-    app.restart_in_flight = false;
-    match outcome {
-        Ok(r) => {
-            for (failed, line) in r.notes {
-                if failed {
-                    app.push_error(format!("✗ {line}"));
-                } else {
-                    app.push_system(line);
-                }
-            }
-            if r.ok {
-                app.push_system(format!("✓ {}", r.detail));
-            } else if !app
-                .messages
-                .last()
-                .is_some_and(|m| m.text.contains(&r.detail))
-            {
-                app.push_error(format!("✗ {}", r.detail));
-            }
-        }
-        Err(e) => app.push_error(format!("✗ restart failed: {e}")),
-    }
 }
 
 /// Offer a chip. A newer proposal replaces the old one — including a ghost,
@@ -200,7 +119,7 @@ pub(super) fn tick(app: &mut App, now: std::time::Instant) -> bool {
         app.proposal_deadline = None;
         return false;
     }
-    if app.streaming || app.restart_in_flight || app.proposal_pinned {
+    if app.streaming || app.proposal_pinned {
         app.proposal_deadline = None;
         return false;
     }
@@ -240,25 +159,14 @@ fn secs_left(app: &App, now: std::time::Instant) -> Option<u64> {
 pub(super) fn chip_line(app: &App) -> Option<(String, String)> {
     // The ghost renders as the composer's placeholder, not a chip row.
     let p = app.proposal.as_ref().filter(|p| !p.is_reply())?;
-    let what = match p.insert_text() {
-        Some(text) => format!("⤷ {text} — {}", p.label),
-        None => format!("⤷ restart {} — {}", app.agent, p.label),
-    };
+    let what = format!("⤷ {} — {}", p.insert_text(&app.agent), p.label);
     let empty = app.input_text().is_empty();
     let pin = if app.proposal_pinned {
         "Ctrl+K to unpin"
     } else {
         "Ctrl+K to keep"
     };
-    let hint = if p.is_executable() {
-        if app.streaming || app.restart_in_flight {
-            "(Enter to run after the turn ends)"
-        } else if empty {
-            "Enter to run · Esc to dismiss"
-        } else {
-            "(clear the input, then Enter to run)"
-        }
-    } else if empty {
+    let hint = if empty {
         "Tab to insert · Esc to dismiss"
     } else {
         "(clear to Tab-insert)"

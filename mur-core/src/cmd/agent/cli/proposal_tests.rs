@@ -1,21 +1,10 @@
 //! Chip key state machine (spec §5). No TTY: keys go through the real
-//! `handle_event`, and the restart runner is injected so no agent restarts.
+//! `handle_event`. Every chip is insert-only, so no test can restart an
+//! agent — there is no key that would.
 
 use super::*;
 use crossterm::event::{KeyEvent, KeyEventState};
 use mur_common::proposal::{Proposal, ProposalKind};
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-
-static RESTARTS: AtomicUsize = AtomicUsize::new(0);
-
-fn fake_restart(_agent: &str) -> RestartOutcome {
-    RESTARTS.fetch_add(1, AtomicOrdering::SeqCst);
-    Ok(crate::cmd::agent::QuietRestart {
-        ok: true,
-        detail: "agent 'a' restarted (aaaa → bbbb)".into(),
-        notes: vec![(false, "respawning".into())],
-    })
-}
 
 fn press(c: KeyCode) -> KeyEvent {
     KeyEvent {
@@ -79,64 +68,39 @@ async fn tab_with_a_draft_leaves_draft_and_chip_alone() {
 
 #[tokio::test]
 async fn enter_with_a_draft_sends_the_draft_and_keeps_the_chip() {
-    let (tx, _rx) = mpsc::channel(8);
     let mut a = app_with(restart_chip());
-    let before = RESTARTS.load(AtomicOrdering::SeqCst);
     a.set_input("hello");
     let k = press(KeyCode::Enter);
-    assert!(!handle_key_with(&mut a, &k, &tx, fake_restart));
+    assert!(!handle_key(&mut a, &k));
     assert!(a.proposal.is_some());
-    assert_eq!(RESTARTS.load(AtomicOrdering::SeqCst), before);
 }
 
+/// The restart chip is a shell chip like any other: Tab inserts the exact
+/// command for the current agent, Enter on an empty composer runs nothing.
 #[tokio::test]
-async fn enter_on_idle_executable_chip_runs_restart_and_locks_submission() {
+async fn restart_chip_tab_inserts_the_restart_command_and_enter_runs_nothing() {
     let (tx, mut rx) = mpsc::channel(8);
     let mut a = app_with(restart_chip());
-    a.context_task_id = Some("ctx-1".into());
-    let k = press(KeyCode::Enter);
-    assert!(handle_key_with(&mut a, &k, &tx, fake_restart));
-    assert!(a.restart_in_flight, "submission locked while restarting");
+    let before = a.messages.len();
+    handle_event(&mut a, Event::Key(press(KeyCode::Enter)), &tx).await;
+    assert!(a.input_text().is_empty(), "Enter inserted nothing");
+    assert_eq!(a.messages.len(), before, "Enter ran nothing");
+    assert!(rx.try_recv().is_err());
+    assert!(a.proposal.is_some(), "chip stays");
+
+    handle_event(&mut a, Event::Key(press(KeyCode::Tab)), &tx).await;
+    assert_eq!(a.input_text(), format!("!mur agent restart {}", a.agent));
     assert!(a.proposal.is_none());
-
-    // Submission is refused while locked; the draft survives.
-    a.set_input("queued");
-    submit(&mut a, &tx).await;
-    assert!(!a.streaming);
-    assert_eq!(a.input_text(), "queued");
-
-    let msg = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
-        .await
-        .expect("restart result")
-        .expect("channel open");
-    let StreamMsg::RestartDone(outcome) = msg else {
-        panic!("expected RestartDone");
-    };
-    finish_restart(&mut a, outcome);
-    assert!(!a.restart_in_flight, "unlocked after");
-    assert_eq!(
-        a.context_task_id.as_deref(),
-        Some("ctx-1"),
-        "conversation kept"
-    );
-    assert!(
-        a.messages
-            .iter()
-            .any(|m| m.text.starts_with("✓ agent 'a' restarted"))
-    );
 }
 
 #[tokio::test]
-async fn enter_on_executable_chip_while_streaming_is_inert() {
-    let (tx, _rx) = mpsc::channel(8);
+async fn restart_chip_hint_while_streaming_is_the_tab_hint() {
     let mut a = app_with(restart_chip());
     a.streaming = true;
-    let k = press(KeyCode::Enter);
-    assert!(handle_key_with(&mut a, &k, &tx, fake_restart));
-    assert!(!a.restart_in_flight);
-    assert!(a.proposal.is_some(), "chip untouched");
-    let (_, hint) = chip_line(&a).unwrap();
-    assert!(hint.contains("after the turn ends"), "{hint}");
+    let (what, hint) = chip_line(&a).unwrap();
+    assert!(what.contains("!mur agent restart"), "{what}");
+    assert!(hint.contains("Tab to insert"), "{hint}");
+    assert!(!hint.contains("Enter"), "{hint}");
 }
 
 #[tokio::test]
@@ -197,8 +161,9 @@ fn chip_line_always_shows_the_command() {
     assert!(what.contains("!git status"), "{what}");
     assert!(hint.contains("Tab"), "{hint}");
     let a = app_with(restart_chip());
-    let (what, _) = chip_line(&a).unwrap();
-    assert!(what.contains("restart a"), "{what}");
+    let (what, hint) = chip_line(&a).unwrap();
+    assert!(what.contains("!mur agent restart "), "{what}");
+    assert!(hint.contains("Tab"), "{hint}");
 }
 
 // ── PR 3: the ghost is an insert-only chip (`ProposalKind::Reply`) ──
@@ -235,12 +200,11 @@ async fn ghost_tab_never_touches_a_draft() {
 
 #[tokio::test]
 async fn ghost_ignores_esc_and_enter_like_before() {
-    let (tx, _rx) = mpsc::channel(8);
     let mut a = app_with_ghost("yes please");
     let esc = press(KeyCode::Esc);
-    assert!(!handle_key_with(&mut a, &esc, &tx, fake_restart));
+    assert!(!handle_key(&mut a, &esc));
     let enter = press(KeyCode::Enter);
-    assert!(!handle_key_with(&mut a, &enter, &tx, fake_restart));
+    assert!(!handle_key(&mut a, &enter));
     assert!(a.has_suggestion_ghost());
     assert!(a.input_text().is_empty(), "Enter never inserts the ghost");
 }
@@ -382,10 +346,11 @@ async fn chooser_keeps_enter_and_digits_when_a_chip_is_up() {
     let mut a = App::test_fixture();
     offer(&mut a, restart_chip());
     chooser(&mut a);
-    // Executable chip has nothing to insert: Tab stays the chooser's.
+    // A restart chip inserts like any other: Tab is the chip's, digits and
+    // Enter stay the chooser's.
     handle_event(&mut a, Event::Key(press(KeyCode::Tab)), &tx).await;
-    assert_eq!(a.input_text(), "yes");
-    assert!(a.proposal.is_some(), "restart chip untouched");
+    assert_eq!(a.input_text(), format!("!mur agent restart {}", a.agent));
+    assert!(a.proposal.is_none());
 }
 
 #[test]
@@ -452,12 +417,11 @@ fn ctrl_k() -> KeyEvent {
 
 #[tokio::test]
 async fn ctrl_k_pins_the_chip_and_stops_the_countdown() {
-    let (tx, _rx) = mpsc::channel(4);
     let t0 = std::time::Instant::now();
     let mut a = app_with(shell_chip());
     tick(&mut a, t0);
     assert!(a.proposal_deadline.is_some());
-    assert!(handle_key_with(&mut a, &ctrl_k(), &tx, fake_restart));
+    assert!(handle_key(&mut a, &ctrl_k()));
     assert!(a.proposal_pinned);
     assert!(
         !tick(&mut a, t0 + PROPOSAL_TTL * 10),
@@ -474,11 +438,10 @@ async fn ctrl_k_pins_the_chip_and_stops_the_countdown() {
 
 #[tokio::test]
 async fn ctrl_k_again_unpins_with_a_fresh_countdown() {
-    let (tx, _rx) = mpsc::channel(4);
     let t0 = std::time::Instant::now();
     let mut a = app_with(shell_chip());
-    handle_key_with(&mut a, &ctrl_k(), &tx, fake_restart);
-    handle_key_with(&mut a, &ctrl_k(), &tx, fake_restart);
+    handle_key(&mut a, &ctrl_k());
+    handle_key(&mut a, &ctrl_k());
     assert!(!a.proposal_pinned);
     let later = t0 + PROPOSAL_TTL * 3;
     tick(&mut a, later);
@@ -487,13 +450,12 @@ async fn ctrl_k_again_unpins_with_a_fresh_countdown() {
 
 #[tokio::test]
 async fn ctrl_k_is_not_the_chips_with_a_draft_or_on_a_ghost() {
-    let (tx, _rx) = mpsc::channel(4);
     let mut a = app_with(shell_chip());
     a.set_input("draft");
-    assert!(!handle_key_with(&mut a, &ctrl_k(), &tx, fake_restart));
+    assert!(!handle_key(&mut a, &ctrl_k()));
     assert!(!a.proposal_pinned);
     let mut g = app_with_ghost("yes");
-    assert!(!handle_key_with(&mut g, &ctrl_k(), &tx, fake_restart));
+    assert!(!handle_key(&mut g, &ctrl_k()));
     assert!(!g.proposal_pinned);
 }
 
