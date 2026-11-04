@@ -3,21 +3,25 @@
 //! This module wraps MUR's existing scoring, gating, and feedback pipeline
 //! into a clean request/response interface for external tools.
 
+use std::path::Path;
+
 use anyhow::Result;
 use chrono::Utc;
 use mur_common::knowledge::KnowledgeBase;
 use mur_common::pattern::{Content, Origin, OriginTrigger, Pattern, PatternKind, Tier};
+use mur_common::skill::stats::LifecycleState;
 use serde::{Deserialize, Serialize};
 
 use crate::evolve::feedback;
 use crate::inject::hook;
 use crate::retrieve::gate::{Tier as GateTier, evaluate_query};
 use crate::retrieve::scoring::score_and_rank_generic_with_config;
+use crate::retrieve::skill_candidates::load_skill_candidates;
 use crate::store::config::load_config;
 use crate::store::yaml::YamlStore;
 
-/// Scope for context retrieval — filters which patterns are relevant.
-/// ponytail: transitional Pattern scope (Phase W3b) — use `scope_visible` / Skills for new code.
+/// Scope for context retrieval. Kept for request compatibility; skills carry
+/// no per-user/platform origin, so it no longer filters results.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContextScope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -50,7 +54,8 @@ fn default_source() -> String {
     "api".to_string()
 }
 
-/// A pattern in the context response with its score.
+/// A skill in the context response with its score. The field is still named
+/// `patterns` on the wire for API compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoredPatternResponse {
     pub name: String,
@@ -131,23 +136,26 @@ pub struct FeedbackRequest {
 
 // ─── Implementation ─────────────────────────────────────────────
 
-/// Retrieve context-optimized patterns for a query.
+/// Retrieve context-optimized skills for a query.
+///
+/// Skills are the knowledge objects; `req.scope` is accepted for request
+/// compatibility but skills carry no per-user/platform origin, so it does not
+/// filter. `skills_dir` is `~/.mur/skills`, `mur_home` is `~/.mur`.
 pub fn retrieve(
     req: &ContextRequest,
-    store: &YamlStore,
-    vector_scores: Option<&std::collections::HashMap<String, f64>>,
+    skills_dir: &Path,
+    mur_home: &Path,
 ) -> Result<ContextResponse> {
     let config = load_config().unwrap_or_default();
-    retrieve_with_config(req, store, vector_scores, &config)
+    retrieve_with_config(req, skills_dir, mur_home, &config)
 }
 
 fn retrieve_with_config(
     req: &ContextRequest,
-    store: &YamlStore,
-    vector_scores: Option<&std::collections::HashMap<String, f64>>,
+    skills_dir: &Path,
+    mur_home: &Path,
     config: &mur_common::config::Config,
 ) -> Result<ContextResponse> {
-    // Apply query gate
     if evaluate_query(&req.query).tier == GateTier::Skip {
         return Ok(ContextResponse {
             patterns: vec![],
@@ -157,112 +165,36 @@ fn retrieve_with_config(
         });
     }
 
-    // Load all patterns
-    let all_patterns = store.list_all()?;
+    let candidates = load_skill_candidates(skills_dir, mur_home)?;
+    let scored: Vec<_> =
+        score_and_rank_generic_with_config(&req.query, candidates, &config.retrieval)
+            .into_iter()
+            .filter(|s| s.item.stats.lifecycle_state != LifecycleState::Archived)
+            .collect();
 
-    // Apply scope filtering
-    let filtered = apply_scope_filter(all_patterns, &req.scope, &req.source);
+    let patterns = scored
+        .iter()
+        .map(|s| ScoredPatternResponse {
+            name: s.item.manifest.name.clone(),
+            description: s.item.manifest.description.clone(),
+            score: s.score,
+            kind: format!("{:?}", s.item.manifest.category).to_lowercase(),
+        })
+        .collect();
+    let injection_ids = scored
+        .iter()
+        .map(|s| s.item.manifest.name.clone())
+        .collect();
 
-    // Score and rank using config-driven retrieval parameters. Vector scores
-    // are no longer merged here — the pattern corpus is transitional (v2 P1b)
-    // and empty after `mur migrate --patterns`.
-    let _ = vector_scores;
-    let scored = score_and_rank_generic_with_config(&req.query, filtered, &config.retrieval);
-
-    // Build response patterns and collect for formatting
-    let mut response_patterns = Vec::new();
-    let mut format_patterns = Vec::new();
-    let mut injection_ids = Vec::new();
-
-    for sp in &scored {
-        let kind_str = match sp.item.effective_kind() {
-            PatternKind::Technical => "technical",
-            PatternKind::Preference => "preference",
-            PatternKind::Fact => "fact",
-            PatternKind::Procedure => "procedure",
-            PatternKind::Behavioral => "behavioral",
-        };
-        response_patterns.push(ScoredPatternResponse {
-            name: sp.item.name.clone(),
-            description: sp.item.description.clone(),
-            score: sp.score,
-            kind: kind_str.to_string(),
-        });
-        injection_ids.push(sp.item.name.clone());
-        format_patterns.push(sp.item.clone());
-    }
-
-    // Format within token budget
-    let formatted = hook::format_for_injection_with_store(&format_patterns, req.token_budget, None);
+    let formatted = hook::format_skills_for_injection(&scored, &[], req.token_budget);
     let tokens_used = formatted.len() / 4; // rough estimate
 
     Ok(ContextResponse {
-        patterns: response_patterns,
+        patterns,
         tokens_used,
         formatted,
         injection_ids,
     })
-}
-
-/// Filter patterns by scope.
-///
-/// Hard filters (pattern is dropped when the pattern declares an applies
-/// constraint AND the scope value doesn't match):
-/// - `scope.project` vs `p.applies.projects`
-/// - `source` vs `p.applies.tools`
-///
-/// Soft filters for user/platform: these live on `pattern.origin`, so we
-/// only filter when the pattern has an origin with a *specific* user/platform
-/// AND the scope provides a different value.  Patterns with no origin are
-/// universal — they are never filtered out.
-///
-/// `scope.task` is used only for scoring (see `ScopeContext`), not filtering.
-#[allow(deprecated)] // transitional: reads legacy origin.user / origin.platform fields
-fn apply_scope_filter(patterns: Vec<Pattern>, scope: &ContextScope, source: &str) -> Vec<Pattern> {
-    patterns
-        .into_iter()
-        .filter(|p| {
-            // --- Hard filter: project ---
-            if let Some(ref project) = scope.project
-                && !p.applies.projects.is_empty()
-                && !p
-                    .applies
-                    .projects
-                    .iter()
-                    .any(|proj| proj == project || proj == "*")
-            {
-                return false;
-            }
-
-            // --- Hard filter: tool / source ---
-            if !p.applies.tools.is_empty()
-                && !p.applies.tools.iter().any(|t| t == source || t == "*")
-            {
-                return false;
-            }
-
-            // --- Soft filter: user (origin-based) ---
-            // Only exclude when the pattern explicitly belongs to a *different* user.
-            if let Some(ref scope_user) = scope.user
-                && let Some(ref origin) = p.origin
-                && let Some(ref origin_user) = origin.user
-                && origin_user != scope_user
-            {
-                return false;
-            }
-
-            // --- Soft filter: platform (origin-based) ---
-            if let Some(ref scope_platform) = scope.platform
-                && let Some(ref origin) = p.origin
-                && let Some(ref origin_platform) = origin.platform
-                && origin_platform != scope_platform
-            {
-                return false;
-            }
-
-            true
-        })
-        .collect()
 }
 
 /// Ingest new knowledge as a pattern.
@@ -474,34 +406,75 @@ mod tests {
         (tmp, store)
     }
 
+    /// One skill on disk, loaded through the production loader.
+    fn skills_home_with(name: &str, description: &str, abstract_: &str) -> TempDir {
+        let home = TempDir::new().unwrap();
+        let dir = home.path().join("skills").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("skill.yaml"),
+            format!(
+                "name: {name}\nversion: 1.0.0\npublisher: human:test\n\
+                 description: {description}\ncategory: context\npriority: normal\n\
+                 tags: [swift, testing]\ncontent:\n  abstract: {abstract_}\n  context: x\n"
+            ),
+        )
+        .unwrap();
+        home
+    }
+
     #[test]
     fn test_retrieve_empty_query() {
-        let (_tmp, store) = make_store_with_patterns();
+        let home = skills_home_with("swift-testing", "Use @Test macro", "Use @Test macro");
         let req = ContextRequest {
             query: "".into(),
             token_budget: 2000,
             scope: ContextScope::default(),
             source: "test".into(),
         };
-        let resp = retrieve(&req, &store, None).unwrap();
+        let resp = retrieve(&req, &home.path().join("skills"), home.path()).unwrap();
         assert!(resp.patterns.is_empty());
         assert!(resp.formatted.is_empty());
     }
 
     #[test]
-    fn test_retrieve_returns_patterns() {
-        let (_tmp, store) = make_store_with_patterns();
+    fn test_retrieve_returns_skills() {
+        let home = skills_home_with(
+            "swift-testing",
+            "Use @Test macro for Swift testing",
+            "Use @Test macro instead of XCTest",
+        );
         let req = ContextRequest {
             query: "swift testing @Test macro".into(),
             token_budget: 2000,
             scope: ContextScope::default(),
             source: "test".into(),
         };
-        let resp = retrieve_with_config(&req, &store, None, &mur_common::config::Config::default())
-            .unwrap();
-        assert!(!resp.patterns.is_empty());
-        assert!(!resp.formatted.is_empty());
-        assert!(!resp.injection_ids.is_empty());
+        let resp = retrieve_with_config(
+            &req,
+            &home.path().join("skills"),
+            home.path(),
+            &mur_common::config::Config::default(),
+        )
+        .unwrap();
+        assert_eq!(resp.patterns.len(), 1);
+        assert_eq!(resp.patterns[0].name, "swift-testing");
+        assert_eq!(resp.patterns[0].kind, "context");
+        assert!(resp.formatted.contains("Use @Test macro for Swift testing"));
+        assert_eq!(resp.injection_ids, vec!["swift-testing".to_string()]);
+    }
+
+    #[test]
+    fn test_retrieve_with_no_skills_dir_is_empty_not_an_error() {
+        let home = TempDir::new().unwrap();
+        let req = ContextRequest {
+            query: "swift testing".into(),
+            token_budget: 2000,
+            scope: ContextScope::default(),
+            source: "test".into(),
+        };
+        let resp = retrieve(&req, &home.path().join("skills"), home.path()).unwrap();
+        assert!(resp.patterns.is_empty());
     }
 
     #[test]
@@ -570,164 +543,5 @@ mod tests {
             source: "test".into(),
         };
         assert!(submit_feedback(&req, &store).is_err());
-    }
-
-    // ─── Scope filtering tests ───────────────────────────────────
-
-    #[test]
-    fn test_scope_filter_project_excludes_other_projects() {
-        let all = make_store_with_patterns().1.list_all().unwrap();
-        // swift-testing has no project constraint → should pass through
-        let scope = ContextScope {
-            project: Some("other-project".into()),
-            ..Default::default()
-        };
-        let filtered = apply_scope_filter(all, &scope, "test");
-        // universal patterns (no projects constraint) must survive
-        assert!(
-            filtered.iter().any(|p| p.name == "swift-testing"),
-            "Universal patterns must survive project filter"
-        );
-    }
-
-    #[test]
-    fn test_scope_filter_tool_excludes_wrong_tool() {
-        use mur_common::knowledge::KnowledgeBase;
-        use mur_common::pattern::{Applies, Content, Pattern};
-        let tmp = tempfile::TempDir::new().unwrap();
-        let store = YamlStore::new(tmp.path().to_path_buf()).unwrap();
-
-        let mut p = Pattern {
-            base: KnowledgeBase {
-                name: "claude-only".into(),
-                description: "Claude-only pattern".into(),
-                content: Content::Plain("Only for Claude".into()),
-                applies: Applies {
-                    tools: vec!["claude-code".into()],
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            kind: None,
-            origin: None,
-            attachments: vec![],
-        };
-        store.save(&p).unwrap();
-
-        p.base.name = "universal-pattern".into();
-        p.base.applies.tools = vec![];
-        store.save(&p).unwrap();
-
-        let all = store.list_all().unwrap();
-        let scope = ContextScope::default();
-        let filtered = apply_scope_filter(all, &scope, "gemini-cli");
-
-        assert!(
-            !filtered.iter().any(|p| p.name == "claude-only"),
-            "Tool-constrained pattern must be excluded for wrong tool"
-        );
-        assert!(
-            filtered.iter().any(|p| p.name == "universal-pattern"),
-            "Universal pattern must pass through"
-        );
-    }
-
-    #[test]
-    fn test_scope_filter_user_excludes_other_user() {
-        use mur_common::knowledge::KnowledgeBase;
-        use mur_common::pattern::{Content, Origin, OriginTrigger, Pattern};
-        let tmp = tempfile::TempDir::new().unwrap();
-        let store = YamlStore::new(tmp.path().to_path_buf()).unwrap();
-
-        let alice_pref = Pattern {
-            base: KnowledgeBase {
-                name: "alice-pref".into(),
-                description: "Alice preference".into(),
-                content: Content::Plain("Alice likes dark mode".into()),
-                ..Default::default()
-            },
-            kind: Some(PatternKind::Preference),
-            #[allow(deprecated)] // transitional: user/platform fields being phased out
-            origin: Some(Origin {
-                source: "commander".into(),
-                trigger: OriginTrigger::UserExplicit,
-                actor: None,
-                user: Some("alice".into()),
-                platform: None,
-                confidence: 1.0,
-            }),
-            attachments: vec![],
-        };
-        store.save(&alice_pref).unwrap();
-
-        let universal_pref = Pattern {
-            base: KnowledgeBase {
-                name: "universal-pref".into(),
-                description: "Universal pref".into(),
-                content: Content::Plain("Always be concise".into()),
-                ..Default::default()
-            },
-            kind: Some(PatternKind::Preference),
-            origin: None, // no user binding
-            attachments: vec![],
-        };
-        store.save(&universal_pref).unwrap();
-
-        let all = store.list_all().unwrap();
-        let scope = ContextScope {
-            user: Some("bob".into()),
-            ..Default::default()
-        };
-        let filtered = apply_scope_filter(all, &scope, "test");
-
-        assert!(
-            !filtered.iter().any(|p| p.name == "alice-pref"),
-            "Alice's preference must be excluded for Bob"
-        );
-        assert!(
-            filtered.iter().any(|p| p.name == "universal-pref"),
-            "Universal preference (no origin user) must survive"
-        );
-    }
-
-    #[test]
-    fn test_scope_filter_platform_excludes_other_platform() {
-        use mur_common::knowledge::KnowledgeBase;
-        use mur_common::pattern::{Content, Origin, OriginTrigger, Pattern};
-        let tmp = tempfile::TempDir::new().unwrap();
-        let store = YamlStore::new(tmp.path().to_path_buf()).unwrap();
-
-        let mac_pref = Pattern {
-            base: KnowledgeBase {
-                name: "mac-pref".into(),
-                description: "macOS preference".into(),
-                content: Content::Plain("Use macOS Sonoma".into()),
-                ..Default::default()
-            },
-            kind: Some(PatternKind::Preference),
-            #[allow(deprecated)] // transitional: user/platform fields being phased out
-            origin: Some(Origin {
-                source: "cli".into(),
-                trigger: OriginTrigger::UserExplicit,
-                actor: None,
-                user: None,
-                platform: Some("macos".into()),
-                confidence: 0.9,
-            }),
-            attachments: vec![],
-        };
-        store.save(&mac_pref).unwrap();
-
-        let all = store.list_all().unwrap();
-        let scope = ContextScope {
-            platform: Some("linux".into()),
-            ..Default::default()
-        };
-        let filtered = apply_scope_filter(all, &scope, "test");
-
-        assert!(
-            !filtered.iter().any(|p| p.name == "mac-pref"),
-            "macOS preference must be excluded on Linux"
-        );
     }
 }

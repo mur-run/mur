@@ -1,28 +1,13 @@
-//! Multi-signal scoring pipeline for pattern retrieval.
+//! Multi-signal scoring pipeline for skill retrieval.
 
 use std::borrow::Cow;
 
 use chrono::Utc;
 use mur_common::config::RetrievalConfig;
-use mur_common::pattern::{Origin, Pattern, PatternKind, Tier};
-
-/// Caller-supplied scope context used to make preference/procedure boosts
-/// accurate rather than using heuristics like `origin.is_some()`.
-#[derive(Debug, Clone, Default)]
-pub struct ScoringHints {
-    /// The active user identifier (matches `Origin::user`).
-    pub user: Option<String>,
-    /// The active platform/tool (matches `Origin::platform`).
-    pub platform: Option<String>,
-    /// The task description — used to detect task-type queries for Procedure boost.
-    pub task: Option<String>,
-}
+use mur_common::pattern::Tier;
 
 /// A retrievable knowledge item. The hybrid scorer is generic over this trait so
-/// `Pattern`, `Skill`, and (later) `Note` share one scoring pipeline.
-///
-/// Default `adjust_score` is the identity; `Pattern` overrides it to apply
-/// scope/language/kind boosts so existing Pattern behavior is preserved exactly.
+/// skills and notes (both `LoadedSkill`) share one scoring pipeline.
 pub trait Retrievable {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
@@ -40,97 +25,6 @@ pub trait Retrievable {
     /// note slots in the budget stage; non-note implementors keep the default.
     fn is_note(&self) -> bool {
         false
-    }
-
-    /// Hook for item-specific score adjustment. Default: identity.
-    /// Pattern overrides to apply `scope_mult`, `kind_score_boost`, `lang_mult`.
-    fn adjust_score(
-        &self,
-        weighted_sum: f64,
-        _query_words: &[&str],
-        _scope: Option<&ScoringHints>,
-        _project_language: Option<&str>,
-    ) -> f64 {
-        weighted_sum
-    }
-}
-
-impl Retrievable for Pattern {
-    fn name(&self) -> &str {
-        &self.name
-    }
-    fn description(&self) -> &str {
-        &self.description
-    }
-    fn text(&self) -> Cow<'_, str> {
-        self.content.as_text()
-    }
-    fn tag_terms(&self) -> Vec<&str> {
-        self.tags
-            .topics
-            .iter()
-            .chain(self.tags.languages.iter())
-            .map(String::as_str)
-            .collect()
-    }
-    fn importance(&self) -> f64 {
-        self.importance
-    }
-    fn effectiveness(&self) -> f64 {
-        self.evidence.effectiveness()
-    }
-    fn tier(&self) -> Tier {
-        self.tier
-    }
-    fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
-        self.created_at
-    }
-    fn last_activity(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.lifecycle
-            .last_injected
-            .or(self.evidence.last_validated)
-    }
-    fn decay_half_life_days(&self) -> f64 {
-        self.lifecycle
-            .decay_half_life
-            .unwrap_or_else(|| self.tier.decay_half_life_days()) as f64
-    }
-    fn is_active(&self) -> bool {
-        !self.lifecycle.muted
-            && self.lifecycle.status == mur_common::pattern::LifecycleStatus::Active
-    }
-    fn adjust_score(
-        &self,
-        weighted_sum: f64,
-        query_words: &[&str],
-        scope: Option<&ScoringHints>,
-        project_language: Option<&str>,
-    ) -> f64 {
-        let scope_mult = if self.applies.projects.is_empty()
-            && self.applies.languages.is_empty()
-            && self.applies.tools.is_empty()
-        {
-            0.7
-        } else {
-            1.0
-        };
-        let lang_mult = if let Some(proj_lang) = project_language {
-            if !self.applies.languages.is_empty() {
-                let proj_lang_lower = proj_lang.to_lowercase();
-                let matches = self
-                    .applies
-                    .languages
-                    .iter()
-                    .any(|l| l.to_lowercase() == proj_lang_lower);
-                if matches { 1.2 } else { 0.05 }
-            } else {
-                1.0
-            }
-        } else {
-            1.0
-        };
-        let kind_boost = kind_score_boost(self, query_words, scope);
-        (weighted_sum * scope_mult + kind_boost) * lang_mult
     }
 }
 
@@ -166,21 +60,13 @@ const RESERVED_NOTE_SLOTS: usize = 1;
 const MAX_TOKENS: usize = 2000;
 
 /// Public generic entry point: score and rank any `Vec<T>` where
-/// `T: Retrievable`. Keyword-only relevance, no scope, no project_language,
-/// default scoring config. Mirrors `score_and_rank` for the generic case.
-///
-/// Hybrid / scope-aware generic entries are added in later plans as needed.
+/// `T: Retrievable`. Keyword-only relevance, default scoring config.
 pub fn score_and_rank_generic<T: Retrievable>(query: &str, candidates: Vec<T>) -> Vec<Scored<T>> {
     let query_lower = query.to_lowercase();
     let query_words: Vec<&str> = query_lower.split_whitespace().collect();
-    score_and_rank_inner(
-        &query_words,
-        candidates,
-        None,
-        None,
-        None,
-        |words, item: &T| keyword_relevance(words, item),
-    )
+    score_and_rank_inner(&query_words, candidates, None, |words, item: &T| {
+        keyword_relevance(words, item)
+    })
 }
 
 /// Generic scoring with config-driven retrieval parameters. Same pipeline as
@@ -192,23 +78,16 @@ pub fn score_and_rank_generic_with_config<T: Retrievable>(
 ) -> Vec<Scored<T>> {
     let query_lower = query.to_lowercase();
     let query_words: Vec<&str> = query_lower.split_whitespace().collect();
-    score_and_rank_inner(
-        &query_words,
-        candidates,
-        None,
-        None,
-        Some(config),
-        |words, item: &T| keyword_relevance(words, item),
-    )
+    score_and_rank_inner(&query_words, candidates, Some(config), |words, item: &T| {
+        keyword_relevance(words, item)
+    })
 }
 
 /// Shared scoring logic: filter, score with a relevance function, sort, and budget-limit.
-/// Generic over T: Retrievable so Pattern, Skill, and Note share one pipeline.
+/// Generic over T: Retrievable so skills and notes share one pipeline.
 fn score_and_rank_inner<T, F>(
     query_words: &[&str],
     candidates: Vec<T>,
-    scope: Option<&ScoringHints>,
-    project_language: Option<&str>,
     config: Option<&RetrievalConfig>,
     relevance_fn: F,
 ) -> Vec<Scored<T>>
@@ -233,14 +112,12 @@ where
             let content_len = item.text().len();
             let length_norm = length_norm_score_from_len(content_len);
 
-            let weighted_sum = relevance * W_RELEVANCE
+            let score = relevance * W_RELEVANCE
                 + recency * W_RECENCY
                 + effectiveness * W_EFFECTIVENESS
                 + importance * W_IMPORTANCE
                 + time_decay * W_TIME_DECAY
                 + length_norm * W_LENGTH_NORM;
-
-            let score = item.adjust_score(weighted_sum, query_words, scope, project_language);
 
             Scored {
                 item,
@@ -423,58 +300,7 @@ fn tier_priority(tier: &Tier) -> u8 {
     }
 }
 
-/// Returns true if `scope` matches the pattern's origin user/platform.
-/// A match requires that the scope field is present AND the pattern's origin
-/// contains the same value.  Missing scope = no scope match (no boost).
-#[allow(deprecated)] // transitional: reads legacy origin.user / origin.platform fields
-fn scope_matches_origin(scope: Option<&ScoringHints>, origin: Option<&Origin>) -> bool {
-    let Some(sc) = scope else { return false };
-    let Some(orig) = origin else { return false };
-
-    let user_match = sc
-        .user
-        .as_deref()
-        .map(|u| orig.user.as_deref() == Some(u))
-        .unwrap_or(false);
-    let platform_match = sc
-        .platform
-        .as_deref()
-        .map(|p| orig.platform.as_deref() == Some(p))
-        .unwrap_or(false);
-
-    user_match || platform_match
-}
-
-/// Returns true when the query or the task description looks like a how-to request.
-fn is_task_query(query_words: &[&str], scope: Option<&ScoringHints>) -> bool {
-    const TASK_INDICATORS: &[&str] = &[
-        "how",
-        "steps",
-        "process",
-        "deploy",
-        "setup",
-        "install",
-        "build",
-        "run",
-        "create",
-        "configure",
-        "guide",
-        "tutorial",
-    ];
-    if query_words.iter().any(|w| TASK_INDICATORS.contains(w)) {
-        return true;
-    }
-    // Also check the explicit task field in scope
-    if let Some(sc) = scope
-        && let Some(task) = &sc.task
-    {
-        let task_lower = task.to_lowercase();
-        return TASK_INDICATORS.iter().any(|kw| task_lower.contains(kw));
-    }
-    false
-}
-
-/// Score external-source hits. Simpler formula than patterns (no lifecycle,
+/// Score external-source hits. Simpler formula than skills (no lifecycle,
 /// no usage-based decay) — see design spec §8.2.
 ///
 /// Factors:
@@ -507,35 +333,6 @@ pub fn score_sources(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     scored
-}
-
-/// Kind-aware scoring boost.
-///
-/// - **Preference / Behavioral**: +0.1 when scope user/platform matches the
-///   pattern's origin — i.e., this preference actually belongs to the caller.
-///   No boost (0.0) when the scope doesn't match or isn't provided.
-/// - **Procedure**: +0.1 when the query or `scope.task` indicates a how-to
-///   request.
-/// - **Technical / Fact / None**: 0.0 (unchanged).
-fn kind_score_boost(pattern: &Pattern, query_words: &[&str], scope: Option<&ScoringHints>) -> f64 {
-    match pattern.effective_kind() {
-        PatternKind::Preference | PatternKind::Behavioral => {
-            // Only boost when the scope actually matches this pattern's origin.
-            if scope_matches_origin(scope, pattern.origin.as_ref()) {
-                0.1
-            } else {
-                0.0
-            }
-        }
-        PatternKind::Procedure => {
-            if is_task_query(query_words, scope) {
-                0.1
-            } else {
-                0.0
-            }
-        }
-        PatternKind::Technical | PatternKind::Fact => 0.0,
-    }
 }
 
 #[cfg(test)]

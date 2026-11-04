@@ -5,7 +5,7 @@
 //! with atomic writes (temp file + rename) for safety.
 
 use anyhow::{Context, Result};
-use mur_common::pattern::{Attachment, AttachmentFormat, Pattern};
+use mur_common::pattern::{AttachmentFormat, Pattern};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -211,23 +211,6 @@ impl YamlStore {
         // Relative path: <pattern-name>/<filename>
         let relative = format!("{}/{}", pattern_name, file_name.to_string_lossy());
         Ok((relative, format))
-    }
-
-    /// Resolve the content of a text-based attachment file.
-    /// Returns None for binary formats (png/svg) or if the file doesn't exist.
-    pub fn resolve_attachment_content(&self, attachment: &Attachment) -> Option<String> {
-        if !attachment.format.is_text_based() {
-            return None;
-        }
-
-        let full_path = self.patterns_dir.join(&attachment.path);
-        match fs::read_to_string(&full_path) {
-            Ok(content) => Some(content),
-            Err(e) => {
-                tracing::warn!("Could not read attachment {}: {}", full_path.display(), e);
-                None
-            }
-        }
     }
 }
 
@@ -591,83 +574,6 @@ updated_at: "2026-02-20T00:00:00Z"
         assert!(pattern.attachments.is_empty());
 
         Ok(())
-    }
-
-    #[test]
-    fn test_resolve_attachment_content_mermaid() -> Result<()> {
-        let tmp = TempDir::new()?;
-        let store = YamlStore::new(tmp.path().to_path_buf())?;
-
-        // Create assets directory and a mermaid file
-        let assets_dir = store.ensure_assets_dir("test-pattern")?;
-        let diagram_content = "graph TD\n    A-->B\n    B-->C";
-        std::fs::write(assets_dir.join("arch.mermaid"), diagram_content)?;
-
-        let attachment = Attachment {
-            att_type: AttachmentType::Diagram,
-            format: AttachmentFormat::Mermaid,
-            path: "test-pattern/arch.mermaid".to_string(),
-            description: "Architecture".to_string(),
-        };
-
-        let resolved = store.resolve_attachment_content(&attachment);
-        assert_eq!(resolved, Some(diagram_content.to_string()));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_resolve_attachment_content_plantuml() -> Result<()> {
-        let tmp = TempDir::new()?;
-        let store = YamlStore::new(tmp.path().to_path_buf())?;
-
-        let assets_dir = store.ensure_assets_dir("puml-test")?;
-        let puml = "@startuml\nAlice -> Bob: hello\n@enduml";
-        std::fs::write(assets_dir.join("seq.puml"), puml)?;
-
-        let attachment = Attachment {
-            att_type: AttachmentType::Diagram,
-            format: AttachmentFormat::PlantUml,
-            path: "puml-test/seq.puml".to_string(),
-            description: "Sequence diagram".to_string(),
-        };
-
-        let resolved = store.resolve_attachment_content(&attachment);
-        assert_eq!(resolved, Some(puml.to_string()));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_resolve_attachment_binary_returns_none() {
-        let tmp = TempDir::new().unwrap();
-        let store = YamlStore::new(tmp.path().to_path_buf()).unwrap();
-
-        let attachment = Attachment {
-            att_type: AttachmentType::Image,
-            format: AttachmentFormat::Png,
-            path: "test/img.png".to_string(),
-            description: "screenshot".to_string(),
-        };
-
-        // Binary format should always return None
-        assert!(store.resolve_attachment_content(&attachment).is_none());
-    }
-
-    #[test]
-    fn test_resolve_attachment_missing_file_returns_none() {
-        let tmp = TempDir::new().unwrap();
-        let store = YamlStore::new(tmp.path().to_path_buf()).unwrap();
-
-        let attachment = Attachment {
-            att_type: AttachmentType::Diagram,
-            format: AttachmentFormat::Mermaid,
-            path: "nonexistent/missing.mermaid".to_string(),
-            description: "missing diagram".to_string(),
-        };
-
-        // Non-existent file should gracefully return None
-        assert!(store.resolve_attachment_content(&attachment).is_none());
     }
 
     #[test]

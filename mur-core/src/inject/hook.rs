@@ -1,4 +1,4 @@
-//! Hook/inject: format patterns and workflows for injection into AI tool prompts.
+//! Hook/inject: format skills and workflows for injection into AI tool prompts.
 //!
 //! ## Post-session feedback integration
 //!
@@ -19,12 +19,10 @@
 // hooks API supports session-end events. For now, `mur feedback auto`
 // is run manually or via shell scripts.
 
-use mur_common::pattern::{Attachment, Content, Pattern, PatternKind};
 use mur_common::workflow::Workflow;
 
 use crate::capture::feedback::{InjectedPatternRecord, InjectionRecord, write_injection_record};
 use crate::evolve::cooccurrence::CooccurrenceMatrix;
-use crate::store::yaml::YamlStore;
 
 // ── InjectedItem: decoupled injection representation (Pattern→Skill migration) ─
 
@@ -108,57 +106,6 @@ pub fn detect_trigger(message: &str) -> HookTrigger {
     HookTrigger::SessionStart
 }
 
-/// Format scored patterns with optional YamlStore for resolving diagram attachments.
-/// Groups patterns by kind when mixed kinds are present.
-pub fn format_for_injection_with_store(
-    patterns: &[Pattern],
-    max_tokens: usize,
-    store: Option<&YamlStore>,
-) -> String {
-    if patterns.is_empty() {
-        return String::new();
-    }
-
-    // Use flat (backward-compatible) format when every pattern has no explicit
-    // kind set OR is explicitly Technical.  Fact, Procedure, Preference, and
-    // Behavioral patterns trigger grouped output.
-    let all_technical_or_unset = patterns
-        .iter()
-        .all(|p| p.kind.is_none() || p.kind == Some(PatternKind::Technical));
-
-    if all_technical_or_unset {
-        return format_flat_injection(patterns, max_tokens, store);
-    }
-
-    // Group patterns by kind category
-    format_grouped_injection(patterns, max_tokens, store)
-}
-
-/// Original flat format — used when all patterns are Technical/None.
-fn format_flat_injection(
-    patterns: &[Pattern],
-    max_tokens: usize,
-    store: Option<&YamlStore>,
-) -> String {
-    let mut output = String::from("## Relevant patterns from your learning history\n\n");
-    let mut token_count = output.len() / 4;
-
-    for (i, pattern) in patterns.iter().enumerate() {
-        let entry = format_pattern_entry(pattern, i + 1, store);
-        let entry_tokens = entry.len() / 4;
-
-        if token_count + entry_tokens > max_tokens && i > 0 {
-            break;
-        }
-
-        output.push_str(&entry);
-        output.push('\n');
-        token_count += entry_tokens;
-    }
-
-    output.trim_end().to_string()
-}
-
 /// Kind category for grouping injection output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KindGroup {
@@ -168,149 +115,12 @@ pub enum KindGroup {
 }
 
 impl KindGroup {
-    fn from_kind(kind: PatternKind) -> Self {
-        match kind {
-            PatternKind::Preference | PatternKind::Behavioral => KindGroup::Preferences,
-            PatternKind::Procedure => KindGroup::Procedures,
-            PatternKind::Technical | PatternKind::Fact => KindGroup::Knowledge,
-        }
-    }
-
     fn header(&self) -> &'static str {
         match self {
             KindGroup::Preferences => "## User Preferences",
             KindGroup::Procedures => "## Procedures",
             KindGroup::Knowledge => "## Knowledge",
         }
-    }
-}
-
-/// Grouped format — patterns grouped by kind with appropriate formatting.
-fn format_grouped_injection(
-    patterns: &[Pattern],
-    max_tokens: usize,
-    store: Option<&YamlStore>,
-) -> String {
-    let mut output = String::from("## Relevant knowledge from your learning history\n\n");
-    let mut token_count = output.len() / 4;
-
-    // Group patterns maintaining relative order within groups
-    let group_order = [
-        KindGroup::Preferences,
-        KindGroup::Procedures,
-        KindGroup::Knowledge,
-    ];
-    let mut index = 1;
-
-    'outer: for group in &group_order {
-        let group_patterns: Vec<&Pattern> = patterns
-            .iter()
-            .filter(|p| KindGroup::from_kind(p.effective_kind()) == *group)
-            .collect();
-
-        if group_patterns.is_empty() {
-            continue;
-        }
-
-        // Buffer the entire group section so we never emit an orphaned header.
-        // Only flush to output once we know at least one pattern fits.
-        let group_header = format!("{}\n\n", group.header());
-        let mut group_buf = group_header;
-        let mut buf_tokens = group_buf.len() / 4;
-        let mut any_added = false;
-
-        for pattern in group_patterns {
-            let entry = match group {
-                KindGroup::Preferences => format_preference_entry(pattern),
-                KindGroup::Procedures => format_procedure_entry(pattern),
-                KindGroup::Knowledge => format_pattern_entry(pattern, index, store),
-            };
-            let entry_tokens = entry.len() / 4;
-
-            // Always include the very first pattern ever (index == 1 and nothing
-            // added yet) so we guarantee at least one result even on tiny budgets.
-            let is_global_first = index == 1 && !any_added;
-            if !is_global_first && token_count + buf_tokens + entry_tokens > max_tokens {
-                // Budget exhausted — flush whatever was buffered and stop all groups.
-                if any_added {
-                    output.push_str(&group_buf);
-                }
-                break 'outer;
-            }
-
-            group_buf.push_str(&entry);
-            group_buf.push('\n');
-            buf_tokens += entry_tokens;
-            index += 1;
-            any_added = true;
-        }
-
-        if any_added {
-            output.push_str(&group_buf);
-            token_count += buf_tokens;
-        }
-        // If any_added is false here it means group_patterns was non-empty but
-        // every single pattern was skipped — only possible when index > 1 and
-        // the budget was already exhausted before this group. Stop processing.
-        else {
-            break 'outer;
-        }
-    }
-
-    output.trim_end().to_string()
-}
-
-/// Format a preference pattern as a bullet point.
-fn format_preference_entry(pattern: &Pattern) -> String {
-    let content = format_content(&pattern.content);
-    format!("- **{}**: {}\n", pattern.description, content.trim())
-}
-
-/// Format a procedure pattern as numbered steps.
-fn format_procedure_entry(pattern: &Pattern) -> String {
-    let content = format_content(&pattern.content);
-    format!("### {}\n{}\n", pattern.description, content.trim())
-}
-
-fn format_pattern_entry(pattern: &Pattern, index: usize, store: Option<&YamlStore>) -> String {
-    let content = format_content(&pattern.content);
-    let mut entry = format!(
-        "### {}. {}\n{}\n",
-        index,
-        pattern.description,
-        content.trim()
-    );
-
-    // Inline diagram attachments
-    for attachment in &pattern.attachments {
-        entry.push_str(&format_attachment_for_injection(attachment, store));
-    }
-
-    entry
-}
-
-/// Format an attachment for injection into a prompt.
-/// Text-based diagrams are inlined; images get description only.
-fn format_attachment_for_injection(attachment: &Attachment, store: Option<&YamlStore>) -> String {
-    if attachment.format.is_text_based() {
-        // Try to resolve and inline the diagram content
-        let content = store.and_then(|s| s.resolve_attachment_content(attachment));
-        if let Some(diagram) = content {
-            return format!(
-                "\n## Diagram: {}\n```{}\n{}\n```\n",
-                attachment.description,
-                attachment.format.fence_lang(),
-                diagram.trim()
-            );
-        }
-        // Couldn't resolve — fall back to description only
-        format!(
-            "\n📎 Diagram: {} ({})\n",
-            attachment.description, attachment.path
-        )
-    } else {
-        // Binary attachment — description only
-        format!("\n📎 {}: {}\n", attachment.description, attachment.path)
     }
 }
 
@@ -587,23 +397,6 @@ pub fn record_cooccurrence_for_items(items: &[InjectedItem]) {
     matrix.record_cooccurrence(&names);
     if let Err(e) = matrix.save(&path) {
         eprintln!("# Warning: failed to save cooccurrence matrix: {}", e);
-    }
-}
-
-fn format_content(content: &Content) -> String {
-    match content {
-        Content::DualLayer {
-            technical,
-            principle,
-        } => {
-            let mut s = technical.clone();
-            if let Some(p) = principle {
-                s.push_str("\n💡 ");
-                s.push_str(p);
-            }
-            s
-        }
-        Content::Plain(s) => s.clone(),
     }
 }
 
