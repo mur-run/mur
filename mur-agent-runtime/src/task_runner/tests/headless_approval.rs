@@ -303,3 +303,193 @@ fn the_delegate_refusal_tells_the_model_to_finish_not_retry() {
     );
     assert!(!entry.content.contains("tool-allow"), "{}", entry.content);
 }
+
+/// #2071: a turn that ends in a denial is still remembered — the user's
+/// message, what ran before the gate closed, and a marker saying why it
+/// stopped — so the next turn ("continue", "pop hitl again") threads onto
+/// it instead of onto the turn before.
+#[tokio::test]
+async fn a_denied_turn_is_remembered_with_its_ledger() {
+    use crate::llm::RichMessage;
+    use crate::llm::stub::SequenceLlm;
+    let responses = vec![
+        tool_call_response("c-1", "echo hi"),
+        end_turn_response("OK"),
+    ];
+    let calls = Arc::new(AtomicU64::new(0));
+    let (ntx, _nrx) = tokio::sync::mpsc::channel(16);
+    let runner = TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+        .with_tools(vec![Arc::new(CountingBashTool {
+            calls: calls.clone(),
+            seen_task: Default::default(),
+        })])
+        .with_tools_policy(vec![])
+        .with_pending_approvals(empty_pending_approvals())
+        .with_sandbox_enforcing(true)
+        .with_notifier(ntx.clone())
+        .with_decision_store(Arc::new(Fixed(Some(Settled::Deny))))
+        .with_hitl_timeout_secs(30)
+        .with_iteration_ceiling(3);
+    runner
+        .register_client_notifier("t-denied", ntx, false)
+        .await;
+    let mut spec = loop_spec("rebase it");
+    spec.task_id = Some("t-denied".into());
+    let outcome = runner.run_sync(spec).await;
+    let e = error_of(&outcome);
+    assert_eq!(e.code, "hitl_denied", "{}", e.message);
+
+    let store = runner.conversations.lock().unwrap();
+    let h = store
+        .map
+        .get("t-denied")
+        .expect("a failed turn is remembered");
+    assert_eq!(h.len(), 3, "user, marker, ledger: {h:?}");
+    assert!(
+        matches!(&h[0], RichMessage::Text { role, content } if role == "user" && content == "rebase it")
+    );
+    match &h[1] {
+        RichMessage::Text { role, content } => {
+            assert_eq!(role, "agent");
+            assert!(content.starts_with("turn ended: "), "{content}");
+            assert!(content.contains("tool call denied"), "{content}");
+        }
+        other => panic!("expected the end marker, got {other:?}"),
+    }
+    match &h[2] {
+        RichMessage::TurnLedger { memory, .. } => {
+            assert!(!memory.narrative_only, "the denied call is on the record");
+            assert_eq!(memory.tools[0].tool, "bash");
+            assert_eq!(
+                memory.tools[0].status,
+                crate::turn_ledger::ToolMemoryStatus::Denied
+            );
+            assert_eq!(memory.tools[0].target, "echo hi");
+        }
+        other => panic!("expected TurnLedger, got {other:?}"),
+    }
+    drop(store);
+    // The slot is per-turn: nothing is left behind once the turn settled.
+    assert!(
+        runner.partial_ledgers.lock().unwrap().is_empty(),
+        "partial ledger slot must be taken when the turn ends"
+    );
+}
+
+/// A `bash` that answers its first call at once and parks every later one
+/// until dropped — the shape of a batch the user cancels mid-way.
+struct FirstThenHang {
+    calls: Arc<AtomicU64>,
+}
+
+#[async_trait::async_trait]
+impl crate::tools::ToolExecutor for FirstThenHang {
+    fn name(&self) -> &str {
+        "bash"
+    }
+    fn def(&self) -> crate::llm::ToolDef {
+        crate::llm::ToolDef {
+            name: "bash".into(),
+            description: "test bash tool".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }
+    }
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+    ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+        if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+            return Ok("ran".to_string().into());
+        }
+        std::future::pending().await
+    }
+}
+
+/// Review P2 on #2275: one response, two calls; the first completes, the
+/// user cancels while the second is running. The completed call must be in
+/// the remembered ledger, not just the batches of earlier iterations.
+#[tokio::test]
+async fn a_cancelled_batch_remembers_the_calls_that_completed() {
+    use crate::llm::RichMessage;
+    use crate::llm::stub::SequenceLlm;
+    let mut two = tool_call_response("c-1", "echo first");
+    two.tool_calls.push(
+        tool_call_response("c-2", "sleep forever")
+            .tool_calls
+            .remove(0),
+    );
+    let responses = vec![two, end_turn_response("OK")];
+    let calls = Arc::new(AtomicU64::new(0));
+    let (ntx, _nrx) = tokio::sync::mpsc::channel(16);
+    let runner = TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+        .with_tools(vec![Arc::new(FirstThenHang {
+            calls: calls.clone(),
+        })])
+        .with_tools_policy(vec![])
+        .with_pending_approvals(empty_pending_approvals())
+        .with_sandbox_enforcing(true)
+        .with_notifier(ntx.clone())
+        .with_decision_store(Arc::new(Fixed(Some(Settled::Allow))))
+        .with_hitl_timeout_secs(30)
+        .with_iteration_ceiling(3);
+    runner
+        .register_client_notifier("t-cancel-batch", ntx, false)
+        .await;
+    let mut spec = loop_spec("do both");
+    spec.task_id = Some("t-cancel-batch".into());
+    let runner = Arc::new(runner);
+    let r2 = runner.clone();
+    let handle = tokio::spawn(async move { r2.run_sync(spec).await });
+
+    // Wait until the second call is parked, then cancel.
+    for _ in 0..200 {
+        if calls.load(Ordering::Relaxed) >= 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        2,
+        "second call never started"
+    );
+    runner.cancel("t-cancel-batch").await.expect("cancel");
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+        .await
+        .expect("a cancelled turn must settle promptly")
+        .expect("join");
+    assert!(matches!(outcome, TaskOutcome::Cancelled(_)), "{outcome:?}");
+
+    let store = runner.conversations.lock().unwrap();
+    let h = store
+        .map
+        .get("t-cancel-batch")
+        .expect("a cancelled turn is remembered");
+    assert_eq!(h.len(), 3, "user, marker, ledger: {h:?}");
+    match &h[2] {
+        RichMessage::TurnLedger { memory, .. } => {
+            assert!(
+                !memory.narrative_only,
+                "the completed call is on the record"
+            );
+            assert_eq!(
+                memory.tools.len(),
+                1,
+                "only the completed call: {:?}",
+                memory.tools
+            );
+            assert_eq!(memory.tools[0].tool, "bash");
+            assert_eq!(memory.tools[0].target, "echo first");
+            assert_eq!(
+                memory.tools[0].status,
+                crate::turn_ledger::ToolMemoryStatus::Ok
+            );
+        }
+        other => panic!("expected TurnLedger, got {other:?}"),
+    }
+    drop(store);
+    assert!(
+        runner.partial_ledgers.lock().unwrap().is_empty(),
+        "partial ledger slot must be taken when the turn ends"
+    );
+}

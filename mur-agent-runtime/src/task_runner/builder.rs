@@ -103,6 +103,7 @@ impl TaskRunner {
             turn_tracks: Mutex::new(HashMap::new()),
             refused_cwd: Mutex::new(HashMap::new()),
             mcp_notices: Mutex::new(HashMap::new()),
+            partial_ledgers: Mutex::new(HashMap::new()),
             project_instructions: None,
             draining: Arc::new(AtomicBool::new(false)),
         }

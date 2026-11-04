@@ -261,8 +261,17 @@ impl TaskRunner {
             None => {
                 // Usage before the terminal state: `tasks/get` reads them
                 // apart, and an ended turn must never look usage-less (#2090).
-                let usage = token_usage();
+                let mut usage = token_usage();
+                usage[REMEMBERED_KEY] = true.into();
                 self.task_usage.insert(&id, usage.clone());
+                // #2071: what ran before the cancel is still the next turn's
+                // context. Before `Cancelled` is set, as with usage.
+                self.remember_ended_turn(
+                    &id,
+                    spec.context_task_id.as_deref(),
+                    &spec.input,
+                    crate::turn_ledger::StopKind::Cancelled,
+                );
                 self.set_state(&id, TaskState::Cancelled);
                 return TaskOutcome::Cancelled(Task {
                     id,
@@ -280,9 +289,9 @@ impl TaskRunner {
         match result {
             Ok((reply, stop)) => {
                 // Persist this turn into multi-turn chat memory keyed by `id`, so
-                // the next send (context.task_id == id) recalls it. Only on
-                // success — a failed/cancelled turn must not leave a dangling
-                // user message with no assistant reply.
+                // the next send (context.task_id == id) recalls it. The parked
+                // checkpoint is stale once the reply carries the real ledger.
+                self.take_partial_ledger(&id);
                 self.remember_turn(&id, spec.context_task_id.as_deref(), &spec.input, &reply);
                 // Artifact detection (#715 Part B): when the caller set an
                 // output_artifact_path and the agent wrote to it, replace the
@@ -363,8 +372,25 @@ impl TaskRunner {
                     error = %err.message,
                     "task failed"
                 );
-                let usage = token_usage();
+                let mut usage = token_usage();
+                // Tells the client it may thread the next turn onto this one.
+                // Threading onto a key the runtime never stored would blank
+                // the conversation, so a client must see this flag first.
+                usage[REMEMBERED_KEY] = true.into();
                 self.task_usage.insert(&id, usage.clone());
+                // #2071: a turn that ended in a denied or timed-out approval
+                // (or a provider error) used to vanish from history, so the
+                // next turn had no record of the request or of the work done
+                // before the gate closed. Remember it with a marker in the
+                // reply slot and whatever ledger the loop had built.
+                self.remember_ended_turn(
+                    &id,
+                    spec.context_task_id.as_deref(),
+                    &spec.input,
+                    crate::turn_ledger::StopKind::Failed {
+                        error: err.message.clone(),
+                    },
+                );
                 self.set_state(&id, TaskState::Failed);
                 TaskOutcome::Failed(Task {
                     id,

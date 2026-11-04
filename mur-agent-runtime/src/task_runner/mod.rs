@@ -330,6 +330,11 @@ pub struct TaskRunner {
     refused_cwd: Mutex<HashMap<String, RefusedCwd>>,
     /// Turn → its MCP hot-reload notices, for the reply footer (`mcp_reload`).
     mcp_notices: Mutex<HashMap<String, mcp_reload::McpNotices>>,
+    /// Turn → the ledger of a loop that is about to fail (#2071). The loop
+    /// drops its ledger on every `Err` return, which is exactly the turn
+    /// whose actions the next turn most needs; the loop parks a copy here
+    /// before returning, and the run wrapper takes it to remember the turn.
+    partial_ledgers: Mutex<HashMap<String, crate::turn_ledger::TurnLedger>>,
     /// Reads the working project's `AGENTS.md` / `CLAUDE.md` into the prompt,
     /// through the same entitlement gate as `read_file`. `None` (stubs, tests)
     /// or no `session_cwd` means no block.

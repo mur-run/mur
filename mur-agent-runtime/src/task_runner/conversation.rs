@@ -379,6 +379,106 @@ impl TaskRunner {
         store.remember(key.to_string(), h);
     }
 
+    /// Park the loop's ledger for turn `turn` so a failure can still be
+    /// remembered (#2071). Called by the loop right before it returns `Err`;
+    /// overwrites, so the newest copy wins.
+    pub(super) fn park_partial_ledger(&self, turn: &str, ledger: &crate::turn_ledger::TurnLedger) {
+        let mut slot = self
+            .partial_ledgers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        slot.insert(turn.to_string(), ledger.clone());
+    }
+
+    /// Checkpoint a tool batch that is still running (#2071, review P2 on
+    /// #2275). `results` holds the calls of `calls` that have completed so
+    /// far, positionally; the loop's own `ledger` does not have them yet —
+    /// it records the whole batch once it settles. A `tasks/cancel` drops
+    /// the loop between two calls, so the parked copy is a clone of the
+    /// ledger with those completed calls appended. The clone is what keeps
+    /// the real ledger free of duplicates when the batch does settle.
+    pub(super) fn checkpoint_batch(
+        &self,
+        turn: &str,
+        ledger: &crate::turn_ledger::TurnLedger,
+        iteration: u32,
+        calls: &[crate::llm::ToolCallResult],
+        results: &[crate::llm::ToolResultEntry],
+    ) {
+        let mut snapshot = ledger.clone();
+        record_completed(&mut snapshot, calls, results);
+        snapshot.iterations = iteration;
+        self.park_partial_ledger(turn, &snapshot);
+    }
+
+    /// Take turn `turn`'s parked ledger. Taken on every outcome so the table
+    /// never grows past the turns in flight.
+    pub(super) fn take_partial_ledger(&self, turn: &str) -> Option<crate::turn_ledger::TurnLedger> {
+        let mut slot = self
+            .partial_ledgers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        slot.remove(turn)
+    }
+
+    /// Persist a turn that ended without a reply — failed or cancelled —
+    /// as `[user, marker, ledger]` (#2071). The marker (`turn ended: …`)
+    /// stands in for the agent text so the history keeps its `[user, agent,
+    /// ledger]` shape and the next turn threads onto this one. The ledger is
+    /// whatever the loop had recorded before it stopped: the five bash steps
+    /// that ran before the sixth timed out are the fact the next turn needs.
+    pub(super) fn remember_ended_turn(
+        &self,
+        key: &str,
+        ctx: Option<&str>,
+        input: &Message,
+        stop: crate::turn_ledger::StopKind,
+    ) {
+        let mut ledger = self.take_partial_ledger(key).unwrap_or_default();
+        ledger.stop = stop;
+        // A ledger carries the agent name once the loop has started; a turn
+        // that failed before the loop (bounds parse, cli-spawn) has none.
+        if ledger.agent.is_empty() {
+            ledger.agent = self.agent_name.clone();
+        }
+        let text = format!("turn ended: {}", end_marker(&ledger));
+        let reply = settle(text, &ledger);
+        self.remember_turn(key, ctx, input, &reply);
+    }
+}
+
+/// `<stop> — <remedy>` for the end marker, or just `<stop>` when the kind
+/// carries no remedy.
+fn end_marker(ledger: &crate::turn_ledger::TurnLedger) -> String {
+    match ledger.stop.remedy(&ledger.agent) {
+        Some(r) => format!("{} — {r}", ledger.stop.as_str()),
+        None => ledger.stop.as_str().to_string(),
+    }
+}
+
+/// Put the completed prefix of a tool batch on `ledger`: `results[i]` is the
+/// result of `calls[i]`, so the zip stops at the first call still running.
+/// No excerpt — that is settlement detail; memory only needs what ran.
+pub(super) fn record_completed(
+    ledger: &mut crate::turn_ledger::TurnLedger,
+    calls: &[crate::llm::ToolCallResult],
+    results: &[crate::llm::ToolResultEntry],
+) {
+    for (call, entry) in calls.iter().zip(results.iter()) {
+        ledger.record(crate::turn_ledger::Action {
+            tool: call.tool_name.clone(),
+            target: crate::turn_ledger::describe_target_with_result(
+                &call.tool_name,
+                &call.input,
+                &entry.content,
+            ),
+            outcome: crate::turn_ledger::classify(&entry.content, entry.is_error, &entry.status),
+            excerpt: None,
+        });
+    }
+}
+
+impl TaskRunner {
     /// Open this turn's cwd slot: the caller's `cwd` when one was supplied and
     /// it is entitled, else the directory of the turn it continues
     /// (`context_task_id`), else the agent home. Absent means "a client with

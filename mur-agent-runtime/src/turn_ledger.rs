@@ -152,6 +152,15 @@ pub enum StopKind {
     /// The model kept calling a tool withdrawn earlier in the turn, so no
     /// further iteration could run anything.
     ToolWithdrawn,
+    /// The turn failed — a denied or timed-out approval, a provider error
+    /// before any text was shown. `error` is the task error's message. The
+    /// turn is still remembered (#2071): without it the next turn had no
+    /// record of the request or of the work done before the failure.
+    Failed {
+        error: String,
+    },
+    /// `tasks/cancel` ended the turn. Remembered for the same reason.
+    Cancelled,
 }
 
 /// Repeated from `task_runner::ITERATION_CEILING` in prose; a test pins the
@@ -179,6 +188,8 @@ impl StopKind {
             StopKind::Deadline => "deadline",
             StopKind::Stuck { .. } => "stuck",
             StopKind::ToolWithdrawn => "tool withdrawn",
+            StopKind::Failed { .. } => "failed",
+            StopKind::Cancelled => "cancelled",
         }
     }
 
@@ -228,6 +239,13 @@ impl StopKind {
                 "a tool was refused and withdrawn for the turn, and the model kept calling it — \
                  allow it and retry: mur agent perm tool-allow {agent} <tool>"
             ),
+            StopKind::Failed { error } => format!(
+                "{error} — the work above is kept; say `continue` to pick it up from here"
+            ),
+            StopKind::Cancelled => {
+                "cancelled — the work above is kept; say `continue` to pick it up from here"
+                    .to_string()
+            }
         })
     }
 }

@@ -120,7 +120,17 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
                         proposal::offer(app, p);
                     }
                 }
-                Err(cause) => app.fail_turn(&cause),
+                Err(cause) => {
+                    // #2071: the runtime remembered this failed turn, so the
+                    // next send threads onto it and the marker is persisted
+                    // in the channel under the same id — a reload restores
+                    // the same threading.
+                    let remembered = stream::remembered_task_id(&task);
+                    app.fail_turn(&cause);
+                    if let Some(tid) = remembered {
+                        app.thread_ended_turn(&cause, &tid);
+                    }
+                }
             }
             app.reveal_suggestions();
         }
