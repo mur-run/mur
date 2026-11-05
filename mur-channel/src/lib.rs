@@ -13,6 +13,7 @@ pub mod service;
 pub mod sign;
 pub mod store;
 pub mod summary;
+pub mod verify;
 pub mod watch;
 
 pub use id::{check_channel_id, is_safe_channel_id};
