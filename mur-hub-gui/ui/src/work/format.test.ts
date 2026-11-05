@@ -7,6 +7,9 @@ import {
   ordinalLabel,
   shortId,
   SHORT_ID_LEN,
+  channelTitle,
+  displayNameMap,
+  TITLE_FALLBACK_SEP,
 } from "./format";
 import type { ChannelActor } from "./types";
 
@@ -84,5 +87,35 @@ describe("channel handles", () => {
   it("shows nothing for an unassigned ordinal rather than a number that would not work", () => {
     expect(ordinalLabel(0)).toBe("");
     expect(ordinalLabel(-1)).toBe("");
+  });
+});
+
+describe("channelTitle", () => {
+  const UUID = "019ed0af-5e38-7912-b554-dc335a8fc2db";
+  const CREATED = "2026-11-05T06:43:08Z";
+  const base = { id: UUID, title: "", agents: ["mur"], created_at: CREATED };
+  const date = new Date(CREATED).toLocaleDateString("en-US");
+
+  it("uses the stored title when there is one", () => {
+    expect(channelTitle({ ...base, title: "explain this repo" })).toBe("explain this repo");
+  });
+  it("renders {agent display name} · {date} for an agent-opened channel", () => {
+    expect(channelTitle(base, { mur: "MUR" }, "en-US")).toBe(`MUR${TITLE_FALLBACK_SEP}${date}`);
+  });
+  it("falls back to the raw agent name when no display name is known", () => {
+    expect(channelTitle(base, {}, "en-US")).toBe(`mur${TITLE_FALLBACK_SEP}${date}`);
+  });
+  it("treats a whitespace-only title as untitled", () => {
+    expect(channelTitle({ ...base, title: "  " }, {}, "en-US")).toBe(`mur${TITLE_FALLBACK_SEP}${date}`);
+  });
+  it("keeps the short id only when there is no agent or no date", () => {
+    expect(channelTitle({ ...base, agents: [] })).toBe(shortId(UUID));
+    expect(channelTitle({ ...base, created_at: "" })).toBe(shortId(UUID));
+  });
+});
+
+describe("displayNameMap", () => {
+  it("maps directory names to display names", () => {
+    expect(displayNameMap([{ name: "mur", display_name: "MUR" }])).toEqual({ mur: "MUR" });
   });
 });

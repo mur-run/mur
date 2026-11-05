@@ -2,7 +2,14 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ChannelSummary } from "../../work/types";
-import { ordinalLabel, relativeTime, shortId } from "../../work/format";
+import {
+  channelTitle,
+  displayNameMap,
+  ordinalLabel,
+  relativeTime,
+  shortId,
+} from "../../work/format";
+import { useAgents } from "../../context/AgentContext";
 
 interface Props {
   agentName: string;
@@ -23,10 +30,21 @@ function agentChannels(channels: ChannelSummary[], agentName: string): ChannelSu
 }
 
 /** What the rail prints for a channel: its title (the first message), else the
- *  preview line, else the short id — a uuid tail is the last resort, not the label. */
-export function channelLabel(c: ChannelSummary): string {
-  return c.title || c.preview || shortName(c.id);
+ *  preview line, else a legacy id's short name, else `{agent} · {date}` (an
+ *  agent-opened channel has no human message yet) — never a uuid tail. */
+export function channelLabel(
+  c: ChannelSummary,
+  displayNames: Record<string, string> = {},
+): string {
+  if (c.title.trim()) return c.title;
+  if (c.preview) return c.preview;
+  // Legacy name-keyed ids ("rustsmith", "fleet-x") carry their own label; only
+  // a uuid id (every channel `create_for_agent` mints) would leak its tail.
+  if (!UUID_RE.test(c.id)) return shortName(c.id);
+  return channelTitle(c, displayNames);
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function shortName(id: string): string {
   // "fleet-projectx" → "fleet/projectx", "rustsmith" → "main"
@@ -36,6 +54,8 @@ function shortName(id: string): string {
 }
 
 export function ChatChannelRail({ agentName, activeId, onSelect, width }: Props) {
+  const { agents } = useAgents();
+  const names = displayNameMap(agents);
   const [channels, setChannels] = useState<ChannelSummary[]>([]);
 
   async function load() {
@@ -67,7 +87,7 @@ export function ChatChannelRail({ agentName, activeId, onSelect, width }: Props)
         title={`${num ? `${num} · ` : ""}${shortId(c.id)} — ${c.title || c.id}`}
       >
         <span className="cw-rail__ch-hash">{num || "#"}</span>
-        <span className="cw-rail__ch-name">{channelLabel(c)}</span>
+        <span className="cw-rail__ch-name">{channelLabel(c, names)}</span>
         <span className="cw-rail__ch-id">{shortId(c.id)}</span>
         <span className="cw-rail__ch-time">{relativeTime(c.updated_at, now)}</span>
         {c.turns > 0 && !isActive && (

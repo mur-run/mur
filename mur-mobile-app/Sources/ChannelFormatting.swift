@@ -24,6 +24,34 @@ func sortedChannels(_ channels: [AppModel.ChannelSummary]) -> [AppModel.ChannelS
     }
 }
 
+/// The name a channel row shows. The stored title comes from the first human
+/// message, so a channel the agent opened stays untitled until the human
+/// replies; render `{agent} · {local date}` then (spec §7.5), never a blank
+/// row. Display-only — nothing is written back.
+func channelDisplayTitle(goal: String, title: String, agents: [String], updatedAt: String,
+                         locale: Locale = .current) -> String {
+    let goal = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !goal.isEmpty { return goal }
+    let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !title.isEmpty { return title }
+    let who = agents.joined(separator: ", ")
+    guard let date = parseRFC3339(updatedAt) else { return who }
+    let day = date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(locale))
+    return who.isEmpty ? day : who + titleFallbackSeparator + day
+}
+
+/// Separator between agent and date in an untitled channel's label.
+let titleFallbackSeparator = " · "
+
+/// RFC3339 with or without fractional seconds (chrono emits either).
+func parseRFC3339(_ s: String) -> Date? {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let d = f.date(from: s) { return d }
+    f.formatOptions = [.withInternetDateTime]
+    return f.date(from: s)
+}
+
 /// State → (label, color) for the lifecycle chip.
 func stateChip(_ state: String) -> (label: String, color: Color) {
     switch state {

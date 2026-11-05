@@ -29,7 +29,8 @@ struct ChannelCard: View {
         let chip = stateChip(channel.state)
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(channel.goal.isEmpty ? channel.title : channel.goal)
+                Text(channelDisplayTitle(goal: channel.goal, title: channel.title,
+                                        agents: channel.agents, updatedAt: channel.updatedAt))
                     .font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
                 Text(chip.label)
