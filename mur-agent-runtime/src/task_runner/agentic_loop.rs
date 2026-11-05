@@ -17,6 +17,7 @@ impl TaskRunner {
         intent: RequestIntent,
         bounds: crate::bounds::TurnBounds,
         autonomy: mur_common::hitl::Autonomy,
+        allowlist: Option<&[String]>,
     ) -> Result<(Message, Option<LoopExit>), TaskError> {
         use crate::llm::{LlmRequest, RichMessage, StopReason};
 
@@ -109,6 +110,7 @@ impl TaskRunner {
                 .map(|t| t.def())
                 .filter(|d| crate::tools::suggest::offer_for_streaming(&d.name, streaming))
                 .filter(|d| !disabled.contains(&d.name))
+                .filter(|d| allowed_by(allowlist, &d.name))
                 .collect();
             let now = std::time::Instant::now();
             if let Some(d) = bounds.deadline
@@ -485,7 +487,15 @@ impl TaskRunner {
             }
 
             // P3: gate the whole response first — one notification, N decisions.
-            let (mut decisions, mut step_ids) = self.gate_response(task_id, &resp.tool_calls).await;
+            // A call outside the turn's allowlist never reaches the gate: it
+            // must not park an approval for a tool this turn cannot use.
+            let gated: Vec<_> = resp
+                .tool_calls
+                .iter()
+                .filter(|c| allowed_by(allowlist, &c.tool_name))
+                .cloned()
+                .collect();
+            let (mut decisions, mut step_ids) = self.gate_response(task_id, &gated).await;
             let mut results = Vec::new();
             // Wall time per call, pushed in lockstep with `results` so the two
             // cannot drift. This is the only place a tool's own latency is
@@ -500,6 +510,15 @@ impl TaskRunner {
             let mut ran_step_ids: Vec<Option<String>> = Vec::new();
             for call in &resp.tool_calls {
                 let t0 = std::time::Instant::now();
+                // Not offered this turn, but a model can call a tool it was
+                // not shown. Refused without the gate or the tool running.
+                if !allowed_by(allowlist, &call.tool_name) {
+                    withdrawn_calls += 1;
+                    durations_ms.push(0);
+                    ran_step_ids.push(None);
+                    results.push(outside_allowlist_entry(call));
+                    continue;
+                }
                 // Withdrawn this turn (spec §3.8): the tool left the list
                 // after a refusal; a model that calls it anyway is told so
                 // again without the gate or the tool running.

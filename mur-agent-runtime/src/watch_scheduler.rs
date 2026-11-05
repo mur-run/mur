@@ -267,6 +267,7 @@ fn inject(runner: &Arc<TaskRunner>, text: &str) {
                 output_artifact_path: None,
                 attended: false,
                 deadline_secs: None,
+                tool_allowlist: None,
             })
             .await;
     });

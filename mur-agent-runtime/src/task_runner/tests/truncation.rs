@@ -704,6 +704,7 @@ async fn loop_ends_on_end_turn_no_tools() {
         active_team: None,
         attended: true,
         deadline_secs: None,
+        tool_allowlist: None,
     };
     let outcome = runner.run_sync(spec).await;
     assert!(matches!(outcome, TaskOutcome::Completed(_)));

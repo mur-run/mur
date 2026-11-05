@@ -146,6 +146,7 @@ fn ping_spec() -> TaskSpec {
         active_team: None,
         attended: true,
         deadline_secs: None,
+        tool_allowlist: None,
     }
 }
 
@@ -164,6 +165,7 @@ fn user_turn(text: &str, task_id: &str, ctx: Option<&str>) -> TaskSpec {
         active_team: None,
         attended: true,
         deadline_secs: None,
+        tool_allowlist: None,
     }
 }
 
@@ -201,6 +203,7 @@ fn loop_spec(text: &str) -> TaskSpec {
         active_team: None,
         attended: true,
         deadline_secs: None,
+        tool_allowlist: None,
     }
 }
 
@@ -223,6 +226,7 @@ mod live_reload;
 mod pre_tool_use_gate;
 mod startup_waiver;
 mod system_prompt;
+mod tool_allowlist;
 mod truncation;
 mod turn_track;
 mod turn_track_target;

@@ -27,6 +27,33 @@ impl TaskRunner {
         // This is a transient failure — callers should retry after the agent
         // comes back up. We do NOT register the task in the registry, so
         // `await_idle` will not be blocked by this rejection.
+        // R9 (channel consult): a tool allowlist binds only the built-in loop.
+        // Any other backend runs tools MUR never sees, so a confined turn is
+        // refused there before anything is registered or spawned.
+        if let Some(backend) = self.backend.confinement_refusal(&spec) {
+            let id = spec
+                .task_id
+                .clone()
+                .unwrap_or_else(|| format!("task-{}", Uuid::now_v7()));
+            let now = chrono::Utc::now().to_rfc3339();
+            return TaskOutcome::Failed(Task {
+                id,
+                state: TaskState::Failed,
+                messages: vec![spec.input],
+                created_at: now.clone(),
+                completed_at: Some(now),
+                error: Some(task_error(
+                    "backend_cannot_confine",
+                    format!(
+                        "this turn restricts its tools, which only the built-in loop can enforce; \
+                         the `{backend}` backend runs tools MUR cannot confine"
+                    ),
+                    false,
+                )),
+                usage: None,
+                artifacts: None,
+            });
+        }
         if self.draining.load(Ordering::SeqCst) {
             let id = spec
                 .task_id
@@ -170,6 +197,7 @@ impl TaskRunner {
                             spec.intent,
                             bounds,
                             settings.autonomy,
+                            spec.tool_allowlist.as_deref(),
                         )
                         .await
                     } else {

@@ -91,6 +91,13 @@ pub struct TaskSpec {
     /// with twelve minutes left passes 720 (spec §3.4). `None` = resolve the
     /// deadline from `profile.yaml` → `config.yaml` → built-in.
     pub deadline_secs: Option<u64>,
+    /// The only tools this turn may use, by name. `None` = every tool the
+    /// runner holds (the normal case). When set, the built-in loop both
+    /// offers and dispatches from it: a model can emit a call for a tool it
+    /// was not shown, so filtering the offer alone would not hold. Binds only
+    /// the built-in loop, so `run_sync` refuses a spec carrying one on any
+    /// other backend (channel consult, R9).
+    pub tool_allowlist: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -114,6 +121,22 @@ pub enum RunnerBackend {
     /// MUR owns the tools. Not an `LlmClient`: there is no completion call to
     /// make here, so it cannot be one of those.
     CliSpawn(&'static mur_common::cli_backend::CliBackend),
+}
+
+impl RunnerBackend {
+    /// The backend's name when it cannot run `spec`: a spec that restricts its
+    /// tools runs only on [`RunnerBackend::Llm`], the one backend whose tools
+    /// MUR dispatches itself. `None` = this backend may run it.
+    pub(crate) fn confinement_refusal(&self, spec: &TaskSpec) -> Option<&'static str> {
+        spec.tool_allowlist.as_ref()?;
+        match self {
+            RunnerBackend::Llm(_) => None,
+            RunnerBackend::CliSpawn(b) => Some(b.key),
+            RunnerBackend::StubEcho => Some("stub-echo"),
+            RunnerBackend::StubSlow => Some("stub-slow"),
+            RunnerBackend::Misconfigured(_) => Some("misconfigured"),
+        }
+    }
 }
 
 /// Cap on task-state entries retained in memory. Oldest entries are evicted

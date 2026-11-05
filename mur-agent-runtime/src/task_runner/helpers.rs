@@ -252,6 +252,33 @@ pub(super) fn last_assistant_text(history: &[crate::llm::RichMessage]) -> Option
 /// `Action`-scoped denial refused one path or one binary; the tool still
 /// works for everything else, and withdrawing it there cost a whole job on
 /// 2026-09-13. See [`crate::tools::DenialScope`].
+/// Whether `tool` may run under a turn's tool allowlist. `None` = no
+/// allowlist, every tool the runner holds.
+pub(super) fn allowed_by(allowlist: Option<&[String]>, tool: &str) -> bool {
+    allowlist.is_none_or(|names| names.iter().any(|n| n == tool))
+}
+
+/// The result for a call to a tool outside the turn's allowlist. A
+/// `Tool`-scoped denial, so `withdraws` drops it for the rest of the turn
+/// like any other refused tool.
+pub(super) fn outside_allowlist_entry(
+    call: &crate::llm::ToolCallResult,
+) -> crate::llm::ToolResultEntry {
+    crate::llm::ToolResultEntry {
+        call_id: call.call_id.clone(),
+        content: format!(
+            "`{}` is not available in this turn; use only the tools you were given",
+            call.tool_name
+        ),
+        is_error: true,
+        status: crate::tools::ToolStatus::Denied {
+            detail: "outside this turn's tool allowlist".into(),
+            scope: crate::tools::DenialScope::Tool,
+        },
+        images: Vec::new(),
+    }
+}
+
 pub(super) fn withdraws(entry: &crate::llm::ToolResultEntry) -> bool {
     matches!(
         entry.status,

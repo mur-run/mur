@@ -42,6 +42,7 @@ fn scheduled_task_spec(message: &str) -> TaskSpec {
         output_artifact_path: None,
         attended: false,
         deadline_secs: None,
+        tool_allowlist: None,
     }
 }
 

@@ -102,6 +102,7 @@ fn unattended(text: &str) -> TaskSpec {
         cwd: None,
         attended: false,
         deadline_secs: None,
+        tool_allowlist: None,
     }
 }
 
