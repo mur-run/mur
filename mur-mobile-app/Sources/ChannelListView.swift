@@ -30,7 +30,10 @@ struct ChannelCard: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(channelDisplayTitle(goal: channel.goal, title: channel.title,
-                                        agents: channel.agents, updatedAt: channel.updatedAt))
+                                        agents: channel.agents,
+                                        displayNames: channel.displayNames,
+                                        createdAt: channel.createdAt,
+                                        updatedAt: channel.updatedAt))
                     .font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
                 Text(chip.label)

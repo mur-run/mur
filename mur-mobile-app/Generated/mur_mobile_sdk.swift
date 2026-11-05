@@ -509,7 +509,11 @@ fileprivate struct FfiConverterString: FfiConverter {
             return String()
         }
         let bytes = UnsafeBufferPointer<UInt8>(start: value.data!, count: Int(value.len))
-        return String(bytes: bytes, encoding: String.Encoding.utf8)!
+        // Use Swift's native UTF-8 decoder; `String(bytes:encoding:.utf8)` goes
+        // through Foundation's NSString and silently strips a leading U+FEFF BOM.
+        // Invalid UTF-8 substitutes U+FFFD instead of trapping (unreachable
+        // given Rust's `String` invariant).
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     public static func lower(_ value: String) -> RustBuffer {
@@ -525,7 +529,8 @@ fileprivate struct FfiConverterString: FfiConverter {
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> String {
         let len: Int32 = try readInt(&buf)
-        return String(bytes: try readBytes(&buf, count: Int(len)), encoding: String.Encoding.utf8)!
+        // See `lift` above for why we avoid Foundation's NSString-backed decoder here.
+        return String(decoding: try readBytes(&buf, count: Int(len)), as: UTF8.self)
     }
 
     public static func write(_ value: String, into buf: inout [UInt8]) {
@@ -1093,19 +1098,37 @@ public struct ChannelListItem: Equatable, Hashable {
     public var title: String
     public var state: String
     public var goal: String
+    /**
+     * RFC3339 creation time; empty when the desktop predates the field.
+     */
+    public var createdAt: String
     public var updatedAt: String
     public var agents: [String]
+    /**
+     * Display label per agent, index-aligned with `agents` (`"MUR"` for the
+     * concierge). Empty when the desktop predates the field.
+     */
+    public var displayNames: [String]
     public var turns: UInt32
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, title: String, state: String, goal: String, updatedAt: String, agents: [String], turns: UInt32) {
+    public init(id: String, title: String, state: String, goal: String, 
+        /**
+         * RFC3339 creation time; empty when the desktop predates the field.
+         */createdAt: String, updatedAt: String, agents: [String], 
+        /**
+         * Display label per agent, index-aligned with `agents` (`"MUR"` for the
+         * concierge). Empty when the desktop predates the field.
+         */displayNames: [String], turns: UInt32) {
         self.id = id
         self.title = title
         self.state = state
         self.goal = goal
+        self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.agents = agents
+        self.displayNames = displayNames
         self.turns = turns
     }
 
@@ -1129,8 +1152,10 @@ public struct FfiConverterTypeChannelListItem: FfiConverterRustBuffer {
                 title: FfiConverterString.read(from: &buf), 
                 state: FfiConverterString.read(from: &buf), 
                 goal: FfiConverterString.read(from: &buf), 
+                createdAt: FfiConverterString.read(from: &buf), 
                 updatedAt: FfiConverterString.read(from: &buf), 
                 agents: FfiConverterSequenceString.read(from: &buf), 
+                displayNames: FfiConverterSequenceString.read(from: &buf), 
                 turns: FfiConverterUInt32.read(from: &buf)
         )
     }
@@ -1140,8 +1165,10 @@ public struct FfiConverterTypeChannelListItem: FfiConverterRustBuffer {
         FfiConverterString.write(value.title, into: &buf)
         FfiConverterString.write(value.state, into: &buf)
         FfiConverterString.write(value.goal, into: &buf)
+        FfiConverterString.write(value.createdAt, into: &buf)
         FfiConverterString.write(value.updatedAt, into: &buf)
         FfiConverterSequenceString.write(value.agents, into: &buf)
+        FfiConverterSequenceString.write(value.displayNames, into: &buf)
         FfiConverterUInt32.write(value.turns, into: &buf)
     }
 }
@@ -1611,7 +1638,11 @@ fileprivate struct UniffiCallbackInterfaceMobileEventListener {
 
     // Rust stores this pointer for future callback invocations, so it must live
     // for the process lifetime (not just for the init function call).
-    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceMobileEventListener> = {
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceMobileEventListener> = {
         let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceMobileEventListener>.allocate(capacity: 1)
         ptr.initialize(to: vtable)
         return UnsafePointer(ptr)

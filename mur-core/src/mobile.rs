@@ -480,8 +480,11 @@ pub fn pairing_uri(
 const MOBILE_CHANNEL_LIMIT: usize = 200;
 
 /// Serve a channel pull for the phone. `op` ∈ "list" | "events".
-/// "list" → array of `{id,title,state,goal,updated_at,agents,turns}` (newest
-/// first, empties hidden). "events" → that channel's events at/after `since_seq`.
+/// "list" → array of `{id,title,state,goal,created_at,updated_at,agents,
+/// display_names,turns}` (newest first, empties hidden). `display_names` is
+/// index-aligned with `agents`; with `created_at` it lets the phone render the
+/// spec §7.5 `{agent display name} · {local date}` label for an untitled
+/// channel exactly as the Hub does. "events" → that channel's events at/after `since_seq`.
 /// Ownership filter: single-user, so all local channels are the owner's.
 pub fn channel_query(
     home: &std::path::Path,
@@ -493,6 +496,7 @@ pub fn channel_query(
     match op {
         "list" => {
             let mut out = Vec::new();
+            let mut names: std::collections::HashMap<String, String> = Default::default();
             for row in svc.list(MOBILE_CHANNEL_LIMIT)? {
                 let events = svc.load_events(&row.id).unwrap_or_default();
                 if events.is_empty() {
@@ -515,13 +519,31 @@ pub fn channel_query(
                     .as_ref()
                     .map(|m| m.goal.statement.clone())
                     .unwrap_or_default();
+                // Creation time, not `updated_at`: the fallback label must not
+                // drift as the channel sees activity. Empty for a channel whose
+                // manifest cannot be read; the phone then falls back further.
+                let created_at = manifest
+                    .as_ref()
+                    .map(|m| m.created_at.to_rfc3339())
+                    .unwrap_or_default();
+                let display_names: Vec<String> = agents
+                    .iter()
+                    .map(|a| {
+                        names
+                            .entry(a.clone())
+                            .or_insert_with(|| agent_display_name(home, a))
+                            .clone()
+                    })
+                    .collect();
                 out.push(serde_json::json!({
                     "id": row.id,
                     "title": row.title,
                     "state": row.state,
                     "goal": goal,
+                    "created_at": created_at,
                     "updated_at": row.updated_at,
                     "agents": agents,
+                    "display_names": display_names,
                     "turns": events.len(),
                 }));
             }
@@ -538,6 +560,17 @@ pub fn channel_query(
         }
         other => anyhow::bail!("unknown channel query op `{other}`"),
     }
+}
+
+/// The label a person sees for an agent: its profile's `display_name` (the
+/// concierge's is "MUR"). The on-disk name is the fallback when the profile is
+/// missing, unreadable, or leaves it blank.
+fn agent_display_name(home: &std::path::Path, agent: &str) -> String {
+    mur_common::agent::AgentProfile::load(home, agent)
+        .ok()
+        .map(|p| p.display_name)
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| agent.to_string())
 }
 
 /// Persist one mobile user→agent exchange into the agent's channel (resolved

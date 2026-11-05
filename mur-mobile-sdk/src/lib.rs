@@ -70,8 +70,13 @@ pub struct ChannelListItem {
     pub title: String,
     pub state: String,
     pub goal: String,
+    /// RFC3339 creation time; empty when the desktop predates the field.
+    pub created_at: String,
     pub updated_at: String,
     pub agents: Vec<String>,
+    /// Display label per agent, index-aligned with `agents` (`"MUR"` for the
+    /// concierge). Empty when the desktop predates the field.
+    pub display_names: Vec<String>,
     pub turns: u32,
 }
 
