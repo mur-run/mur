@@ -26,16 +26,26 @@ func sortedChannels(_ channels: [AppModel.ChannelSummary]) -> [AppModel.ChannelS
 
 /// The name a channel row shows. The stored title comes from the first human
 /// message, so a channel the agent opened stays untitled until the human
-/// replies; render `{agent} · {local date}` then (spec §7.5), never a blank
-/// row. Display-only — nothing is written back.
-func channelDisplayTitle(goal: String, title: String, agents: [String], updatedAt: String,
-                         locale: Locale = .current) -> String {
+/// replies; render `{agent display name} · {local date}` then (spec §7.5),
+/// never a blank row. Display-only — nothing is written back.
+///
+/// `displayNames` is index-aligned with `agents`; a missing or blank entry
+/// falls back to the agent id. `createdAt` keeps the label stable as the
+/// channel sees activity; `updatedAt` is used only when a desktop that
+/// predates the field sends none.
+func channelDisplayTitle(goal: String, title: String, agents: [String],
+                         displayNames: [String] = [], createdAt: String = "",
+                         updatedAt: String, locale: Locale = .current) -> String {
     let goal = goal.trimmingCharacters(in: .whitespacesAndNewlines)
     if !goal.isEmpty { return goal }
     let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
     if !title.isEmpty { return title }
-    let who = agents.joined(separator: ", ")
-    guard let date = parseRFC3339(updatedAt) else { return who }
+    let who = agents.enumerated().map { i, id -> String in
+        let name = i < displayNames.count
+            ? displayNames[i].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        return name.isEmpty ? id : name
+    }.joined(separator: ", ")
+    guard let date = parseRFC3339(createdAt) ?? parseRFC3339(updatedAt) else { return who }
     let day = date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(locale))
     return who.isEmpty ? day : who + titleFallbackSeparator + day
 }

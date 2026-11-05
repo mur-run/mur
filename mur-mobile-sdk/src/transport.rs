@@ -419,6 +419,18 @@ where
     }
 }
 
+/// A JSON string array as `Vec<String>`; a missing field (older desktop) or a
+/// non-string element is skipped rather than failing the whole list.
+fn str_array(v: &serde_json::Value) -> Vec<String> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn emit_channel_data<E>(emit: &E, op: &str, payload: serde_json::Value)
 where
     E: Fn(MobileEvent),
@@ -435,13 +447,10 @@ where
                     title: v["title"].as_str().unwrap_or_default().to_string(),
                     state: v["state"].as_str().unwrap_or_default().to_string(),
                     goal: v["goal"].as_str().unwrap_or_default().to_string(),
+                    created_at: v["created_at"].as_str().unwrap_or_default().to_string(),
                     updated_at: v["updated_at"].as_str().unwrap_or_default().to_string(),
-                    agents: v["agents"]
-                        .as_array()
-                        .unwrap_or(&vec![])
-                        .iter()
-                        .filter_map(|a| a.as_str().map(|s| s.to_string()))
-                        .collect(),
+                    agents: str_array(&v["agents"]),
+                    display_names: str_array(&v["display_names"]),
                     turns: v["turns"].as_u64().unwrap_or(0) as u32,
                 })
                 .collect();
@@ -492,5 +501,48 @@ where
             emit(MobileEvent::ChannelEvents { channel_id, events });
         }
         other => tracing::debug!("mur-mobile-sdk: ignoring channel_data op={other}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn list(payload: serde_json::Value) -> Vec<crate::ChannelListItem> {
+        let out = std::cell::RefCell::new(None);
+        emit_channel_data(
+            &|e| {
+                if let MobileEvent::ChannelList { channels } = e {
+                    *out.borrow_mut() = Some(channels);
+                }
+            },
+            "list",
+            payload,
+        );
+        out.into_inner().expect("a ChannelList event")
+    }
+
+    #[test]
+    fn list_carries_created_at_and_display_names() {
+        let rows = list(serde_json::json!([{
+            "id": "c1", "title": "", "state": "working", "goal": "",
+            "created_at": "2026-11-01T09:00:00+00:00",
+            "updated_at": "2026-11-05T09:00:00+00:00",
+            "agents": ["mur"], "display_names": ["MUR"], "turns": 1
+        }]));
+        assert_eq!(rows[0].created_at, "2026-11-01T09:00:00+00:00");
+        assert_eq!(rows[0].display_names, vec!["MUR".to_string()]);
+        assert_eq!(rows[0].agents, vec!["mur".to_string()]);
+    }
+
+    #[test]
+    fn list_from_an_older_desktop_leaves_new_fields_empty() {
+        let rows = list(serde_json::json!([{
+            "id": "c1", "title": "t", "state": "working", "goal": "",
+            "updated_at": "2026-11-05T09:00:00Z", "agents": ["mur"], "turns": 2
+        }]));
+        assert!(rows[0].created_at.is_empty());
+        assert!(rows[0].display_names.is_empty());
+        assert_eq!(rows[0].turns, 2);
     }
 }

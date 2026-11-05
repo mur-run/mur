@@ -17,8 +17,10 @@ final class AppModel {
         let title: String
         let state: String       // kebab ChannelState
         let goal: String
+        let createdAt: String   // empty from a desktop that predates the field
         let updatedAt: String
         let agents: [String]
+        let displayNames: [String]  // index-aligned with `agents`; may be empty
         let turns: Int
     }
 
@@ -541,7 +543,9 @@ final class AppModel {
         case let .channelList(channels: items):
             channels = items.map {
                 ChannelSummary(id: $0.id, title: $0.title, state: $0.state, goal: $0.goal,
-                               updatedAt: $0.updatedAt, agents: $0.agents, turns: Int($0.turns))
+                               createdAt: $0.createdAt, updatedAt: $0.updatedAt,
+                               agents: $0.agents, displayNames: $0.displayNames,
+                               turns: Int($0.turns))
             }
         case let .channelEvents(channelId, events):
             guard channelId == detailChannelId else { break }

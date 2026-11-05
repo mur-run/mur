@@ -10,6 +10,10 @@ fn channel_query_list_and_events() {
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["agents"][0], "mur");
     assert!(arr[0]["turns"].as_u64().unwrap() >= 2);
+    // §7.5 fallback inputs: a creation time and a display name aligned with
+    // `agents`. No profile on disk here, so the name falls back to the id.
+    assert!(chrono::DateTime::parse_from_rfc3339(arr[0]["created_at"].as_str().unwrap()).is_ok());
+    assert_eq!(arr[0]["display_names"][0], "mur");
     let cid = arr[0]["id"].as_str().unwrap().to_string();
     // events → the two messages; since_seq filters.
     let evs = channel_query(tmp.path(), "events", Some(cid.clone()), None).unwrap();
@@ -494,4 +498,28 @@ fn persist_without_channel_skips_a_newer_fleet_run() {
     persist_mobile_exchange(tmp.path(), "mur", "q", "ans");
     assert_eq!(svc.load_events(&chat.id).unwrap().len(), 2);
     assert!(svc.load_events(&fleet.id).unwrap().is_empty());
+}
+
+#[test]
+fn agent_display_name_reads_profile_and_falls_back_to_id() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    assert_eq!(agent_display_name(tmp.path(), "ghost"), "ghost");
+    let mut p = mur_common::agent::AgentProfile::default_for_tests();
+    p.name = "mur".into();
+    p.display_name = "MUR".into();
+    let dir = tmp.path().join("agents").join("mur");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("profile.yaml"),
+        serde_yaml_ng::to_string(&p).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(agent_display_name(tmp.path(), "mur"), "MUR");
+    p.display_name = "  ".into();
+    std::fs::write(
+        dir.join("profile.yaml"),
+        serde_yaml_ng::to_string(&p).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(agent_display_name(tmp.path(), "mur"), "mur");
 }
