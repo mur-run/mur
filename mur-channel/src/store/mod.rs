@@ -28,6 +28,7 @@ mod chain;
 mod load;
 mod quarantine;
 
+pub(crate) use append::line_seq;
 pub use append::{PreSealHook, PreSealInput, SealHook, SealHooks, SealInput};
 pub use chain::{GENESIS_PREV_HASH, line_hash};
 #[cfg(test)]
