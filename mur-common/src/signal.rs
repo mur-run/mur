@@ -78,8 +78,8 @@ pub(crate) fn is_zero(v: &u32) -> bool {
 pub const SIGNAL_SIG_INPUT_VERSION: u32 = 1;
 
 /// Canonical signed bytes for a [`Signal`]: every semantic field, `sig`
-/// excluded. `serde_json` sorts object keys (no preserve_order), so this is
-/// deterministic for a given input. The `domain` tag prevents a signature
+/// excluded. Keys are sorted by [`crate::canonical::canonical_json`], so this
+/// is deterministic whatever `serde_json` features the build unifies. The `domain` tag prevents a signature
 /// minted here from verifying in any other MUR signing context.
 fn sign_input(s: &Signal) -> Vec<u8> {
     let canon = serde_json::json!({
@@ -95,7 +95,7 @@ fn sign_input(s: &Signal) -> Vec<u8> {
         "schema_version": s.schema_version,
         "key_version": s.key_version,
     });
-    serde_json::to_vec(&canon).unwrap_or_default()
+    crate::canonical::canonical_json(&canon)
 }
 
 /// Parse `MUR_SIGNAL_REQUIRE_SIG`: only explicit truthy values enable

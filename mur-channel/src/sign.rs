@@ -46,7 +46,7 @@ pub fn sign_input_v2(
         "idempotency_key": idempotency_key,
         "prev_hash": prev_hash,
     });
-    serde_json::to_vec(&canon).unwrap_or_default()
+    mur_common::canonical::canonical_json(&canon)
 }
 
 /// Sign an event's v2 canonical input; returns the multibase sig.
@@ -79,8 +79,9 @@ pub(crate) fn verify_input_sig(input: &[u8], sig_multibase: &str, pubkey: &[u8; 
     vk.verify(input, &sig).is_ok()
 }
 
-/// Canonical bytes signed for an event. `serde_json` sorts object keys (no
-/// preserve_order), so this is deterministic for a given input.
+/// Canonical bytes signed for an event. Keys are sorted by
+/// [`mur_common::canonical::canonical_json`], never by `serde_json`'s map
+/// type — a dependency enabling `preserve_order` must not change these bytes.
 pub fn sign_input(
     channel_id: &str,
     actor: &ChannelActor,
@@ -96,7 +97,7 @@ pub fn sign_input(
         "payload": payload,
         "idempotency_key": idempotency_key,
     });
-    serde_json::to_vec(&canon).unwrap_or_default()
+    mur_common::canonical::canonical_json(&canon)
 }
 
 /// Sign an event's canonical input with `identity`; returns the multibase sig.
@@ -261,6 +262,40 @@ pub fn verify_log(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Golden bytes: keys sorted at every depth regardless of insertion order.
+    /// Guards against a dependency unifying `serde_json/preserve_order` into
+    /// the build, which would otherwise reorder these bytes and break every
+    /// signature already on disk.
+    #[test]
+    fn sign_input_bytes_are_key_sorted_at_every_depth() {
+        let actor = ChannelActor::Agent { id: "qa".into() };
+        let mut inner = serde_json::Map::new();
+        inner.insert("z".into(), 1.into());
+        inner.insert("a".into(), 2.into());
+        let mut p = serde_json::Map::new();
+        p.insert("text".into(), "hi".into());
+        p.insert("meta".into(), serde_json::Value::Object(inner));
+        let p = serde_json::Value::Object(p);
+        let v1 = sign_input("c1", &actor, EventKind::Message, &p, Some("k1"));
+        let v2 = sign_input_v2("c1", &actor, EventKind::Message, &p, None, "ph");
+        let actor_json =
+            String::from_utf8(mur_common::canonical::canonical_json_for(&actor)).unwrap();
+        let kind_json = serde_json::to_string(&EventKind::Message).unwrap();
+        let payload = r#"{"meta":{"a":2,"z":1},"text":"hi"}"#;
+        assert_eq!(
+            String::from_utf8(v1).unwrap(),
+            format!(
+                r#"{{"actor":{actor_json},"channel_id":"c1","idempotency_key":"k1","kind":{kind_json},"payload":{payload},"v":{SIG_INPUT_VERSION}}}"#
+            )
+        );
+        assert_eq!(
+            String::from_utf8(v2).unwrap(),
+            format!(
+                r#"{{"actor":{actor_json},"channel_id":"c1","idempotency_key":null,"kind":{kind_json},"payload":{payload},"prev_hash":"ph","v":{SIG_INPUT_VERSION_V2}}}"#
+            )
+        );
+    }
 
     #[test]
     fn sign_input_excludes_seq_ts_and_is_stable() {
