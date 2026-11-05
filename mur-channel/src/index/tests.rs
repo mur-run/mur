@@ -711,18 +711,31 @@ fn an_out_of_order_fold_is_still_idempotent() {
 
 #[test]
 fn a_late_hitl_request_does_not_reopen_a_newer_response() {
-    // hitl_pending follows the newest gate event, so an older request that
-    // folds after a newer response must not flip the flag back on.
+    // An older request that folds after the response to the same gate must
+    // not flip the flag back on. `channel_hitl` holds independent
+    // requested/responded bits per `hitl_id`, so fold order cannot matter.
+    // Payloads must parse as the real types, or `fold_hitl` skips them and
+    // this would pass vacuously.
     let tmp = TempDir::new().unwrap();
     let idx = ChannelIndex::open(tmp.path()).unwrap();
     idx.upsert(&ch("c1", ChannelState::Working)).unwrap();
     let mut resp = msg(1, "");
     resp.kind = EventKind::HitlResponse;
+    resp.payload = serde_json::json!({
+        "hitl_id": "g1", "action_hash": "hash-g1", "allow": true, "surface": "cli",
+    });
     let mut req = msg(0, "");
     req.kind = EventKind::HitlRequest;
+    req.payload = serde_json::json!({
+        "hitl_id": "g1", "action_hash": "hash-g1", "tier": "write",
+        "tool_name": "shell", "tool_input": {}, "step_or_call_id": "call-1",
+        "agent_id": "mur", "timeout_ms": 0, "summary": "run it",
+    });
     idx.record_event("c1", &resp).unwrap();
     idx.record_event("c1", &req).unwrap();
-    assert!(!idx.list(10).unwrap()[0].hitl_pending);
+    let row = &idx.list(10).unwrap()[0];
+    assert_eq!(row.last_seq, 1, "both events must actually fold");
+    assert!(!row.hitl_pending);
 }
 
 #[test]
