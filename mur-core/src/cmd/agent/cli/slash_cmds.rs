@@ -538,35 +538,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                 Err(e) => app.push_system(format!("forget failed: {e}")),
             }
         }
-        SlashCmd::Skin(name_opt) => match name_opt {
-            None => {
-                let current = theme::skin_name(app.theme);
-                app.push_system(format!(
-                    "current skin: {current} — valid: {}",
-                    theme::SKIN_NAMES
-                ));
-            }
-            Some(name) => {
-                if !theme::is_known_skin(&name) {
-                    app.push_system(format!(
-                        "unknown skin '{name}' — valid: {}",
-                        theme::SKIN_NAMES
-                    ));
-                } else {
-                    app.apply_theme(theme::resolve_skin(&name));
-                    app.mascot_mode =
-                        welcome::resolve_mascot_mode(app.theme, std::io::stdout().is_terminal());
-                    let h = app.home.clone();
-                    match persist_skin(&h, &name) {
-                        Ok(()) => app.push_system(skin_notice(&name)),
-                        Err(e) => app.push_system(format!(
-                            "{} · could not persist: {e}",
-                            skin_notice(&name)
-                        )),
-                    }
-                }
-            }
-        },
+        SlashCmd::Skin(name_opt) => skin_cmd::handle(app, name_opt.as_deref()),
         SlashCmd::Panel(args) => panel::handle_panel_command(app, &args),
         SlashCmd::Browser(args) => browser_cmd::handle(app, args, tx).await,
         SlashCmd::Open => {
@@ -725,10 +697,3 @@ mod resolve_tests;
 /// ten newer conversations pushed it off the listing.
 #[cfg(test)]
 mod lookup_window_tests;
-
-/// The line an operator-typed `/skin <name>` prints (spec §2). Says what the
-/// switch cannot do: rows already in scrollback keep the colours they were
-/// painted with, and only a resume repaints them.
-fn skin_notice(name: &str) -> String {
-    format!("skin → {name} (earlier lines keep their colours; murmur --resume repaints them)")
-}

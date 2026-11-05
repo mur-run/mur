@@ -61,6 +61,7 @@ mod settlement;
 pub mod session_grant;
 mod shell;
 mod shell_complete;
+mod skin_cmd;
 mod slash_cmds;
 mod step;
 pub(crate) mod stream;
