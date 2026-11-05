@@ -12,6 +12,20 @@ pub struct SealInput<'a> {
     pub record: &'a [u8],
 }
 
+/// The one field every event line carries whatever its `kind`: enough to keep
+/// `seq` monotonic over lines a newer writer added.
+#[derive(serde::Deserialize)]
+struct SeqOnly {
+    seq: u64,
+}
+
+/// `seq` of one log line, read from the raw JSON rather than a full
+/// `ChannelEvent`, so a line whose `kind` this binary does not know still
+/// counts. `None` only for a line with no integer `seq` at all.
+pub(crate) fn line_seq(body: &str) -> Option<u64> {
+    serde_json::from_str::<SeqOnly>(body).ok().map(|s| s.seq)
+}
+
 /// The post-write sealing hook type (see [`SealHooks::post_write`]).
 pub type SealHook<'h> = dyn for<'a, 'b> Fn(&'b SealInput<'a>) -> Result<()> + 'h;
 
@@ -210,7 +224,16 @@ impl ChannelStore {
                         hit = Some((e, segment));
                     }
                 }
-                Err(_) => damaged.push(idx + 1),
+                Err(_) => {
+                    // A line this binary cannot fold (a newer `kind`, say)
+                    // still holds its `seq`. Skipping it would hand the next
+                    // append that same `seq`, and the index's `seq > last`
+                    // guard would then drop the new event silently.
+                    if let Some(seq) = line_seq(body) {
+                        last_seq = Some(seq);
+                    }
+                    damaged.push(idx + 1);
+                }
             }
         }
         if !damaged.is_empty() {
