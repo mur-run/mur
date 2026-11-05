@@ -661,11 +661,11 @@ async fn run_guarded_inner(
         }
 
         // Stuck-detection (§3.5, fleet half): an agent-authored channel event
-        // is progress and resets the clock; a router-only iteration is not.
+        // is progress and resets the clock; a router-only iteration is not,
+        // and neither is a consult (`Ask` / `AskReply`), which is written
+        // beside the work rather than as part of it.
         let events = svc.load_events(&fleet.channel_id)?;
-        let progressed = events
-            .iter()
-            .any(|e| e.seq > last_seq && matches!(e.actor, ChannelActor::Agent { .. }));
+        let progressed = member_progressed(&events, last_seq);
         last_seq = events.last().map(|e| e.seq).unwrap_or(last_seq);
         if progressed {
             last_progress = clock::Stopwatch::fresh();

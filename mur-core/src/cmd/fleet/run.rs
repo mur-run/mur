@@ -58,6 +58,25 @@ fn job_status_from_channel(
 /// Phase 1 "plan": one parallel delegate-step per member (or per track if parallel config present),
 /// each handed the goal (with approach injection for tracks).
 /// (Phase 2 replaces this with a router-produced DAG.)
+/// `(member, text)` for each agent-authored reply newer than `since`.
+/// Consults (`Ask` / `AskReply`) are members talking to each other, not
+/// replies to the user, so they are left out.
+fn member_replies(events: &[mur_common::channel::ChannelEvent], since: u64) -> Vec<(&str, &str)> {
+    events
+        .iter()
+        .filter(|e| e.seq > since && !e.kind.is_consult())
+        .filter_map(|e| match &e.actor {
+            ChannelActor::Agent { id } => e
+                .payload
+                .get("text")
+                .and_then(|v| v.as_str())
+                .filter(|t| !t.is_empty())
+                .map(|t| (id.as_str(), t)),
+            _ => None,
+        })
+        .collect()
+}
+
 pub fn build_fleet_procedure(
     goal: &str,
     members: &[String],
@@ -683,20 +702,8 @@ pub async fn cmd_fleet_run(
 
     // Tail agent-authored replies from THIS run (seq > pre-run cursor), peer-writes-own.
     // Note: prints payload["text"]; confirm the exact reply payload shape in the live Harness test.
-    for ev in svc
-        .load_events(&fleet.channel_id)?
-        .into_iter()
-        .filter(|e| e.seq > since)
-    {
-        if let (ChannelActor::Agent { id }, Some(text)) = (
-            &ev.actor,
-            ev.payload
-                .get("text")
-                .and_then(|v| v.as_str())
-                .filter(|t| !t.is_empty()),
-        ) {
-            println!("[{id}] {text}");
-        }
+    for (id, text) in member_replies(&svc.load_events(&fleet.channel_id)?, since) {
+        println!("[{id}] {text}");
     }
 
     // Tier 1: leave worktrees + tracks.json intact for the existing reconcilers

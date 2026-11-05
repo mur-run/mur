@@ -217,6 +217,15 @@ pub fn is_converged(reply: &str) -> bool {
     has("done") && !has("continue") && !has("not") && !has("incomplete")
 }
 
+/// Did a member write anything newer than `after_seq` that counts as work?
+/// Drives fleet stuck detection: router/system events and consults
+/// (`Ask` / `AskReply`) do not reset the clock.
+pub fn member_progressed(events: &[ChannelEvent], after_seq: u64) -> bool {
+    events.iter().any(|e| {
+        e.seq > after_seq && matches!(e.actor, ChannelActor::Agent { .. }) && !e.kind.is_consult()
+    })
+}
+
 /// Has a member emitted `marker` as a SENTINEL — the sole trimmed content of
 /// some line — in a channel event newer than `after_seq`?
 ///
@@ -228,11 +237,14 @@ pub fn is_converged(reply: &str) -> bool {
 /// excludes negated/embedded mentions — mirroring `is_converged`'s posture that
 /// stopping early on a false positive is worse than one extra iteration. Only
 /// `Agent`-authored events count (matching the stuck-detection filter), so the
-/// criterion text in the System goal event can't self-trigger either.
+/// criterion text in the System goal event can't self-trigger either. A
+/// consult (`Ask` / `AskReply`) never counts: an answer that quotes the marker
+/// is not the member declaring the goal met.
 pub fn channel_has_marker(events: &[ChannelEvent], marker: &str, after_seq: u64) -> bool {
     events.iter().any(|e| {
         e.seq > after_seq
             && matches!(e.actor, ChannelActor::Agent { .. })
+            && !e.kind.is_consult()
             && e.payload
                 .get("text")
                 .and_then(|t| t.as_str())
@@ -604,6 +616,8 @@ pub async fn cmd_fleet_run_loop(
     Ok(())
 }
 
+#[cfg(test)]
+mod consult_tests;
 #[cfg(test)]
 mod pause_tests;
 #[cfg(test)]

@@ -151,6 +151,46 @@ pub enum EventKind {
     HitlRequest,
     HitlResponse,
     Note,
+    /// One agent asks another a question (channel consult). Signed by the
+    /// asker; the payload is an [`AskPayload`] and `idempotency_key` equals
+    /// its `nonce`. Not agent progress: readers that count agent output skip it.
+    Ask,
+    /// The answerer's reply to an [`EventKind::Ask`]; the payload is an
+    /// [`AskReplyPayload`]. Not agent progress, a fleet reply, or a final answer.
+    AskReply,
+}
+
+impl EventKind {
+    /// True for the consult kinds, which an agent writes beside its work
+    /// rather than as part of it. Readers that treat any agent-authored event
+    /// as progress, a reply, or a final answer must exclude these.
+    pub fn is_consult(self) -> bool {
+        matches!(self, EventKind::Ask | EventKind::AskReply)
+    }
+}
+
+/// Payload of an [`EventKind::Ask`] event. Every field is inside the signed
+/// input, so the answerer, the deadline and the nonce cannot be rewritten
+/// without breaking the asker's signature.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AskPayload {
+    /// The answering agent's name. Only that agent may answer.
+    pub to: String,
+    /// The question text the answerer sees.
+    pub question: String,
+    /// Unix-epoch milliseconds after which the answerer refuses the `Ask`.
+    pub expires_at_ms: i64,
+    /// Single-use id; the event's `idempotency_key` carries the same value.
+    pub nonce: String,
+}
+
+/// Payload of an [`EventKind::AskReply`] event.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AskReplyPayload {
+    /// The `nonce` of the [`AskPayload`] this answers.
+    pub nonce: String,
+    /// The answer text.
+    pub text: String,
 }
 
 /// One append-only line in `~/.mur/channels/<id>/events.jsonl`.
@@ -208,6 +248,52 @@ mod tests {
         assert_eq!(back.seq, 3);
         assert_eq!(back.actor, ChannelActor::Agent { id: "qa".into() });
         assert_eq!(back.payload["text"], "hello");
+    }
+
+    #[test]
+    fn consult_kinds_round_trip_in_kebab_case() {
+        for (kind, wire) in [
+            (EventKind::Ask, "\"ask\""),
+            (EventKind::AskReply, "\"ask-reply\""),
+        ] {
+            assert_eq!(serde_json::to_string(&kind).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<EventKind>(wire).unwrap(), kind);
+            assert!(kind.is_consult());
+        }
+        assert!(!EventKind::Message.is_consult());
+    }
+
+    #[test]
+    fn ask_event_round_trips_with_typed_payload() {
+        let ask = AskPayload {
+            to: "tech-writer".into(),
+            question: "what does R7 cover?".into(),
+            expires_at_ms: 1_700_000_000_000,
+            nonce: "n1".into(),
+        };
+        let ev = ChannelEvent {
+            seq: 4,
+            ts: Utc::now(),
+            actor: ChannelActor::Agent { id: "pm".into() },
+            kind: EventKind::Ask,
+            payload: serde_json::to_value(&ask).unwrap(),
+            idempotency_key: Some(ask.nonce.clone()),
+            sig: None,
+            key_version: None,
+            prev_hash: None,
+        };
+        let back: ChannelEvent =
+            serde_json::from_str(&serde_json::to_string(&ev).unwrap()).unwrap();
+        assert_eq!(back.kind, EventKind::Ask);
+        let got: AskPayload = serde_json::from_value(back.payload).unwrap();
+        assert_eq!(got, ask);
+
+        let reply = AskReplyPayload {
+            nonce: "n1".into(),
+            text: "seq reuse".into(),
+        };
+        let v = serde_json::to_value(&reply).unwrap();
+        assert_eq!(serde_json::from_value::<AskReplyPayload>(v).unwrap(), reply);
     }
 
     #[test]
