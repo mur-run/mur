@@ -43,4 +43,11 @@ describe("channelEventsToMessages", () => {
       { role: "agent", text: "done" },
     ]);
   });
+
+  it("names a non-agent consult actor `?`, matching the Rust renderer", () => {
+    const msgs = channelEventsToMessages([
+      { ...base, seq: 0, actor: { kind: "human", name: "david" }, kind: "ask", payload: { to: "pm", question: "status?" } },
+    ]);
+    expect(msgs).toEqual([{ role: "consult", text: "? → pm: status?" }]);
+  });
 });

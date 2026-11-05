@@ -106,7 +106,7 @@ export interface ChannelEvent {
 /** One `consult` row for an agent-to-agent `ask` / `ask-reply`, or null for
  *  anything else. These render muted, never as the agent's reply to the user. */
 export function consultLine(ev: ChannelEvent): ChatMsg | null {
-  const who = ev.actor.kind === "agent" ? (ev.actor.id ?? "") : "";
+  const who = (ev.actor.kind === "agent" && ev.actor.id) || "?";
   if (ev.kind === "ask") {
     return { role: "consult", text: `${who} → ${ev.payload?.to ?? "?"}: ${ev.payload?.question ?? ""}` };
   }

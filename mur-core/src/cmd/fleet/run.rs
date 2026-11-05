@@ -55,9 +55,6 @@ fn job_status_from_channel(
         })
 }
 
-/// Phase 1 "plan": one parallel delegate-step per member (or per track if parallel config present),
-/// each handed the goal (with approach injection for tracks).
-/// (Phase 2 replaces this with a router-produced DAG.)
 /// `(member, text)` for each agent-authored reply newer than `since`.
 /// Consults (`Ask` / `AskReply`) are members talking to each other, not
 /// replies to the user, so they are left out.
@@ -77,6 +74,9 @@ fn member_replies(events: &[mur_common::channel::ChannelEvent], since: u64) -> V
         .collect()
 }
 
+/// Phase 1 "plan": one parallel delegate-step per member (or per track if parallel config present),
+/// each handed the goal (with approach injection for tracks).
+/// (Phase 2 replaces this with a router-produced DAG.)
 pub fn build_fleet_procedure(
     goal: &str,
     members: &[String],
