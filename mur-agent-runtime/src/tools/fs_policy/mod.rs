@@ -299,47 +299,6 @@ pub fn format_io_error(verb: &str, path: &Path, base: &Path, err: &std::io::Erro
 /// allowed to do?". Reads are now carved back via
 /// [`self_protected_write_only`]: `identity.key` remains read-denied through
 /// `LaunchChain::protects_read` (signing authority), `profile.yaml` does not.
-/// The read/write policy an agent's file tools actually enforce, and the
-/// launch chain they enforce it with: the profile entitlement put through
-/// [`for_file_tools`] (implicit grants, self-protected denies) plus
-/// [`LaunchChain::new`](crate::sandbox::launch_chain::LaunchChain::new) for
-/// `agent_home`. The one constructor for both, so an agent's own tools and any
-/// check made on its behalf (channel consult §D3.6) cannot drift apart. Never
-/// hand the raw profile entitlement to a gate instead.
-pub(crate) fn file_tool_policy(
-    profile_fs: FilesystemEntitlement,
-    agent_home: &Path,
-) -> (
-    FilesystemEntitlement,
-    crate::sandbox::launch_chain::LaunchChain,
-) {
-    (
-        for_file_tools(profile_fs, agent_home),
-        crate::sandbox::launch_chain::LaunchChain::new(agent_home),
-    )
-}
-
-/// [`file_tool_policy`] for the agent rooted at `agent_home`, read from its
-/// own `profile.yaml` through the same loader its runtime boots with
-/// (template expansion and path validation included). Nothing the caller
-/// holds contributes to it. An unreadable or unparsable profile is an error,
-/// never an empty or default policy.
-pub(crate) fn file_tool_policy_of(
-    agent_home: &Path,
-) -> Result<
-    (
-        FilesystemEntitlement,
-        crate::sandbox::launch_chain::LaunchChain,
-    ),
-    crate::profile::ProfileLoadError,
-> {
-    let profile = crate::profile::Profile::load(agent_home)?;
-    Ok(file_tool_policy(
-        profile.inner.entitlements.filesystem,
-        agent_home,
-    ))
-}
-
 pub(crate) fn for_file_tools(
     mut fs: FilesystemEntitlement,
     agent_home: &Path,
@@ -382,6 +341,47 @@ pub(crate) fn for_file_tools(
         }
     }
     fs
+}
+
+/// The read/write policy an agent's file tools actually enforce, and the
+/// launch chain they enforce it with: the profile entitlement put through
+/// [`for_file_tools`] (implicit grants, self-protected denies) plus
+/// [`LaunchChain::new`](crate::sandbox::launch_chain::LaunchChain::new) for
+/// `agent_home`. The one constructor for both, so an agent's own tools and any
+/// check made on its behalf (channel consult §D3.6) cannot drift apart. Never
+/// hand the raw profile entitlement to a gate instead.
+pub(crate) fn file_tool_policy(
+    profile_fs: FilesystemEntitlement,
+    agent_home: &Path,
+) -> (
+    FilesystemEntitlement,
+    crate::sandbox::launch_chain::LaunchChain,
+) {
+    (
+        for_file_tools(profile_fs, agent_home),
+        crate::sandbox::launch_chain::LaunchChain::new(agent_home),
+    )
+}
+
+/// [`file_tool_policy`] for the agent rooted at `agent_home`, read from its
+/// own `profile.yaml` through the same loader its runtime boots with
+/// (template expansion and path validation included). Nothing the caller
+/// holds contributes to it. An unreadable or unparsable profile is an error,
+/// never an empty or default policy.
+pub(crate) fn file_tool_policy_of(
+    agent_home: &Path,
+) -> Result<
+    (
+        FilesystemEntitlement,
+        crate::sandbox::launch_chain::LaunchChain,
+    ),
+    crate::profile::ProfileLoadError,
+> {
+    let profile = crate::profile::Profile::load(agent_home)?;
+    Ok(file_tool_policy(
+        profile.inner.entitlements.filesystem,
+        agent_home,
+    ))
 }
 
 /// True when `canonical` falls under any of `roots`.
@@ -599,13 +599,19 @@ fn decide_read(
 
 /// Typed read gate: the same decision as [`check_read_entitlement`], for
 /// callers that must not see error text (the project-instructions loader).
+///
+/// When both sides refuse, the asker's refusal wins: `NoGrant` is a refusal
+/// the loader *names*, and naming a file the asker cannot read is exactly the
+/// disclosure §D4 forbids. With no consult bound this is the answerer's own
+/// refusal, unchanged.
 pub(crate) fn check_read_refusal(
     fs: &FilesystemEntitlement,
     canonical: &Path,
     chain: &crate::sandbox::launch_chain::LaunchChain,
 ) -> Result<(), ReadRefusal> {
-    decide_read(fs, canonical, chain).map_err(|(r, _)| r)?;
-    consult_decision(canonical).map_err(|_| ReadRefusal::OutsideConsult)
+    let own = decide_read(fs, canonical, chain).map_err(|(r, _)| r);
+    consult_decision(canonical).map_err(|_| ReadRefusal::OutsideConsult)?;
+    own
 }
 
 /// Channel consult (§D4, R4): the second read decision, made with the asking
