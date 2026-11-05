@@ -282,9 +282,11 @@ fn extract_report(
         .loop_cfg
         .as_ref()
         .and_then(|l| crate::cmd::fleet::done_policy::done_marker(&l.done_when));
-    let agent_texts = events
-        .iter()
-        .filter(|e| e.seq > baseline_seq && matches!(e.actor, ChannelActor::Agent { .. }));
+    let agent_texts = events.iter().filter(|e| {
+        e.seq > baseline_seq
+            && matches!(e.actor, ChannelActor::Agent { .. })
+            && !e.kind.is_consult()
+    });
     let mut best: Option<&str> = None;
     let mut last: Option<&str> = None;
     for e in agent_texts {
@@ -337,6 +339,50 @@ fn save_report(mur_home: &Path, question: &str, report: &str) -> Result<std::pat
 mod tests {
     use super::*;
     use crate::cmd::deep_research::status::{DeepResearchStatus, WorkerStatus};
+
+    /// A consult reply is never the deep-research final answer, even when it
+    /// is the last agent-authored text of the run.
+    #[test]
+    fn extract_report_ignores_consult_replies() {
+        use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
+        let ev = |seq, kind, text: &str| ChannelEvent {
+            seq,
+            ts: chrono::Utc::now(),
+            actor: ChannelActor::Agent { id: "w".into() },
+            kind,
+            payload: serde_json::json!({ "text": text }),
+            idempotency_key: None,
+            sig: None,
+            key_version: None,
+            prev_hash: None,
+        };
+        let fleet = mur_common::fleet::Fleet {
+            name: "dr".into(),
+            display_name: String::new(),
+            goal: String::new(),
+            router: None,
+            members: vec![],
+            team_id: None,
+            channel_id: "fleet-dr".into(),
+            procedure: vec![],
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: None,
+            parallel: None,
+            hitl: None,
+            requires_programs: vec![],
+            limits: None,
+            needs: vec![],
+        };
+        let evs = vec![
+            ev(1, EventKind::Message, "the report"),
+            ev(2, EventKind::AskReply, "a consult answer"),
+        ];
+        assert_eq!(
+            extract_report(&evs, &fleet, 0).as_deref(),
+            Some("the report")
+        );
+    }
 
     fn worker(name: &str, running: bool, egress: bool) -> WorkerStatus {
         WorkerStatus {

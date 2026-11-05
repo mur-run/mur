@@ -15,8 +15,8 @@ import { expandBatch, groupBatches } from "./hitlModel";
 import { ProposalChip } from "./ProposalChip";
 import { chipReducer, NO_CHIP, PROPOSAL_EVENT, type ProposalChipPayload } from "./proposalChipModel";
 
-interface ChatMsg {
-  role: "user" | "agent" | "error";
+export interface ChatMsg {
+  role: "user" | "agent" | "error" | "consult";
   text: string;
   /** True when this agent reply was committed early by a Stop action. */
   stopped?: boolean;
@@ -84,7 +84,7 @@ interface ChatDelta {
  *  tagged on `kind` (kebab-case): `{kind:"human",name}` / `{kind:"agent",id}` /
  *  `{kind:"system"}`. The event `kind` is also kebab-case ("message", "note",
  *  "tool-call", …) and `payload` is free-form JSON. */
-interface ChannelEvent {
+export interface ChannelEvent {
   seq: number;
   ts: string;
   actor:
@@ -92,17 +92,43 @@ interface ChannelEvent {
     | { kind: "agent"; id?: string }
     | { kind: "system" };
   kind: string;
-  payload: { text?: string; task_id?: string; usage?: TurnUsage };
+  payload: {
+    text?: string;
+    task_id?: string;
+    usage?: TurnUsage;
+    /** `ask` only: the answering agent and the question. */
+    to?: string;
+    question?: string;
+  };
   idempotency_key?: string | null;
 }
 
-/** Map persisted channel events to the committed message list. We only render
- *  `message` events; non-message kinds (notes, tool calls, state changes …) are
- *  not displayed here. System-actor messages are skipped — this view has no
- *  system role and rendering them as the agent would mislabel them. */
-function channelEventsToMessages(events: ChannelEvent[]): ChatMsg[] {
+/** One `consult` row for an agent-to-agent `ask` / `ask-reply`, or null for
+ *  anything else. These render muted, never as the agent's reply to the user. */
+export function consultLine(ev: ChannelEvent): ChatMsg | null {
+  const who = (ev.actor.kind === "agent" && ev.actor.id) || "?";
+  if (ev.kind === "ask") {
+    return { role: "consult", text: `${who} → ${ev.payload?.to ?? "?"}: ${ev.payload?.question ?? ""}` };
+  }
+  if (ev.kind === "ask-reply") {
+    return { role: "consult", text: `${who} ↩ ${ev.payload?.text ?? ""}` };
+  }
+  return null;
+}
+
+/** Map persisted channel events to the committed message list. We render
+ *  `message` events, plus agent-to-agent consults as muted `consult` rows;
+ *  other kinds (notes, tool calls, state changes …) are not displayed here.
+ *  System-actor messages are skipped — this view has no system role and
+ *  rendering them as the agent would mislabel them. */
+export function channelEventsToMessages(events: ChannelEvent[]): ChatMsg[] {
   const out: ChatMsg[] = [];
   for (const ev of events) {
+    const consult = consultLine(ev);
+    if (consult) {
+      out.push(consult);
+      continue;
+    }
     if (ev.kind !== "message") continue;
     const text = ev.payload?.text ?? "";
     switch (ev.actor.kind) {

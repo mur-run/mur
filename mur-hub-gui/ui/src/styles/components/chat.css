@@ -90,6 +90,15 @@
   user-select: none;
 }
 
+/* Agent-to-agent consult (`ask` / `ask-reply`): context, not a reply to you. */
+.chat__msg--consult {
+  align-self: center;
+  background: transparent;
+  color: var(--text-tertiary, var(--text-secondary));
+  border: 1px dashed var(--border-subtle, var(--surface-hover));
+  font-size: var(--text-xs, 12px);
+}
+
 .chat__msg--error {
   align-self: flex-start;
   background: var(--coral-soft, #fde8e6);

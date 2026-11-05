@@ -218,6 +218,12 @@ pub fn summarize(ev: &ChannelEvent, channel_id: &str) -> String {
             ),
             Err(_) => "approval decision (unreadable)".to_string(),
         },
+        EventKind::Ask => format!(
+            "? → {}: {}",
+            field(ev, &["to"]).unwrap_or("?"),
+            clip(field(ev, &["question"]).unwrap_or(""))
+        ),
+        EventKind::AskReply => format!("↩ {}", clip(field(ev, &["text"]).unwrap_or(""))),
     };
     format!("{who}: {body}")
 }
@@ -401,6 +407,29 @@ mod tests {
         };
         let line = summarize(&ev, "ch1");
         assert!(line.contains("mur channel approve ch1 h7"), "{line}");
+    }
+
+    /// Consult events render in the raw transcript but are not milestones:
+    /// an `AskReply` is not a member's turn summary.
+    #[test]
+    fn consult_kinds_render_raw_but_not_as_milestones() {
+        let mut ev = mk(
+            1,
+            0,
+            ChannelActor::Agent { id: "pm".into() },
+            EventKind::Ask,
+            serde_json::json!({ "to": "tech-writer", "question": "which file?", "expires_at_ms": 0, "nonce": "n1" }),
+        );
+        assert_eq!(summarize(&ev, "ch1"), "pm: ? → tech-writer: which file?");
+        let mut at = HashMap::new();
+        assert!(milestone(&ev, "ch1", &mut at).is_none());
+        ev.kind = EventKind::AskReply;
+        ev.actor = ChannelActor::Agent {
+            id: "tech-writer".into(),
+        };
+        ev.payload = serde_json::json!({ "nonce": "n1", "text": "README.md" });
+        assert_eq!(summarize(&ev, "ch1"), "tech-writer: ↩ README.md");
+        assert!(milestone(&ev, "ch1", &mut at).is_none());
     }
 
     // ── Milestone mode ──────────────────────────────────────────────────────

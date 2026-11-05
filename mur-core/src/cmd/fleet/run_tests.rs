@@ -389,3 +389,34 @@ async fn loop_run_passes_a_granted_target_and_skips_the_gate_without_one() {
     assert_eq!(stop, LoopStop::QueueDrained);
     assert_eq!(hitl_count(ungranted.path()), 0);
 }
+
+/// Consults between members are not replies to the user.
+#[test]
+fn member_replies_skip_consults_and_non_agents() {
+    use mur_common::channel::{ChannelEvent, EventKind};
+    let ev = |seq, actor, kind, text: &str| ChannelEvent {
+        seq,
+        ts: chrono::Utc::now(),
+        actor,
+        kind,
+        payload: serde_json::json!({ "text": text }),
+        idempotency_key: None,
+        sig: None,
+        key_version: None,
+        prev_hash: None,
+    };
+    let pm = || ChannelActor::Agent { id: "pm".into() };
+    let evs = vec![
+        ev(1, pm(), EventKind::Message, "before the run"),
+        ev(2, ChannelActor::System, EventKind::Note, "router"),
+        ev(3, pm(), EventKind::Ask, "which file?"),
+        ev(
+            4,
+            ChannelActor::Agent { id: "tw".into() },
+            EventKind::AskReply,
+            "README.md",
+        ),
+        ev(5, pm(), EventKind::Message, "done"),
+    ];
+    assert_eq!(member_replies(&evs, 1), vec![("pm", "done")]);
+}
