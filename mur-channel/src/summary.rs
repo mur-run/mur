@@ -412,6 +412,34 @@ mod tests {
         };
         assert_eq!(svc.list_conversations(q).unwrap()[0].unread, 0);
     }
+
+    #[test]
+    fn rebuilding_preserves_a_read_watermark_at_seq_zero() {
+        // Seq 0 is a real position: a watermark there is user state the
+        // event log cannot regenerate, so a rebuild must keep it.
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        let first = svc
+            .append_message(
+                &ch.id,
+                ChannelActor::Agent { id: "mur".into() },
+                EventKind::Message,
+                "hello",
+                None,
+            )
+            .unwrap();
+        assert_eq!(first.seq, 0);
+        svc.mark_read(&ch.id, first.seq).unwrap();
+
+        svc.index().rebuild_from(svc.store()).unwrap();
+
+        let q = ConversationQuery {
+            agent: None,
+            active_only: false,
+        };
+        assert_eq!(svc.list_conversations(q).unwrap()[0].unread, 0);
+    }
 }
 
 #[cfg(test)]

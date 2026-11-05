@@ -14,13 +14,9 @@ use std::path::Path;
 use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 
-/// The channel's router/owner agent — the trusted WRITER that signs the events
-/// appended to workflow/HITL channels (v3d). The concierge `"mur"` owns these
-/// channels; its on-disk identity (`<home>/agents/mur/`) signs `HitlRequest`/
-/// `HitlResponse`/workflow events, and the HITL gate verifies an incoming
-/// `HitlResponse` against this agent's pubkey before releasing. Internal
-/// directory slug, so lowercase (matches the on-disk `name`).
-pub const ROUTER_AGENT: &str = "mur";
+/// The channel's router/owner agent; defined beside the verification that
+/// resolves System/Human actors to it ([`mur_channel::verify::ROUTER_AGENT`]).
+pub use mur_channel::verify::ROUTER_AGENT;
 
 /// Plant a signing identity for `agent` under `home`, so events that agent
 /// writes in a test are SIGNED the way they are in production.

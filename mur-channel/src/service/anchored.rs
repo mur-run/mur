@@ -26,7 +26,7 @@ use super::ChannelService;
 use crate::anchor::{self, AnchorLagError};
 use crate::head::{Head, HeadFields, chain_log, chain_log_with_prefix};
 use crate::head_io;
-use crate::store::{PreSealInput, SealHook, SealHooks, SealInput};
+use crate::store::{PreSealInput, SealHook, SealHooks, SealInput, line_seq};
 
 /// Who signs the head of an anchored append: the writer's identity and its
 /// key version, the same pair that signs the event.
@@ -62,7 +62,7 @@ fn mark(mur_home: &Path, input: &PreSealInput<'_>) -> Result<()> {
         .with_context(|| format!("mark channel head dirty for {}", input.channel_id))
 }
 
-/// `seq` of the last parseable event in `log`, and of the last one that
+/// `seq` of the last event line in `log`, and of the last one that
 /// predates `record` when `record` is the log's final line (a fresh write);
 /// when it is not (a dedup hit on an older line), every line predates the
 /// first head, so both are the last `seq`.
@@ -74,12 +74,14 @@ fn seqs(log: &[u8], record: &[u8]) -> (Option<u64>, Option<u64>) {
         log
     };
     // Walk back from the end and decode one line at a time, so the cost is
-    // the unparseable tail plus one event, not the whole log.
+    // the unparseable tail plus one line. Only `seq` is decoded, as the
+    // append path does: a line with a `kind` this binary does not know is
+    // still an event, and skipping it would seal a head whose `seq` (and a
+    // first head's `legacy_through`) lags the log.
     let last_seq = |bytes: &[u8]| {
         bytes
             .rsplit(|&b| b == b'\n')
-            .find_map(|l| serde_json::from_str::<ChannelEvent>(&String::from_utf8_lossy(l)).ok())
-            .map(|e| e.seq)
+            .find_map(|l| line_seq(&String::from_utf8_lossy(l)))
     };
     (last_seq(log), last_seq(body))
 }
@@ -415,8 +417,7 @@ mod seqs_tests {
         String::from_utf8_lossy(bytes)
             .lines()
             .rev()
-            .find_map(|l| serde_json::from_str::<ChannelEvent>(l).ok())
-            .map(|e| e.seq)
+            .find_map(line_seq)
     }
 
     /// Several unparseable lines at the tail (garbage, blank, CRLF, non-UTF-8,
@@ -455,5 +456,19 @@ mod seqs_tests {
         }
         // Nothing parseable at all.
         assert_eq!(seqs(b"x\ny\n", b"z\n"), (None, None));
+    }
+
+    /// A line whose `kind` this binary does not know still carries its
+    /// `seq`; the head must count it, or it lags the log (R7).
+    #[test]
+    fn unknown_kind_line_still_counts() {
+        let mut log = line(3);
+        log.extend_from_slice(b"{\"seq\":4,\"kind\":\"from_the_future\"}\n");
+        // Dedup hit on an older line: both are the unknown line's `seq`.
+        assert_eq!(seqs(&log, &line(3)), (Some(4), Some(4)));
+        // Fresh write after it: `before` is the unknown line too.
+        let record = line(5);
+        log.extend(&record);
+        assert_eq!(seqs(&log, &record), (Some(5), Some(4)));
     }
 }
