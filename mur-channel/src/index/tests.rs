@@ -633,11 +633,15 @@ fn an_index_predating_the_fold_ledger_asks_for_a_rebuild() {
     // rerun would double-count them. The rebuild also recovers any message
     // the old `>` guard dropped.
     let tmp = TempDir::new().unwrap();
-    drop(ChannelIndex::open(tmp.path()).unwrap());
+    {
+        // A brand-new DB owes one (cheap) rebuild; pay it.
+        let idx = ChannelIndex::open(tmp.path()).unwrap();
+        idx.rebuild_from(&ChannelStore::new(tmp.path())).unwrap();
+    }
     {
         let idx = ChannelIndex::open(tmp.path()).unwrap();
         assert!(
-            !idx.just_migrated(),
+            !idx.rebuild_pending().unwrap(),
             "a current DB must not rebuild every open"
         );
         idx.conn_for_test()
@@ -647,5 +651,10 @@ fn an_index_predating_the_fold_ledger_asks_for_a_rebuild() {
             )
             .unwrap();
     }
-    assert!(ChannelIndex::open(tmp.path()).unwrap().just_migrated());
+    assert!(
+        ChannelIndex::open(tmp.path())
+            .unwrap()
+            .rebuild_pending()
+            .unwrap()
+    );
 }

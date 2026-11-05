@@ -101,22 +101,18 @@ impl ChannelService {
     pub fn open(mur_home: &Path) -> Result<Self> {
         let store = ChannelStore::new(mur_home);
         let index = ChannelIndex::open(mur_home)?;
-        // First open after an upgrade that added the activity columns: every
-        // pre-existing row is still sitting on their SQL defaults (msg_count=0,
-        // preview='', ...), which makes every legacy channel look inactive to
-        // the new contracts. `ChannelIndex::migrate` cannot fix this itself —
-        // it has no `ChannelStore` — so the one-time rebuild happens here,
-        // the only place that holds both. `just_migrated` is true at most once
-        // per DB file (ALTER TABLE ADD COLUMN fails forever after the first
-        // success), so this cannot re-run on every open. A failed rebuild must
-        // never block startup: the index is disposable, so log and carry on
-        // with the stale-but-working rows.
-        if index.just_migrated()
-            && let Err(e) = index.rebuild_from(&store)
-        {
+        // First open after an upgrade (or after a rebuild that failed): the
+        // rows sit on stale or default values until they are re-derived from
+        // the event log. `ChannelIndex::migrate` records that debt but cannot
+        // pay it — it has no `ChannelStore` — so it is paid here, the only
+        // place that holds both. The debt is a row, cleared in the rebuild's
+        // own commit, so a failure here is retried on the next open rather
+        // than lost. It must never block startup: the index is disposable,
+        // so log and carry on with the stale-but-working rows.
+        if let Err(e) = index.rebuild_if_pending(&store) {
             tracing::warn!(
                 error = %e,
-                "post-migration channel index rebuild failed; index remains stale but usable"
+                "post-migration channel index rebuild failed; will retry on next open"
             );
         }
         Ok(Self {
