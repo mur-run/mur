@@ -260,3 +260,15 @@ impl App {
             .unwrap_or_default()
     }
 }
+
+/// The role label on this agent's turns: its profile's `display_name`
+/// (`MUR`), so split panes tell speakers apart. Falls back to the agent's
+/// name when the profile is unreadable or names none — a label is never
+/// worth failing a session over.
+pub(super) fn agent_label(home: &std::path::Path, agent: &str) -> String {
+    mur_common::AgentProfile::load(home, agent)
+        .ok()
+        .map(|p| p.display_name.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| agent.to_string())
+}

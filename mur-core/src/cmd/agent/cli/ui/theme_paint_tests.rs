@@ -108,7 +108,7 @@ fn user_body_is_muted() {
     for theme in [&ANSI, &LIGHT, &MUR, &CLAY] {
         let m = ChatMsg::for_test(Role::User, "hello there");
         let mut lines = Vec::new();
-        push_message(&mut lines, &m, 0, theme, false, 80);
+        push_message(&mut lines, &m, 0, theme, false, 80, "agent");
         let got = style_in(&lines, "hello there");
         assert_eq!(got.fg, theme.muted.fg, "user body colour");
         assert_eq!(

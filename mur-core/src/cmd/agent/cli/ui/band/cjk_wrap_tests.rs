@@ -24,7 +24,7 @@ fn paint(role: Role, width: u16) -> (Vec<(usize, String)>, u16) {
     m.rendered =
         Some(markdown::render(PROSE, markdown::body_cols(width, ANSI.inner_padding), &ANSI).lines);
     let mut lines = Vec::new();
-    push_message(&mut lines, &m, 0, &ANSI, false, width);
+    push_message(&mut lines, &m, 0, &ANSI, false, width, "agent");
     let measured = band_rows(&ANSI, lines.clone(), width);
     let area = Rect::new(0, 0, width, 80);
     let mut buf = Buffer::empty(area);

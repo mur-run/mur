@@ -135,6 +135,8 @@ pub struct HandoverRequest {
 pub struct App {
     pub home: PathBuf,
     pub agent: String,
+    /// The agent's `display_name` (`MUR`), the role label on its turns.
+    pub agent_label: String,
     pub messages: Vec<ChatMsg>,
     pub input: TextArea<'static>,
     pub context_task_id: Option<String>,
@@ -458,6 +460,7 @@ pub struct App {
 impl App {
     pub fn new(home: PathBuf, agent: String, session: Session, theme: &'static Theme) -> Self {
         Self {
+            agent_label: session::agent_label(&home, &agent),
             home,
             agent,
             messages: Vec::new(),

@@ -108,13 +108,14 @@ pub(super) fn push_agent_header(
     m: &ChatMsg,
     spinner: usize,
     theme: &'static crate::cmd::agent::cli::theme::Theme,
+    label: &str,
 ) {
     let (bullet, header_style) = if m.streaming {
         let spin = SPINNER[spinner % SPINNER.len()];
-        (format!("{spin} agent"), theme.accent)
+        (format!("{spin} {label}"), theme.accent)
     } else {
         (
-            "● agent".to_string(),
+            format!("● {label}"),
             theme.accent.add_modifier(Modifier::BOLD),
         )
     };
@@ -193,6 +194,7 @@ pub(super) fn push_message(
     theme: &'static crate::cmd::agent::cli::theme::Theme,
     cards_expanded: bool,
     width: u16,
+    label: &str,
 ) {
     // Step cards replace role-based rendering entirely for that message.
     if let Some(card) = &m.step {
@@ -283,7 +285,7 @@ pub(super) fn push_message(
         Role::Agent => {
             // Animated bullet while streaming, solid bullet once done — so an
             // in-progress turn reads as "live" at a glance vs. a finished one.
-            push_agent_header(lines, m, spinner, theme);
+            push_agent_header(lines, m, spinner, theme, label);
             lines.extend(agent_body_lines(
                 &m.text,
                 m.streaming,
@@ -323,7 +325,7 @@ mod settlement_paint_tests {
         let mut m = ChatMsg::for_test(Role::Agent, "did it");
         m.settlement = Some("  ✔ bash · cargo test".into());
         let mut lines = Vec::new();
-        push_message(&mut lines, &m, 0, &ANSI, false, 60);
+        push_message(&mut lines, &m, 0, &ANSI, false, 60, "agent");
         let text: Vec<String> = lines
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -347,7 +349,7 @@ mod settlement_paint_tests {
     fn a_message_without_one_paints_nothing_extra() {
         let m = ChatMsg::for_test(Role::Agent, "did it");
         let mut lines = Vec::new();
-        push_message(&mut lines, &m, 0, &ANSI, false, 60);
+        push_message(&mut lines, &m, 0, &ANSI, false, 60, "agent");
         let text: Vec<String> = lines
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -421,22 +423,20 @@ mod block_tests {
         );
     }
 
-    /// Every item is set off from the one before it, tool cards included: a
-    /// run of cards used to group flush against each other and read as one
-    /// smear (field report). Each card is its own line of the story.
+    /// A card after a spoken turn is set off by a gap; a card after a card
+    /// stacks flush (murmur UI P1/P2 spec §4, superseding #1236's
+    /// gap-per-card): with the accent and bold gone from success rows a run
+    /// of calls reads as one quiet block, and the gaps mark the turns.
     #[test]
-    fn every_step_card_opens_a_gap() {
+    fn a_card_opens_a_gap_only_after_a_non_card() {
         let mut app = App::test_fixture();
         app.messages.push(ChatMsg::for_test(Role::User, "hi"));
         app.messages.push(card());
         app.messages.push(card());
-        for i in [1, 2] {
-            let lines = text(&message_block(&app, i, &app.messages[i], 0, false));
-            assert!(
-                lines.first().is_some_and(|l| is_gap(l)),
-                "card {i}: {lines:?}"
-            );
-        }
+        let first = text(&message_block(&app, 1, &app.messages[1], 0, false));
+        assert!(first.first().is_some_and(|l| is_gap(l)), "{first:?}");
+        let second = text(&message_block(&app, 2, &app.messages[2], 0, false));
+        assert!(!second.first().is_some_and(|l| is_gap(l)), "{second:?}");
     }
 
     /// Control — if this flips, gaps stop marking anything.
@@ -471,7 +471,7 @@ mod shell_footer_tests {
         let mut m = ChatMsg::for_test(Role::Shell, text);
         m.streaming = streaming;
         let mut lines = Vec::new();
-        push_message(&mut lines, &m, 0, &ANSI, false, 60);
+        push_message(&mut lines, &m, 0, &ANSI, false, 60, "agent");
         lines
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -514,7 +514,7 @@ mod approval_badge_tests {
         let mut m = ChatMsg::for_test(Role::System, "approved bash · git push -u origin feat/x");
         m.severity = Severity::Success;
         let mut lines = Vec::new();
-        push_message(&mut lines, &m, 0, &ANSI, false, 80);
+        push_message(&mut lines, &m, 0, &ANSI, false, 80, "agent");
         let row = lines.first().expect("one row");
         assert!(row.spans.len() >= 3, "badge must be its own span: {row:?}");
         let badge = row
@@ -549,7 +549,7 @@ mod approval_badge_tests {
         let mut m = ChatMsg::for_test(Role::System, "reconnected to agent");
         m.severity = Severity::Info;
         let mut lines = Vec::new();
-        push_message(&mut lines, &m, 0, &ANSI, false, 80);
+        push_message(&mut lines, &m, 0, &ANSI, false, 80, "agent");
         assert_eq!(lines.first().expect("row").spans.len(), 1);
     }
 
@@ -564,7 +564,7 @@ mod approval_badge_tests {
         );
         m.severity = Severity::Success;
         let mut lines = Vec::new();
-        push_message(&mut lines, &m, 0, &ANSI, false, 120);
+        push_message(&mut lines, &m, 0, &ANSI, false, 120, "agent");
         let row = lines.first().expect("one row");
         let intent = row
             .spans
@@ -601,7 +601,7 @@ mod approval_badge_tests {
         );
         m.severity = Severity::Success;
         let mut lines = Vec::new();
-        push_message(&mut lines, &m, 0, &ANSI, false, 120);
+        push_message(&mut lines, &m, 0, &ANSI, false, 120, "agent");
         let row = lines.first().expect("one row");
         let cmd = row
             .spans
