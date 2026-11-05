@@ -804,18 +804,7 @@ fn a_new_agent_message_after_reading_is_unread_again() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
     let ch = svc.create_for_agent("mur").unwrap();
-    // NOTE: this test does not currently discriminate. The agent's
-    // first message is seq 0, and `last_read_seq` defaults to 0 (the
-    // same 0-indexed collision `last_seq` needed a -1 sentinel for) —
-    // so a `mark_read(&ch.id, 0)` call here would be a no-op against
-    // the column default, and the test would pass whether or not
-    // "after reading" ever actually ran. The `mark_read` call is
-    // deliberately omitted rather than kept-but-useless. Fixing this
-    // for real needs the `last_read_seq` -1 sentinel, deferred to
-    // Phase 2; once that lands, add `svc.mark_read(&ch.id,
-    // first.seq).unwrap()` back here and this test becomes
-    // load-bearing.
-    let _first = svc
+    let first = svc
         .append_message(
             &ch.id,
             ChannelActor::Agent { id: "mur".into() },
@@ -824,6 +813,9 @@ fn a_new_agent_message_after_reading_is_unread_again() {
             None,
         )
         .unwrap();
+    // `first` is seq 0: marking it read must be a real watermark move, not
+    // a no-op against the column default.
+    svc.mark_read(&ch.id, first.seq).unwrap();
     svc.append_message(
         &ch.id,
         ChannelActor::Agent { id: "mur".into() },
@@ -890,4 +882,35 @@ fn replaying_an_old_idempotency_key_never_moves_updated_at_backwards() {
         before.to_rfc3339(),
         "index recency went backwards on replay"
     );
+}
+
+#[test]
+fn an_agent_message_at_seq_zero_is_unread_until_marked_read() {
+    // An agent-initiated channel puts an inbound message at seq 0. A 0
+    // watermark default would compute `0 > 0 == false` and hide it.
+    let tmp = TempDir::new().unwrap();
+    let svc = ChannelService::open(tmp.path()).unwrap();
+    let ch = svc.create_for_agent("mur").unwrap();
+    let first = svc
+        .append_message(
+            &ch.id,
+            ChannelActor::Agent { id: "mur".into() },
+            EventKind::Message,
+            "hi, I noticed something",
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        first.seq, 0,
+        "fixture must put the inbound message at seq 0"
+    );
+
+    let q = || crate::summary::ConversationQuery {
+        agent: None,
+        active_only: false,
+    };
+    assert_eq!(svc.list_conversations(q()).unwrap()[0].unread, 1);
+
+    svc.mark_read(&ch.id, first.seq).unwrap();
+    assert_eq!(svc.list_conversations(q()).unwrap()[0].unread, 0);
 }

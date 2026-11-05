@@ -44,7 +44,7 @@ pub struct ChannelRow {
     pub msg_count: i64,
     /// Highest event seq seen.
     pub last_seq: i64,
-    /// Read watermark (Task 7).
+    /// Read watermark: highest seq the human has seen; -1 = nothing read.
     pub last_read_seq: i64,
     /// A HITL request is awaiting a response.
     pub hitl_pending: bool,
@@ -146,7 +146,10 @@ impl ChannelIndex {
             // forever. -1 means "nothing folded yet" without colliding with
             // any real seq.
             "ALTER TABLE channels ADD COLUMN last_seq INTEGER NOT NULL DEFAULT -1",
-            "ALTER TABLE channels ADD COLUMN last_read_seq INTEGER NOT NULL DEFAULT 0",
+            // -1 for the same reason as `last_seq`: unread is
+            // `inbound_seq > last_read_seq`, so a 0 default would mark an
+            // agent-authored seq 0 as already read before anyone saw it.
+            "ALTER TABLE channels ADD COLUMN last_read_seq INTEGER NOT NULL DEFAULT -1",
             "ALTER TABLE channels ADD COLUMN hitl_pending INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN inbound_seqs TEXT NOT NULL DEFAULT '[]'",
             // Marker-only column: SQLite cannot ALTER an existing column's
@@ -171,6 +174,31 @@ impl ChannelIndex {
             if self.conn.execute(ddl, []).is_ok() {
                 migrated = true;
             }
+        }
+        // Read-watermark counterpart of `seq_sentinel_fix_applied`, with one
+        // difference: the watermark is user state, so `rebuild_from` carries
+        // it over instead of re-deriving it. A DB that had `last_read_seq`
+        // under the old DEFAULT 0 therefore has to be corrected here, once —
+        // the marker ADD COLUMN succeeds exactly on the first open after the
+        // upgrade. A stored 0 there meant "never read" in every case except
+        // a channel read through exactly seq 0; resetting it to -1 can at
+        // worst resurface that single message as unread, while leaving it
+        // would hide every agent-authored seq 0 forever. On a new DB the
+        // UPDATE matches nothing (no rows, or a column just added at -1).
+        // The marker is never read.
+        if self
+            .conn
+            .execute(
+                "ALTER TABLE channels ADD COLUMN read_sentinel_fix_applied INTEGER NOT NULL DEFAULT 1",
+                [],
+            )
+            .is_ok()
+        {
+            migrated = true;
+            self.conn.execute(
+                "UPDATE channels SET last_read_seq = -1 WHERE last_read_seq = 0",
+                [],
+            )?;
         }
         // Stable display numbers live in their own table, not a column on
         // `channels`, for two reasons: `rebuild_from` wipes `channels` and
@@ -240,12 +268,13 @@ impl ChannelIndex {
         // DEFAULT) so a new row is correctly seeded as "nothing folded yet"
         // even on a DB where the column's actual DEFAULT is stuck at the old
         // value 0 (SQLite cannot ALTER an existing column's default — see
-        // the migration comment above). ON CONFLICT deliberately does not
-        // touch last_seq: it must never reset an existing row's fold
-        // progress back to -1.
+        // the migration comment above). `last_read_seq` gets the same
+        // treatment for the same reason. ON CONFLICT deliberately touches
+        // neither: it must never reset an existing row's fold progress or
+        // read watermark back to -1.
         self.conn.execute(
-            "INSERT INTO channels (id,title,state,owner,created_at,updated_at,purpose,agents,last_seq)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,-1)
+            "INSERT INTO channels (id,title,state,owner,created_at,updated_at,purpose,agents,last_seq,last_read_seq)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,-1,-1)
              ON CONFLICT(id) DO UPDATE SET
                title=excluded.title, state=excluded.state,
                owner=excluded.owner, updated_at=excluded.updated_at,
@@ -481,7 +510,7 @@ impl ChannelIndex {
             let watermarks: Vec<(String, i64)> = {
                 let mut stmt = self
                     .conn
-                    .prepare("SELECT id, last_read_seq FROM channels WHERE last_read_seq > 0")?;
+                    .prepare("SELECT id, last_read_seq FROM channels WHERE last_read_seq >= 0")?;
                 stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
                     .collect::<rusqlite::Result<Vec<_>>>()?
             };
