@@ -186,19 +186,41 @@ impl ChannelIndex {
         // would hide every agent-authored seq 0 forever. On a new DB the
         // UPDATE matches nothing (no rows, or a column just added at -1).
         // The marker is never read.
-        if self
+        //
+        // Marker and reset commit together inside `BEGIN IMMEDIATE`: if the
+        // ALTER landed and the UPDATE then failed (SQLITE_BUSY from a
+        // concurrent cold open, or a crash between the two), the marker
+        // would make every later open skip the reset and the ambiguous 0s
+        // would stay. The write lock also keeps a concurrent `mark_read(0)`
+        // from slipping in between the two and being wiped.
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .context("begin read-watermark reset")?;
+        let marker_added = self
             .conn
             .execute(
                 "ALTER TABLE channels ADD COLUMN read_sentinel_fix_applied INTEGER NOT NULL DEFAULT 1",
                 [],
             )
-            .is_ok()
-        {
-            migrated = true;
-            self.conn.execute(
+            .is_ok();
+        if marker_added {
+            let reset = self.conn.execute(
                 "UPDATE channels SET last_read_seq = -1 WHERE last_read_seq = 0",
                 [],
-            )?;
+            );
+            if let Err(e) = reset {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                return Err(e).context("reset ambiguous read watermarks");
+            }
+            self.conn
+                .execute_batch("COMMIT")
+                .context("commit read-watermark reset")?;
+            migrated = true;
+        } else {
+            // Marker already present: nothing to do, release the lock.
+            self.conn
+                .execute_batch("ROLLBACK")
+                .context("release read-watermark lock")?;
         }
         // Stable display numbers live in their own table, not a column on
         // `channels`, for two reasons: `rebuild_from` wipes `channels` and

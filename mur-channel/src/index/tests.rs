@@ -218,6 +218,53 @@ fn migrating_a_pre_sentinel_db_clears_only_the_ambiguous_zero_watermark() {
 }
 
 #[test]
+fn a_failed_watermark_reset_is_retried_on_the_next_open() {
+    // The marker ALTER and the reset UPDATE must commit together: if the
+    // UPDATE fails (SQLITE_BUSY, a crash) after the marker landed, the next
+    // open would see the marker and skip the reset, hiding seq 0 for good.
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path().join("index").join("channels");
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("channels.db");
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE channels (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL, state TEXT NOT NULL,
+                owner TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                purpose TEXT NOT NULL DEFAULT 'conversation',
+                agents TEXT NOT NULL DEFAULT '[]',
+                preview TEXT NOT NULL DEFAULT '',
+                msg_count INTEGER NOT NULL DEFAULT 0,
+                last_seq INTEGER NOT NULL DEFAULT -1,
+                last_read_seq INTEGER NOT NULL DEFAULT 0,
+                hitl_pending INTEGER NOT NULL DEFAULT 0,
+                inbound_seqs TEXT NOT NULL DEFAULT '[]',
+                seq_sentinel_fix_applied INTEGER NOT NULL DEFAULT 1);
+             INSERT INTO channels (id,title,state,owner,created_at,updated_at,last_read_seq)
+               VALUES ('never-read','a','working','{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',0);
+             CREATE TRIGGER fail_reset BEFORE UPDATE OF last_read_seq ON channels
+               BEGIN SELECT RAISE(ABORT, 'injected reset failure'); END;",
+        )
+        .unwrap();
+    }
+
+    assert!(
+        ChannelIndex::open(tmp.path()).is_err(),
+        "the injected failure must surface"
+    );
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute_batch("DROP TRIGGER fail_reset")
+        .unwrap();
+
+    let idx = ChannelIndex::open(tmp.path()).unwrap();
+    assert!(idx.just_migrated(), "the reset must be retried");
+    let rows = idx.list(10).unwrap();
+    assert_eq!(rows[0].last_read_seq, -1);
+}
+
+#[test]
 fn upsert_writes_purpose_and_agents() {
     let tmp = TempDir::new().unwrap();
     let idx = ChannelIndex::open(tmp.path()).unwrap();
