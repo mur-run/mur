@@ -15,16 +15,65 @@ const ORDINAL_DDL: &str = "CREATE TABLE IF NOT EXISTS channel_ordinals (
         ordinal INTEGER NOT NULL UNIQUE
     );";
 
+/// Which seqs of each channel have been folded into `channels`. This is the
+/// fold dedup: membership, not `seq > last_seq`, so two processes folding
+/// one channel out of order both land. `kind` lets the preview and the HITL
+/// flag follow the *newest* event of their kind rather than the last one to
+/// fold. Derived like the rest of the read model — `rebuild_from` and
+/// `remove` clear it alongside `channels`.
+const FOLDS_DDL: &str = "CREATE TABLE IF NOT EXISTS channel_folds (
+        channel_id TEXT NOT NULL,
+        seq        INTEGER NOT NULL,
+        kind       TEXT,
+        PRIMARY KEY (channel_id, seq)
+    ) WITHOUT ROWID;";
+
+/// Additive `channels` columns, applied in order by `migrate()`.
+const MIGRATION_DDL: &[&str] = &[
+    "ALTER TABLE channels ADD COLUMN purpose TEXT NOT NULL DEFAULT 'conversation'",
+    "ALTER TABLE channels ADD COLUMN agents TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE channels ADD COLUMN preview TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE channels ADD COLUMN msg_count INTEGER NOT NULL DEFAULT 0",
+    // -1, not 0: seqs are 0-indexed, so 0 is a real, foldable seq.
+    // `record_event` once deduped on `ev.seq > last_seq`, where a 0
+    // default rejected the channel's very first event forever. Dedup
+    // now lives in `channel_folds`, but -1 still means "nothing
+    // folded yet" without colliding with any real seq.
+    "ALTER TABLE channels ADD COLUMN last_seq INTEGER NOT NULL DEFAULT -1",
+    // -1 for the same reason as `last_seq`: unread is
+    // `inbound_seq > last_read_seq`, so a 0 default would mark an
+    // agent-authored seq 0 as already read before anyone saw it.
+    "ALTER TABLE channels ADD COLUMN last_read_seq INTEGER NOT NULL DEFAULT -1",
+    "ALTER TABLE channels ADD COLUMN hitl_pending INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE channels ADD COLUMN inbound_seqs TEXT NOT NULL DEFAULT '[]'",
+    // Marker-only column: SQLite cannot ALTER an existing column's
+    // DEFAULT, so a DB that already had `last_seq` (added under the old
+    // DEFAULT 0, before the -1 sentinel) keeps reporting 0 as its schema
+    // default forever. On such a DB this column does not exist yet, so its
+    // ADD COLUMN succeeds and owes a rebuild; the rebuild re-inserts every
+    // row via `upsert()` (which writes `last_seq = -1` explicitly) and
+    // re-derives it from the event log. Never read.
+    "ALTER TABLE channels ADD COLUMN seq_sentinel_fix_applied INTEGER NOT NULL DEFAULT 1",
+    // Marker-only, same mechanism: a DB that predates the `channel_folds`
+    // ledger has rows folded without ledger entries, so a rerun of one of
+    // those seqs would double-count. The rebuild this owes seeds the ledger
+    // and replays every event, recovering any message the old
+    // `seq > last_seq` guard dropped. (`ledger_missing` re-detects the same
+    // state from the data, for a DB that got this column but not the
+    // rebuild.) Never read.
+    "ALTER TABLE channels ADD COLUMN fold_ledger_applied INTEGER NOT NULL DEFAULT 1",
+];
+
+/// Marker-only column for the read-watermark sentinel. Kept out of
+/// `MIGRATION_DDL` because its success does more than owe a rebuild: it
+/// gates the one-time reset of ambiguous 0 watermarks in `migrate()`.
+const READ_SENTINEL_MARKER_DDL: &str =
+    "ALTER TABLE channels ADD COLUMN read_sentinel_fix_applied INTEGER NOT NULL DEFAULT 1";
+
 /// SQLite read-model at `<mur_home>/index/channels/channels.db`. Droppable &
 /// rebuildable from the event-log manifests — never the source of truth.
 pub struct ChannelIndex {
     conn: Connection,
-    /// Set by `open()` when this call's `migrate()` added at least one of
-    /// the activity columns for the first time — i.e. this DB predates them
-    /// (or is brand new). Callers with access to a `ChannelStore` (only
-    /// `ChannelService::open`) use this to trigger a one-time rebuild so
-    /// pre-existing channels don't sit invisible behind SQL column defaults.
-    just_migrated: bool,
 }
 
 /// One row of the channel-list / "my work" query.
@@ -99,28 +148,15 @@ impl ChannelIndex {
         // makes the contended connection wait and retry instead of dropping.
         conn.execute_batch("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;")
             .context("configure channels.db concurrency pragmas")?;
-        let mut me = Self {
-            conn,
-            just_migrated: false,
-        };
-        me.just_migrated = me.migrate()?;
+        let me = Self { conn };
+        me.migrate()?;
         Ok(me)
     }
 
-    /// True when this `open()` call's `migrate()` added an activity column
-    /// for the first time (fresh DB or one that predates them). See the
-    /// `just_migrated` field doc for who consumes this and why.
-    pub fn just_migrated(&self) -> bool {
-        self.just_migrated
-    }
-
-    /// Returns whether any of the additive columns below were newly added
-    /// by this call — i.e. whether this DB predated them (or is brand new).
-    /// `ADD COLUMN` on an existing column errors ("duplicate column name");
-    /// that per-column success/failure is exactly the "did I just migrate"
-    /// signal, so unlike before this loop inspects it instead of discarding
-    /// it.
-    fn migrate(&self) -> Result<bool> {
+    /// Bring the schema up to date and record whether a rebuild is owed
+    /// (see `pending.rs`). `ChannelService::open` pays the debt; `migrate`
+    /// cannot, since it has no `ChannelStore`.
+    fn migrate(&self) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS channels (
                 id            TEXT PRIMARY KEY,
@@ -132,96 +168,55 @@ impl ChannelIndex {
             );
             CREATE INDEX IF NOT EXISTS idx_channels_updated ON channels(updated_at DESC);",
         )?;
+        self.conn.execute_batch(pending::META_DDL)?;
+        self.conn.execute_batch(FOLDS_DDL)?;
         // Additive columns. `ADD COLUMN` on an existing column errors; that is
-        // the "already migrated" case for that column.
-        let mut migrated = false;
-        for ddl in [
-            "ALTER TABLE channels ADD COLUMN purpose TEXT NOT NULL DEFAULT 'conversation'",
-            "ALTER TABLE channels ADD COLUMN agents TEXT NOT NULL DEFAULT '[]'",
-            "ALTER TABLE channels ADD COLUMN preview TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE channels ADD COLUMN msg_count INTEGER NOT NULL DEFAULT 0",
-            // -1, not 0: seqs are 0-indexed, so 0 is a real, foldable seq.
-            // `record_event`'s dedup guard is `ev.seq > last_seq`; a 0 default
-            // would make that guard reject the channel's very first event
-            // forever. -1 means "nothing folded yet" without colliding with
-            // any real seq.
-            "ALTER TABLE channels ADD COLUMN last_seq INTEGER NOT NULL DEFAULT -1",
-            // -1 for the same reason as `last_seq`: unread is
-            // `inbound_seq > last_read_seq`, so a 0 default would mark an
-            // agent-authored seq 0 as already read before anyone saw it.
-            "ALTER TABLE channels ADD COLUMN last_read_seq INTEGER NOT NULL DEFAULT -1",
-            "ALTER TABLE channels ADD COLUMN hitl_pending INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE channels ADD COLUMN inbound_seqs TEXT NOT NULL DEFAULT '[]'",
-            // Marker-only column: SQLite cannot ALTER an existing column's
-            // DEFAULT, so a DB that already had `last_seq` (added under the
-            // old DEFAULT 0, before this sentinel fix) keeps reporting 0 as
-            // its schema default forever, no matter what the DDL text above
-            // says. This column's sole purpose is to detect that case: on
-            // such a DB it does not exist yet, so this ADD COLUMN succeeds
-            // and sets `migrated = true` (same "succeeds exactly once"
-            // mechanism as every other column here), which makes
-            // `ChannelService::open` run `rebuild_from`. `rebuild_from`
-            // deletes every row and re-inserts it via `upsert()` (which
-            // always writes `last_seq = -1` explicitly, never relying on the
-            // column default) before replaying every event through the
-            // guarded `record_event` — so every pre-existing row's ambiguous
-            // `last_seq = 0` is correctly re-derived from the authoritative
-            // event log. On a brand-new DB this column is redundant (every
-            // other ALTER here already sets `migrated = true`) but harmless.
-            // It is never read.
-            "ALTER TABLE channels ADD COLUMN seq_sentinel_fix_applied INTEGER NOT NULL DEFAULT 1",
-        ] {
-            if self.conn.execute(ddl, []).is_ok() {
+        // the "already migrated" case for that column, and its success is
+        // the "this DB predates the column" signal that owes a rebuild.
+        //
+        // One transaction for the columns and the flag they imply, so a
+        // crash between a successful ALTER (which never succeeds again) and
+        // the flag write cannot lose the rebuild. A failed ALTER rolls back
+        // only its own statement, not the transaction.
+        self.write_txn("schema migration", || {
+            let mut migrated = false;
+            for ddl in MIGRATION_DDL {
+                if self.conn.execute(ddl, []).is_ok() {
+                    migrated = true;
+                }
+            }
+            // Read-watermark counterpart of `seq_sentinel_fix_applied`, with
+            // one difference: the watermark is user state, so the rebuild
+            // carries it over instead of re-deriving it. A DB that had
+            // `last_read_seq` under the old DEFAULT 0 therefore has to be
+            // corrected here, once — the marker ADD COLUMN succeeds exactly
+            // on the first open after the upgrade. A stored 0 there meant
+            // "never read" in every case except a channel read through
+            // exactly seq 0; resetting it to -1 can at worst resurface that
+            // single message as unread, while leaving it would hide every
+            // agent-authored seq 0 forever. On a new DB the UPDATE matches
+            // nothing (no rows, or a column just added at -1). The marker is
+            // never read.
+            //
+            // Marker and reset share this transaction: if the UPDATE fails
+            // (or the process dies) after the ALTER, everything rolls back
+            // and the next open retries, instead of the marker making every
+            // later open skip the reset. The write lock also keeps a
+            // concurrent `mark_read(0)` from landing between the two.
+            if self.conn.execute(READ_SENTINEL_MARKER_DDL, []).is_ok() {
+                self.conn
+                    .execute(
+                        "UPDATE channels SET last_read_seq = -1 WHERE last_read_seq = 0",
+                        [],
+                    )
+                    .context("reset ambiguous read watermarks")?;
                 migrated = true;
             }
-        }
-        // Read-watermark counterpart of `seq_sentinel_fix_applied`, with one
-        // difference: the watermark is user state, so `rebuild_from` carries
-        // it over instead of re-deriving it. A DB that had `last_read_seq`
-        // under the old DEFAULT 0 therefore has to be corrected here, once —
-        // the marker ADD COLUMN succeeds exactly on the first open after the
-        // upgrade. A stored 0 there meant "never read" in every case except
-        // a channel read through exactly seq 0; resetting it to -1 can at
-        // worst resurface that single message as unread, while leaving it
-        // would hide every agent-authored seq 0 forever. On a new DB the
-        // UPDATE matches nothing (no rows, or a column just added at -1).
-        // The marker is never read.
-        //
-        // Marker and reset commit together inside `BEGIN IMMEDIATE`: if the
-        // ALTER landed and the UPDATE then failed (SQLITE_BUSY from a
-        // concurrent cold open, or a crash between the two), the marker
-        // would make every later open skip the reset and the ambiguous 0s
-        // would stay. The write lock also keeps a concurrent `mark_read(0)`
-        // from slipping in between the two and being wiped.
-        self.conn
-            .execute_batch("BEGIN IMMEDIATE")
-            .context("begin read-watermark reset")?;
-        let marker_added = self
-            .conn
-            .execute(
-                "ALTER TABLE channels ADD COLUMN read_sentinel_fix_applied INTEGER NOT NULL DEFAULT 1",
-                [],
-            )
-            .is_ok();
-        if marker_added {
-            let reset = self.conn.execute(
-                "UPDATE channels SET last_read_seq = -1 WHERE last_read_seq = 0",
-                [],
-            );
-            if let Err(e) = reset {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                return Err(e).context("reset ambiguous read watermarks");
+            if migrated || self.ledger_missing()? {
+                self.set_rebuild_pending()?;
             }
-            self.conn
-                .execute_batch("COMMIT")
-                .context("commit read-watermark reset")?;
-            migrated = true;
-        } else {
-            // Marker already present: nothing to do, release the lock.
-            self.conn
-                .execute_batch("ROLLBACK")
-                .context("release read-watermark lock")?;
-        }
+            Ok(())
+        })?;
         // Stable display numbers live in their own table, not a column on
         // `channels`, for two reasons: `rebuild_from` wipes `channels` and
         // would otherwise renumber everything, and a number must stay burned
@@ -269,7 +264,7 @@ impl ChannelIndex {
             "CREATE VIRTUAL TABLE IF NOT EXISTS channel_fts
              USING fts5(channel_id UNINDEXED, seq UNINDEXED, body, tokenize='unicode61');",
         )?;
-        Ok(migrated)
+        Ok(())
     }
 
     pub fn upsert(&self, ch: &Channel) -> Result<()> {
@@ -338,55 +333,88 @@ impl ChannelIndex {
         } else {
             ""
         };
-        let hitl_delta = match ev.kind {
+        let fold_kind = match ev.kind {
+            EventKind::Message => Some("msg"),
+            EventKind::HitlRequest | EventKind::HitlResponse => Some("hitl"),
+            _ => None,
+        };
+        let hitl_pending = match ev.kind {
             EventKind::HitlRequest => Some(1_i64),
             EventKind::HitlResponse => Some(0_i64),
             _ => None,
         };
         let inbound = counts && !matches!(ev.actor, ChannelActor::Human { .. });
-        // `AND ?2 > last_seq` makes this idempotent per (channel, seq): a
-        // crash-rerun that hits `ChannelStore::append_event`'s idempotency-key
-        // dedup returns the *same* pre-existing event, and calling this again
-        // for a seq already folded must be a no-op — otherwise msg_count,
-        // inbound_seqs (the unread badge), and the FTS row all get duplicated
-        // per rerun. `changed` (rows affected) doubles as the fold signal for
-        // the FTS insert below: 0 means this seq was already folded.
-        //
-        // This guarantee is same-process-only. `ChannelStore::append_event`
-        // releases `events.lock` before this fold runs, and the v3d-2
+        let seq = ev.seq as i64;
+        // Dedup on `(channel_id, seq)` membership in `channel_folds`, not on
+        // `seq > last_seq`. A crash-rerun that hits `ChannelStore::append_event`'s
+        // idempotency-key dedup returns the *same* event, and folding it again
+        // must be a no-op (else msg_count, inbound_seqs and the FTS row all
+        // duplicate). Membership gives that without assuming order: the
+        // store releases `events.lock` before this fold runs and the
         // `channel/delegate` path has a second process writing the same
-        // channel — so two processes can fold out of order. When that
-        // happens, `?2 > last_seq` treats the lower, later-arriving seq as
-        // already-stale and silently drops it from the read model: no
-        // count, no preview, no FTS row, so search can never find that
-        // message. Fixing this needs dedup on `(channel_id, seq)`
-        // membership rather than on `>`; that is Phase 2 work. Until then,
-        // `mur internals reindex` (which calls `rebuild_from`, replaying
-        // every event in seq order) recovers any message dropped this way.
-        let changed = self.conn.execute(
-            "UPDATE channels SET
-               last_seq  = MAX(last_seq, ?2),
-               msg_count = msg_count + ?3,
-               preview   = CASE WHEN ?3 = 1 THEN ?4 ELSE preview END,
-               hitl_pending = COALESCE(?5, hitl_pending),
-               inbound_seqs = CASE WHEN ?6 = 1
-                   THEN json_insert(inbound_seqs, '$[#]', ?2)
-                   ELSE inbound_seqs END
-             WHERE id = ?1 AND ?2 > last_seq",
-            rusqlite::params![
-                ch_id,
-                ev.seq as i64,
-                if counts { 1_i64 } else { 0_i64 },
-                preview,
-                hitl_delta,
-                if inbound { 1_i64 } else { 0_i64 },
-            ],
-        )?;
-        if changed > 0 && counts && !preview.is_empty() {
-            self.conn.execute(
-                "INSERT INTO channel_fts (channel_id, seq, body) VALUES (?1, ?2, ?3)",
-                rusqlite::params![ch_id, ev.seq as i64, preview],
+        // channel, so seqs can arrive out of order — and a lower, late seq is
+        // still a real message that must be counted and searchable.
+        //
+        // A SAVEPOINT (not BEGIN) so this nests inside `rebuild_from`'s
+        // transaction; the ledger insert is the first statement, so the
+        // write lock is taken before anything is read.
+        self.conn.execute_batch("SAVEPOINT fold")?;
+        let result = (|| -> Result<()> {
+            let fresh = self.conn.execute(
+                "INSERT OR IGNORE INTO channel_folds (channel_id, seq, kind)
+                 SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM channels WHERE id = ?1)",
+                rusqlite::params![ch_id, seq, fold_kind],
             )?;
+            if fresh == 0 {
+                return Ok(());
+            }
+            // `newest` = no other folded event of this kind has a higher seq,
+            // so a late-arriving older message/gate event never overwrites
+            // the preview or the HITL flag set by a newer one.
+            let newest: bool = match fold_kind {
+                Some(kind) => self.conn.query_row(
+                    "SELECT NOT EXISTS (SELECT 1 FROM channel_folds
+                       WHERE channel_id = ?1 AND kind = ?2 AND seq > ?3)",
+                    rusqlite::params![ch_id, kind, seq],
+                    |r| r.get(0),
+                )?,
+                None => false,
+            };
+            self.conn.execute(
+                "UPDATE channels SET
+                   last_seq  = MAX(last_seq, ?2),
+                   msg_count = msg_count + ?3,
+                   preview   = CASE WHEN ?3 = 1 AND ?7 = 1 THEN ?4 ELSE preview END,
+                   hitl_pending = CASE WHEN ?7 = 1 THEN COALESCE(?5, hitl_pending)
+                       ELSE hitl_pending END,
+                   inbound_seqs = CASE WHEN ?6 = 1
+                       THEN json_insert(inbound_seqs, '$[#]', ?2)
+                       ELSE inbound_seqs END
+                 WHERE id = ?1",
+                rusqlite::params![
+                    ch_id,
+                    seq,
+                    if counts { 1_i64 } else { 0_i64 },
+                    preview,
+                    hitl_pending,
+                    if inbound { 1_i64 } else { 0_i64 },
+                    if newest { 1_i64 } else { 0_i64 },
+                ],
+            )?;
+            if counts && !preview.is_empty() {
+                self.conn.execute(
+                    "INSERT INTO channel_fts (channel_id, seq, body) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![ch_id, seq, preview],
+                )?;
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => self.conn.execute_batch("RELEASE fold")?,
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK TO fold; RELEASE fold");
+                return Err(e);
+            }
         }
         Ok(())
     }
@@ -503,6 +531,11 @@ impl ChannelIndex {
         self.conn
             .execute("DELETE FROM channel_fts WHERE channel_id = ?1", [id])
             .context("remove channel fts rows")?;
+        // A restarted chain reuses seqs from 0; stale ledger rows would
+        // make the fresh chain's events look already folded.
+        self.conn
+            .execute("DELETE FROM channel_folds WHERE channel_id = ?1", [id])
+            .context("remove channel fold rows")?;
         Ok(())
     }
 
@@ -511,91 +544,60 @@ impl ChannelIndex {
     /// Read watermarks are the exception: nothing in the event log records what
     /// a human has looked at, so they are carried across rather than lost.
     ///
-    /// All-or-nothing: everything below runs inside one `BEGIN IMMEDIATE` /
-    /// `COMMIT`. This method takes `&self`, so rusqlite's safe `transaction()`
-    /// wrapper (which needs `&mut Connection`) is not available — the
-    /// transaction is driven explicitly, with a `ROLLBACK` on any error path
-    /// before the error is propagated. Without this, a hard failure partway
-    /// through the replay loop (already-deleted rows, only some channels
-    /// re-inserted) would leave the index truncated, and since the
-    /// migration-triggered auto-rebuild (`ChannelService::open`) only ever
-    /// fires once per DB file, nothing would retry it.
-    /// `BEGIN IMMEDIATE` (not plain `BEGIN`) takes the write lock up front
-    /// instead of mid-rebuild, so a lock conflict surfaces before any row is
-    /// touched rather than after a partial delete.
+    /// All-or-nothing: everything runs inside one `BEGIN IMMEDIATE` /
+    /// `COMMIT` (`write_txn`), so a hard failure partway through the replay
+    /// loop rolls back to the previous index instead of leaving it truncated
+    /// (already-deleted rows, only some channels re-inserted). A successful
+    /// rebuild also pays any rebuild owed by `migrate()`, in the same commit.
     pub fn rebuild_from(&self, store: &ChannelStore) -> Result<usize> {
-        self.conn
-            .execute_batch("BEGIN IMMEDIATE")
-            .context("begin rebuild transaction")?;
+        self.write_txn("rebuild", || self.rebuild_locked(store))
+    }
 
-        let result = (|| -> Result<usize> {
-            let watermarks: Vec<(String, i64)> = {
-                let mut stmt = self
-                    .conn
-                    .prepare("SELECT id, last_read_seq FROM channels WHERE last_read_seq >= 0")?;
-                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?
-            };
+    /// The body of `rebuild_from`; the caller holds the write transaction.
+    fn rebuild_locked(&self, store: &ChannelStore) -> Result<usize> {
+        let watermarks: Vec<(String, i64)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, last_read_seq FROM channels WHERE last_read_seq >= 0")?;
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
 
-            self.conn
-                .execute_batch("DELETE FROM channels; DELETE FROM channel_fts;")?;
+        self.conn.execute_batch(
+            "DELETE FROM channels; DELETE FROM channel_fts; DELETE FROM channel_folds;",
+        )?;
 
-            let mut n = 0;
-            // Sorted by creation time, not `list_ids()`'s `read_dir` order:
-            // when the index file itself is lost, `channel_ordinals` is empty
-            // too and this loop hands out every number from scratch. Directory
-            // order is the filesystem's business, so without this the numbers
-            // a user memorised come back shuffled. `id` breaks ties so the
-            // result is deterministic for manifests written in the same tick.
-            let mut manifests: Vec<Channel> = store
-                .list_ids()?
-                .into_iter()
-                .filter_map(|id| store.load_manifest(&id).ok())
-                .collect();
-            manifests.sort_by(|a, b| {
-                a.created_at
-                    .cmp(&b.created_at)
-                    .then_with(|| a.id.cmp(&b.id))
-            });
-            for ch in manifests {
-                let id = ch.id.clone();
-                self.upsert(&ch)?;
-                for ev in store.load_events(&id).unwrap_or_default() {
-                    self.record_event(&id, &ev)?;
-                }
-                n += 1;
+        let mut n = 0;
+        // Sorted by creation time, not `list_ids()`'s `read_dir` order:
+        // when the index file itself is lost, `channel_ordinals` is empty
+        // too and this loop hands out every number from scratch. Directory
+        // order is the filesystem's business, so without this the numbers
+        // a user memorised come back shuffled. `id` breaks ties so the
+        // result is deterministic for manifests written in the same tick.
+        let mut manifests: Vec<Channel> = store
+            .list_ids()?
+            .into_iter()
+            .filter_map(|id| store.load_manifest(&id).ok())
+            .collect();
+        manifests.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        for ch in manifests {
+            let id = ch.id.clone();
+            self.upsert(&ch)?;
+            for ev in store.load_events(&id).unwrap_or_default() {
+                self.record_event(&id, &ev)?;
             }
-
-            for (id, seq) in watermarks {
-                self.mark_read(&id, seq as u64)?;
-            }
-            Ok(n)
-        })();
-
-        match result {
-            Ok(n) => match self.conn.execute_batch("COMMIT") {
-                Ok(()) => Ok(n),
-                Err(e) => {
-                    // COMMIT itself failed (e.g. disk full at commit time).
-                    // Without this, `?` would escape with the transaction
-                    // still open, and self.conn would silently queue every
-                    // later write inside it instead of autocommitting —
-                    // worse than the torn-rebuild bug this transaction
-                    // exists to fix. Roll back before propagating, same as
-                    // the Err(e) arm below; a rollback that itself fails
-                    // must not mask the original COMMIT error.
-                    let _ = self.conn.execute_batch("ROLLBACK");
-                    Err(e).context("commit rebuild transaction")
-                }
-            },
-            Err(e) => {
-                // Best-effort: if the rollback itself fails, the original
-                // error is still the one worth surfacing, not the rollback
-                // failure.
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(e)
-            }
+            n += 1;
         }
+
+        for (id, seq) in watermarks {
+            self.mark_read(&id, seq as u64)?;
+        }
+        self.clear_rebuild_pending()?;
+        Ok(n)
     }
 
     /// Raw connection, for tests that need to simulate out-of-band writes.
@@ -605,5 +607,8 @@ impl ChannelIndex {
     }
 }
 
+mod pending;
+#[cfg(test)]
+mod pending_tests;
 #[cfg(test)]
 mod tests;

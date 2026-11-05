@@ -115,9 +115,9 @@ impl ChannelService {
         let Some((quarantined, event)) = done else {
             return Ok(None);
         };
-        // Seqs restart at 0; the read-model's fold guard (`seq > last_seq`)
-        // would ignore the fresh chain, so drop the row and let the refresh
-        // re-seed it.
+        // Seqs restart at 0; the read-model's fold ledger (`channel_folds`)
+        // would treat the fresh chain's seqs as already folded, so drop the
+        // row (which clears its ledger) and let the refresh re-seed it.
         if let Err(e) = self.index.remove(channel_id) {
             tracing::warn!(channel_id, error = %e, "could not reset the channel index row");
         }
