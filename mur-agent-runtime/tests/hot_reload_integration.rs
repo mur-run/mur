@@ -103,6 +103,7 @@ fn unattended(text: &str) -> TaskSpec {
         attended: false,
         deadline_secs: None,
         tool_allowlist: None,
+        consult_scope: None,
     }
 }
 

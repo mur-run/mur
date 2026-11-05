@@ -27,6 +27,7 @@ fn spec() -> TaskSpec {
         attended: true,
         deadline_secs: None,
         tool_allowlist: None,
+        consult_scope: None,
     }
 }
 

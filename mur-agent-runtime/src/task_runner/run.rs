@@ -27,7 +27,8 @@ impl TaskRunner {
         // This is a transient failure — callers should retry after the agent
         // comes back up. We do NOT register the task in the registry, so
         // `await_idle` will not be blocked by this rejection.
-        // R9 (channel consult): a tool allowlist binds only the built-in loop.
+        // R9 (channel consult): a tool allowlist or consult scope binds only
+        // the built-in loop.
         // Any other backend runs tools MUR never sees, so a confined turn is
         // refused there before anything is registered or spawned.
         if let Some(backend) = self.backend.confinement_refusal(&spec) {
@@ -45,7 +46,7 @@ impl TaskRunner {
                 error: Some(task_error(
                     "backend_cannot_confine",
                     format!(
-                        "this turn restricts its tools, which only the built-in loop can enforce; \
+                        "this turn restricts its tools or read scope, which only the built-in loop can enforce; \
                          the `{backend}` backend runs tools MUR cannot confine"
                     ),
                     false,
@@ -224,6 +225,11 @@ impl TaskRunner {
         // call) and we return a Cancelled task so message/send terminates the
         // stream cleanly.
         let generation = turn_models::scope(models.clone(), generation);
+        // Channel consult C4: the asker's read scope is bound to THIS turn's
+        // generation only, before the system prompt and the pinned project
+        // instructions are built inside it. It is dropped with the future on
+        // every outcome, cancel included (R10).
+        let generation = consult_scope::scope(spec.consult_scope.clone(), generation);
         let result: Option<Result<(Message, Option<LoopExit>), TaskError>> = tokio::select! {
             r = generation => Some(r),
             _ = &mut rx_cancel => None,

@@ -570,6 +570,10 @@ pub(crate) enum ReadRefusal {
     DenyList,
     /// Outside every `read` and `write` root.
     NoGrant,
+    /// Readable by this agent, but not by the agent whose channel consult
+    /// this turn answers (§D4). Never named in a rendered refusal: saying the
+    /// file exists would already tell the asker something it cannot read.
+    OutsideConsult,
 }
 
 /// The one read decision: `Err` carries the refusal and, for the launch
@@ -600,7 +604,28 @@ pub(crate) fn check_read_refusal(
     canonical: &Path,
     chain: &crate::sandbox::launch_chain::LaunchChain,
 ) -> Result<(), ReadRefusal> {
-    decide_read(fs, canonical, chain).map_err(|(r, _)| r)
+    decide_read(fs, canonical, chain).map_err(|(r, _)| r)?;
+    consult_decision(canonical).map_err(|_| ReadRefusal::OutsideConsult)
+}
+
+/// Channel consult (§D4, R4): the second read decision, made with the asking
+/// agent's effective policy and launch chain when this turn answers a
+/// consult. With no scope bound — every ordinary turn — it always passes.
+///
+/// The two policies are never merged: each goes through [`decide_read`] on
+/// its own, so `deny` and the worktree hop mean for each side exactly what
+/// they mean in that agent's own turn. The bound scope's asker is returned
+/// on refusal, for the message.
+fn consult_decision(
+    canonical: &Path,
+) -> Result<(), std::sync::Arc<crate::task_runner::consult_scope::ConsultScope>> {
+    let Some(scope) = crate::task_runner::consult_scope::current() else {
+        return Ok(());
+    };
+    match decide_read(scope.fs(), canonical, scope.chain()) {
+        Ok(()) => Ok(()),
+        Err(_) => Err(scope),
+    }
 }
 
 /// Read-side twin of [`check_write_entitlement`], and the one gate for every
@@ -618,6 +643,23 @@ pub(crate) fn check_read_entitlement(
     canonical: &Path,
     chain: &crate::sandbox::launch_chain::LaunchChain,
 ) -> Result<(), ToolError> {
+    own_read_decision(fs, canonical, chain)?;
+    consult_decision(canonical).map_err(|scope| {
+        ToolError::Execution(format!(
+            "path is outside this consult's read scope: {} (the asking agent `{}` \
+             cannot read it in its own turns, so this answer may not use it)",
+            canonical.display(),
+            scope.asker()
+        ))
+    })
+}
+
+/// [`check_read_entitlement`]'s first decision: this agent's own policy.
+fn own_read_decision(
+    fs: &FilesystemEntitlement,
+    canonical: &Path,
+    chain: &crate::sandbox::launch_chain::LaunchChain,
+) -> Result<(), ToolError> {
     decide_read(fs, canonical, chain).map_err(|(refusal, reason)| {
         let path = canonical.display();
         ToolError::Execution(match refusal {
@@ -628,10 +670,16 @@ pub(crate) fn check_read_entitlement(
             ReadRefusal::NoGrant => {
                 format!("path not entitled: {path} (grant it via `mur agent perm allow-read`)")
             }
+            // `decide_read` never returns it; only `consult_decision` refuses so.
+            ReadRefusal::OutsideConsult => {
+                format!("path is outside this consult's read scope: {path}")
+            }
         })
     })
 }
 
+#[cfg(test)]
+mod consult_tests;
 #[cfg(test)]
 mod effective_tests;
 #[cfg(test)]

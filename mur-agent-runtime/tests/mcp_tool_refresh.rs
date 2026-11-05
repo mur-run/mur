@@ -243,6 +243,7 @@ fn turn(text: &str) -> mur_agent_runtime::task_runner::TaskSpec {
         attended: true,
         deadline_secs: None,
         tool_allowlist: None,
+        consult_scope: None,
     }
 }
 

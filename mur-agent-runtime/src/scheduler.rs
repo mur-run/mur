@@ -43,6 +43,7 @@ fn scheduled_task_spec(message: &str) -> TaskSpec {
         attended: false,
         deadline_secs: None,
         tool_allowlist: None,
+        consult_scope: None,
     }
 }
 

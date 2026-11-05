@@ -215,6 +215,7 @@ impl MethodHandler for MessageSendHandler {
             attended: can_approve,
             deadline_secs: caller_deadline_secs(&p),
             tool_allowlist: None,
+            consult_scope: None,
         };
 
         // Fail at dispatch, not after the budget (spec §3.8): a declared need

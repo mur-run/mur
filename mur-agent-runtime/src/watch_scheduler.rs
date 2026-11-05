@@ -268,6 +268,7 @@ fn inject(runner: &Arc<TaskRunner>, text: &str) {
                 attended: false,
                 deadline_secs: None,
                 tool_allowlist: None,
+                consult_scope: None,
             })
             .await;
     });

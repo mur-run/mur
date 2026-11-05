@@ -23,6 +23,7 @@ mod agentic_loop;
 pub(crate) mod ask_origin;
 mod builder;
 pub use builder::DrainOutcome;
+pub mod consult_scope;
 mod conversation;
 pub(crate) mod deny_hint;
 mod helpers;
@@ -98,6 +99,12 @@ pub struct TaskSpec {
     /// the built-in loop, so `run_sync` refuses a spec carrying one on any
     /// other backend (channel consult, R9).
     pub tool_allowlist: Option<Vec<String>>,
+    /// Channel consult (§D4): the asking agent's read scope. `None` for every
+    /// ordinary turn. When set, `run_sync` binds it to this turn only, and
+    /// every read the turn makes must pass both the runner's own policy and
+    /// this one. Only the consult handler sets it; like `tool_allowlist` it
+    /// binds only the built-in loop (R9).
+    pub consult_scope: Option<Arc<consult_scope::ConsultScope>>,
 }
 
 #[derive(Debug)]
@@ -125,10 +132,12 @@ pub enum RunnerBackend {
 
 impl RunnerBackend {
     /// The backend's name when it cannot run `spec`: a spec that restricts its
-    /// tools runs only on [`RunnerBackend::Llm`], the one backend whose tools
-    /// MUR dispatches itself. `None` = this backend may run it.
+    /// tools or its read scope runs only on [`RunnerBackend::Llm`], the one
+    /// backend whose tools MUR dispatches itself. `None` = this backend may run it.
     pub(crate) fn confinement_refusal(&self, spec: &TaskSpec) -> Option<&'static str> {
-        spec.tool_allowlist.as_ref()?;
+        if spec.tool_allowlist.is_none() && spec.consult_scope.is_none() {
+            return None;
+        }
         match self {
             RunnerBackend::Llm(_) => None,
             RunnerBackend::CliSpawn(b) => Some(b.key),

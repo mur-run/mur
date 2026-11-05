@@ -315,7 +315,7 @@ fn own_public_key_material_is_write_denied_but_readable() {
 }
 /// Build a real repo + linked worktree. Returns `None` when git is
 /// unavailable so the test skips loudly rather than passing vacuously.
-fn repo_with_worktree() -> Option<(tempfile::TempDir, PathBuf, PathBuf)> {
+pub(super) fn repo_with_worktree() -> Option<(tempfile::TempDir, PathBuf, PathBuf)> {
     let tmp = tempfile::tempdir().ok()?;
     let main = tmp.path().join("main");
     std::fs::create_dir_all(&main).ok()?;
