@@ -48,7 +48,7 @@ async fn boot(extra: &str, rules: &[ToolRule]) -> (Vec<String>, String) {
         args: vec!["--extra-tool".into(), extra.into()],
         ..Default::default()
     };
-    let pool = McpPool::new(vec![entry.clone()], SandboxPolicy::default(), None);
+    let pool = McpPool::new(vec![entry.clone()], SandboxPolicy::default(), None, None);
     let log = Captured::default();
     let subscriber = tracing_subscriber::fmt()
         .with_writer(log.clone())

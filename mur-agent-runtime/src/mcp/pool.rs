@@ -28,6 +28,9 @@ pub struct McpPool {
     /// Shared egress proxy for servers with a `Restricted` network policy.
     /// `None` when no server on this agent declares one (the common case).
     proxy: Option<EgressProxyHandle>,
+    /// The ssh-agent proxy socket (and pinned git command) every stdio child
+    /// receives. `None` when the proxy is not running.
+    ssh: Option<crate::tools::bash_env::SshChild>,
     /// Warm clients, each with the entry it was started from.
     clients: Mutex<HashMap<String, Warm>>,
 }
@@ -37,6 +40,7 @@ impl McpPool {
         entries: Vec<McpServerEntry>,
         policy: SandboxPolicy,
         proxy: Option<EgressProxyHandle>,
+        ssh: Option<crate::tools::bash_env::SshChild>,
     ) -> Arc<Self> {
         let map = entries.into_iter().map(|e| (e.name.clone(), e)).collect();
         Arc::new(Self {
@@ -44,6 +48,7 @@ impl McpPool {
             live: std::sync::OnceLock::new(),
             policy,
             proxy,
+            ssh,
             clients: Mutex::new(HashMap::new()),
         })
     }
@@ -109,7 +114,8 @@ impl McpPool {
         // serena loads (and may migrate) its config before answering
         // `initialize`, so hash before spawn and compare after (#1688).
         let serena_cfg = crate::mcp::serena::rewrite::fingerprint(entry, self.policy.agent_home());
-        let mut client = McpClient::connect(entry, &self.policy, self.proxy.as_ref()).await?;
+        let mut client =
+            McpClient::connect(entry, &self.policy, self.proxy.as_ref(), self.ssh.as_ref()).await?;
         client.initialize().await?;
         if let Some(warning) = serena_cfg.and_then(|fp| fp.rewritten()) {
             tracing::warn!(server = %server, "{warning}");
@@ -200,7 +206,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_server_returns_error() {
-        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
         match pool.client("nonexistent").await {
             Err(e) => {
                 let msg = e.to_string();

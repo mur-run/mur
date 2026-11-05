@@ -188,8 +188,10 @@ pub async fn probe_mcp_descriptions(
         // the probe. `inspect` passes the agent's real one so a server that
         // dies on a sandbox EPERM fails here too (#1161); the pin path passes a
         // permissive one, where the job is only to hash tool descriptions.
+        // No ssh-agent proxy here: the probe runs in `mur`, not the agent, so
+        // the child gets no `SSH_AUTH_SOCK` at all (same as before).
         let mut client =
-            mur_agent_runtime::protocol::mcp_client::McpClient::connect(entry, policy, proxy)
+            mur_agent_runtime::protocol::mcp_client::McpClient::connect(entry, policy, proxy, None)
                 .await?;
         let _info = client.initialize().await?;
         let tools = client.list_tools().await?;

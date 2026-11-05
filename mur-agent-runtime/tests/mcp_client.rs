@@ -12,7 +12,7 @@ async fn initialize_and_tools_list() {
         ..Default::default()
     };
     let policy = SandboxPolicy::default();
-    let mut client = McpClient::connect(&entry, &policy, None)
+    let mut client = McpClient::connect(&entry, &policy, None, None)
         .await
         .expect("connect");
     let info = client.initialize().await.expect("init");

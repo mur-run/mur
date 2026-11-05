@@ -32,7 +32,7 @@ async fn proxied_pool() -> (Arc<McpPool>, Receiver<serde_json::Value>) {
         }),
         ..Default::default()
     };
-    let pool = McpPool::new(vec![entry], SandboxPolicy::default(), Some(proxy));
+    let pool = McpPool::new(vec![entry], SandboxPolicy::default(), Some(proxy), None);
     (pool, rx)
 }
 

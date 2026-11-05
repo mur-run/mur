@@ -71,6 +71,7 @@ impl McpClient {
         entry: &McpServerEntry,
         policy: &SandboxPolicy,
         proxy: Option<&crate::sandbox::egress_proxy::EgressProxyHandle>,
+        ssh: Option<&crate::tools::bash_env::SshChild>,
     ) -> Result<Self, McpError> {
         if let Some(url) = &entry.url {
             use super::http_mcp_client::{HttpMcpClient, entry_hosts};
@@ -95,7 +96,7 @@ impl McpClient {
             let client = HttpMcpClient::connect(url, bearer, refresh, guard).await?;
             Ok(McpClient::Http(Box::new(client)))
         } else {
-            let client = StdioMcpClient::spawn(entry, policy, proxy).await?;
+            let client = StdioMcpClient::spawn(entry, policy, proxy, ssh).await?;
             Ok(McpClient::Stdio(Box::new(client)))
         }
     }
@@ -265,6 +266,7 @@ impl StdioMcpClient {
         entry: &McpServerEntry,
         policy: &SandboxPolicy,
         proxy: Option<&crate::sandbox::egress_proxy::EgressProxyHandle>,
+        ssh: Option<&crate::tools::bash_env::SshChild>,
     ) -> Result<Self, McpError> {
         // Resolve a bare `mur-mcp-server` command to the bundled absolute path
         // (ensured under ~/.mur/mcp-servers by the supervisor's self-heal) so it
@@ -314,11 +316,8 @@ impl StdioMcpClient {
         if let Some((k, v)) = crate::sandbox::sealed_child_env(crate::sandbox::last_status()) {
             std_cmd.env(k, v);
         }
-        // Same rule as bash (`bash_env.rs`): the runtime's inherited
-        // ssh-agent socket is never handed to a tool child. An MCP server that
-        // runs commands would otherwise sign with the user's real agent,
-        // around the ssh-agent proxy.
-        strip_inherited_ssh_agent(&mut std_cmd);
+        // ssh: inherited socket out, proxy socket in (see `apply_ssh_env`).
+        apply_ssh_env(&mut std_cmd, ssh);
         // Last, so neither an inherited nor a policy env var can move
         // `SERENA_HOME`, and the fixed `--project` follows the entry's args.
         for k in &serena.env_remove {
@@ -578,8 +577,14 @@ pub(crate) fn scratch_env_for(policy: &SandboxPolicy) -> Vec<(String, String)> {
 /// must never inherit from the runtime.
 const INHERITED_SSH_AGENT_ENV: &str = "SSH_AUTH_SOCK";
 
-fn strip_inherited_ssh_agent(cmd: &mut std::process::Command) {
+/// Same rule as bash (`bash_env.rs`): drop the runtime's inherited ssh-agent
+/// socket, then hand the child the proxy socket (and `GIT_SSH_COMMAND`) when
+/// the proxy runs. With no proxy the key stays removed — an MCP server that
+/// runs commands must never sign with the user's real agent, around the
+/// ssh-agent proxy.
+fn apply_ssh_env(cmd: &mut std::process::Command, ssh: Option<&crate::tools::bash_env::SshChild>) {
     cmd.env_remove(INHERITED_SSH_AGENT_ENV);
+    cmd.envs(crate::tools::bash_env::ssh_mcp_env(ssh));
 }
 
 #[cfg(test)]
@@ -589,10 +594,37 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn mcp_child_never_inherits_the_ssh_agent_socket() {
+    fn mcp_child_gets_the_proxy_socket_never_the_inherited_one() {
+        use crate::tools::bash_env::SshChild;
+        let inherited = "/tmp/agent.sock";
+        let proxy = std::path::PathBuf::from("/h/agents/a/ssh-agent.sock");
+
+        // Proxy running: the child's SSH_AUTH_SOCK is the proxy path.
         let mut cmd = std::process::Command::new("true");
-        cmd.env(INHERITED_SSH_AGENT_ENV, "/tmp/agent.sock");
-        strip_inherited_ssh_agent(&mut cmd);
+        cmd.env(INHERITED_SSH_AGENT_ENV, inherited);
+        apply_ssh_env(
+            &mut cmd,
+            Some(&SshChild {
+                sock: proxy.clone(),
+                client: None,
+            }),
+        );
+        let got: Vec<_> = cmd
+            .get_envs()
+            .filter(|(k, _)| *k == INHERITED_SSH_AGENT_ENV)
+            .collect();
+        assert_eq!(
+            got,
+            vec![(
+                std::ffi::OsStr::new(INHERITED_SSH_AGENT_ENV),
+                Some(proxy.as_os_str())
+            )]
+        );
+
+        // Proxy not running: the inherited socket is removed, no fallback.
+        let mut cmd = std::process::Command::new("true");
+        cmd.env(INHERITED_SSH_AGENT_ENV, inherited);
+        apply_ssh_env(&mut cmd, None);
         let got: Vec<_> = cmd
             .get_envs()
             .filter(|(k, _)| *k == INHERITED_SSH_AGENT_ENV)
@@ -743,7 +775,7 @@ mod tests {
             ..SandboxPolicy::default()
         };
         assert_eq!(policy.agent_home(), Some(home.as_path()));
-        let err = StdioMcpClient::spawn(&entry, &policy, None)
+        let err = StdioMcpClient::spawn(&entry, &policy, None, None)
             .await
             .err()
             .expect("gate must refuse");
@@ -751,7 +783,7 @@ mod tests {
         assert!(err.to_string().contains("`code-nav`"), "{err}");
 
         // The default policy has no agent home: refused, not guessed.
-        let err = StdioMcpClient::spawn(&entry, &SandboxPolicy::default(), None)
+        let err = StdioMcpClient::spawn(&entry, &SandboxPolicy::default(), None, None)
             .await
             .err()
             .expect("no home must refuse");
@@ -765,7 +797,7 @@ mod tests {
             url: Some("https://example.com/mcp".into()),
             ..Default::default()
         };
-        let client = McpClient::connect(&entry, &SandboxPolicy::default(), None)
+        let client = McpClient::connect(&entry, &SandboxPolicy::default(), None, None)
             .await
             .expect("connect should succeed for a url entry");
         assert!(

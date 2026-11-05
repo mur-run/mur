@@ -17,7 +17,7 @@ fn mock(args: &[&str]) -> McpServerEntry {
 
 #[tokio::test]
 async fn an_edited_entry_starts_a_new_client_generation() {
-    let pool = McpPool::new(vec![mock(&[])], SandboxPolicy::default(), None);
+    let pool = McpPool::new(vec![mock(&[])], SandboxPolicy::default(), None, None);
     let served = Arc::new(Mutex::new(mock(&[])));
     let source = served.clone();
     pool.attach_live(Box::new(move |name| {
@@ -44,7 +44,7 @@ async fn an_edited_entry_starts_a_new_client_generation() {
 
 #[tokio::test]
 async fn a_server_the_live_profile_does_not_know_falls_back_to_boot() {
-    let pool = McpPool::new(vec![mock(&[])], SandboxPolicy::default(), None);
+    let pool = McpPool::new(vec![mock(&[])], SandboxPolicy::default(), None, None);
     pool.attach_live(Box::new(|_| None));
     pool.client("mock").await.expect("boot entry still serves");
     pool.shutdown().await;
@@ -72,6 +72,7 @@ async fn a_retired_generation_keeps_its_token_until_its_last_reference_drops() {
         vec![boot.clone()],
         SandboxPolicy::default(),
         Some(proxy.clone()),
+        None,
     );
     let served = Arc::new(Mutex::new(boot));
     let source = served.clone();

@@ -319,7 +319,7 @@ mod tests {
             command: "/definitely/not/a/real/mcp-binary".into(),
             ..Default::default()
         };
-        let pool = McpPool::new(vec![entry.clone()], SandboxPolicy::default(), None);
+        let pool = McpPool::new(vec![entry.clone()], SandboxPolicy::default(), None, None);
         let dir = tempfile::tempdir().unwrap();
         let status_path = dir.path().join(mur_common::agent::MCP_STATUS_FILE);
         let backend = McpBackend {
@@ -337,7 +337,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_servers_empty_result() {
-        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
         let (defs, map) =
             build_tools(None, None, None, None, &[], &[], McpBackend::unrouted(pool)).await;
         // the chrome built-ins (suggest_replies, propose) are always registered.
@@ -361,7 +361,7 @@ mod tests {
             ssh: None,
         });
         let bash_def = bash_exec.def();
-        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
         let (defs, map) = build_tools(
             Some((bash_def, bash_exec)),
             None,
@@ -379,7 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn suggest_replies_is_registered() {
-        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
         let (defs, map) =
             build_tools(None, None, None, None, &[], &[], McpBackend::unrouted(pool)).await;
         assert!(map.contains_key("suggest_replies"));
@@ -407,7 +407,7 @@ mod tests {
             risk: None,
             bypass_builtin_tier_floor: Default::default(),
         }];
-        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
         let (defs, map) = build_tools(
             Some((bash_def, bash_exec)),
             None,
@@ -432,7 +432,7 @@ mod tests {
             mur_common::agent::FilesystemEntitlement::default(),
         ));
         let read_file_def = read_file_exec.def();
-        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
         let (defs, map) = build_tools(
             None,
             Some((read_file_def, read_file_exec)),
@@ -462,7 +462,7 @@ mod tests {
             risk: None,
             bypass_builtin_tier_floor: Default::default(),
         }];
-        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
         let (defs, map) = build_tools(
             None,
             Some((read_file_def, read_file_exec)),
@@ -487,7 +487,7 @@ mod tests {
             mur_common::agent::FilesystemEntitlement::default(),
         ));
         let write_file_def = write_file_exec.def();
-        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
         let (defs, map) = build_tools(
             None,
             None,
@@ -517,7 +517,7 @@ mod tests {
             risk: None,
             bypass_builtin_tier_floor: Default::default(),
         }];
-        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
         let (defs, map) = build_tools(
             None,
             None,
@@ -542,7 +542,7 @@ mod tests {
             mur_common::agent::FilesystemEntitlement::default(),
         ));
         let edit_file_def = edit_file_exec.def();
-        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
         let (defs, map) = build_tools(
             None,
             None,
@@ -572,7 +572,7 @@ mod tests {
             risk: None,
             bypass_builtin_tier_floor: Default::default(),
         }];
-        let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+        let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
         let (defs, map) = build_tools(
             None,
             None,
@@ -609,7 +609,7 @@ mod tests {
         for (rules, expect) in [(deny, false), (vec![], true)] {
             let bash = mk();
             let exec: Arc<dyn ToolExecutor> = bash.clone();
-            let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
+            let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
             let (_defs, mut map) = build_tools(
                 Some((bash.def(), exec)),
                 None,

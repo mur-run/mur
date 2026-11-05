@@ -87,6 +87,24 @@ pub fn ssh_child_env(ssh: Option<&SshChild>) -> Vec<(String, String)> {
     env
 }
 
+/// ssh keys for a stdio MCP child: the same proxy socket as a bash child
+/// plus `GIT_SSH_COMMAND`, but no `BASH_FUNC_ssh%%` — MCP servers run under
+/// zsh, node, or python, where an exported bash function is noise. A bare
+/// `ssh` in such a child uses the user's own `~/.ssh/config`; the proxy's
+/// per-request policy + HITL is where authorization is decided. Nothing when
+/// the proxy is not running: the inherited socket is never a fallback.
+pub fn ssh_mcp_env(ssh: Option<&SshChild>) -> Vec<(String, String)> {
+    let Some(ssh) = ssh else { return Vec::new() };
+    let mut env = vec![(
+        SSH_AUTH_SOCK_ENV.to_string(),
+        ssh.sock.to_string_lossy().into_owned(),
+    )];
+    if let Some(c) = &ssh.client {
+        env.push(c.git_env_pair());
+    }
+    env
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +143,34 @@ mod tests {
             keys(Some(&full)),
             ["SSH_AUTH_SOCK", "GIT_SSH_COMMAND", "BASH_FUNC_ssh%%"]
         );
+    }
+
+    #[test]
+    fn mcp_env_is_socket_plus_git_only() {
+        let sock = std::path::PathBuf::from("/h/agents/a/ssh-agent.sock");
+        assert!(ssh_mcp_env(None).is_empty());
+        let bare = SshChild {
+            sock: sock.clone(),
+            client: None,
+        };
+        assert_eq!(
+            ssh_mcp_env(Some(&bare)),
+            [("SSH_AUTH_SOCK".into(), "/h/agents/a/ssh-agent.sock".into())]
+        );
+        let client = super::super::ssh_client_env::SshClientEnv::for_test("/h/agents/a");
+        let full = SshChild {
+            sock,
+            client: Some(client),
+        };
+        let env = ssh_mcp_env(Some(&full));
+        let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["SSH_AUTH_SOCK", "GIT_SSH_COMMAND"]);
+        // The bash variant and the MCP variant pin git identically.
+        let bash_git = ssh_child_env(Some(&full))
+            .into_iter()
+            .find(|(k, _)| k == "GIT_SSH_COMMAND")
+            .unwrap();
+        assert_eq!(env[1], bash_git);
     }
 
     #[test]
