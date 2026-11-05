@@ -10,12 +10,12 @@ const FIXTURE: &str = include_str!("../../../../mur-common/tests/fixtures/minima
 fn agent_home(tmp: &Path, name: &str, read_root: &Path) -> PathBuf {
     let home = tmp.join("agents").join(name);
     std::fs::create_dir_all(&home).unwrap();
+    // Single-quoted: YAML double quotes treat `\` as an escape, which breaks
+    // on a Windows path (`C:\Users\...`). Single quotes only escape `'`.
+    let quoted = read_root.display().to_string().replace('\'', "''");
     let yaml = FIXTURE.replace(
         "filesystem: { read: [], write: [],",
-        &format!(
-            "filesystem: {{ read: [\"{}\"], write: [],",
-            read_root.display()
-        ),
+        &format!("filesystem: {{ read: ['{quoted}'], write: [],"),
     );
     assert_ne!(yaml, FIXTURE, "fixture shape changed");
     std::fs::write(home.join("profile.yaml"), yaml).unwrap();
