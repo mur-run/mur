@@ -1,11 +1,20 @@
+import type { AgentEntry } from "../../types";
 import type { ChannelSummary } from "../../work/types";
-import { ordinalLabel, relativeTime, shortId, stateBadge } from "../../work/format";
+import {
+  channelTitle,
+  displayNameMap,
+  ordinalLabel,
+  relativeTime,
+  stateBadge,
+} from "../../work/format";
 import { isActivityChannel } from "./useChannels";
 import { useT } from "../../i18n";
 
 const MAX_ROWS = 8;
 
 interface Props {
+  /** Roster, for the untitled-channel fallback label (display names). */
+  agents: AgentEntry[];
   channels: ChannelSummary[];
   nowMs: number;
   /** Jump to the chat for the clicked channel. */
@@ -17,8 +26,9 @@ interface Props {
  * WorkView showed in its rail, ordered newest-first. Each row jumps to the
  * chat surface. Hidden when there is nothing.
  */
-export function RecentActivity({ channels, nowMs, onOpen }: Props) {
+export function RecentActivity({ agents, channels, nowMs, onOpen }: Props) {
   const { t } = useT();
+  const names = displayNameMap(agents);
 
   const rows = channels
     .filter(isActivityChannel)
@@ -37,7 +47,7 @@ export function RecentActivity({ channels, nowMs, onOpen }: Props) {
             <button className="home-recent-row" onClick={() => onOpen(ch)}>
               <span className="home-recent-row__num">{ordinalLabel(ch.ordinal)}</span>
               <span className="home-recent-row__title">
-                {ch.title || shortId(ch.id)}
+                {channelTitle(ch, names)}
               </span>
               <span className="home-recent-row__sub">
                 {ch.goal.trim() || ch.preview || ch.agents.join(", ")}

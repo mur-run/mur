@@ -1,6 +1,12 @@
 import type { AgentEntry, AgentRuntimeStatus } from "../../types";
 import type { ChannelSummary } from "../../work/types";
-import { ordinalLabel, relativeTime, shortId, stateBadge } from "../../work/format";
+import {
+  channelTitle,
+  displayNameMap,
+  ordinalLabel,
+  relativeTime,
+  stateBadge,
+} from "../../work/format";
 import { isActivityChannel, isRunningChannel } from "./useChannels";
 import { PetFace } from "../PetFace";
 import { avatarPreset, familyOf } from "../../utils";
@@ -43,6 +49,7 @@ export function NowRunning({
   if (runningAgents.length === 0 && runningChannels.length === 0) return null;
 
   const entryFor = (name: string) => agents.find((a) => a.name === name);
+  const names = displayNameMap(agents);
 
   return (
     <section className="home-section home-now-running">
@@ -87,7 +94,7 @@ export function NowRunning({
               <button className="home-run-row" onClick={() => onOpen(ch)}>
                 <span className="home-run-row__num">{ordinalLabel(ch.ordinal)}</span>
                 <span className="home-run-row__title">
-                  {ch.title || shortId(ch.id)}
+                  {channelTitle(ch, names)}
                 </span>
                 <span className={`work-badge work-badge--${stateBadge(ch.state)}`}>
                   {ch.state}

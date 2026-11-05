@@ -99,6 +99,7 @@ export function HomePage({
             onPeekAgent={peekAgent}
           />
           <RecentActivity
+            agents={agents}
             channels={channels}
             nowMs={nowMs}
             onOpen={openChat}
