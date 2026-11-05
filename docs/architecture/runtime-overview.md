@@ -45,6 +45,78 @@ with `mur internals migrate-channels`.
 
 Spec: `docs/superpowers/specs/2026-06-15-unified-channel-design.md`.
 
+## Channel consult (`Ask` / `AskReply`)
+
+One agent asks another a question and gets an answer that can draw only on
+files *both* could read. Spec:
+`docs/superpowers/specs/2026-09-26-channel-consult-design.md`.
+
+**Status:** readers ship first; the writer is off. `tools::ask::ENABLED` is
+`false` (`mur-agent-runtime/src/tools/ask/mod.rs`), so no runtime registers the
+`ask` tool and nothing emits an `Ask` yet. `channel/consult` is served but has
+nothing to answer until the gate is lifted one release later.
+
+**Event kinds** (`mur-common/src/channel.rs`): `EventKind::Ask` carries
+`AskPayload { to, question, expires_at_ms, nonce }`; `EventKind::AskReply`
+carries `AskReplyPayload { nonce, text }`. Both are signed by their author's
+own key (actor `Agent{self}`). Readers that treat any agent-authored event as
+progress, a reply or a final answer filter both kinds out: fleet stuck
+detection and done-marker, fleet reply printing, the deep-research final
+answer. `mur agent cli` follow and the Hub chat tab render them as consult
+lines.
+
+**Asker side — `ask` tool.** Checks `communication.sends_to` and that the
+answerer's `agent.sock` exists *before* writing anything, then appends a
+self-signed `Ask` (random nonce, deadline `consult.ask_expiry_secs` from
+config, default 600 s, `0` means the default) to the asker's own ask channel —
+one per agent, id kept in `<agent_home>/ask-channel`, like the schedule
+channel. It then dials `channel/consult(channel_id, nonce)` on the answerer via
+`protocol::peer_dial` (the runtime cannot use `mur-core`'s dialer) and returns
+the answer. The dial carries no scope.
+
+**Answerer side — `channel/consult`**
+(`mur-agent-runtime/src/protocol/methods/channel_consult/`, needs A2A proto 5;
+an older peer gets a "restart the agent" hint instead of `-32601`). The dialer is neither trusted nor identified: the `Ask`
+authenticates itself. Checks, in order, each a named refusal:
+1. the runner is the built-in agentic loop (a CLI backend is refused before
+   anything is read or recorded);
+2. the platform (below);
+3. exactly one `Ask` carries the nonce;
+4. its actor is an agent with a valid name;
+5. its signature verifies against that agent's key — always, regardless of
+   `MUR_CHANNEL_REQUIRE_SIG`;
+6. `to` is this agent and `expires_at_ms` has not passed;
+7. `(asker, nonce)` has not been answered (`<agent_home>/consult-ledger.json`,
+   pruned past expiry; a claim is released if the turn never runs);
+8. the asker's read scope, derived from the asker's own `profile.yaml`.
+
+The consult turn offers and dispatches only `read_file`, and a path is readable
+only if both agents could read it in their own turns: the asker's *effective*
+policy (implicit grants and self-protected denies included, its own launch
+chain) is checked a second time inside the shared read decision, so it covers
+the project-instructions loader too. The scope is a turn-local
+(`mur-agent-runtime/src/task_runner/consult_scope.rs`) and never leaks into a
+concurrent ordinary turn. The answer is appended as a self-signed `AskReply`.
+
+**Trust model and caveats.**
+- The scope bounds what the answer can *draw on*, not who reads it: the
+  `AskReply` is as public as the channel, so a replayed `Ask` reveals nothing
+  not already posted.
+- **Memory is not scoped.** `recall` and injected memories reach the consult
+  turn as in any turn, so an answer can reflect what the answerer remembers
+  regardless of file scope. User-facing docs must say so.
+- **Platforms:** only macOS answers, because only there is an agent's own
+  `profile.yaml` kernel-protected from the agent's `bash`. Linux refuses until
+  the Landlock cage can deny inside an allow; FreeBSD and Windows refuse as
+  unchecked (`docs/platforms/freebsd-audit.md`).
+
+**Mixed versions.** The store derives the next `seq` from a minimal `{seq}`
+parse of every line, whatever its kind (`mur-channel/src/store/append.rs`), so
+a binary that cannot parse `Ask` still never reuses its `seq`. A binary older
+than that change can: its next append silently collides with the `Ask`'s `seq`
+and is dropped by the index and every `seq > since` cursor. Hence readers in
+one release, writers in the next.
+
 ## Pattern pipeline removal (workflow-engine v2 P1a+P1b, 2026-06-11)
 
 The legacy Pattern pipeline is removed; skills + workflows are the knowledge
