@@ -558,9 +558,10 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                         welcome::resolve_mascot_mode(app.theme, std::io::stdout().is_terminal());
                     let h = app.home.clone();
                     match persist_skin(&h, &name) {
-                        Ok(()) => app.push_system(format!("skin changed to {name}")),
+                        Ok(()) => app.push_system(skin_notice(&name)),
                         Err(e) => app.push_system(format!(
-                            "skin changed to {name} (could not persist: {e})"
+                            "{} · could not persist: {e}",
+                            skin_notice(&name)
                         )),
                     }
                 }
@@ -724,3 +725,10 @@ mod resolve_tests;
 /// ten newer conversations pushed it off the listing.
 #[cfg(test)]
 mod lookup_window_tests;
+
+/// The line an operator-typed `/skin <name>` prints (spec §2). Says what the
+/// switch cannot do: rows already in scrollback keep the colours they were
+/// painted with, and only a resume repaints them.
+fn skin_notice(name: &str) -> String {
+    format!("skin → {name} (earlier lines keep their colours; murmur --resume repaints them)")
+}

@@ -180,10 +180,7 @@ pub(super) fn intent_note(subject: Option<&str>, used_cols: usize, width: u16) -
     if room < INTENT_MIN_COLS {
         return None;
     }
-    Some(format!(
-        "{INTENT_LEAD}{})",
-        elide_middle_cols(subject, room)
-    ))
+    Some(format!("{INTENT_LEAD}{})", elide_tail_cols(subject, room)))
 }
 
 pub(super) fn arg_hint(card: &StepCard, budget: usize) -> String {
@@ -275,6 +272,49 @@ pub(super) fn elide_middle_cols(s: &str, budget: usize) -> String {
         return format!("{head}…");
     }
     format!("{head}…{tail}")
+}
+
+/// Keep the HEAD of model prose, cut at a word boundary, budgeted in display
+/// COLUMNS. The column counterpart of [`elide_tail_at_word`] for intent notes:
+/// a sentence keeps its opening and loses its end, where middle-elision left
+/// `Running the…the tests` reading like noise. CJK prose has no spaces, so a
+/// cut that would back up past half the budget falls on the column edge.
+pub(super) fn elide_tail_cols(s: &str, budget: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    if width_of(s) <= budget {
+        return s.to_string();
+    }
+    let keep = budget.saturating_sub(ELLIPSIS_OVERHEAD);
+    let mut end = 0;
+    let mut used = 0;
+    for (i, c) in s.char_indices() {
+        let w = c.width().unwrap_or(0);
+        if used + w > keep {
+            break;
+        }
+        used += w;
+        end = i + c.len_utf8();
+    }
+    let cut = match s[..end].rfind(' ') {
+        Some(i) if i * 2 >= end => i,
+        _ => end,
+    };
+    format!("{}…", s[..cut].trim_end())
+}
+
+/// One duration format for the card header and the transcript dump:
+/// `640ms` under a second, `12.4s` under a minute, `2m06s` beyond.
+pub(super) fn fmt_duration(ms: u64) -> String {
+    const SEC: u64 = 1_000;
+    const MIN: u64 = 60 * SEC;
+    if ms < SEC {
+        format!("{ms}ms")
+    } else if ms < MIN {
+        // Tenths, truncated so 59_999 never rounds up to "60.0s".
+        format!("{}.{}s", ms / SEC, (ms % SEC) / 100)
+    } else {
+        format!("{}m{:02}s", ms / MIN, (ms % MIN) / SEC)
+    }
 }
 
 /// What a bash call with no `command` argument is: a shell, not a no-op. Named

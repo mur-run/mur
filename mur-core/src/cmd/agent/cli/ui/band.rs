@@ -27,6 +27,8 @@ mod scrub_tests;
 #[cfg(test)]
 mod settled_md_tests;
 #[cfg(test)]
+mod stack_tests;
+#[cfg(test)]
 mod table_tail_tests;
 #[cfg(test)]
 mod tests;
@@ -212,8 +214,12 @@ pub(super) fn message_block(
     let mut lines: Vec<Line<'static>> = Vec::new();
     // Never before a continuation: `skip > 0` resumes a message whose head is
     // already committed above.
-    if idx > 0 && skip == 0 {
-        lines.push(gap_row(app.theme, app.messages.get(idx - 1), m));
+    // Two step cards in a row stack with no gap (spec §4): a page of tool
+    // calls reads as one block, and the next turn's gap sets it apart.
+    let prev = idx.checked_sub(1).and_then(|i| app.messages.get(i));
+    let stacked = m.step.is_some() && prev.is_some_and(|p| p.step.is_some());
+    if idx > 0 && skip == 0 && !stacked {
+        lines.push(gap_row(app.theme, prev, m));
     }
     if measured {
         push_live_measured(&mut lines, app, m, skip);
@@ -248,12 +254,13 @@ pub(super) fn push_live_inner(
             app.theme,
             app.cards_expanded,
             app.width,
+            &app.agent_label,
         );
         return;
     }
     if skip == 0 {
         // Measuring a streaming turn: header + reasoning, then the settled body.
-        push_agent_header(lines, m, app.spinner, app.theme);
+        push_agent_header(lines, m, app.spinner, app.theme, &app.agent_label);
     }
     // Continuation of a partially-committed agent turn: body only, no header.
     let rest = m.text.get(skip..).unwrap_or("");
@@ -569,7 +576,7 @@ pub fn flush_finished<B: Backend>(
                 lines.push(gap_row(theme, app.messages.get(app.flushed_upto - 1), m));
             }
             lines.push(Line::from(Span::styled(
-                "● agent".to_string(),
+                format!("● {}", app.agent_label),
                 theme.accent.add_modifier(Modifier::BOLD),
             )));
         }

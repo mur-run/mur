@@ -51,7 +51,7 @@ fn card_text(card: &StepCard) -> String {
     let mut s = String::new();
     let dur = card
         .duration_ms
-        .map(|ms| format!(" · {ms}ms"))
+        .map(|ms| format!(" · {}", super::call_summary::fmt_duration(ms)))
         .unwrap_or_default();
     s.push_str(&format!("\n{} {}{}\n", card.glyph(), card.name, dur));
     // An edit tool's args are a file path plus two big blobs of source. Dumped
