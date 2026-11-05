@@ -29,6 +29,16 @@ const COMMAND_ROW_INDENT: &str = "    ";
 /// is always retained; the full unbounded patch stays one Ctrl+O away.
 const COLLAPSED_DIFF_PREVIEW_LINES: usize = 20;
 
+/// Columns the ` — ` before a failure's cause occupies.
+const CAUSE_CHROME_COLS: usize = 3;
+
+/// Fewest columns a failure's cause is cut to; a narrower row wraps instead
+/// of losing the reason.
+const CAUSE_MIN_COLS: usize = 16;
+
+/// The awaiting-approval marker row on a step card.
+pub(super) const AWAITING_MARKER: &str = "  ⏳ awaiting approval";
+
 /// Append a bounded edit preview and a clear route to the complete patch.
 ///
 /// Tool cards live in a transcript, so allowing a large write to consume the
@@ -146,6 +156,20 @@ pub fn card_lines(
     }
     header_spans.push(Span::styled(meta, theme.muted));
     header_spans.push(auto_tag);
+    // A failure says its cause once, on the header, in `text`: the glyph and
+    // the name already carry `error`, and the wrapper chain the runtime sends
+    // (`tool error: tool execution failed: …`) repeated what they said.
+    let failure = card.error.as_deref().map(super::failure::parse);
+    if let Some(f) = &failure {
+        let used: usize = header_spans.iter().map(|s| width_of(&s.content)).sum();
+        let room = usize::from(width)
+            .saturating_sub(used + CAUSE_CHROME_COLS)
+            .max(CAUSE_MIN_COLS);
+        header_spans.push(Span::styled(
+            format!(" — {}", elide_tail_cols(&f.cause, room)),
+            theme.text,
+        ));
+    }
     out.push(Line::from(header_spans));
     if let Some(cmd) = command_row {
         out.push(Line::from(Span::styled(
@@ -217,39 +241,23 @@ pub fn card_lines(
     out
 }
 
-/// Error line for a card, or `None` when the tool succeeded. Shown in both
-/// collapsed and expanded modes.
+/// The `fix:` row under a failed card: the remediation the runtime embedded
+/// in the error, lifted out so it can be read and copied whole. `None` when
+/// the card did not fail or the runtime named no fix. The cause itself is on
+/// the header (see `card_lines`). Shown in both collapsed and expanded modes.
 fn error_line(card: &StepCard, theme: &'static Theme) -> Option<Line<'static>> {
-    card.error
-        .as_ref()
-        .map(|err| Line::styled(format!(" ✗ {err}"), theme.error))
+    let fix = super::failure::parse(card.error.as_deref()?).fix?;
+    Some(Line::from(Span::styled(
+        format!("{}fix: {fix}", super::failure::FIX_INDENT),
+        theme.muted,
+    )))
 }
 
-/// The `[y] approve [a] always [n] deny` inline-HITL prompt row.
+/// The marker a card carries while its call waits on a decision. It has no
+/// keys: the decision is made in the docked approval panel, which is always
+/// on screen, so a second surface could only disagree with it.
 fn hitl_row(theme: &'static Theme) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            "  [y]",
-            Style::default()
-                .fg(ratatui::style::Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" approve  ", theme.muted),
-        Span::styled(
-            "[a]",
-            Style::default()
-                .fg(ratatui::style::Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" always  ", theme.muted),
-        Span::styled(
-            "[n]",
-            Style::default()
-                .fg(ratatui::style::Color::Red)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" deny / Esc", theme.muted),
-    ])
+    Line::from(Span::styled(AWAITING_MARKER, theme.muted))
 }
 
 /// Collapsed-card tail: error line (if any) + pending-HITL row (if any). The

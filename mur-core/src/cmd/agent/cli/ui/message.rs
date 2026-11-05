@@ -229,6 +229,7 @@ pub(super) fn push_message(
                 Severity::Warn => (theme.warn, "▲"),
                 Severity::Error => (theme.error, "✖"),
                 Severity::Success => (theme.ok, "✔"),
+                Severity::Denied => (theme.warn, "⊘"),
             };
             let bold = !matches!(m.severity, Severity::Info);
             for (i, l) in m.text.lines().enumerate() {

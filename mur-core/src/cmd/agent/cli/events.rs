@@ -325,7 +325,7 @@ pub(super) async fn event_loop(
         let hitl_at = app
             .hitl
             .as_ref()
-            .map(|r| TokioInstant::from_std(r.created_at + crate::hitl::gate::DEFAULT_TIMEOUT))
+            .map(|r| TokioInstant::from_std(r.deadline))
             .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
         // The chip countdown repaints once a second and must wake an idle
         // loop to retire the chip at zero.
@@ -443,18 +443,19 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                     // deletes one character, leaving no live key that approves
                     // and only the 5-minute auto-deny to end the gate (#939).
                     KeyCode::Char('u') if ctrl => app.clear_input(),
-                    // Paging the modal body, which now wraps and keeps the
-                    // whole tool input rather than cutting it (#939).
+                    // The docked panel folds a long call instead of scrolling
+                    // it (a third scroll owner would collide with ↑/↓ and
+                    // PgUp), so PgUp/PgDn keep scrolling the transcript — the
+                    // agent's reasons for the call — and Ctrl+O shows the call
+                    // in full. Both used to be swallowed or typed while a gate
+                    // was open.
                     KeyCode::PageUp => {
-                        app.hitl_scroll = app
-                            .hitl_scroll
-                            .saturating_sub(ui::hitl_scroll_step(app.hitl_page))
+                        app.scroll_back = app.scroll_back.saturating_add(app.scroll_page.max(1))
                     }
                     KeyCode::PageDown => {
-                        app.hitl_scroll = app
-                            .hitl_scroll
-                            .saturating_add(ui::hitl_scroll_step(app.hitl_page))
+                        app.scroll_back = app.scroll_back.saturating_sub(app.scroll_page.max(1))
                     }
+                    KeyCode::Char('o') if ctrl => scrollback_dump(app),
                     KeyCode::Char('y') | KeyCode::Char('Y') if composer_empty => {
                         decide_hitl(app, tx, true)
                     }

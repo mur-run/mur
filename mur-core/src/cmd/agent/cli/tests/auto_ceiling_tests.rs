@@ -21,8 +21,7 @@ fn req(tool: &str, input: serde_json::Value) -> stream::HitlRequest {
         step_id: None,
         tool_name: tool.into(),
         tool_input: input,
-        prompt: "approve?".into(),
-        created_at: std::time::Instant::now(),
+        deadline: std::time::Instant::now() + std::time::Duration::from_secs(300),
         declared_risk: None,
     }
 }

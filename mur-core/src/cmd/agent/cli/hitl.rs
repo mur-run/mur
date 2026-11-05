@@ -142,15 +142,15 @@ pub(super) fn commit_hitl_choice(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 /// advertising "tool approval needed (auto-deny in 0s)" for a request that was
 /// already dead — the one surface still claiming a decision was wanted.
 ///
-/// Uses the same `DEFAULT_TIMEOUT` the status line counts down to, so the
-/// display and the state cannot disagree. (A profile that shortens
-/// `hitl.timeout_secs` still expires earlier on the runtime side than the CLI
-/// shows; the request carries no timeout for the CLI to read.)
+/// Reads the request's `deadline` — the one the panel counts down to, set from
+/// the runtime's own `timeout_ms` — so the display, this sweep and the runtime
+/// cannot disagree. A profile that shortens `hitl.timeout_secs` now shortens
+/// the countdown too.
 ///
 /// Returns whether anything was retired.
 pub(super) fn expire_stale_hitl(app: &mut App) -> bool {
     let Some(req) = &app.hitl else { return false };
-    if req.created_at.elapsed() < crate::hitl::gate::DEFAULT_TIMEOUT {
+    if StdInstant::now() < req.deadline {
         return false;
     }
     let tool = req.tool_name.clone();
@@ -248,29 +248,31 @@ pub(super) fn decide_hitl_with_note(
                     app.mark_card_auto_approved(sid);
                 }
             }
-            // The receipt names the COMMAND, not the tool category. `approved
-            // \`bash\`` was unreviewable after the fact — the scrollback could
-            // not tell two approvals of the same tool apart, and neither could
-            // the operator.
+            // An approved call is simply a call that ran: its card says so,
+            // with the command. The separate `✔ approved …` row it replaces
+            // made one call read as two events (spec 2026-09-29 §4).
             (true, false) => {
                 app.saw_hitl_this_turn = true;
-                let s = super::call_summary::approval_summary(
-                    &req.tool_name,
-                    &req.tool_input,
-                    app.width,
-                    super::call_summary::ApprovalFrame::Transcript,
-                );
-                app.push_success(format!("approved {s}"))
             }
-            (false, _) => {
-                let s = super::call_summary::approval_summary(
-                    &req.tool_name,
-                    &req.tool_input,
-                    app.width,
-                    super::call_summary::ApprovalFrame::Transcript,
-                );
-                app.push_warn(format!("denied {s}"))
-            }
+            // A denial keeps its own row, because nothing else records it.
+            // It names the COMMAND, not the tool category — a bare `denied
+            // \`bash\`` could not tell two denials apart after the fact.
+            (false, _) => app.push_denied(denial_line(&req.tool_name, &req.tool_input, app.width)),
         }
     }
+}
+
+/// `edit_file ~/murui-demo/hello.md — denied`: the tool, what it would have
+/// touched, and the verdict. The model-written intent is left off — it says
+/// why the agent wanted the call, which no longer matters once it is refused.
+pub(super) fn denial_line(tool: &str, input: &serde_json::Value, width: u16) -> String {
+    let s = super::call_summary::approval_summary(
+        tool,
+        input,
+        width,
+        super::call_summary::ApprovalFrame::Transcript,
+    );
+    let (cmd, _intent) = super::call_summary::split_intent(&s);
+    let cmd = cmd.replacen(" · ", " ", 1);
+    format!("{} — denied", cmd.trim_end())
 }

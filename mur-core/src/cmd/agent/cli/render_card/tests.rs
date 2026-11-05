@@ -422,11 +422,16 @@ fn collapsed_card_still_shows_errors_and_hitl() {
         text.contains("exit 101"),
         "error must show collapsed: {text}"
     );
-    assert!(text.contains("[y]"), "HITL must show collapsed: {text}");
+    assert!(
+        text.contains("awaiting approval"),
+        "the awaiting marker must show collapsed: {text}"
+    );
 }
 
+/// The card marks a pending decision but carries no keys of its own: the
+/// docked panel is the one place a decision is made (spec §3, one surface).
 #[test]
-fn awaiting_card_shows_inline_approval_row() {
+fn awaiting_card_shows_a_marker_without_keys() {
     let mut c = StepCard::new(
         "s1".into(),
         "edit".into(),
@@ -445,9 +450,73 @@ fn awaiting_card_shows_inline_approval_row() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("[y]"));
-    assert!(text.contains("approve"));
-    assert!(text.contains("[n]"));
+    assert!(text.contains("⏳ awaiting approval"), "{text}");
+    assert!(!text.contains("[y]") && !text.contains("[n]"), "{text}");
+}
+
+fn edit_failure() -> StepCard {
+    let mut c = StepCard::new(
+        "s1".into(),
+        "edit_file".into(),
+        serde_json::json!({"file_path": "~/murui-demo/hello.md"}),
+    );
+    c.complete(
+        CallOutcome::Failed,
+        String::new(),
+        false,
+        0,
+        Some(
+            "tool error: tool execution failed: path not write-entitled: \
+             ~/murui-demo/hello.md (grant it via `mur agent perm allow-write mur \
+             ~/murui-demo/hello.md && mur agent restart mur`)"
+                .into(),
+        ),
+        19,
+    );
+    c
+}
+
+/// Spec §7 `failed_tool_is_one_summary_line`: one `✗` row plus one `fix:`
+/// row, the wrapper chain gone, the cause said once.
+#[test]
+fn failed_tool_is_one_summary_line() {
+    let lines = card_lines(&edit_failure(), theme::resolve_skin("dark"), false, 160);
+    let text = joined(&lines);
+    assert_eq!(lines.len(), 2, "{text}");
+    assert!(text.starts_with("✗ edit_file"), "{text}");
+    assert!(text.contains("— path not write-entitled"), "{text}");
+    assert!(
+        !text.contains("tool error") && !text.contains("tool execution failed"),
+        "{text}"
+    );
+    assert_eq!(text.matches("not write-entitled").count(), 1, "{text}");
+    let fix = text.lines().nth(1).unwrap();
+    assert!(
+        fix.trim_start()
+            .starts_with("fix: mur agent perm allow-write mur"),
+        "{fix}"
+    );
+}
+
+/// Only the glyph and the tool name take `error`; the cause takes `text` and
+/// the `fix:` row `muted`.
+#[test]
+fn failure_ink() {
+    for theme in [&theme::ANSI, &theme::LIGHT, &theme::MUR, &theme::CLAY] {
+        let lines = card_lines(&edit_failure(), theme, false, 160);
+        let span = |needle: &str| {
+            lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .find(|s| s.content.contains(needle))
+                .unwrap()
+                .style
+        };
+        assert_eq!(span("✗").fg, theme.error.fg);
+        assert_eq!(span("edit_file").fg, theme.error.fg);
+        assert_eq!(span("not write-entitled"), theme.text);
+        assert_eq!(span("fix:"), theme.muted);
+    }
 }
 
 /// Spec §4 ink: on a done row the `✔` takes `ok`, and nothing else on the
