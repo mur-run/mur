@@ -739,4 +739,6 @@ pub mod restart;
 mod transition;
 
 #[cfg(test)]
+mod resume_tests;
+#[cfg(test)]
 mod tests;
