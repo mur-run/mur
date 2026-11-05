@@ -26,6 +26,7 @@ pub const BUILTIN_TOOL_NAMES: &[&str] = &[
     "remind",
     "open_item",
     "fleet_run",
+    "ask",
     "git_push_request",
     "git_push_status",
     "git_push_cancel",

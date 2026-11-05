@@ -239,6 +239,26 @@ pub async fn build_provider_runner(
             );
         }
     }
+    // Channel consult, asker side. Off until release N+1 (D3/E7): readers of
+    // the `Ask` kind ship one release before any writer (§D7). An explicit
+    // Deny in the profile still wins once it is on.
+    {
+        use crate::tools::ask::{ASK, AskTool, ENABLED};
+        use mur_common::agent::{ToolPolicy, resolve_tool_policy};
+        if ENABLED && resolve_tool_policy(&tools_policy, ASK) != ToolPolicy::Deny {
+            tool_map.insert(
+                ASK.to_string(),
+                Arc::new(AskTool {
+                    mur_home: mur_home.clone(),
+                    agent_name: profile.inner.name.clone(),
+                    identity: identity.clone(),
+                    key_version: profile.inner.identity.key_version,
+                    consult: boot_cfg.consult.clone(),
+                    sends_to: profile.inner.communication.sends_to.clone(),
+                }),
+            );
+        }
+    }
     // Built-in git push broker tools: registered ONLY for agents allowlisted in
     // the global config (`git_push.enabled` + `git_push.agents`, deny-by-default)
     // — unauthorized agents never see them. An explicit Deny in the profile still
