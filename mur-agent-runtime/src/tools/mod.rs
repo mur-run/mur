@@ -1,3 +1,4 @@
+pub mod ask;
 pub(crate) mod atomic_write;
 pub mod bash;
 #[cfg(test)]
@@ -243,6 +244,7 @@ fn builtin_tool_names_cover_every_builtin() {
         remind::REMIND,
         open_item::OPEN_ITEM,
         fleet_run::FLEET_RUN,
+        ask::ASK,
         git_push::GIT_PUSH_REQUEST,
         git_push::GIT_PUSH_STATUS,
         git_push::GIT_PUSH_CANCEL,

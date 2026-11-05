@@ -151,6 +151,23 @@ pub(super) fn build_dispatcher(
             ),
         ),
     );
+    // Channel consult, answerer side (§D3). Registered on every runtime: the
+    // handler itself refuses on a backend or platform that cannot confine
+    // the turn, naming why, so a dialer never mistakes it for a missing
+    // method.
+    d.register(
+        crate::protocol::methods::channel_consult::CHANNEL_CONSULT_METHOD,
+        Box::new(
+            crate::protocol::methods::channel_consult::ChannelConsultHandler::new(
+                runner.clone(),
+                identity.clone(),
+                agent_name.to_string(),
+                key_version,
+                mur_home.to_path_buf(),
+                &profile.agent_home,
+            ),
+        ),
+    );
     d.register("tasks/get", Box::new(TasksGetHandler::new(runner.clone())));
     d.register(
         "tasks/cancel",

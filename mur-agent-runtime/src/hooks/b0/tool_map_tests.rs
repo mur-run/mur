@@ -1,6 +1,6 @@
 use super::*;
 use crate::tools::{
-    bash::BASH, bash_control, edit_file::EDIT_FILE, fleet_run::FLEET_RUN, git_push,
+    ask::ASK, bash::BASH, bash_control, edit_file::EDIT_FILE, fleet_run::FLEET_RUN, git_push,
     open_item::OPEN_ITEM, read_file::READ_FILE, recall::RECALL, remember::REMEMBER, remind::REMIND,
     suggest::SUGGEST_REPLIES, write_file::WRITE_FILE,
 };
@@ -24,6 +24,7 @@ const BUILTINS: &[(&str, &str)] = &[
     ("REMIND", REMIND),
     ("OPEN_ITEM", OPEN_ITEM),
     ("FLEET_RUN", FLEET_RUN),
+    ("ASK", ASK),
     ("GIT_PUSH_REQUEST", git_push::GIT_PUSH_REQUEST),
     ("GIT_PUSH_STATUS", git_push::GIT_PUSH_STATUS),
     ("GIT_PUSH_CANCEL", git_push::GIT_PUSH_CANCEL),
@@ -92,6 +93,7 @@ fn side_effect_builtins_are_gated_by_rule_4() {
         REMIND,
         OPEN_ITEM,
         FLEET_RUN,
+        ASK,
         git_push::GIT_PUSH_REQUEST,
         git_push::GIT_PUSH_CANCEL,
     ] {

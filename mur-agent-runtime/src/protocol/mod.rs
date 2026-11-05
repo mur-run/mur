@@ -5,3 +5,4 @@ pub mod http_mcp_client;
 pub mod mcp_client;
 pub mod mcp_sse;
 pub mod methods;
+pub mod peer_dial;

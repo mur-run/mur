@@ -34,6 +34,12 @@ impl TaskRunner {
         Self::with_backend(RunnerBackend::CliSpawn(b))
     }
 
+    /// This runner's backend name when it cannot confine a turn; `None` on
+    /// the built-in loop. See [`RunnerBackend::non_confining_name`].
+    pub(crate) fn non_confining_backend(&self) -> Option<&'static str> {
+        self.backend.non_confining_name()
+    }
+
     #[cfg(test)]
     pub(crate) fn backend_for_test(&self) -> &RunnerBackend {
         &self.backend

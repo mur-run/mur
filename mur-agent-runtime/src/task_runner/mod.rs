@@ -138,6 +138,14 @@ impl RunnerBackend {
         if spec.tool_allowlist.is_none() && spec.consult_scope.is_none() {
             return None;
         }
+        self.non_confining_name()
+    }
+
+    /// The backend's name unless it is [`RunnerBackend::Llm`], the only one
+    /// that can confine a turn's tools and read scope. The consult handler
+    /// asks this before it reads anything (§D3.0); `run_sync` asks it again
+    /// through [`Self::confinement_refusal`] (R9).
+    pub(crate) fn non_confining_name(&self) -> Option<&'static str> {
         match self {
             RunnerBackend::Llm(_) => None,
             RunnerBackend::CliSpawn(b) => Some(b.key),
