@@ -455,12 +455,20 @@ impl ChannelService {
         self.index.list(limit)
     }
 
-    /// The newest channel that has `agent` as a participant — the CLI's
-    /// `--resume` target and the Hub's "open this agent" target.
+    /// The newest *conversation* that has `agent` as a participant — the
+    /// resume target for mobile and Hub chat when no channel was picked.
+    ///
+    /// Fleet and workflow runs are skipped even when the agent takes part in
+    /// them: otherwise a run the agent joined after its last chat would
+    /// capture "continue my conversation" and the user's next message would
+    /// land in the run's thread. Empty conversations stay eligible (unlike
+    /// `list_conversations`), because a caller that just created one must
+    /// find it again before the first exchange is written.
     pub fn latest_for_agent(&self, agent: &str) -> Result<Option<String>> {
         // list() is newest-first; load each manifest and match the participant.
-        for row in self.index.list(1000)? {
+        for row in self.index.list(SUMMARY_SCAN_LIMIT)? {
             if let Ok(ch) = self.store.load_manifest(&row.id)
+                && crate::purpose::effective_purpose(&ch) == ChannelPurpose::Conversation
                 && ch
                     .participants
                     .iter()

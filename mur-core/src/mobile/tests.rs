@@ -479,3 +479,19 @@ fn verify_hello_proof_rejects_wrong_token_and_bad_nonce() {
         .is_none()
     );
 }
+
+#[test]
+fn persist_without_channel_skips_a_newer_fleet_run() {
+    // A fleet run the agent joined after its last chat must not receive the
+    // phone's next message.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+    let chat = svc.create_for_agent("mur").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let fleet = svc
+        .create_for_fleet("projectx", "mur", &["mur".into()])
+        .unwrap();
+    persist_mobile_exchange(tmp.path(), "mur", "q", "ans");
+    assert_eq!(svc.load_events(&chat.id).unwrap().len(), 2);
+    assert!(svc.load_events(&fleet.id).unwrap().is_empty());
+}

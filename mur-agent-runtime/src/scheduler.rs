@@ -168,8 +168,8 @@ async fn notify_inbox(sink: &ScheduleSink, task_id: &str, body: &str, now: DateT
 ///
 /// Deliberately not `ChannelService::latest_for_agent`: that returns whatever
 /// conversation the agent last took part in, so a breakfast reminder would land
-/// in the middle of an unrelated fleet thread, and in a different thread each
-/// time it fired. A remembered id keeps every firing in one findable place.
+/// in the middle of an unrelated chat, and in a different thread each time it
+/// fired. A remembered id keeps every firing in one findable place.
 ///
 /// A marker naming a channel that no longer loads is replaced rather than
 /// treated as an error — deleting a channel must not silently stop an agent's
