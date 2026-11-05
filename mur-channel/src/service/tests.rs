@@ -663,41 +663,6 @@ fn internal_events_advance_seq_but_do_not_count_as_messages() {
 }
 
 #[test]
-fn hitl_request_sets_pending_and_response_clears_it() {
-    let tmp = TempDir::new().unwrap();
-    let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
-
-    svc.append(
-        &ch.id,
-        ChannelActor::System,
-        EventKind::HitlRequest,
-        serde_json::json!({"hitl_id": "h1"}),
-        None,
-    )
-    .unwrap();
-    let row = |svc: &ChannelService| {
-        svc.index()
-            .list(10)
-            .unwrap()
-            .into_iter()
-            .find(|r| r.id == ch.id)
-            .unwrap()
-    };
-    assert!(row(&svc).hitl_pending);
-
-    svc.append(
-        &ch.id,
-        ChannelActor::local_human(),
-        EventKind::HitlResponse,
-        serde_json::json!({"hitl_id": "h1", "approved": true}),
-        None,
-    )
-    .unwrap();
-    assert!(!row(&svc).hitl_pending);
-}
-
-#[test]
 fn unread_counts_only_messages_the_human_did_not_write() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();

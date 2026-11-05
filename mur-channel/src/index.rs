@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use mur_common::channel::{Channel, ChannelActor, ChannelEvent, EventKind};
+use mur_common::hitl::{HitlRequest, HitlResponse};
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::store::ChannelStore;
@@ -17,9 +18,9 @@ const ORDINAL_DDL: &str = "CREATE TABLE IF NOT EXISTS channel_ordinals (
 
 /// Which seqs of each channel have been folded into `channels`. This is the
 /// fold dedup: membership, not `seq > last_seq`, so two processes folding
-/// one channel out of order both land. `kind` lets the preview and the HITL
-/// flag follow the *newest* event of their kind rather than the last one to
-/// fold. Derived like the rest of the read model — `rebuild_from` and
+/// one channel out of order both land. `kind` lets the preview follow the
+/// *newest* message rather than the last one to fold. (The HITL flag needs no
+/// such ordering; `channel_hitl` derives it per gate.) Derived like the rest of the read model — `rebuild_from` and
 /// `remove` clear it alongside `channels`.
 const FOLDS_DDL: &str = "CREATE TABLE IF NOT EXISTS channel_folds (
         channel_id TEXT NOT NULL,
@@ -27,6 +28,21 @@ const FOLDS_DDL: &str = "CREATE TABLE IF NOT EXISTS channel_folds (
         kind       TEXT,
         PRIMARY KEY (channel_id, seq)
     ) WITHOUT ROWID;";
+
+/// Per-gate HITL state, keyed by `hitl_id`, so `channels.hitl_pending` is
+/// derived with the same rule as `mur channel pending` (`mur-core`'s
+/// `unresolved_gates_in`): a gate is open when a request exists and no
+/// response names its id. A bare request/response toggle would let answering
+/// one of two open gates clear the flag. Two independent bits rather than a
+/// state also make the fold order-independent: a response folded before its
+/// request still closes it.
+const HITL_DDL: &str = "CREATE TABLE IF NOT EXISTS channel_hitl (
+        channel_id TEXT NOT NULL,
+        hitl_id    TEXT NOT NULL,
+        requested  INTEGER NOT NULL DEFAULT 0,
+        responded  INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (channel_id, hitl_id)
+    );";
 
 /// Additive `channels` columns, applied in order by `migrate()`.
 const MIGRATION_DDL: &[&str] = &[
@@ -62,6 +78,10 @@ const MIGRATION_DDL: &[&str] = &[
     // state from the data, for a DB that got this column but not the
     // rebuild.) Never read.
     "ALTER TABLE channels ADD COLUMN fold_ledger_applied INTEGER NOT NULL DEFAULT 1",
+    // Marker-only, same mechanism: a DB whose `hitl_pending` was folded by
+    // the old request/response toggle has no `channel_hitl` rows, so it owes
+    // one rebuild to re-derive the flag per `hitl_id`. Never read.
+    "ALTER TABLE channels ADD COLUMN hitl_by_id_fix_applied INTEGER NOT NULL DEFAULT 1",
 ];
 
 /// Marker-only column for the read-watermark sentinel. Kept out of
@@ -95,7 +115,7 @@ pub struct ChannelRow {
     pub last_seq: i64,
     /// Read watermark: highest seq the human has seen; -1 = nothing read.
     pub last_read_seq: i64,
-    /// A HITL request is awaiting a response.
+    /// At least one HITL request has no response naming its `hitl_id`.
     pub hitl_pending: bool,
     /// JSON array of the seqs of messages not authored by the local human.
     /// Small (bounded by message count), trivially rebuildable from the
@@ -170,6 +190,7 @@ impl ChannelIndex {
         )?;
         self.conn.execute_batch(pending::META_DDL)?;
         self.conn.execute_batch(FOLDS_DDL)?;
+        self.conn.execute_batch(HITL_DDL)?;
         // Additive columns. `ADD COLUMN` on an existing column errors; that is
         // the "already migrated" case for that column, and its success is
         // the "this DB predates the column" signal that owes a rebuild.
@@ -335,12 +356,6 @@ impl ChannelIndex {
         };
         let fold_kind = match ev.kind {
             EventKind::Message => Some("msg"),
-            EventKind::HitlRequest | EventKind::HitlResponse => Some("hitl"),
-            _ => None,
-        };
-        let hitl_pending = match ev.kind {
-            EventKind::HitlRequest => Some(1_i64),
-            EventKind::HitlResponse => Some(0_i64),
             _ => None,
         };
         let inbound = counts && !matches!(ev.actor, ChannelActor::Human { .. });
@@ -368,9 +383,9 @@ impl ChannelIndex {
             if fresh == 0 {
                 return Ok(());
             }
-            // `newest` = no other folded event of this kind has a higher seq,
-            // so a late-arriving older message/gate event never overwrites
-            // the preview or the HITL flag set by a newer one.
+            // `newest` = no other folded message has a higher seq, so a
+            // late-arriving older message never overwrites the preview set
+            // by a newer one.
             let newest: bool = match fold_kind {
                 Some(kind) => self.conn.query_row(
                     "SELECT NOT EXISTS (SELECT 1 FROM channel_folds
@@ -384,10 +399,8 @@ impl ChannelIndex {
                 "UPDATE channels SET
                    last_seq  = MAX(last_seq, ?2),
                    msg_count = msg_count + ?3,
-                   preview   = CASE WHEN ?3 = 1 AND ?7 = 1 THEN ?4 ELSE preview END,
-                   hitl_pending = CASE WHEN ?7 = 1 THEN COALESCE(?5, hitl_pending)
-                       ELSE hitl_pending END,
-                   inbound_seqs = CASE WHEN ?6 = 1
+                   preview   = CASE WHEN ?3 = 1 AND ?6 = 1 THEN ?4 ELSE preview END,
+                   inbound_seqs = CASE WHEN ?5 = 1
                        THEN json_insert(inbound_seqs, '$[#]', ?2)
                        ELSE inbound_seqs END
                  WHERE id = ?1",
@@ -396,7 +409,6 @@ impl ChannelIndex {
                     seq,
                     if counts { 1_i64 } else { 0_i64 },
                     preview,
-                    hitl_pending,
                     if inbound { 1_i64 } else { 0_i64 },
                     if newest { 1_i64 } else { 0_i64 },
                 ],
@@ -407,7 +419,7 @@ impl ChannelIndex {
                     rusqlite::params![ch_id, seq, preview],
                 )?;
             }
-            Ok(())
+            self.fold_hitl(ch_id, ev)
         })();
         match result {
             Ok(()) => self.conn.execute_batch("RELEASE fold")?,
@@ -416,6 +428,45 @@ impl ChannelIndex {
                 return Err(e);
             }
         }
+        Ok(())
+    }
+
+    /// Track one HITL request/response by `hitl_id` and re-derive
+    /// `hitl_pending` from every gate in the channel. Idempotent on its own
+    /// (setting a bit twice is a no-op) and order-independent, so unlike the
+    /// preview it needs no "newest of its kind" check. Payloads that do not
+    /// parse are skipped, as `unresolved_gates_in` skips them.
+    fn fold_hitl(&self, ch_id: &str, ev: &ChannelEvent) -> Result<()> {
+        let (hitl_id, column) = match ev.kind {
+            EventKind::HitlRequest => {
+                match serde_json::from_value::<HitlRequest>(ev.payload.clone()) {
+                    Ok(r) => (r.hitl_id, "requested"),
+                    Err(_) => return Ok(()),
+                }
+            }
+            EventKind::HitlResponse => {
+                match serde_json::from_value::<HitlResponse>(ev.payload.clone()) {
+                    Ok(r) => (r.hitl_id, "responded"),
+                    Err(_) => return Ok(()),
+                }
+            }
+            _ => return Ok(()),
+        };
+        // `column` is one of two literals above, never input.
+        self.conn.execute(
+            &format!(
+                "INSERT INTO channel_hitl (channel_id, hitl_id, {column}) VALUES (?1, ?2, 1)
+                 ON CONFLICT(channel_id, hitl_id) DO UPDATE SET {column} = 1"
+            ),
+            rusqlite::params![ch_id, hitl_id],
+        )?;
+        self.conn.execute(
+            "UPDATE channels SET hitl_pending = EXISTS (
+                 SELECT 1 FROM channel_hitl
+                 WHERE channel_id = ?1 AND requested = 1 AND responded = 0)
+             WHERE id = ?1",
+            [ch_id],
+        )?;
         Ok(())
     }
 
@@ -536,6 +587,9 @@ impl ChannelIndex {
         self.conn
             .execute("DELETE FROM channel_folds WHERE channel_id = ?1", [id])
             .context("remove channel fold rows")?;
+        self.conn
+            .execute("DELETE FROM channel_hitl WHERE channel_id = ?1", [id])
+            .context("remove channel hitl rows")?;
         Ok(())
     }
 
@@ -564,7 +618,8 @@ impl ChannelIndex {
         };
 
         self.conn.execute_batch(
-            "DELETE FROM channels; DELETE FROM channel_fts; DELETE FROM channel_folds;",
+            "DELETE FROM channels; DELETE FROM channel_fts; DELETE FROM channel_folds;
+             DELETE FROM channel_hitl;",
         )?;
 
         let mut n = 0;
