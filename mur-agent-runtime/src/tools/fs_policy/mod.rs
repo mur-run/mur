@@ -343,6 +343,47 @@ pub(crate) fn for_file_tools(
     fs
 }
 
+/// The read/write policy an agent's file tools actually enforce, and the
+/// launch chain they enforce it with: the profile entitlement put through
+/// [`for_file_tools`] (implicit grants, self-protected denies) plus
+/// [`LaunchChain::new`](crate::sandbox::launch_chain::LaunchChain::new) for
+/// `agent_home`. The one constructor for both, so an agent's own tools and any
+/// check made on its behalf (channel consult §D3.6) cannot drift apart. Never
+/// hand the raw profile entitlement to a gate instead.
+pub(crate) fn file_tool_policy(
+    profile_fs: FilesystemEntitlement,
+    agent_home: &Path,
+) -> (
+    FilesystemEntitlement,
+    crate::sandbox::launch_chain::LaunchChain,
+) {
+    (
+        for_file_tools(profile_fs, agent_home),
+        crate::sandbox::launch_chain::LaunchChain::new(agent_home),
+    )
+}
+
+/// [`file_tool_policy`] for the agent rooted at `agent_home`, read from its
+/// own `profile.yaml` through the same loader its runtime boots with
+/// (template expansion and path validation included). Nothing the caller
+/// holds contributes to it. An unreadable or unparsable profile is an error,
+/// never an empty or default policy.
+pub(crate) fn file_tool_policy_of(
+    agent_home: &Path,
+) -> Result<
+    (
+        FilesystemEntitlement,
+        crate::sandbox::launch_chain::LaunchChain,
+    ),
+    crate::profile::ProfileLoadError,
+> {
+    let profile = crate::profile::Profile::load(agent_home)?;
+    Ok(file_tool_policy(
+        profile.inner.entitlements.filesystem,
+        agent_home,
+    ))
+}
+
 /// True when `canonical` falls under any of `roots`.
 ///
 /// Roots go through the SAME `~` expansion the sandbox builder applies
@@ -529,6 +570,10 @@ pub(crate) enum ReadRefusal {
     DenyList,
     /// Outside every `read` and `write` root.
     NoGrant,
+    /// Readable by this agent, but not by the agent whose channel consult
+    /// this turn answers (§D4). Never named in a rendered refusal: saying the
+    /// file exists would already tell the asker something it cannot read.
+    OutsideConsult,
 }
 
 /// The one read decision: `Err` carries the refusal and, for the launch
@@ -554,12 +599,39 @@ fn decide_read(
 
 /// Typed read gate: the same decision as [`check_read_entitlement`], for
 /// callers that must not see error text (the project-instructions loader).
+///
+/// When both sides refuse, the asker's refusal wins: `NoGrant` is a refusal
+/// the loader *names*, and naming a file the asker cannot read is exactly the
+/// disclosure §D4 forbids. With no consult bound this is the answerer's own
+/// refusal, unchanged.
 pub(crate) fn check_read_refusal(
     fs: &FilesystemEntitlement,
     canonical: &Path,
     chain: &crate::sandbox::launch_chain::LaunchChain,
 ) -> Result<(), ReadRefusal> {
-    decide_read(fs, canonical, chain).map_err(|(r, _)| r)
+    let own = decide_read(fs, canonical, chain).map_err(|(r, _)| r);
+    consult_decision(canonical).map_err(|_| ReadRefusal::OutsideConsult)?;
+    own
+}
+
+/// Channel consult (§D4, R4): the second read decision, made with the asking
+/// agent's effective policy and launch chain when this turn answers a
+/// consult. With no scope bound — every ordinary turn — it always passes.
+///
+/// The two policies are never merged: each goes through [`decide_read`] on
+/// its own, so `deny` and the worktree hop mean for each side exactly what
+/// they mean in that agent's own turn. The bound scope's asker is returned
+/// on refusal, for the message.
+fn consult_decision(
+    canonical: &Path,
+) -> Result<(), std::sync::Arc<crate::task_runner::consult_scope::ConsultScope>> {
+    let Some(scope) = crate::task_runner::consult_scope::current() else {
+        return Ok(());
+    };
+    match decide_read(scope.fs(), canonical, scope.chain()) {
+        Ok(()) => Ok(()),
+        Err(_) => Err(scope),
+    }
 }
 
 /// Read-side twin of [`check_write_entitlement`], and the one gate for every
@@ -577,6 +649,23 @@ pub(crate) fn check_read_entitlement(
     canonical: &Path,
     chain: &crate::sandbox::launch_chain::LaunchChain,
 ) -> Result<(), ToolError> {
+    own_read_decision(fs, canonical, chain)?;
+    consult_decision(canonical).map_err(|scope| {
+        ToolError::Execution(format!(
+            "path is outside this consult's read scope: {} (the asking agent `{}` \
+             cannot read it in its own turns, so this answer may not use it)",
+            canonical.display(),
+            scope.asker()
+        ))
+    })
+}
+
+/// [`check_read_entitlement`]'s first decision: this agent's own policy.
+fn own_read_decision(
+    fs: &FilesystemEntitlement,
+    canonical: &Path,
+    chain: &crate::sandbox::launch_chain::LaunchChain,
+) -> Result<(), ToolError> {
     decide_read(fs, canonical, chain).map_err(|(refusal, reason)| {
         let path = canonical.display();
         ToolError::Execution(match refusal {
@@ -587,9 +676,17 @@ pub(crate) fn check_read_entitlement(
             ReadRefusal::NoGrant => {
                 format!("path not entitled: {path} (grant it via `mur agent perm allow-read`)")
             }
+            // `decide_read` never returns it; only `consult_decision` refuses so.
+            ReadRefusal::OutsideConsult => {
+                format!("path is outside this consult's read scope: {path}")
+            }
         })
     })
 }
 
+#[cfg(test)]
+mod consult_tests;
+#[cfg(test)]
+mod effective_tests;
 #[cfg(test)]
 mod tests;

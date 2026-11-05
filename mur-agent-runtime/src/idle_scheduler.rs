@@ -165,6 +165,8 @@ async fn run_idle_loop(scheduler: IdleScheduler, cancel: CancellationToken) {
                         output_artifact_path: None,
                         attended: false,
                         deadline_secs: None,
+                        tool_allowlist: None,
+                        consult_scope: None,
                     })
                     .await;
 

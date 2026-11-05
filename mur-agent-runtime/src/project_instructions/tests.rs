@@ -416,3 +416,33 @@ fn rel_path_is_slash_separated_on_every_os() {
     assert_eq!(rel_path(root, &nested), "crates/x/AGENTS.md");
     assert_eq!(rel_path(root, &root.join("AGENTS.md")), "AGENTS.md");
 }
+
+/// Consult §D4: a file neither side can read is omitted unnamed, not listed
+/// as `no-read-grant` — naming it would tell the asker it exists. With no
+/// consult bound the same file is still listed, as in any ordinary turn.
+#[test]
+fn a_consult_omits_a_file_neither_side_can_read() {
+    use crate::task_runner::consult_scope::{ConsultScope, sync_scope};
+    let (_t, pi, found) = refusal_found();
+    let asker_home = found.root.join("agents/pm");
+    fs::create_dir_all(&asker_home).unwrap();
+    let asker = std::sync::Arc::new(ConsultScope::new(
+        "pm",
+        FilesystemEntitlement {
+            read: vec![found.root.join("granted").to_string_lossy().into_owned()],
+            write: vec![],
+            deny: vec![],
+        },
+        LaunchChain::new(&asker_home),
+    ));
+    let block = sync_scope(asker, || pi.render_found(&found, WIDE).unwrap().text);
+    assert!(block.contains("GRANTED-RULE"), "{block}");
+    for hidden in ["nogrant", "NOGRANT-RULE"] {
+        assert!(!block.contains(hidden), "{hidden} leaked:\n{block}");
+    }
+    let ordinary = pi.render_found(&found, WIDE).unwrap().text;
+    assert!(
+        ordinary.contains(r#"<not_loaded path="nogrant/AGENTS.md" reason="no-read-grant"/>"#),
+        "{ordinary}"
+    );
+}

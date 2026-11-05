@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 mod attribution;
 mod backend;
+mod consult;
 mod conversations;
 mod ops;
 mod scratch;
@@ -12,6 +13,7 @@ mod turn_track;
 
 pub use attribution::*;
 pub use backend::*;
+pub use consult::*;
 pub use conversations::*;
 pub use ops::*;
 pub use scratch::*;
@@ -346,6 +348,10 @@ pub struct Config {
     /// Per-agent scratch dir retention and doctor threshold (`scratch:`).
     #[serde(default)]
     pub scratch: ScratchConfig,
+
+    /// Channel consult (`consult:`): how long an `Ask` stays answerable.
+    #[serde(default)]
+    pub consult: ConsultConfig,
 
     /// Per-turn copy-on-write track tuning (`turn_track:`).
     #[serde(default)]

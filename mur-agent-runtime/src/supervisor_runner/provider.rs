@@ -151,14 +151,13 @@ pub async fn build_provider_runner(
     let bash_def = bash_exec.def();
     // Issue #712: the file tools must never write the agent's own
     // SELF_PROTECTED_AGENT_FILES, whatever the profile grants.
-    let tool_fs = crate::tools::fs_policy::for_file_tools(
-        profile.inner.entitlements.filesystem.clone(),
-        agent_home,
-    );
     // Issue #712 protects this agent's own profile/key. The launch chain
     // protects every OTHER agent's, plus the binary and the autostart entries
     // that start them — none of which any entitlement may authorise.
-    let launch_chain = crate::sandbox::launch_chain::LaunchChain::new(agent_home);
+    let (tool_fs, launch_chain) = crate::tools::fs_policy::file_tool_policy(
+        profile.inner.entitlements.filesystem.clone(),
+        agent_home,
+    );
     let read_file_exec: Arc<dyn crate::tools::ToolExecutor> =
         Arc::new(crate::tools::read_file::ReadFileTool::new(
             session_cwd.clone(),

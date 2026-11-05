@@ -152,7 +152,13 @@ impl ProjectInstructions {
                     not_loaded.push((rel(path), "no-read-grant"));
                     continue;
                 }
-                Err(r @ (ReadRefusal::DenyList | ReadRefusal::LaunchChain)) => {
+                // A file outside a consult's asker scope is omitted like a
+                // denied one, unnamed: listing it would tell the asker it exists.
+                Err(
+                    r @ (ReadRefusal::DenyList
+                    | ReadRefusal::LaunchChain
+                    | ReadRefusal::OutsideConsult),
+                ) => {
                     if first_time(&canonical) {
                         tracing::debug!(path = %canonical.display(), refusal = ?r, "project instructions: omitted");
                     }

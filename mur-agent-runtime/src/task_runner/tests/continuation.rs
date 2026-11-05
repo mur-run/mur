@@ -16,6 +16,8 @@ fn continuation_spec(text: &str, attended: bool) -> TaskSpec {
         active_team: None,
         attended,
         deadline_secs: None,
+        tool_allowlist: None,
+        consult_scope: None,
     }
 }
 
@@ -227,6 +229,8 @@ async fn max_iterations_exceeded_yields_completed_with_summary() {
         active_team: None,
         attended: true,
         deadline_secs: None,
+        tool_allowlist: None,
+        consult_scope: None,
     };
     let outcome = runner.run_sync(spec).await;
     let TaskOutcome::Completed(task) = outcome else {

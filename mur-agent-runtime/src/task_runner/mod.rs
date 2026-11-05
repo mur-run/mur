@@ -23,6 +23,7 @@ mod agentic_loop;
 pub(crate) mod ask_origin;
 mod builder;
 pub use builder::DrainOutcome;
+pub mod consult_scope;
 mod conversation;
 pub(crate) mod deny_hint;
 mod helpers;
@@ -91,6 +92,19 @@ pub struct TaskSpec {
     /// with twelve minutes left passes 720 (spec §3.4). `None` = resolve the
     /// deadline from `profile.yaml` → `config.yaml` → built-in.
     pub deadline_secs: Option<u64>,
+    /// The only tools this turn may use, by name. `None` = every tool the
+    /// runner holds (the normal case). When set, the built-in loop both
+    /// offers and dispatches from it: a model can emit a call for a tool it
+    /// was not shown, so filtering the offer alone would not hold. Binds only
+    /// the built-in loop, so `run_sync` refuses a spec carrying one on any
+    /// other backend (channel consult, R9).
+    pub tool_allowlist: Option<Vec<String>>,
+    /// Channel consult (§D4): the asking agent's read scope. `None` for every
+    /// ordinary turn. When set, `run_sync` binds it to this turn only, and
+    /// every read the turn makes must pass both the runner's own policy and
+    /// this one. Only the consult handler sets it; like `tool_allowlist` it
+    /// binds only the built-in loop (R9).
+    pub consult_scope: Option<Arc<consult_scope::ConsultScope>>,
 }
 
 #[derive(Debug)]
@@ -114,6 +128,24 @@ pub enum RunnerBackend {
     /// MUR owns the tools. Not an `LlmClient`: there is no completion call to
     /// make here, so it cannot be one of those.
     CliSpawn(&'static mur_common::cli_backend::CliBackend),
+}
+
+impl RunnerBackend {
+    /// The backend's name when it cannot run `spec`: a spec that restricts its
+    /// tools or its read scope runs only on [`RunnerBackend::Llm`], the one
+    /// backend whose tools MUR dispatches itself. `None` = this backend may run it.
+    pub(crate) fn confinement_refusal(&self, spec: &TaskSpec) -> Option<&'static str> {
+        if spec.tool_allowlist.is_none() && spec.consult_scope.is_none() {
+            return None;
+        }
+        match self {
+            RunnerBackend::Llm(_) => None,
+            RunnerBackend::CliSpawn(b) => Some(b.key),
+            RunnerBackend::StubEcho => Some("stub-echo"),
+            RunnerBackend::StubSlow => Some("stub-slow"),
+            RunnerBackend::Misconfigured(_) => Some("misconfigured"),
+        }
+    }
 }
 
 /// Cap on task-state entries retained in memory. Oldest entries are evicted
