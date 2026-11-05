@@ -15,6 +15,19 @@ const ORDINAL_DDL: &str = "CREATE TABLE IF NOT EXISTS channel_ordinals (
         ordinal INTEGER NOT NULL UNIQUE
     );";
 
+/// Which seqs of each channel have been folded into `channels`. This is the
+/// fold dedup: membership, not `seq > last_seq`, so two processes folding
+/// one channel out of order both land. `kind` lets the preview and the HITL
+/// flag follow the *newest* event of their kind rather than the last one to
+/// fold. Derived like the rest of the read model — `rebuild_from` and
+/// `remove` clear it alongside `channels`.
+const FOLDS_DDL: &str = "CREATE TABLE IF NOT EXISTS channel_folds (
+        channel_id TEXT NOT NULL,
+        seq        INTEGER NOT NULL,
+        kind       TEXT,
+        PRIMARY KEY (channel_id, seq)
+    ) WITHOUT ROWID;";
+
 /// SQLite read-model at `<mur_home>/index/channels/channels.db`. Droppable &
 /// rebuildable from the event-log manifests — never the source of truth.
 pub struct ChannelIndex {
@@ -141,10 +154,10 @@ impl ChannelIndex {
             "ALTER TABLE channels ADD COLUMN preview TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE channels ADD COLUMN msg_count INTEGER NOT NULL DEFAULT 0",
             // -1, not 0: seqs are 0-indexed, so 0 is a real, foldable seq.
-            // `record_event`'s dedup guard is `ev.seq > last_seq`; a 0 default
-            // would make that guard reject the channel's very first event
-            // forever. -1 means "nothing folded yet" without colliding with
-            // any real seq.
+            // `record_event` once deduped on `ev.seq > last_seq`, where a 0
+            // default rejected the channel's very first event forever. Dedup
+            // now lives in `channel_folds`, but -1 still means "nothing
+            // folded yet" without colliding with any real seq.
             "ALTER TABLE channels ADD COLUMN last_seq INTEGER NOT NULL DEFAULT -1",
             "ALTER TABLE channels ADD COLUMN last_read_seq INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN hitl_pending INTEGER NOT NULL DEFAULT 0",
@@ -167,6 +180,13 @@ impl ChannelIndex {
             // other ALTER here already sets `migrated = true`) but harmless.
             // It is never read.
             "ALTER TABLE channels ADD COLUMN seq_sentinel_fix_applied INTEGER NOT NULL DEFAULT 1",
+            // Marker-only, same mechanism as above: a DB that predates the
+            // `channel_folds` ledger has rows folded without ledger entries,
+            // so a rerun of one of those seqs would double-count. Adding
+            // this column once forces the rebuild that seeds the ledger —
+            // and replays every event, recovering any message the old
+            // `seq > last_seq` guard dropped. Never read.
+            "ALTER TABLE channels ADD COLUMN fold_ledger_applied INTEGER NOT NULL DEFAULT 1",
         ] {
             if self.conn.execute(ddl, []).is_ok() {
                 migrated = true;
@@ -177,6 +197,7 @@ impl ChannelIndex {
         // would otherwise renumber everything, and a number must stay burned
         // after its channel is deleted. Nothing here is ever deleted.
         self.conn.execute_batch(ORDINAL_DDL)?;
+        self.conn.execute_batch(FOLDS_DDL)?;
         // Backfill for DBs that predate the table. Idempotent: `OR IGNORE`
         // plus the PRIMARY KEY means already-numbered ids are skipped, and
         // the ordering gives existing channels the numbers a user expects.
@@ -287,55 +308,88 @@ impl ChannelIndex {
         } else {
             ""
         };
-        let hitl_delta = match ev.kind {
+        let fold_kind = match ev.kind {
+            EventKind::Message => Some("msg"),
+            EventKind::HitlRequest | EventKind::HitlResponse => Some("hitl"),
+            _ => None,
+        };
+        let hitl_pending = match ev.kind {
             EventKind::HitlRequest => Some(1_i64),
             EventKind::HitlResponse => Some(0_i64),
             _ => None,
         };
         let inbound = counts && !matches!(ev.actor, ChannelActor::Human { .. });
-        // `AND ?2 > last_seq` makes this idempotent per (channel, seq): a
-        // crash-rerun that hits `ChannelStore::append_event`'s idempotency-key
-        // dedup returns the *same* pre-existing event, and calling this again
-        // for a seq already folded must be a no-op — otherwise msg_count,
-        // inbound_seqs (the unread badge), and the FTS row all get duplicated
-        // per rerun. `changed` (rows affected) doubles as the fold signal for
-        // the FTS insert below: 0 means this seq was already folded.
-        //
-        // This guarantee is same-process-only. `ChannelStore::append_event`
-        // releases `events.lock` before this fold runs, and the v3d-2
+        let seq = ev.seq as i64;
+        // Dedup on `(channel_id, seq)` membership in `channel_folds`, not on
+        // `seq > last_seq`. A crash-rerun that hits `ChannelStore::append_event`'s
+        // idempotency-key dedup returns the *same* event, and folding it again
+        // must be a no-op (else msg_count, inbound_seqs and the FTS row all
+        // duplicate). Membership gives that without assuming order: the
+        // store releases `events.lock` before this fold runs and the
         // `channel/delegate` path has a second process writing the same
-        // channel — so two processes can fold out of order. When that
-        // happens, `?2 > last_seq` treats the lower, later-arriving seq as
-        // already-stale and silently drops it from the read model: no
-        // count, no preview, no FTS row, so search can never find that
-        // message. Fixing this needs dedup on `(channel_id, seq)`
-        // membership rather than on `>`; that is Phase 2 work. Until then,
-        // `mur internals reindex` (which calls `rebuild_from`, replaying
-        // every event in seq order) recovers any message dropped this way.
-        let changed = self.conn.execute(
-            "UPDATE channels SET
-               last_seq  = MAX(last_seq, ?2),
-               msg_count = msg_count + ?3,
-               preview   = CASE WHEN ?3 = 1 THEN ?4 ELSE preview END,
-               hitl_pending = COALESCE(?5, hitl_pending),
-               inbound_seqs = CASE WHEN ?6 = 1
-                   THEN json_insert(inbound_seqs, '$[#]', ?2)
-                   ELSE inbound_seqs END
-             WHERE id = ?1 AND ?2 > last_seq",
-            rusqlite::params![
-                ch_id,
-                ev.seq as i64,
-                if counts { 1_i64 } else { 0_i64 },
-                preview,
-                hitl_delta,
-                if inbound { 1_i64 } else { 0_i64 },
-            ],
-        )?;
-        if changed > 0 && counts && !preview.is_empty() {
-            self.conn.execute(
-                "INSERT INTO channel_fts (channel_id, seq, body) VALUES (?1, ?2, ?3)",
-                rusqlite::params![ch_id, ev.seq as i64, preview],
+        // channel, so seqs can arrive out of order — and a lower, late seq is
+        // still a real message that must be counted and searchable.
+        //
+        // A SAVEPOINT (not BEGIN) so this nests inside `rebuild_from`'s
+        // transaction; the ledger insert is the first statement, so the
+        // write lock is taken before anything is read.
+        self.conn.execute_batch("SAVEPOINT fold")?;
+        let result = (|| -> Result<()> {
+            let fresh = self.conn.execute(
+                "INSERT OR IGNORE INTO channel_folds (channel_id, seq, kind)
+                 SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM channels WHERE id = ?1)",
+                rusqlite::params![ch_id, seq, fold_kind],
             )?;
+            if fresh == 0 {
+                return Ok(());
+            }
+            // `newest` = no other folded event of this kind has a higher seq,
+            // so a late-arriving older message/gate event never overwrites
+            // the preview or the HITL flag set by a newer one.
+            let newest: bool = match fold_kind {
+                Some(kind) => self.conn.query_row(
+                    "SELECT NOT EXISTS (SELECT 1 FROM channel_folds
+                       WHERE channel_id = ?1 AND kind = ?2 AND seq > ?3)",
+                    rusqlite::params![ch_id, kind, seq],
+                    |r| r.get(0),
+                )?,
+                None => false,
+            };
+            self.conn.execute(
+                "UPDATE channels SET
+                   last_seq  = MAX(last_seq, ?2),
+                   msg_count = msg_count + ?3,
+                   preview   = CASE WHEN ?3 = 1 AND ?7 = 1 THEN ?4 ELSE preview END,
+                   hitl_pending = CASE WHEN ?7 = 1 THEN COALESCE(?5, hitl_pending)
+                       ELSE hitl_pending END,
+                   inbound_seqs = CASE WHEN ?6 = 1
+                       THEN json_insert(inbound_seqs, '$[#]', ?2)
+                       ELSE inbound_seqs END
+                 WHERE id = ?1",
+                rusqlite::params![
+                    ch_id,
+                    seq,
+                    if counts { 1_i64 } else { 0_i64 },
+                    preview,
+                    hitl_pending,
+                    if inbound { 1_i64 } else { 0_i64 },
+                    if newest { 1_i64 } else { 0_i64 },
+                ],
+            )?;
+            if counts && !preview.is_empty() {
+                self.conn.execute(
+                    "INSERT INTO channel_fts (channel_id, seq, body) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![ch_id, seq, preview],
+                )?;
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => self.conn.execute_batch("RELEASE fold")?,
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK TO fold; RELEASE fold");
+                return Err(e);
+            }
         }
         Ok(())
     }
@@ -452,6 +506,11 @@ impl ChannelIndex {
         self.conn
             .execute("DELETE FROM channel_fts WHERE channel_id = ?1", [id])
             .context("remove channel fts rows")?;
+        // A restarted chain reuses seqs from 0; stale ledger rows would
+        // make the fresh chain's events look already folded.
+        self.conn
+            .execute("DELETE FROM channel_folds WHERE channel_id = ?1", [id])
+            .context("remove channel fold rows")?;
         Ok(())
     }
 
@@ -486,8 +545,9 @@ impl ChannelIndex {
                     .collect::<rusqlite::Result<Vec<_>>>()?
             };
 
-            self.conn
-                .execute_batch("DELETE FROM channels; DELETE FROM channel_fts;")?;
+            self.conn.execute_batch(
+                "DELETE FROM channels; DELETE FROM channel_fts; DELETE FROM channel_folds;",
+            )?;
 
             let mut n = 0;
             // Sorted by creation time, not `list_ids()`'s `read_dir` order:

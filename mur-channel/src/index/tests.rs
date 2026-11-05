@@ -537,3 +537,115 @@ fn an_index_predating_the_ordinals_table_is_backfilled_in_creation_order() {
     assert_eq!(ordinal_of(&idx, "a"), 1);
     assert_eq!(ordinal_of(&idx, "b"), 2);
 }
+
+fn msg(seq: u64, text: &str) -> ChannelEvent {
+    ChannelEvent {
+        seq,
+        ts: Utc::now(),
+        actor: ChannelActor::Agent { id: "mur".into() },
+        kind: EventKind::Message,
+        payload: serde_json::json!({ "text": text }),
+        idempotency_key: None,
+        sig: None,
+        key_version: None,
+        prev_hash: None,
+    }
+}
+
+#[test]
+fn an_out_of_order_fold_is_counted_not_dropped() {
+    // Two processes appending to one channel (the `channel/delegate` path)
+    // can fold seq 1 before seq 0. The lower, later-arriving seq is a real
+    // message: it must reach msg_count, the unread list, and search.
+    let tmp = TempDir::new().unwrap();
+    let idx = ChannelIndex::open(tmp.path()).unwrap();
+    idx.upsert(&ch("c1", ChannelState::Working)).unwrap();
+
+    idx.record_event("c1", &msg(1, "second")).unwrap();
+    idx.record_event("c1", &msg(0, "first")).unwrap();
+
+    let row = idx.list(10).unwrap().into_iter().next().unwrap();
+    assert_eq!(row.msg_count, 2, "the late seq 0 must be counted");
+    assert_eq!(row.last_seq, 1);
+    let mut inbound: Vec<i64> = serde_json::from_str(&row.inbound_seqs).unwrap();
+    inbound.sort_unstable();
+    assert_eq!(inbound, vec![0, 1], "the late seq 0 must be unread");
+    assert_eq!(
+        fts_row_count(&idx, "c1"),
+        2,
+        "the late seq 0 must be searchable"
+    );
+    assert_eq!(
+        row.preview, "second",
+        "the preview is the newest message, not the last one to fold"
+    );
+}
+
+#[test]
+fn an_out_of_order_fold_is_still_idempotent() {
+    let tmp = TempDir::new().unwrap();
+    let idx = ChannelIndex::open(tmp.path()).unwrap();
+    idx.upsert(&ch("c1", ChannelState::Working)).unwrap();
+    for seq in [1, 0, 1, 0] {
+        idx.record_event("c1", &msg(seq, "x")).unwrap();
+    }
+    let row = idx.list(10).unwrap().into_iter().next().unwrap();
+    assert_eq!(row.msg_count, 2);
+    assert_eq!(fts_row_count(&idx, "c1"), 2);
+}
+
+#[test]
+fn a_late_hitl_request_does_not_reopen_a_newer_response() {
+    // hitl_pending follows the newest gate event, so an older request that
+    // folds after a newer response must not flip the flag back on.
+    let tmp = TempDir::new().unwrap();
+    let idx = ChannelIndex::open(tmp.path()).unwrap();
+    idx.upsert(&ch("c1", ChannelState::Working)).unwrap();
+    let mut resp = msg(1, "");
+    resp.kind = EventKind::HitlResponse;
+    let mut req = msg(0, "");
+    req.kind = EventKind::HitlRequest;
+    idx.record_event("c1", &resp).unwrap();
+    idx.record_event("c1", &req).unwrap();
+    assert!(!idx.list(10).unwrap()[0].hitl_pending);
+}
+
+#[test]
+fn removing_a_row_forgets_its_folds_so_a_restarted_chain_refolds() {
+    // `restart` drops the row and lets the fresh chain (seqs from 0 again)
+    // re-seed it; a stale fold record would swallow the new seq 0.
+    let tmp = TempDir::new().unwrap();
+    let idx = ChannelIndex::open(tmp.path()).unwrap();
+    let c = ch("c1", ChannelState::Working);
+    idx.upsert(&c).unwrap();
+    idx.record_event("c1", &msg(0, "old")).unwrap();
+    idx.remove("c1").unwrap();
+    idx.upsert(&c).unwrap();
+    idx.record_event("c1", &msg(0, "new")).unwrap();
+    let row = idx.list(10).unwrap().into_iter().next().unwrap();
+    assert_eq!(row.msg_count, 1);
+    assert_eq!(row.preview, "new");
+}
+
+#[test]
+fn an_index_predating_the_fold_ledger_asks_for_a_rebuild() {
+    // Without a rebuild, already-folded seqs have no ledger entry and a
+    // rerun would double-count them. The rebuild also recovers any message
+    // the old `>` guard dropped.
+    let tmp = TempDir::new().unwrap();
+    drop(ChannelIndex::open(tmp.path()).unwrap());
+    {
+        let idx = ChannelIndex::open(tmp.path()).unwrap();
+        assert!(
+            !idx.just_migrated(),
+            "a current DB must not rebuild every open"
+        );
+        idx.conn_for_test()
+            .execute_batch(
+                "DROP TABLE channel_folds;
+                 ALTER TABLE channels DROP COLUMN fold_ledger_applied;",
+            )
+            .unwrap();
+    }
+    assert!(ChannelIndex::open(tmp.path()).unwrap().just_migrated());
+}
