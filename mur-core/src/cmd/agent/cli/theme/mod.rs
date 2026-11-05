@@ -12,6 +12,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::BorderType;
 
 pub mod contrast;
+pub mod user;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
@@ -321,12 +322,30 @@ pub fn resolve_skin(name: &str) -> &'static Theme {
         .unwrap_or(&ANSI)
 }
 
-/// Canonical name of a theme instance — `"ansi"` for the alias too.
+/// A built-in skin by name (the alias included) and the background it is
+/// designed against — `None` for `ansi`, which never learns the terminal's.
+/// A user skin that `inherits:` one of these takes that background too.
+pub fn builtin(name: &str) -> Option<(&'static Theme, Option<Color>)> {
+    let theme = KNOWN.iter().find(|(n, _)| *n == name).map(|(_, t)| *t)?;
+    let bg = [
+        (&LIGHT, ASSUMED_BG_LIGHT),
+        (&MUR, ASSUMED_BG_MUR),
+        (&CLAY, ASSUMED_BG_CLAY),
+    ]
+    .into_iter()
+    .find(|(t, _)| std::ptr::eq(*t, theme))
+    .map(|(_, bg)| bg);
+    Some((theme, bg))
+}
+
+/// Canonical name of a theme instance — `"ansi"` for the alias too, and the
+/// file stem for a user skin.
 pub fn skin_name(theme: &'static Theme) -> &'static str {
     KNOWN
         .iter()
         .find(|(_, t)| std::ptr::eq(*t, theme))
         .map(|(n, _)| *n)
+        .or_else(|| user::loaded_name(theme))
         .unwrap_or("ansi")
 }
 

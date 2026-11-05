@@ -62,8 +62,9 @@ pub(super) async fn run_tui(
         .as_deref()
         .or(cfg.cli.skin.as_deref())
         .unwrap_or("ansi");
-    let unknown_skin = !theme::is_known_skin(skin_name);
-    let active_theme = theme::resolve_skin(skin_name);
+    // A built-in, else `<home>/skins/<name>.yaml`; a broken file never
+    // half-applies — the session starts on `ansi` and says why.
+    let (active_theme, skin_notice) = theme::user::resolve_startup(&home, skin_name);
 
     // Restore the terminal even if a later panic unwinds past the guard.
     // Capture enhancement support once so the panic path doesn't re-query the
@@ -102,11 +103,13 @@ pub(super) async fn run_tui(
     let (initial_pricing, book) = load_pricing(&home, &agent);
     app.pricing = initial_pricing;
     app.pricing_book = Some(book);
-    if unknown_skin {
-        app.push_system(format!(
+    match skin_notice {
+        Some(theme::user::Notice::Unknown) => app.push_system(format!(
             "unknown skin '{skin_name}', using ansi — valid: {}",
-            theme::SKIN_NAMES
-        ));
+            theme::user::valid_names(&home)
+        )),
+        Some(theme::user::Notice::Rejected(row)) => app.push_warn(row),
+        None => {}
     }
     // Auto-approve is the default and the status bar's AUTO badge says so;
     // only the opt-out gets a notice, because a session that asks is the one
