@@ -25,7 +25,7 @@ use crate::cmd::agent::cli::stream::HitlRequest;
 use crate::cmd::agent::cli::theme::Theme;
 use crate::cmd::fleet::review::murmur::bridge::HitlOrigin;
 
-/// At or under this much time left, the countdown turns `warn`.
+/// At or under this much time left, the countdown turns `error`.
 pub(crate) const COUNTDOWN_WARN: Duration = Duration::from_secs(30);
 
 /// The panel never takes more than this share of the terminal's rows.
@@ -166,10 +166,15 @@ pub(crate) fn countdown(left: Duration) -> String {
     format!("{}:{:02}", s / 60, s % 60)
 }
 
-/// The countdown's ink: `warn` at 30 s or less, `muted` before that.
+/// The countdown's ink: `error` at 30 s or less, `muted` before that.
+///
+/// Not `warn`: the panel's border and title are `accent`, and on the `mur`
+/// skin `accent` (#fbbf24) and `warn` (#f2c76a) are both gold, so a `warn`
+/// clock sat on a gold border and never read as a change. `error` is the one
+/// ink every skin keeps apart from `accent`.
 pub(super) fn countdown_style(theme: &'static Theme, left: Duration) -> Style {
     if left <= COUNTDOWN_WARN {
-        theme.warn
+        theme.error
     } else {
         theme.muted
     }
@@ -294,14 +299,22 @@ pub(super) fn fold(
 }
 
 /// Option 4's label follows the composer: what will be sent as the reason.
-pub(super) fn deny_label(origin: HitlOrigin, composer: &str) -> String {
+///
+/// The row is also where a reason is written (`Tab` or `4` moves there
+/// without deciding), so the empty label says how to get there, and says
+/// what Enter will do once the cursor has arrived.
+pub(super) fn deny_label(origin: HitlOrigin, composer: &str, selected: bool) -> String {
     if origin == HitlOrigin::Review {
         // A member's denial has nowhere to carry composer text.
         return "No — or Esc".to_string();
     }
     let typed = composer.trim();
     if typed.is_empty() {
-        return "No — type a reason below first, or Esc".to_string();
+        return if selected {
+            "No — type a reason, then Enter (or Enter for just no)".to_string()
+        } else {
+            "No — Tab to add a reason, or Esc".to_string()
+        };
     }
     let flat = typed.replace('\n', " ");
     let quoted: String = flat.chars().take(REASON_QUOTE_CHARS).collect();
@@ -319,9 +332,10 @@ fn option_label(
     req: &HitlRequest,
     origin: HitlOrigin,
     composer: &str,
+    selected: bool,
 ) -> String {
     match choice {
-        HitlChoice::Deny => deny_label(origin, composer),
+        HitlChoice::Deny => deny_label(origin, composer, selected),
         HitlChoice::Once => "Yes".to_string(),
         HitlChoice::Tool | HitlChoice::All => {
             let grant = crate::cmd::agent::cli::dest::grant_for(
@@ -452,7 +466,7 @@ pub(super) fn render_approval(f: &mut Frame, app: &App, area: Rect, form: PanelF
     }
     let composer = app.input_text();
     for (i, c) in choices.iter().enumerate() {
-        let label = option_label(*c, req, origin, &composer);
+        let label = option_label(*c, req, origin, &composer, i == selected);
         lines.push(option_line(i, label, *c, i == selected, cols, theme));
     }
 

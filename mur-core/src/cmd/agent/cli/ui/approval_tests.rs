@@ -127,7 +127,7 @@ fn approval_shows_diff_for_edit() {
 
 #[test]
 fn approval_countdown() {
-    assert_eq!(countdown_style(&MUR, Duration::from_secs(30)), MUR.warn);
+    assert_eq!(countdown_style(&MUR, Duration::from_secs(30)), MUR.error);
     assert_eq!(countdown_style(&MUR, Duration::from_secs(31)), MUR.muted);
     assert_eq!(countdown(Duration::from_secs(90)), "1:30");
     assert_eq!(countdown(Duration::from_secs(292)), "4:52");
@@ -371,8 +371,11 @@ fn option_three_carries_the_warn_glyph_and_four_follows_the_composer() {
         three.trim_end().ends_with("▲ │"),
         "▲ not at the right edge: {three}"
     );
+    assert!(all.contains("No — Tab to add a reason, or Esc"), "{all}");
+    app.hitl_selected = 3;
+    let all = rows(&frame(&mut app, 40)).join("\n");
     assert!(
-        all.contains("No — type a reason below first, or Esc"),
+        all.contains("No — type a reason, then Enter (or Enter for just no)"),
         "{all}"
     );
     app.set_input("use the other file please, it is the right one");
@@ -381,4 +384,17 @@ fn option_three_carries_the_warn_glyph_and_four_follows_the_composer() {
         all.contains("No — send \"use the other file please, it \u{2026}\" as the reason"),
         "{all}"
     );
+}
+
+/// The clock under 30 s must not be the border's colour. On `mur` the border
+/// (`accent`) and `warn` are both gold, which is how the manual check saw no
+/// change at all. Every skin must keep the two apart.
+#[test]
+fn countdown_warning_differs_from_the_border_on_every_skin() {
+    use crate::cmd::agent::cli::theme::{CLAY, LIGHT};
+    for t in [&ANSI, &LIGHT, &MUR, &CLAY] {
+        let late = countdown_style(t, Duration::from_secs(5));
+        assert_ne!(late.fg, t.accent.fg, "warning clock blends into the border");
+        assert_ne!(late, countdown_style(t, Duration::from_secs(60)));
+    }
 }

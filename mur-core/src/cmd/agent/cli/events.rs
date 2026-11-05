@@ -418,75 +418,8 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                 }
                 return;
             }
-            // HITL prompt owns the decision keys — but Ctrl+C/Ctrl+D must stay
-            // live so the user is never trapped by a stale/unanswerable modal,
-            // and any other key keeps going to the composer so typed text isn't
-            // silently swallowed while the modal is up.
-            //
-            // Decision LETTERS only count while the composer is empty. Once the
-            // operator has typed anything they are writing a message, not
-            // answering the gate, and `y`/`a`/`n` are ordinary characters —
-            // before this guard, sending "modal" while a gate was open ate the
-            // `a`, approved the call, AND added the tool to
-            // `session_tool_allow` for the whole session. Esc and the Ctrl
-            // combos are exempt: they cannot collide with typed text, and Esc
-            // must always remain the escape hatch.
             if app.hitl.is_some() {
-                let composer_empty = app.input_text().is_empty();
-                match key.code {
-                    KeyCode::Char('d') if ctrl => request_quit(app, tx),
-                    KeyCode::Char('c') if ctrl => decide_hitl(app, tx, false),
-                    // The composer guard above makes y/a/A/n type instead of
-                    // decide whenever the composer holds text, so the way out
-                    // of that state has to keep working. It did not: the
-                    // catch-all below forwarded Ctrl+U into the textarea, which
-                    // deletes one character, leaving no live key that approves
-                    // and only the 5-minute auto-deny to end the gate (#939).
-                    KeyCode::Char('u') if ctrl => app.clear_input(),
-                    // The docked panel folds a long call instead of scrolling
-                    // it (a third scroll owner would collide with ↑/↓ and
-                    // PgUp), so PgUp/PgDn keep scrolling the transcript — the
-                    // agent's reasons for the call — and Ctrl+O shows the call
-                    // in full. Both used to be swallowed or typed while a gate
-                    // was open.
-                    KeyCode::PageUp => {
-                        app.scroll_back = app.scroll_back.saturating_add(app.scroll_page.max(1))
-                    }
-                    KeyCode::PageDown => {
-                        app.scroll_back = app.scroll_back.saturating_sub(app.scroll_page.max(1))
-                    }
-                    KeyCode::Char('o') if ctrl => scrollback_dump(app),
-                    KeyCode::Char('y') | KeyCode::Char('Y') if composer_empty => {
-                        decide_hitl(app, tx, true)
-                    }
-                    // The menu replaces the old two-press `a`/`A` dance. Arrows
-                    // and Enter cannot collide with typed text, so they stay
-                    // live even while the composer holds a message — a denial
-                    // can carry that message along. Only the digit shortcuts
-                    // step aside and type when the composer is non-empty.
-                    KeyCode::Up => {
-                        app.hitl_selected = app.hitl_selected.saturating_sub(1);
-                    }
-                    KeyCode::Down => {
-                        app.hitl_selected = (app.hitl_selected + 1)
-                            .min(ui::hitl_choices(app.hitl_origin).len() - 1);
-                    }
-                    KeyCode::Char(c @ '1'..='4') if composer_empty => {
-                        let i = (c as usize) - ('1' as usize);
-                        if i < ui::hitl_choices(app.hitl_origin).len() {
-                            app.hitl_selected = i;
-                            commit_hitl_choice(app, tx);
-                        }
-                    }
-                    KeyCode::Enter => commit_hitl_choice(app, tx),
-                    KeyCode::Char('n') | KeyCode::Char('N') if composer_empty => {
-                        decide_hitl(app, tx, false)
-                    }
-                    KeyCode::Esc => decide_hitl(app, tx, false),
-                    _ => {
-                        app.input.input(key);
-                    }
-                }
+                handle_hitl_key(app, key, ctrl, tx);
                 return;
             }
             // Stale-decision swallow: a gate that auto-resolves (read lane,
