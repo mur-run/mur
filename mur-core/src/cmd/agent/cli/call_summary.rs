@@ -206,16 +206,14 @@ const TOOL_BADGE_COLS: usize = 14;
 /// on a transcript receipt, in front of the badge.
 const APPROVAL_VERB_COLS: usize = 12;
 
-/// Where an approval line is being drawn. The two frames pay for different
-/// chrome — the transcript receipt carries a severity glyph and an `approved`
-/// verb, the pinned modal header carries neither — so charging both the same
-/// overhead made the modal throw away a dozen columns it actually had.
+/// Where an approval line is being drawn, and so what chrome it pays for
+/// besides the command. One frame today: the centred modal that had its own
+/// (cheaper) frame is gone — the docked panel titles itself and renders the
+/// call as a body, not as one summary line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ApprovalFrame {
-    /// The `✔ approved bash · …` row in the transcript.
+    /// A transcript row: a severity glyph, a verb, the tool badge.
     Transcript,
-    /// The `tool: bash · …` line in the pinned approval modal.
-    Modal,
 }
 
 impl ApprovalFrame {
@@ -223,7 +221,6 @@ impl ApprovalFrame {
     fn overhead(self) -> usize {
         match self {
             Self::Transcript => APPROVAL_VERB_COLS + TOOL_BADGE_COLS,
-            Self::Modal => TOOL_BADGE_COLS,
         }
     }
 }
@@ -501,7 +498,7 @@ mod tests {
     #[test]
     fn approval_summary_never_renders_a_bare_tool_name() {
         for input in [serde_json::json!({}), serde_json::Value::Null] {
-            let s = approval_summary("bash", &input, TEST_WIDTH, ApprovalFrame::Modal);
+            let s = approval_summary("bash", &input, TEST_WIDTH, ApprovalFrame::Transcript);
             assert_eq!(s, "bash · (interactive)");
         }
     }
@@ -522,21 +519,6 @@ mod tests {
             width_of(&s) <= usize::from(width),
             "over budget on a {width}-col terminal (width {}): {s}",
             width_of(&s)
-        );
-    }
-
-    /// The modal header has no `approved ` prefix, so it must not be charged
-    /// for one: a frame that spends fewer columns on chrome gets more of the
-    /// command. Same width, same command, strictly more visible in the modal.
-    #[test]
-    fn each_frame_is_charged_only_for_its_own_chrome() {
-        let cmd = "cargo clippy --all --all-targets --no-deps --locked -- -D warnings --fix";
-        let args = serde_json::json!({ "command": cmd });
-        let modal = approval_summary("bash", &args, 60, ApprovalFrame::Modal);
-        let transcript = approval_summary("bash", &args, 60, ApprovalFrame::Transcript);
-        assert!(
-            width_of(&modal) > width_of(&transcript),
-            "modal pays less chrome so it must show more: {modal} vs {transcript}"
         );
     }
 

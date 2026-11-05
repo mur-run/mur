@@ -28,6 +28,10 @@ pub enum Severity {
     Error,
     /// A completed action worth a nod (saved, done).
     Success,
+    /// A tool call the operator refused. Its own kind because nothing else
+    /// records it: an approved call is simply a card that ran, but a denied
+    /// one never gets a card result to say so.
+    Denied,
 }
 
 /// One message in the visible transcript.

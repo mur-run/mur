@@ -130,8 +130,30 @@ pub(super) fn commit_hitl_choice(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
             }
             decide_hitl(app, tx, true);
         }
-        super::ui::HitlChoice::Deny => decide_hitl(app, tx, false),
+        super::ui::HitlChoice::Deny => {
+            decide_hitl(app, tx, false);
+            send_deny_reason(app, tx);
+        }
     }
+}
+
+/// The "No" row promises `send "…" as the reason`, so keep the promise: what
+/// the composer holds goes to the still-running turn as a steer, right behind
+/// the denial. It used to stay in the composer, unsent, until a second Enter.
+/// A review member's gate has nowhere to carry it, so it is left alone there.
+fn send_deny_reason(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
+    if app.hitl_origin == HitlOrigin::Review {
+        return;
+    }
+    let reason = app.input_text().trim().to_string();
+    if reason.is_empty() || !app.streaming {
+        return;
+    }
+    let Some(task_id) = app.current_task_id.clone() else {
+        return;
+    };
+    app.clear_input();
+    super::turn::steer_now(app, task_id, reason.clone(), &reason, tx);
 }
 
 /// Retire an approval request that has outlived the gate's timeout.
@@ -142,15 +164,15 @@ pub(super) fn commit_hitl_choice(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 /// advertising "tool approval needed (auto-deny in 0s)" for a request that was
 /// already dead — the one surface still claiming a decision was wanted.
 ///
-/// Uses the same `DEFAULT_TIMEOUT` the status line counts down to, so the
-/// display and the state cannot disagree. (A profile that shortens
-/// `hitl.timeout_secs` still expires earlier on the runtime side than the CLI
-/// shows; the request carries no timeout for the CLI to read.)
+/// Reads the request's `deadline` — the one the panel counts down to, set from
+/// the runtime's own `timeout_ms` — so the display, this sweep and the runtime
+/// cannot disagree. A profile that shortens `hitl.timeout_secs` now shortens
+/// the countdown too.
 ///
 /// Returns whether anything was retired.
 pub(super) fn expire_stale_hitl(app: &mut App) -> bool {
     let Some(req) = &app.hitl else { return false };
-    if req.created_at.elapsed() < crate::hitl::gate::DEFAULT_TIMEOUT {
+    if StdInstant::now() < req.deadline {
         return false;
     }
     let tool = req.tool_name.clone();
@@ -248,29 +270,126 @@ pub(super) fn decide_hitl_with_note(
                     app.mark_card_auto_approved(sid);
                 }
             }
-            // The receipt names the COMMAND, not the tool category. `approved
-            // \`bash\`` was unreviewable after the fact — the scrollback could
-            // not tell two approvals of the same tool apart, and neither could
-            // the operator.
+            // An approved call is simply a call that ran: its card says so,
+            // with the command. The separate `✔ approved …` row it replaces
+            // made one call read as two events (spec 2026-09-29 §4).
             (true, false) => {
                 app.saw_hitl_this_turn = true;
-                let s = super::call_summary::approval_summary(
-                    &req.tool_name,
-                    &req.tool_input,
-                    app.width,
-                    super::call_summary::ApprovalFrame::Transcript,
-                );
-                app.push_success(format!("approved {s}"))
             }
-            (false, _) => {
-                let s = super::call_summary::approval_summary(
-                    &req.tool_name,
-                    &req.tool_input,
-                    app.width,
-                    super::call_summary::ApprovalFrame::Transcript,
-                );
-                app.push_warn(format!("denied {s}"))
-            }
+            // A denial keeps its own row, because nothing else records it.
+            // It names the COMMAND, not the tool category — a bare `denied
+            // \`bash\`` could not tell two denials apart after the fact.
+            (false, _) => app.push_denied(denial_line(&req.tool_name, &req.tool_input, app.width)),
         }
     }
+}
+
+/// `edit_file ~/murui-demo/hello.md — denied`: the tool, what it would have
+/// touched, and the verdict. The model-written intent is left off — it says
+/// why the agent wanted the call, which no longer matters once it is refused.
+pub(super) fn denial_line(tool: &str, input: &serde_json::Value, width: u16) -> String {
+    let s = super::call_summary::approval_summary(
+        tool,
+        input,
+        width,
+        super::call_summary::ApprovalFrame::Transcript,
+    );
+    let (cmd, _intent) = super::call_summary::split_intent(&s);
+    let cmd = cmd.replacen(" · ", " ", 1);
+    format!("{} — denied", cmd.trim_end())
+}
+
+/// HITL prompt owns the decision keys — but Ctrl+C/Ctrl+D must stay
+/// live so the user is never trapped by a stale/unanswerable modal,
+/// and any other key keeps going to the composer so typed text isn't
+/// silently swallowed while the modal is up.
+///
+/// Decision LETTERS only count while the composer is empty. Once the
+/// operator has typed anything they are writing a message, not
+/// answering the gate, and `y`/`a`/`n` are ordinary characters —
+/// before this guard, sending "modal" while a gate was open ate the
+/// `a`, approved the call, AND added the tool to
+/// `session_tool_allow` for the whole session. Esc and the Ctrl
+/// combos are exempt: they cannot collide with typed text, and Esc
+/// must always remain the escape hatch.
+pub(super) fn handle_hitl_key(
+    app: &mut App,
+    key: crossterm::event::KeyEvent,
+    ctrl: bool,
+    tx: &mpsc::Sender<StreamMsg>,
+) {
+    // Option A: the "No" row is where a reason is written. With the cursor
+    // there, every character types — a reason that starts with `n`, `y` or a
+    // digit ("name it hello.txt") used to deny on its first letter, because
+    // the composer was still empty when that letter landed.
+    // A review member's "No" carries no reason, so its row stays a plain
+    // answer and its digit still denies at once.
+    let deny_row = deny_row(app).filter(|_| app.hitl_origin != HitlOrigin::Review);
+    let on_deny = Some(app.hitl_selected) == deny_row;
+    let shortcuts = app.input_text().is_empty() && !on_deny;
+    match key.code {
+        KeyCode::Char('d') if ctrl => request_quit(app, tx),
+        KeyCode::Char('c') if ctrl => decide_hitl(app, tx, false),
+        // The composer guard above makes y/a/A/n type instead of
+        // decide whenever the composer holds text, so the way out
+        // of that state has to keep working. It did not: the
+        // catch-all below forwarded Ctrl+U into the textarea, which
+        // deletes one character, leaving no live key that approves
+        // and only the 5-minute auto-deny to end the gate (#939).
+        KeyCode::Char('u') if ctrl => app.clear_input(),
+        // The docked panel folds a long call instead of scrolling
+        // it (a third scroll owner would collide with ↑/↓ and
+        // PgUp), so PgUp/PgDn keep scrolling the transcript — the
+        // agent's reasons for the call — and Ctrl+O shows the call
+        // in full. Both used to be swallowed or typed while a gate
+        // was open.
+        KeyCode::PageUp => app.scroll_back = app.scroll_back.saturating_add(app.scroll_page.max(1)),
+        KeyCode::PageDown => {
+            app.scroll_back = app.scroll_back.saturating_sub(app.scroll_page.max(1))
+        }
+        KeyCode::Char('o') if ctrl => scrollback_dump(app),
+        KeyCode::Char('y') | KeyCode::Char('Y') if shortcuts => decide_hitl(app, tx, true),
+        // The menu replaces the old two-press `a`/`A` dance. Arrows
+        // and Enter cannot collide with typed text, so they stay
+        // live even while the composer holds a message — a denial
+        // can carry that message along. Only the digit shortcuts
+        // step aside and type when the composer is non-empty.
+        KeyCode::Up => {
+            app.hitl_selected = app.hitl_selected.saturating_sub(1);
+        }
+        KeyCode::Down => {
+            app.hitl_selected =
+                (app.hitl_selected + 1).min(ui::hitl_choices(app.hitl_origin).len() - 1);
+        }
+        // Tab, and the "No" row's own digit, move the cursor there WITHOUT
+        // deciding, so the reason can be typed next. Enter then denies with
+        // it (or without one, if nothing was typed).
+        KeyCode::Tab => {
+            if let Some(i) = deny_row {
+                app.hitl_selected = i;
+            }
+        }
+        KeyCode::Char(c @ '1'..='4') if shortcuts => {
+            let i = (c as usize) - ('1' as usize);
+            if Some(i) == deny_row {
+                app.hitl_selected = i;
+            } else if i < ui::hitl_choices(app.hitl_origin).len() {
+                app.hitl_selected = i;
+                commit_hitl_choice(app, tx);
+            }
+        }
+        KeyCode::Enter => commit_hitl_choice(app, tx),
+        KeyCode::Char('n') | KeyCode::Char('N') if shortcuts => decide_hitl(app, tx, false),
+        KeyCode::Esc => decide_hitl(app, tx, false),
+        _ => {
+            app.input.input(key);
+        }
+    }
+}
+
+/// Index of the "No" row in the open gate's menu.
+fn deny_row(app: &App) -> Option<usize> {
+    ui::hitl_choices(app.hitl_origin)
+        .iter()
+        .position(|c| *c == ui::HitlChoice::Deny)
 }

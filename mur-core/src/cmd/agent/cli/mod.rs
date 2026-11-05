@@ -29,6 +29,7 @@ mod dump;
 mod egress;
 pub(crate) mod egress_denied;
 mod events;
+mod failure;
 mod fleet_rail;
 mod follow;
 mod footer;
@@ -449,7 +450,11 @@ pub(super) static ON_ALT: AtomicBool = AtomicBool::new(false);
 /// reachable via the OS's native scrollback tooling even after the overlay
 /// closes.
 fn scrollback_dump(app: &mut App) {
-    let text = dump::transcript_to_text(&app.messages);
+    let mut text = dump::transcript_to_text(&app.messages);
+    // The approval panel folds a long call and points here for the rest.
+    if let Some(req) = &app.hitl {
+        text.push_str(&dump::pending_request_text(req));
+    }
     let path = std::env::temp_dir().join(format!("mur-transcript-{}.txt", app.agent));
     let _ = std::fs::write(&path, &text);
     app.overlay_text = Some(text);

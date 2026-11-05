@@ -1,10 +1,11 @@
-//! Ratatui rendering: transcript pane, input box, status bar, HITL modal.
+//! Ratatui rendering: transcript pane, approval panel, input box, status bar.
 //!
 //! One submodule per region of the frame: `band` (the live transcript and its
 //! flush to scrollback), `message` (one message's lines), `chooser`, `rail`,
 //! `status`, `hitl`. This root owns the layout and the two popups that sit on
 //! the composer.
 
+mod approval;
 mod band;
 mod chooser;
 mod hitl;
@@ -15,12 +16,11 @@ mod status;
 mod theme_paint_tests;
 
 pub use band::flush_finished;
-pub(super) use hitl::hitl_scroll_step;
 pub(super) use hitl::{HitlChoice, hitl_choices};
 
+use approval::{PanelForm, docked_rows, render_approval};
 use band::render_transcript;
-use chooser::{chooser_band_height, render_chooser_band};
-use hitl::render_hitl;
+use chooser::render_chooser_band;
 use rail::{fleet_rail_height, render_fleet_rail};
 use status::render_status;
 
@@ -47,14 +47,14 @@ const OVERLAY_HINT: &str = " ↑↓ PgUp PgDn Home End scroll · Enter or Esc re
 
 /// Rows the composer spends on chrome: its top rule plus the blank row under
 /// the text (`app::COMPOSER_PAD_BELOW`).
-const INPUT_CHROME_ROWS: u16 = 1 + super::app::COMPOSER_PAD_BELOW;
+pub(super) const INPUT_CHROME_ROWS: u16 = 1 + super::app::COMPOSER_PAD_BELOW;
 
 /// Composer height when the input is empty (one text row plus the chrome;
 /// the status bar sits directly beneath). Typing grows it up to
 /// `INPUT_H_MAX`, which leaves seven text rows.
 pub(super) const INPUT_H_MIN: u16 = 1 + INPUT_CHROME_ROWS;
 
-const INPUT_H_MAX: u16 = 7 + INPUT_CHROME_ROWS;
+pub(super) const INPUT_H_MAX: u16 = 7 + INPUT_CHROME_ROWS;
 
 /// Draw the whole UI for one frame, then scrub control characters from every
 /// cell. Scrubbing the finished buffer, not each string, means no widget —
@@ -72,23 +72,37 @@ fn render_frame(f: &mut Frame, app: &mut App) {
         render_overlay(f, app);
         return;
     }
+    let total_h = f.area().height;
     let input_lines = app.input.lines().len() as u16;
     let input_height = (input_lines + INPUT_CHROME_ROWS).clamp(INPUT_H_MIN, INPUT_H_MAX);
-    // The agent chooser (suggested replies) renders as its own layout band
-    // between transcript and composer — never a Clear-overlay popup — so it
-    // can't cover the reply the user must read to choose. The slash-command
-    // menu keeps the compact popup (the user is typing, not reading).
-    let chooser_h = chooser_band_height(app, f.area().height, input_height);
     let rail_h = fleet_rail_height(app);
-    // The proposal chip is one row directly above the composer.
-    let chip = super::proposal::chip_line(app);
-    let chip_h = u16::from(chip.is_some()); // keep in step with band_inner_rows
+    // The approval panel is docked above the composer, sized after the rows
+    // that are never given up (status bar, composer at its current height)
+    // and after the rail. It is the only decision surface: the step card's
+    // marker has no keys, so "an open gate is always visible" holds by
+    // construction — in the status-only form the status bar carries it.
+    //
+    // The agent chooser (suggested replies) is a band of its own too — never
+    // a Clear-overlay popup — so it can't cover the reply the user must read
+    // to choose. The slash-command menu keeps the compact popup (the user is
+    // typing, not reading). The chooser and the proposal chip step aside
+    // while a gate is open; `docked_rows` is shared with `band_inner_rows`.
+    let (chooser_h, panel_h, chip_h, form) = docked_rows(app, total_h, input_height);
+    let gated = form.is_some();
+    let chip = super::proposal::chip_line(app).filter(|_| chip_h > 0);
+    // The compact form outranks the history: the transcript may go to zero.
+    let transcript_min = match form {
+        Some(PanelForm::Compact | PanelForm::StatusOnly) => 0,
+        Some(_) => 1,
+        None => 3,
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(3),
+            Constraint::Min(transcript_min),
             Constraint::Length(rail_h),
             Constraint::Length(chooser_h),
+            Constraint::Length(panel_h),
             Constraint::Length(chip_h),
             Constraint::Length(input_height),
             Constraint::Length(1),
@@ -101,42 +115,17 @@ fn render_frame(f: &mut Frame, app: &mut App) {
     }
     if chooser_h > 0 {
         render_chooser_band(f, app, chunks[2]);
-    } else {
-        render_completion(f, app, chunks[4]);
+    } else if !gated {
+        render_completion(f, app, chunks[5]);
+    }
+    if let Some(form) = form {
+        render_approval(f, app, chunks[3], form, std::time::Instant::now());
     }
     if let Some((what, hint)) = chip {
-        render_chip(f, app, chunks[3], &what, &hint);
+        render_chip(f, app, chunks[4], &what, &hint);
     }
-    f.render_widget(&app.input, chunks[4]);
-    render_status(f, app, chunks[5]);
-
-    // The centered modal is the fallback whenever the approval's inline row on
-    // a step card is not actually visible. Key it on VISIBILITY recomputed per
-    // frame (`hitl_inline_visible`), never on whether the runtime sent a
-    // step_id and never on a cached flag: the gate commonly fires before the
-    // card exists, and a card that is live when the gate opens can be flushed
-    // into frozen scrollback while it is still open. Both used to leave the
-    // operator with neither surface. The invariant: an open gate always has at
-    // least one place the operator can see it.
-    if let Some(hitl) = app
-        .hitl
-        .clone()
-        .filter(|h| !app.hitl_inline_visible(h.step_id.as_deref()))
-    {
-        let (used, shown) = render_hitl(
-            f,
-            app.theme,
-            &hitl,
-            app.review_gate.member.as_deref(),
-            app.hitl_selected,
-            app.input_text().is_empty(),
-            app.hitl_scroll,
-        );
-        app.hitl_scroll = used;
-        // The renderer is the only place that knows the box height, so it hands
-        // the page size back rather than the key handler guessing one.
-        app.hitl_page = shown;
-    }
+    f.render_widget(&app.input, chunks[5]);
+    render_status(f, app, chunks[6]);
 }
 
 /// One row: the proposal (always shown in full — principle C) and, dimmed,

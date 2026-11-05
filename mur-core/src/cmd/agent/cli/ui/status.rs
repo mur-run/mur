@@ -33,19 +33,25 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
     // fitted around it instead of pushing it off the right edge.
     let mut protect = false;
     let (msg, style) = if let Some(req) = &app.hitl {
-        // Surface the auto-deny clock: the gate expires approvals after
-        // DEFAULT_TIMEOUT (300s). Reuse `created_at` rather than tracking new
-        // state; the status bar redraws on each blink deadline so it ticks.
         // The tool name goes here so the operator always knows WHAT they are
-        // being asked to approve at any width; the decision keys live in the
-        // framed modal / inline row, which is where the user is looking.
-        let remaining = crate::hitl::gate::DEFAULT_TIMEOUT
-            .as_secs()
-            .saturating_sub(req.created_at.elapsed().as_secs());
-        (
-            format!("⏳ approve {} · auto-deny in {remaining}s", req.tool_name),
-            theme.warn,
-        )
+        // being asked to approve at any width. The countdown and the keys
+        // live in the docked panel — except when the terminal is too short
+        // for any panel, and then this row is the whole surface, so it
+        // carries the keys and the clock too.
+        protect = true;
+        if super::approval::status_only(app, f.area().height) {
+            let left = req.remaining(std::time::Instant::now());
+            (
+                format!(
+                    "approve {} — 1-4 · Ctrl+O · {}",
+                    req.tool_name,
+                    super::approval::countdown(left)
+                ),
+                super::approval::countdown_style(theme, left),
+            )
+        } else {
+            (format!("approve {}", req.tool_name), theme.warn)
+        }
     } else if app.streaming {
         let spin = SPINNER[app.spinner % SPINNER.len()];
         // The steering hint is the first thing to drop when the row is tight:

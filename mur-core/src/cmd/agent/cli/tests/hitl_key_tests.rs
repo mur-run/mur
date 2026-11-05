@@ -11,8 +11,7 @@ fn gate(app: &mut App) {
         step_id: None,
         tool_name: "write_file".into(),
         tool_input: serde_json::json!({}),
-        prompt: "approve?".into(),
-        created_at: std::time::Instant::now(),
+        deadline: std::time::Instant::now() + std::time::Duration::from_secs(300),
         declared_risk: None,
     });
 }
@@ -96,8 +95,7 @@ fn gate_via_stream(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         step_id: None,
         tool_name: "bash".into(),
         tool_input: serde_json::json!({}),
-        prompt: "approve?".into(),
-        created_at: std::time::Instant::now(),
+        deadline: std::time::Instant::now() + std::time::Duration::from_secs(300),
         declared_risk: None,
     };
     handle_stream(app, StreamMsg::Hitl { req, task_id }, tx);
@@ -232,7 +230,10 @@ async fn digit_shortcuts_pick_rows_directly() {
     app.auto_approve = false;
     gate(&mut app);
     handle_event(&mut app, key('4'), &tx).await;
-    assert!(app.hitl.is_none(), "row 4 denies");
+    assert!(app.hitl.is_some(), "`4` moves to No so a reason can follow");
+    assert_eq!(app.hitl_selected, 3);
+    handle_event(&mut app, code(KeyCode::Enter), &tx).await;
+    assert!(app.hitl.is_none(), "row 4 denies on Enter");
     assert!(app.session_tool_allow.is_empty());
     assert!(!app.auto_approve);
 }
@@ -347,9 +348,7 @@ fn stale_gate_is_retired_so_the_status_line_stops_asking() {
 
     // Past the gate's deadline: retired, and the operator is told why.
     if let Some(req) = &mut app.hitl {
-        req.created_at = std::time::Instant::now()
-            - crate::hitl::gate::DEFAULT_TIMEOUT
-            - std::time::Duration::from_secs(1);
+        req.deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
     }
     assert!(expire_stale_hitl(&mut app));
     assert!(app.hitl.is_none(), "status line must stop asking");
@@ -367,4 +366,74 @@ fn stale_gate_is_retired_so_the_status_line_stops_asking() {
 
     // Idempotent: nothing left to retire.
     assert!(!expire_stale_hitl(&mut app));
+}
+
+/// Option A, the manual-check failure: a reason that begins with `n` denied
+/// on its first letter, because the composer was still empty when `n` landed.
+/// Tab puts the cursor on "No" without deciding; from there every letter types.
+#[tokio::test]
+async fn a_reason_starting_with_n_or_y_types_once_on_the_no_row() {
+    let (tx, _rx) = mpsc::channel(16);
+    let mut app = App::test_fixture();
+    app.auto_approve = false;
+    gate(&mut app);
+
+    handle_event(&mut app, code(KeyCode::Tab), &tx).await;
+    assert_eq!(app.hitl_selected, 3, "Tab moves to the No row");
+    assert!(app.hitl.is_some(), "Tab decides nothing");
+
+    type_str(&mut app, "name it hello.txt instead", &tx).await;
+    assert!(app.hitl.is_some(), "the leading `n` must not deny");
+    assert_eq!(app.input_text(), "name it hello.txt instead");
+
+    let mut app = App::test_fixture();
+    app.auto_approve = false;
+    gate(&mut app);
+    handle_event(&mut app, key('4'), &tx).await;
+    assert!(app.hitl.is_some(), "`4` moves to No, it does not deny");
+    type_str(&mut app, "yes but 2 files", &tx).await;
+    assert!(
+        app.hitl.is_some(),
+        "neither `y` nor a digit decides on the No row"
+    );
+    assert!(app.session_tool_allow.is_empty() && !app.auto_approve);
+    assert_eq!(app.input_text(), "yes but 2 files");
+}
+
+/// The single-key answers are untouched while the cursor is NOT on No.
+#[tokio::test]
+async fn y_and_n_still_decide_from_the_default_row() {
+    let (tx, _rx) = mpsc::channel(16);
+    for (k, label) in [('y', "y approves"), ('n', "n denies")] {
+        let mut app = App::test_fixture();
+        app.auto_approve = false;
+        gate(&mut app);
+        handle_event(&mut app, key(k), &tx).await;
+        assert!(app.hitl.is_none(), "{label}");
+        assert_eq!(app.input_text(), "");
+    }
+}
+
+/// Row 4 says `send "…" as the reason`, so Enter sends it: the reason goes to
+/// the running turn as a steer and leaves the composer.
+#[tokio::test]
+async fn enter_on_no_sends_the_reason_to_the_turn() {
+    let (tx, _rx) = mpsc::channel(16);
+    let mut app = App::test_fixture();
+    app.auto_approve = false;
+    app.streaming = true;
+    app.current_task_id = Some("t1".into());
+    gate(&mut app);
+
+    handle_event(&mut app, code(KeyCode::Tab), &tx).await;
+    type_str(&mut app, "name it hello.txt instead", &tx).await;
+    handle_event(&mut app, code(KeyCode::Enter), &tx).await;
+
+    assert!(app.hitl.is_none(), "Enter on No denies");
+    assert_eq!(app.input_text(), "", "the reason left the composer");
+    let steered = app
+        .messages
+        .iter()
+        .any(|m| m.text.contains("steering: name it hello.txt instead"));
+    assert!(steered, "the reason must reach the turn");
 }

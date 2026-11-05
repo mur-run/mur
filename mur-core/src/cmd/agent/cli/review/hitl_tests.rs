@@ -43,8 +43,7 @@ fn req(id: &str, cmd: &str) -> HitlRequest {
         step_id: None,
         tool_name: "bash".into(),
         tool_input: serde_json::json!({ "command": cmd }),
-        prompt: "Run `bash`?".into(),
-        created_at: std::time::Instant::now(),
+        deadline: std::time::Instant::now() + std::time::Duration::from_secs(300),
         declared_risk: None,
     }
 }
@@ -100,16 +99,16 @@ async fn review_hitl_shows_once_deny_only() {
     assert_eq!(app.hitl.as_ref().map(|r| r.hitl_id.as_str()), Some("H-1"));
     assert_eq!(app.hitl_origin, HitlOrigin::Review);
     let screen = modal_text(&mut app);
-    assert!(screen.contains("1. Yes"), "{screen}");
+    assert!(screen.contains("1 Yes"), "{screen}");
     assert!(
-        screen.contains("2. No"),
+        screen.contains("2 No"),
         "Deny is row 2 for a review gate: {screen}"
     );
     assert!(
         !screen.contains("stop asking"),
         "no session grants: {screen}"
     );
-    assert!(!screen.contains("3."), "two rows only: {screen}");
+    assert!(!screen.contains("  3 Yes"), "two rows only: {screen}");
     assert!(
         screen.contains("review member alpha"),
         "the title names whose call it is: {screen}"
@@ -200,9 +199,7 @@ async fn review_hitl_ui_never_calls_respond_hitl() {
 async fn review_hitl_timeout_denies() {
     let (_h, mut app) = attached_app();
     let mut r = req("H-1", "ls");
-    r.created_at = std::time::Instant::now()
-        .checked_sub(crate::hitl::gate::DEFAULT_TIMEOUT)
-        .unwrap();
+    r.deadline = std::time::Instant::now();
     let rx = gate(&mut app, r);
     assert!(expire_stale_hitl(&mut app), "the stale gate retires");
     assert_eq!(rx.try_recv(), Ok(false), "timeout → deny");
@@ -230,7 +227,7 @@ async fn own_gate_menu_is_unchanged() {
     app.hitl = Some(req("O-1", "ls"));
     assert_eq!(app.hitl_origin, HitlOrigin::Own);
     let screen = modal_text(&mut app);
-    assert!(screen.contains("4. No"), "own gate keeps 4 rows: {screen}");
+    assert!(screen.contains("4 No"), "own gate keeps 4 rows: {screen}");
     assert!(screen.contains("stop asking"), "{screen}");
 }
 

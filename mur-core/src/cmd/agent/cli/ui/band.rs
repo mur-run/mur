@@ -2,7 +2,6 @@
 //! flush that pushes its overflow into the terminal's own scrollback.
 
 use super::INPUT_H_MIN;
-use super::chooser::chooser_band_height;
 use super::message::{agent_body_lines, gap_row, push_agent_header, push_message, raw_body_lines};
 use super::rail::fleet_rail_height;
 use ratatui::Frame;
@@ -53,14 +52,17 @@ pub(super) fn band_capacity(viewport_h: u16, input_h: u16, chooser_h: u16, rail_
 /// and hiding it costs the reply. The rail stays for the session and takes
 /// its rows outright.
 pub(super) fn band_inner_rows(app: &App, viewport_h: u16) -> u16 {
-    let chooser_h = chooser_band_height(app, viewport_h, INPUT_H_MIN);
     // The proposal chip row is counted like the rail: while it is up, the
     // band paints one row less, and a kept row it cannot show is hidden text.
-    let chip_h = u16::from(super::super::proposal::chip_line(app).is_some());
+    // The approval panel likewise: the reasons for the call must be pushed
+    // up into scrollback, not kept behind the panel. Same numbers the frame
+    // paints with (`docked_rows`).
+    let (chooser_h, panel_h, chip_h, _) =
+        super::approval::docked_rows(app, viewport_h, INPUT_H_MIN);
     band_capacity(
         viewport_h,
         INPUT_H_MIN,
-        chooser_h,
+        chooser_h + panel_h,
         fleet_rail_height(app) + chip_h,
     )
 }

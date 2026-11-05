@@ -169,14 +169,6 @@ pub struct App {
     /// confirm with Enter. Reset to 0 (`Yes`, this call only) on every new
     /// gate, so the row under a reflex Enter is always the narrowest one.
     pub hitl_selected: usize,
-    /// Scroll offset into the approval modal's body, in wrapped rows. Reset on
-    /// every new gate so a fresh request always opens at the top; the renderer
-    /// clamps it to the content and hands back what it used.
-    pub hitl_scroll: u16,
-    /// Body rows the approval modal last had room to show. The renderer reports
-    /// it so PgUp/PgDn can page by the real window instead of a fixed guess
-    /// that could step over unread rows; 0 until the modal has drawn once.
-    pub hitl_page: u16,
     /// Who answers the gate in `hitl` (P3b-§10): the attached agent's own
     /// turn, or a review member's, whose decision goes to `review_gate`.
     pub hitl_origin: crate::cmd::fleet::review::murmur::bridge::HitlOrigin,
@@ -475,8 +467,6 @@ impl App {
             hitl_queue: std::collections::VecDeque::new(),
             hitl_resolved_at: None,
             hitl_selected: 0,
-            hitl_scroll: 0,
-            hitl_page: 0,
             hitl_origin: crate::cmd::fleet::review::murmur::bridge::HitlOrigin::Own,
             review_gate: Default::default(),
             session,

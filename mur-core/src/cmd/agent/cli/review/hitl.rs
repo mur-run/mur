@@ -56,7 +56,6 @@ pub fn promote(app: &mut App) -> bool {
     app.review_gate.reply = Some(reply);
     app.review_gate.member = Some(member);
     // Same as a fresh own gate: top of the input, narrowest answer selected.
-    app.hitl_scroll = 0;
     app.hitl_selected = 0;
     true
 }

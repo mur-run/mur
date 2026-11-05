@@ -24,6 +24,10 @@ impl App {
         self.push_system_sev(text, Severity::Warn);
     }
 
+    pub fn push_denied(&mut self, text: impl Into<String>) {
+        self.push_system_sev(text, Severity::Denied);
+    }
+
     pub fn push_success(&mut self, text: impl Into<String>) {
         self.push_system_sev(text, Severity::Success);
     }
@@ -301,9 +305,8 @@ impl App {
     }
 
     /// Flag the card with this `step_id` as awaiting a HITL decision, so it
-    /// renders the inline approval row. Whether that row can actually be SEEN
-    /// is a separate question — ask [`App::hitl_inline_visible`] at render
-    /// time, not once at attach time.
+    /// carries the `⏳ awaiting approval` marker. The marker has no keys: the
+    /// docked approval panel is the one place the decision is made.
     pub fn mark_card_awaiting(&mut self, step_id: &str) {
         if let Some(card) = self
             .messages
@@ -313,27 +316,6 @@ impl App {
         {
             card.awaiting_hitl = true;
         }
-    }
-
-    /// Is the inline approval row for the open gate actually on screen?
-    ///
-    /// Only a card still in the live band can repaint: messages below
-    /// `flushed_upto` are committed to the terminal's native scrollback and
-    /// their rows are frozen forever. The renderer suppresses the centered
-    /// modal when this is true, so a wrong `true` costs the operator every
-    /// surface at once — no modal, no inline row, and a status line that
-    /// cannot name the tool. Two ways that used to happen: the gate fires
-    /// before the card exists (common), and the card is flushed to scrollback
-    /// either before the gate opens or while it is still open.
-    ///
-    /// Recompute it per frame; do not cache.
-    pub fn hitl_inline_visible(&self, step_id: Option<&str>) -> bool {
-        let Some(sid) = step_id else { return false };
-        self.messages.iter().skip(self.flushed_upto).any(|m| {
-            m.step
-                .as_ref()
-                .is_some_and(|c| c.id == sid && c.awaiting_hitl)
-        })
     }
 
     /// Mark the card with this `step_id` as auto-approved — by the read lane

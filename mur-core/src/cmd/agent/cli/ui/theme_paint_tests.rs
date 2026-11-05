@@ -119,8 +119,8 @@ fn user_body_is_muted() {
     }
 }
 
-/// A failed call's header and error line take the skin's `error`, not a
-/// pinned red.
+/// A failed call's glyph and name take the skin's `error`, not a pinned red;
+/// the cause beside them is `text` (spec §4: the summary is not an alarm).
 #[test]
 fn a_failed_card_takes_error() {
     for theme in [&ANSI, &LIGHT, &MUR, &CLAY] {
@@ -135,6 +135,6 @@ fn a_failed_card_takes_error() {
         );
         let lines = card_lines(&c, theme, false, 80);
         assert_eq!(style_in(&lines, "edit_file").fg, theme.error.fg, "header");
-        assert_eq!(style_in(&lines, "boom").fg, theme.error.fg, "error line");
+        assert_eq!(style_in(&lines, "boom"), theme.text, "cause");
     }
 }

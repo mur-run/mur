@@ -147,8 +147,7 @@ async fn esc_in_hitl_modal_denies_and_leaves_pause_flag() {
         step_id: None,
         tool_name: "write_file".into(),
         tool_input: serde_json::json!({}),
-        prompt: "approve?".into(),
-        created_at: std::time::Instant::now(),
+        deadline: std::time::Instant::now() + std::time::Duration::from_secs(300),
         declared_risk: None,
     });
 

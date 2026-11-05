@@ -47,6 +47,31 @@ pub fn transcript_to_text(messages: &[ChatMsg]) -> String {
     out
 }
 
+/// The open approval request, in full, for the end of the Ctrl+O dump.
+///
+/// The docked panel folds a long call and its no-body form shows none of it;
+/// both point here. The gate commonly opens before its step card exists, so
+/// the card in the transcript above cannot be relied on to carry it — this
+/// section always does. Edits read as their diff; anything else as the
+/// pretty-printed input, uncapped.
+pub fn pending_request_text(req: &super::stream::HitlRequest) -> String {
+    let mut s = format!("\n⏳ awaiting approval: {}\n", req.tool_name);
+    if let Some(diff) = super::diff::edit_diff_text(&req.tool_name, &req.tool_input) {
+        for l in diff {
+            s.push_str("  ");
+            s.push_str(&l);
+            s.push('\n');
+        }
+    } else if let Ok(pretty) = serde_json::to_string_pretty(&req.tool_input) {
+        for l in pretty.lines() {
+            s.push_str("  ");
+            s.push_str(l);
+            s.push('\n');
+        }
+    }
+    s
+}
+
 fn card_text(card: &StepCard) -> String {
     let mut s = String::new();
     let dur = card
