@@ -186,6 +186,39 @@ pub(super) fn is_block_boundary(text: &str, at: usize) -> bool {
     at == 0 || next_boundary_after(text, at.saturating_sub(1)) == Some(at)
 }
 
+/// How far past the overflow a whole-block spill may reach: the band must stay
+/// at least half full afterwards. Below that, sending the block whole is
+/// cheaper than tearing it (the block keeps its markdown in scrollback and the
+/// band refills within a few deltas); above it, the empty rows are the reply's
+/// head pushed off a short pane (#2020). Proportional to the band, not a row
+/// count, so a 5-row pane and a 20-row one get the same guarantee.
+fn spill_slack(cap: u32) -> u32 {
+    cap / 2
+}
+
+/// Byte length of the fewest leading complete lines of `rest` whose raw rows
+/// cover `need`, or 0 when `rest` has no complete line. Lines are never split:
+/// the band paints raw text line by line, so a line is the smallest unit that
+/// moves to scrollback without changing shape.
+fn raw_lines_for(
+    theme: &'static crate::cmd::agent::cli::theme::Theme,
+    rest: &str,
+    need: u32,
+    width: u16,
+) -> usize {
+    let cols = crate::cmd::agent::cli::markdown::body_cols(width, theme.inner_padding);
+    let mut end = 0usize;
+    let mut rows = 0u32;
+    for line in rest.split_inclusive('\n') {
+        if rows >= need || !line.ends_with('\n') {
+            break;
+        }
+        end += line.len();
+        rows += u32::from(band_rows(theme, raw_body_lines(line, cols), width));
+    }
+    end
+}
+
 /// Lines the live band paints for one message, honoring a committed prefix on
 /// the band's head message (its committed part is already in scrollback).
 pub(super) fn push_live(lines: &mut Vec<Line<'static>>, app: &App, m: &ChatMsg, skip: usize) {
@@ -229,6 +262,27 @@ pub(super) fn message_block(
         push_live(&mut lines, app, m, skip);
     }
     lines
+}
+
+/// Rows one message takes in the band, for the flush decision.
+///
+/// A streaming agent turn has two shapes: the raw text the band paints now,
+/// and the markdown it settles into. Neither bounds the other — a table paints
+/// raw at one row per line and may render wider or narrower — so the band must
+/// fit both: the raw one so no row hides behind "↑ N more" while it streams,
+/// the settled one so settling needs no second spill (a fixpoint reached a
+/// frame late is one the operator sees broken). Measure both, keep the larger.
+pub(super) fn live_rows(app: &App, idx: usize, m: &ChatMsg, skip: usize, width: u16) -> u16 {
+    let theme = app.theme;
+    let settled = band_rows(theme, message_block(app, idx, m, skip, true), width);
+    if !(m.streaming && m.role == Role::Agent && m.step.is_none()) {
+        return settled;
+    }
+    settled.max(band_rows(
+        theme,
+        message_block(app, idx, m, skip, false),
+        width,
+    ))
 }
 
 pub(super) fn push_live_measured(
@@ -458,10 +512,7 @@ pub fn flush_finished<B: Backend>(
     let rows: Vec<u16> = app.messages[start..]
         .iter()
         .enumerate()
-        .map(|(n, m)| {
-            let lines = message_block(app, start + n, m, if n == 0 { skip } else { 0 }, true);
-            band_rows(theme, lines, width)
-        })
+        .map(|(n, m)| live_rows(app, start + n, m, if n == 0 { skip } else { 0 }, width))
         .collect();
     let mut total: u32 = rows.iter().map(|r| u32::from(*r)).sum();
     let settled = settle_end(app);
@@ -554,20 +605,42 @@ pub fn flush_finished<B: Backend>(
             break;
         }
         let rest = m.text.get(skip..).unwrap_or("");
-        let mut block_end = next_boundary_after(&m.text, skip).map_or(0, |b| b - skip);
-        if block_end == 0 {
+        let need = total - cap;
+        let closed = next_boundary_after(&m.text, skip).map_or(0, |b| b - skip);
+        // A spill sends either one whole block, rendered, or just enough of a
+        // block's complete lines, raw, to clear the overflow. Whole and
+        // rendered is the default — it is what keeps scrollback styled. The
+        // raw cut is for a block so tall that sending it whole would leave
+        // the band mostly empty: a 14-row fence spilled to clear a 1-row
+        // overflow left the band 13 rows short, and on a 30-row split pane
+        // those rows were the reply's head, pushed off the top of the screen
+        // (#2020). Raw costs nothing on screen — a streaming turn paints raw
+        // text, so nothing changes shape, only where it lives — and only the
+        // torn block stays raw once the turn settles.
+        let (block_end, as_raw) = if closed == 0 {
             // One block taller than the band (a long table or fence has no
             // blank line inside it): waiting for it to close hides its head
-            // behind "↑ N more" for as long as it streams. Commit its complete
-            // lines instead. They go up as the raw text the band was already
-            // showing — a streaming turn paints raw text, so nothing on
-            // screen changes shape, only where it lives.
-            block_end = rest.rfind('\n').map_or(0, |i| i + 1);
-            if block_end == 0 {
-                break;
+            // behind "↑ N more" for as long as it streams. Commit complete
+            // lines instead.
+            let complete = rest.rfind('\n').map_or(0, |i| i + 1);
+            (raw_lines_for(theme, &rest[..complete], need, width), true)
+        } else if raw {
+            // Still inside a torn block: the rest of it is raw either way.
+            (raw_lines_for(theme, &rest[..closed], need, width), true)
+        } else {
+            let mut probe =
+                agent_body_lines(&rest[..closed], false, app.spinner, theme, None, width);
+            probe.push(Line::default());
+            if u32::from(band_rows(theme, probe, width)) <= need + spill_slack(cap) {
+                (closed, false)
+            } else {
+                (raw_lines_for(theme, &rest[..closed], need, width), true)
             }
-            raw = true;
+        };
+        if block_end == 0 {
+            break;
         }
+        raw = as_raw;
         let chunk = &rest[..block_end];
         let mut lines: Vec<Line<'static>> = Vec::new();
         if skip == 0 {
@@ -608,9 +681,13 @@ pub fn flush_finished<B: Backend>(
         raw = !is_block_boundary(&app.messages[app.flushed_upto].text, skip);
         app.flushed_raw = raw;
 
-        let mut live = Vec::new();
-        push_live_measured(&mut live, app, &app.messages[app.flushed_upto], skip);
-        total = u32::from(band_rows(theme, live, width));
+        total = u32::from(live_rows(
+            app,
+            app.flushed_upto,
+            &app.messages[app.flushed_upto],
+            skip,
+            width,
+        ));
     }
     Ok(())
 }
