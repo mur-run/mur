@@ -88,6 +88,12 @@ impl ChannelConversationStore {
         }
     }
 
+    /// Resize the per-conversation token ceiling (the runner's context window
+    /// became known after the store was built).
+    pub(crate) fn set_budget_tokens(&mut self, budget_tokens: u64) {
+        self.budget_tokens = budget_tokens.max(1);
+    }
+
     pub(crate) fn cache_state(&self, channel_id: &str) -> CacheState {
         let watermark = match self.map.get(channel_id) {
             Some(h) => h.watermark,
@@ -396,5 +402,38 @@ impl ConversationLocks {
         // The semaphore is never closed; a closed one would be a bug, and
         // refusing the turn is the safe answer.
         sem.acquire_owned().await.map_err(|_| Busy)
+    }
+}
+
+/// What a runner needs to serve channel conversations: where channels live
+/// (`mur_home`), the channel-keyed cache, and the per-conversation locks.
+/// `None` on the runner = channel turns are not served (stub runners).
+pub(crate) struct ChannelConversations {
+    pub(crate) mur_home: PathBuf,
+    pub(crate) store: std::sync::Mutex<ChannelConversationStore>,
+    pub(crate) locks: ConversationLocks,
+}
+
+impl ChannelConversations {
+    pub(crate) fn new(
+        mur_home: PathBuf,
+        conversation_dir: Option<&Path>,
+        budget_tokens: u64,
+        max_waiting: usize,
+    ) -> Self {
+        Self {
+            mur_home,
+            store: std::sync::Mutex::new(ChannelConversationStore::new(
+                conversation_dir,
+                budget_tokens,
+            )),
+            locks: ConversationLocks::new(max_waiting),
+        }
+    }
+
+    /// `agent`'s current channel writer key, from its home under `mur_home`
+    /// (rotation chain head, else `identity.pub`).
+    pub(crate) fn writer_pubkey(&self, agent: &str) -> Option<[u8; 32]> {
+        mur_channel::sign::resolve_writer_pubkey(&self.mur_home.join("agents").join(agent), None)
     }
 }

@@ -197,6 +197,7 @@ impl MethodHandler for ChannelDelegateHandler {
             deadline_secs: super::message_send::caller_deadline_secs(&p),
             tool_allowlist: None,
             consult_scope: None,
+            channel: None,
         };
 
         // Synchronous is not attended: the caller is a fleet router waiting on

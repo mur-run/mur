@@ -458,7 +458,14 @@ pub async fn build_provider_runner(
         };
         crate::supervisor_runner::build_runner(
             base.with_llm_telemetry(llm_telemetry.clone(), entry.provider.clone())
-                .with_scratch_dir(scratch_dir.clone()),
+                .with_scratch_dir(scratch_dir.clone())
+                // at-mention §3.4: channel turns, cache beside the task-id
+                // store, waiting cap from config.yaml `mention:` (S3).
+                .with_channel_conversations(
+                    mur_home.clone(),
+                    Some(agent_home.join("conversations")),
+                    boot_cfg.mention.conversation_max_waiting,
+                ),
             system_prompt_with_memory.clone(),
             runtime_skills.clone(),
             skills_cfg.clone(),

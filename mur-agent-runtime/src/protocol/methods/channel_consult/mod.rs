@@ -195,6 +195,7 @@ impl MethodHandler for ChannelConsultHandler {
             deadline_secs: super::message_send::caller_deadline_secs(&p),
             tool_allowlist: Some(vec![crate::tools::read_file::READ_FILE.to_string()]),
             consult_scope: Some(scope),
+            channel: None,
         };
         let _beat = ctx.notifier.as_ref().map(|n| {
             crate::protocol::heartbeat::spawn(n.clone(), task_id.clone(), self.heartbeat_interval)

@@ -216,6 +216,7 @@ fn task_spec_accepts_optional_task_id() {
         deadline_secs: None,
         tool_allowlist: None,
         consult_scope: None,
+        channel: None,
     };
     assert_eq!(spec.task_id.as_deref(), Some("task-fixed-1"));
 }
@@ -239,6 +240,7 @@ async fn run_sync_uses_supplied_task_id() {
         deadline_secs: None,
         tool_allowlist: None,
         consult_scope: None,
+        channel: None,
     };
     let outcome = runner.run_sync(spec).await;
     let TaskOutcome::Completed(task) = outcome else {
@@ -270,6 +272,7 @@ async fn run_sync_streaming_is_cancellable_by_id() {
         deadline_secs: None,
         tool_allowlist: None,
         consult_scope: None,
+        channel: None,
     };
     let r2 = runner.clone();
     let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx, None).await });

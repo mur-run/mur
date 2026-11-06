@@ -23,6 +23,7 @@ mod agentic_loop;
 pub(crate) mod ask_origin;
 mod builder;
 pub(crate) mod channel_conversation;
+pub(crate) mod channel_gate;
 pub use builder::DrainOutcome;
 pub mod consult_scope;
 mod conversation;
@@ -106,6 +107,10 @@ pub struct TaskSpec {
     /// this one. Only the consult handler sets it; like `tool_allowlist` it
     /// binds only the built-in loop (R9).
     pub consult_scope: Option<Arc<consult_scope::ConsultScope>>,
+    /// `context.channel_id` + `context.channel_seq` (at-mention §3.4): the
+    /// turn belongs to a channel conversation and its history comes from the
+    /// channel log. `None` keeps the task-id keyed history unchanged.
+    pub channel: Option<crate::protocol::methods::message_send::ChannelContext>,
 }
 
 #[derive(Debug)]
@@ -359,6 +364,8 @@ pub struct TaskRunner {
     startup_waiver: std::sync::OnceLock<mur_common::hitl::startup_waiver::StartupWaiver>,
     /// Multi-turn chat memory keyed by `context.task_id` (see `ConversationStore`).
     conversations: Mutex<ConversationStore>,
+    /// Channel-keyed memory + locks (at-mention §3.4); `None` = not served.
+    channel_conversations: Option<channel_conversation::ChannelConversations>,
     /// The session cwd shared with bash and the file tools, plus the roots a
     /// caller-supplied `TaskSpec.cwd` may move it to. `None` for runners built
     /// without tools (stubs, most tests): no cwd line in the prompt.

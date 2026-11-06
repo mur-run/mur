@@ -521,7 +521,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                         error: Some(JsonRpcError {
                             code: e.code(),
                             message: e.to_string(),
-                            data: None,
+                            data: e.data(),
                         }),
                     },
                 };
