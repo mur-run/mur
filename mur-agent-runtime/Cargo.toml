@@ -155,6 +155,7 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
+mur-test-log = { path = "../mur-test-log" }
 tempfile = "3"
 shell-words = "1"
 # `tokio::time::pause` / `#[tokio::test(start_paused = true)]` for the

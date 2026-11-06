@@ -23,5 +23,5 @@ hex = "0.4"
 tracing = { workspace = true }
 
 [dev-dependencies]
+mur-test-log = { path = "../mur-test-log" }
 tempfile = "3"
-tracing-subscriber = { workspace = true }
