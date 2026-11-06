@@ -197,24 +197,28 @@ fn name_target(
     if !ask {
         return Ok(naming);
     }
-    let mut proposal = entry.clone();
+    // The first question says why the wanted name moved; a retry says why
+    // the typed one was refused, so a bad format and a clash read apart.
+    let mut why = format!("`{wanted}` is taken");
     loop {
         let typed = prompt.input(
             &format!(
-                "{}: `{wanted}` is taken; entry name for {}",
+                "{}: {why}; entry name for {}",
                 agent.name,
                 project.path.display()
             ),
-            &proposal,
+            entry,
         )?;
         let typed = typed.trim().to_owned();
-        if names::usable(&agent.existing, &typed, assigned) {
-            return Ok(Naming::New {
-                entry: typed.clone(),
-                wanted: (typed != *wanted).then(|| wanted.clone()),
-            });
+        match names::refusal(&agent.existing, &typed, assigned) {
+            None => {
+                return Ok(Naming::New {
+                    entry: typed.clone(),
+                    wanted: (typed != *wanted).then(|| wanted.clone()),
+                });
+            }
+            Some(reason) => why = reason,
         }
-        proposal = entry.clone();
     }
 }
 
@@ -311,5 +315,49 @@ fn answer(pick: usize, free: &[usize]) -> Unknown {
         None => Unknown::Serves(free[pick]),
         Some(0) => Unknown::Neither,
         Some(_) => Unknown::Skip,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::super::names::Existing;
+    use super::super::prompt::{Answer, Script};
+    use super::*;
+
+    #[test]
+    fn a_refused_name_is_asked_again_with_the_reason() {
+        let agent = AgentCtx {
+            name: "pm".into(),
+            home: PathBuf::new(),
+            existing: Existing {
+                servers: vec!["app".into()],
+                ..Default::default()
+            },
+            manifest_path: PathBuf::new(),
+            prior: Default::default(),
+        };
+        let project = Project {
+            name: "app".into(),
+            path: PathBuf::from("/src/app"),
+            indexed: true,
+            detected: BTreeSet::new(),
+            base: "app".into(),
+        };
+        let mut s = Script::new([
+            Answer::Text("Bad Name".into()),
+            Answer::Text("app".into()),
+            Answer::Text("app-web".into()),
+        ]);
+        let n = name_target(&agent, &project, &[], true, &mut s).unwrap();
+        assert_eq!(n.entry(), "app-web");
+        assert!(s.asked[0].contains("`app` is taken"), "{:?}", s.asked);
+        assert!(
+            s.asked[1].contains("not a valid entry name"),
+            "{:?}",
+            s.asked
+        );
+        assert!(s.asked[2].contains("already used"), "{:?}", s.asked);
     }
 }

@@ -88,24 +88,29 @@ pub(super) fn apply<O: Ops>(
 
     // Shared installs: once each; a failure fails every target needing it.
     writeln!(out, "\nInstalling shared tools:")?;
-    let mut broken: BTreeMap<&'static str, String> = BTreeMap::new();
+    // Keyed like `table::shared_installs` dedups: two targets pinning the
+    // same tool at different versions install (and fail) independently.
+    let mut broken: BTreeSet<(&'static str, &'static str)> = BTreeSet::new();
     for row in table::shared_installs(d) {
         if let Err(e) = ops.install_shared(&row, out) {
             writeln!(out, "  ✗ {} {}: {e:#}", row.name, row.version)?;
-            broken.insert(row.name, format!("{e:#}"));
+            broken.insert((row.name, row.version));
         }
     }
 
     let mut staged: BTreeMap<usize, (O::Staged, Vec<PathBuf>)> = BTreeMap::new();
     for &i in &applying {
         let s = &d.specs[i];
-        if let Some((name, _)) = s
+        if let Some(r) = s
             .plan
             .install
             .iter()
-            .find_map(|r| broken.get_key_value(r.name))
+            .find(|r| broken.contains(&(r.name, r.version)))
         {
-            outcomes[i] = Outcome::InstallFailed(format!("shared install {name} failed (above)"));
+            outcomes[i] = Outcome::InstallFailed(format!(
+                "shared install {} {} failed (above)",
+                r.name, r.version
+            ));
             continue;
         }
         writeln!(out, "\n{}:", label(d, i))?;

@@ -144,9 +144,21 @@ pub(super) fn name_for(ex: &Existing, project: &Path, base: &str, also: &[String
     }
 }
 
-/// Whether an edited name is usable for a new entry on this agent.
-pub(super) fn usable(ex: &Existing, name: &str, also: &[String]) -> bool {
-    valid(name) && !ex.taken(name, also)
+/// Why an edited name cannot be used for a new entry on this agent, or
+/// `None` when it can.
+pub(super) fn refusal(ex: &Existing, name: &str, also: &[String]) -> Option<String> {
+    if !valid(name) {
+        return Some(format!(
+            "`{name}` is not a valid entry name (1–{MAX_ENTRY_NAME_LEN} of a-z, 0-9, `-`, `_`; \
+             no trailing or doubled `_`)"
+        ));
+    }
+    let servers = ex.servers.iter().chain(also).map(String::as_str);
+    if let Some(other) = tool_prefix_clash(name, servers) {
+        return Some(format!("`{name}` shares a tool prefix with `{other}`"));
+    }
+    ex.taken(name, also)
+        .then(|| format!("`{name}` is already used by this agent"))
 }
 
 /// `<base>-2`, `-3`, … the first one `taken` refuses not.

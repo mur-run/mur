@@ -91,9 +91,16 @@ fn a_suffix_on_a_full_length_name_stays_valid() {
 }
 
 #[test]
-fn usable_rejects_invalid_and_taken_names() {
-    let e = ex(&["taken"], &[]);
-    assert!(usable(&e, "fresh", &[]));
-    assert!(!usable(&e, "taken", &[]));
-    assert!(!usable(&e, "Bad Name", &[]));
+fn refusal_names_why_a_name_is_rejected() {
+    let e = ex(&["taken", "repo.a"], &[]);
+    assert_eq!(refusal(&e, "fresh", &[]), None);
+    let r = |n: &str, also: &[String]| refusal(&e, n, also).unwrap_or_default();
+    assert!(r("Bad Name", &[]).contains("not a valid entry name"));
+    assert!(r("taken", &[]).contains("already used"));
+    assert!(r("mine", &["mine".into()]).contains("already used"));
+    assert!(
+        r("repo_a", &[]).contains("tool prefix with `repo.a`"),
+        "{}",
+        r("repo_a", &[])
+    );
 }
