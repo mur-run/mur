@@ -327,9 +327,17 @@ jobs:
           mkdir dmg-root
           cp mur-aarch64-apple-darwin.pkg dmg-root/
           # hdiutil -srcfolder auto-sizes sometimes underestimates on CI runners.
-          # Use a two-step approach: create a generously-sized sparse image, mount
-          # it, copy files manually, then detach and convert.
-          hdiutil create -volname "MUR" -size 200m -fs HFS+ -layout NONE temp.sparseimage
+          # Use a two-step approach: create a sparse image sized from the .pkg,
+          # mount it, copy files manually, then detach and convert.
+          # The size is derived from the payload (+20% headroom, min 64 MiB for
+          # HFS+ metadata) instead of a fixed figure: a hardcoded 200m overflowed
+          # once the .pkg crossed that line (v2.99.0, "No space left on device").
+          PKG_BYTES=$(stat -f%z mur-aarch64-apple-darwin.pkg)
+          DMG_MB=$(( PKG_BYTES * 12 / 10 / 1048576 + 1 ))
+          DMG_MIN_MB=64
+          if [ "$DMG_MB" -lt "$DMG_MIN_MB" ]; then DMG_MB=$DMG_MIN_MB; fi
+          echo "pkg: $PKG_BYTES bytes -> sparse image: ${DMG_MB}m"
+          hdiutil create -volname "MUR" -size "${DMG_MB}m" -fs HFS+ -layout NONE temp.sparseimage
           hdiutil attach -nobrowse temp.sparseimage
           cp -R dmg-root/* /Volumes/MUR/
           hdiutil detach /Volumes/MUR
