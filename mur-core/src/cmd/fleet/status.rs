@@ -210,21 +210,6 @@ mod tests {
     /// who wonders why a run is missing has one line telling them.
     #[test]
     fn an_unreadable_sidecar_is_warned_not_silently_skipped() {
-        use std::io::Write;
-        use std::sync::{Arc, Mutex};
-
-        #[derive(Clone)]
-        struct Capture(Arc<Mutex<Vec<u8>>>);
-        impl Write for Capture {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-
         let tmp = tempfile::tempdir().unwrap();
         let mur_home = tmp.path();
         let base = chrono::Utc::now();
@@ -235,16 +220,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("sidecar.json"), b"{ not json").unwrap();
 
-        let capture = Capture(Arc::new(Mutex::new(Vec::new())));
-        let writer = capture.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(move || writer.clone())
-            .with_max_level(tracing::Level::WARN)
-            .finish();
-        let found = tracing::subscriber::with_default(subscriber, || {
+        let (found, logged) = mur_test_log::capture(tracing::Level::WARN, || {
             find_latest_run_for_channel(mur_home, "fleet-x")
-        })
-        .unwrap();
+        });
+        let found = found.unwrap();
 
         assert_eq!(
             found
@@ -253,7 +232,6 @@ mod tests {
                 .run_id,
             "run-good"
         );
-        let logged = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
         assert!(
             logged.contains("sidecar"),
             "the unreadable sidecar must be warned, not silently skipped: {logged}"

@@ -44,6 +44,7 @@ mur-mobile-sdk
 mur-monitor
 mur-open-items
 mur-research-gateway
+mur-test-log
 mur-track
 mur-trash
 mur-zfs-agent

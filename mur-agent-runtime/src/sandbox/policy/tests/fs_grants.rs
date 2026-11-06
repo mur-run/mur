@@ -486,26 +486,7 @@ fn the_agents_own_scratch_dir_is_granted_but_not_a_siblings() {
 /// scratch path and logs exactly the error the operator needs.
 #[test]
 fn scratch_grant_is_skipped_and_logged_when_helper_errs() {
-    use std::sync::{Arc, Mutex};
-    #[derive(Clone, Default)]
-    struct Buf(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for Buf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let buf = Buf::default();
-    let w = buf.clone();
-    let sub = tracing_subscriber::fmt()
-        .with_writer(move || w.clone())
-        .with_max_level(tracing::Level::ERROR)
-        .with_ansi(false)
-        .finish();
-    let policy = tracing::subscriber::with_default(sub, || {
+    let (policy, log) = mur_test_log::capture(tracing::Level::ERROR, || {
         SandboxPolicy::from_entitlements(&minimal_entitlements(), Path::new("/w1"))
     });
     assert!(
@@ -513,7 +494,6 @@ fn scratch_grant_is_skipped_and_logged_when_helper_errs() {
         "{:?}",
         policy.fs_write
     );
-    let log = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
     assert!(log.contains("scratch dir not granted"), "log: {log}");
 }
 

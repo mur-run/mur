@@ -266,19 +266,6 @@ mod tests {
     #[test]
     fn a_damaged_line_is_skipped_but_warned_with_its_line_number() {
         use std::io::Write as _;
-        use std::sync::{Arc, Mutex};
-
-        #[derive(Clone)]
-        struct Capture(Arc<Mutex<Vec<u8>>>);
-        impl std::io::Write for Capture {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
 
         let tmp = TempDir::new().unwrap();
         let store = ChannelStore::new(tmp.path());
@@ -316,14 +303,9 @@ mod tests {
             )
             .unwrap();
 
-        let capture = Capture(Arc::new(Mutex::new(Vec::new())));
-        let writer = capture.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(move || writer.clone())
-            .with_max_level(tracing::Level::WARN)
-            .finish();
-        let events =
-            tracing::subscriber::with_default(subscriber, || store.load_events("c1")).unwrap();
+        let (events, logged) =
+            mur_test_log::capture(tracing::Level::WARN, || store.load_events("c1"));
+        let events = events.unwrap();
 
         assert_eq!(
             events.len(),
@@ -331,7 +313,6 @@ mod tests {
             "the healthy events on either side of the damage must still load"
         );
 
-        let logged = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
         assert!(
             logged.contains("c1"),
             "the warning must name the channel: {logged}"
@@ -339,7 +320,7 @@ mod tests {
         // `lines=[2]`, not a bare "2": the timestamp and the temp path are full
         // of digits, so a loose match would pass with no line number at all.
         assert!(
-            logged.contains("dropped\u{1b}[0m\u{1b}[2m=\u{1b}[0m1") || logged.contains("dropped=1"),
+            logged.contains("dropped=1"),
             "the warning must say how many lines were dropped: {logged}"
         );
         assert!(

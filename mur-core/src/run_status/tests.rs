@@ -449,23 +449,6 @@ fn status_of_reconciles_a_parseable_running_cache_with_the_channel() {
 /// cache's answer.
 #[test]
 fn status_of_warns_when_the_reconcile_sidecar_read_fails() {
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
-
-    // A writer that captures log lines so the warn is asserted, not
-    // assumed.
-    #[derive(Clone)]
-    struct Capture(Arc<Mutex<Vec<u8>>>);
-    impl Write for Capture {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     let tmp = tempfile::tempdir().unwrap();
     let mur_home = tmp.path();
 
@@ -496,13 +479,9 @@ fn status_of_warns_when_the_reconcile_sidecar_read_fails() {
         "precondition: the sidecar really is corrupt"
     );
 
-    let capture = Capture(Arc::new(Mutex::new(Vec::new())));
-    let writer = capture.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(move || writer.clone())
-        .with_max_level(tracing::Level::WARN)
-        .finish();
-    let status = tracing::subscriber::with_default(subscriber, || status_of(mur_home, "run-s"))
+    let (status, logged) =
+        mur_test_log::capture(tracing::Level::WARN, || status_of(mur_home, "run-s"));
+    let status = status
         .unwrap()
         .expect("a corrupt sidecar must not fail the status itself");
     assert_eq!(
@@ -511,7 +490,6 @@ fn status_of_warns_when_the_reconcile_sidecar_read_fails() {
         "without a readable sidecar the cache's answer stands"
     );
 
-    let logged = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
     assert!(
         logged.contains("sidecar"),
         "the corrupt sidecar read must be warned, not silently skipped: {logged}"

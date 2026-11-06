@@ -319,19 +319,6 @@ mod pending_hitl_tests {
     #[test]
     fn an_unreadable_channel_is_warned_not_silently_skipped() {
         use std::os::unix::fs::PermissionsExt;
-        use std::sync::{Arc, Mutex};
-
-        #[derive(Clone)]
-        struct Capture(Arc<Mutex<Vec<u8>>>);
-        impl std::io::Write for Capture {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
 
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
@@ -347,14 +334,9 @@ mod pending_hitl_tests {
             return;
         }
 
-        let capture = Capture(Arc::new(Mutex::new(Vec::new())));
-        let writer = capture.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(move || writer.clone())
-            .with_max_level(tracing::Level::WARN)
-            .finish();
-        let gates =
-            tracing::subscriber::with_default(subscriber, || pending_hitl_gates(home)).unwrap();
+        let (gates, logged) =
+            mur_test_log::capture(tracing::Level::WARN, || pending_hitl_gates(home));
+        let gates = gates.unwrap();
 
         assert_eq!(
             gates.len(),
@@ -363,7 +345,6 @@ mod pending_hitl_tests {
         );
         assert_eq!(gates[0].hitl_id, "hitl-open");
 
-        let logged = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
         assert!(
             logged.contains("chan-bad"),
             "the unreadable channel must be named in a warning, not silently skipped: {logged}"

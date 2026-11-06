@@ -340,38 +340,12 @@ mod tests {
 
     // --- warn_dropped: a dropped directive must leave a trace (#1862) ---
 
-    #[derive(Clone, Default)]
-    struct LogBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl std::io::Write for LogBuf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuf {
-        type Writer = LogBuf;
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
     /// Run `fold_governance` under a capturing subscriber; return the log text.
     fn fold_logs(evs: &[ChannelEvent], pk: &[[u8; 32]]) -> String {
-        let buf = LogBuf::default();
-        let sub = tracing_subscriber::fmt()
-            .with_writer(buf.clone())
-            .with_ansi(false)
-            .with_max_level(tracing::Level::WARN)
-            .finish();
-        tracing::subscriber::with_default(sub, || {
+        mur_test_log::capture(tracing::Level::WARN, || {
             fold_governance(evs, CID, "dev", pk);
-        });
-        String::from_utf8(buf.0.lock().unwrap().clone()).unwrap()
+        })
+        .1
     }
 
     #[test]

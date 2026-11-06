@@ -606,18 +606,6 @@ mod tests {
     /// the track name, the outcome label and the promoted file count.
     #[test]
     fn successful_close_emits_one_close_log_line() {
-        use std::sync::{Arc as SArc, Mutex};
-        #[derive(Clone, Default)]
-        struct Buf(SArc<Mutex<Vec<u8>>>);
-        impl std::io::Write for Buf {
-            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(b);
-                Ok(b.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
         // `k=v` or `k="v"`: fmt quotes `&str` fields but not `%Display` ones.
         fn has(line: &str, k: &str, v: &str) -> bool {
             line.contains(&format!("{k}={v}")) || line.contains(&format!("{k}=\"{v}\""))
@@ -653,28 +641,14 @@ mod tests {
         let name = track_dir_name(&open.track).expect("track dir name");
         std::fs::write(open.track.path().join("a.txt"), "edited").unwrap();
 
-        let buf = Buf::default();
-        let w = buf.clone();
-        // tracing-core caches a callsite's interest when it is first hit.
-        // With one live dispatcher it asks only the hitting thread's default,
-        // so a sibling test closing a track on a subscriber-less thread
-        // caches `never` and our line vanishes. A second live dispatcher
-        // makes registration consult every live dispatcher, ours included.
-        let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
-        let sub = tracing::Dispatch::new(
-            tracing_subscriber::fmt()
-                .with_writer(move || w.clone())
-                .with_max_level(tracing::Level::INFO)
-                .with_ansi(false)
-                .finish(),
-        );
         let mut ledger = crate::turn_ledger::TurnLedger::default();
-        let outcome = tracing::dispatcher::with_default(&sub, || {
+        // Guarded capture: a sibling test closing a track on a
+        // subscriber-less thread must not cache this callsite as `never`.
+        let (outcome, log) = mur_test_log::capture(tracing::Level::INFO, || {
             runner.close_turn_track("t1", open, &mut ledger)
         });
         assert_eq!(outcome, TrackClose::Promoted);
 
-        let log = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
         let closes: Vec<&str> = log
             .lines()
             .filter(|l| l.contains("turn track closed"))

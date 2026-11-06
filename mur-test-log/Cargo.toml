@@ -1,0 +1,13 @@
+[package]
+name = "mur-test-log"
+version.workspace = true
+edition.workspace = true
+# Dev-only test support: consumed as a path dev-dependency, never shipped.
+publish = false
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

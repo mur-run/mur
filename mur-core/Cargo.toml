@@ -154,6 +154,7 @@ ollama-live-smoke = []
 qdrant = ["dep:qdrant-client"]
 
 [dev-dependencies]
+mur-test-log = { path = "../mur-test-log" }
 tempfile = "3"
 shell-words = "1"
 tower = { version = "0.5", features = ["util"] }
