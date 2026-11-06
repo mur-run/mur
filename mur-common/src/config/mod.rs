@@ -228,6 +228,9 @@ pub struct Config {
     pub conversations: ConversationsConfig,
 
     #[serde(default)]
+    pub mention: MentionConfig,
+
+    #[serde(default)]
     pub sync: SyncConfig,
 
     // --- P1.1 additions ---
@@ -417,6 +420,19 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mention_defaults_apply_when_block_absent_and_field_parses() {
+        let c: super::Config = serde_yaml_ng::from_str("{}").unwrap();
+        assert_eq!(
+            c.mention.conversation_max_waiting,
+            super::DEFAULT_CONVERSATION_MAX_WAITING
+        );
+        assert_eq!(c.mention.conversation_max_waiting, 4);
+        let c: super::Config =
+            serde_yaml_ng::from_str("mention:\n  conversation_max_waiting: 9\n").unwrap();
+        assert_eq!(c.mention.conversation_max_waiting, 9);
+    }
+
     #[test]
     fn update_defaults_apply_when_block_absent_and_fields_parse() {
         let c: super::Config = serde_yaml_ng::from_str("{}").unwrap();

@@ -22,6 +22,7 @@ use uuid::Uuid;
 mod agentic_loop;
 pub(crate) mod ask_origin;
 mod builder;
+pub(crate) mod channel_conversation;
 pub use builder::DrainOutcome;
 pub mod consult_scope;
 mod conversation;
@@ -163,6 +164,9 @@ const MAX_REGISTRY_ENTRIES: usize = 1_024;
 /// Cap on chat threads retained for multi-turn memory (LRU-evicted) so a
 /// long-lived agent serving many conversations doesn't leak unboundedly.
 const MAX_CONVERSATIONS: usize = 256;
+/// Cap on channel-keyed conversations (at-mention §3.4), separate from
+/// [`MAX_CONVERSATIONS`]: its own LRU, its own directory, its own sweep.
+const MAX_CHANNEL_CONVERSATIONS: usize = 256;
 /// Hard ceiling on stored messages per conversation, kept only so a pathological
 /// stream of empty turns cannot grow the vector without bound. The real limit is
 /// [`CONV_BUDGET_DIVISOR`] below — a turn count says nothing about how much
