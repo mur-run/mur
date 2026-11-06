@@ -40,8 +40,9 @@ use crate::channel_writer::{KeySource, ROUTER_AGENT, WriterKey, writer_key};
 use crate::cmd::channel_integrity::{self, IntegrityReport};
 use crate::cmd::channel_repair_gate_b::GateB;
 
-/// `payload.type` of the event that opens a repaired chain.
-pub const REPAIR_EVENT_TYPE: &str = "channel-repair";
+/// `payload.type` of the event that opens a repaired chain. Defined in
+/// `mur-channel` so the agent runtime can recognise it too.
+pub use mur_channel::repair_record::REPAIR_EVENT_TYPE;
 
 /// What a repair did.
 #[derive(Debug)]

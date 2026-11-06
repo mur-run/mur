@@ -9,6 +9,7 @@ pub mod id;
 pub mod index;
 pub mod purpose;
 pub mod repair_marker;
+pub mod repair_record;
 pub mod service;
 pub mod sign;
 pub mod store;
