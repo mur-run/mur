@@ -71,6 +71,8 @@ Before changing anything that pins, verifies, or launches an MCP server, read `d
 
 `main` is protected, so the whole release is one PR: **merging the version bump to `main` IS the release.** `tag.yml` tags the merge commit and dispatches `release.yml` automatically — there is no manual tag step, so review the bump PR as the release approval. Full step-by-step: the **`mur-release`** skill (`.claude/skills/mur-release/`).
 
+**Re-publishing an existing tag** (e.g. one platform's assets failed): `gh workflow run release.yml --ref main -f tag=vX.Y.Z`. Always `--ref main` — `--ref vX.Y.Z` runs the `release.yml` frozen in that tag, not the fixed one. The run re-uploads every asset for that release and pushes a new Homebrew tap commit; crates.io publishes are skipped as already published. The macOS DMG is sized from the `.pkg` (+20%, 64m floor), never a fixed number — do not reintroduce one.
+
 ## Documentation Checklist
 
 After a user-facing change, update all three: **`README.md`**, the **docs site** (https://app.mur.run/docs/core), and the **product page** (https://app.mur.run/products/mur). Exact source paths and publish gotchas live in the **`update-docs`** skill — use it, don't reconstruct the paths.
