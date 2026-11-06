@@ -15,6 +15,8 @@ use crate::cmd::code_nav::plan::{Detected, InstallRow};
 #[derive(Default)]
 struct Fake {
     fail_shared: BTreeSet<&'static str>,
+    /// `(name, version)` pairs whose shared install fails.
+    fail_shared_version: BTreeSet<(&'static str, &'static str)>,
     fail_install: BTreeSet<usize>,
     fail_commit: BTreeSet<usize>,
     fail_smoke: BTreeSet<usize>,
@@ -28,7 +30,9 @@ impl Ops for Fake {
     type Staged = ();
     fn install_shared(&mut self, row: &InstallRow, _: &mut dyn Write) -> Result<()> {
         self.log.push(format!("shared {}", row.name));
-        if self.fail_shared.contains(row.name) {
+        if self.fail_shared.contains(row.name)
+            || self.fail_shared_version.contains(&(row.name, row.version))
+        {
             bail!("download failed");
         }
         Ok(())
@@ -229,6 +233,24 @@ fn a_failed_shared_install_is_tried_once_and_fails_every_dependent() {
         f.log
     );
     assert_eq!(out.matches("download failed").count(), 1, "{out}");
+}
+
+#[test]
+fn a_failed_shared_version_fails_only_targets_needing_that_version() {
+    let mut d = decided(&["pm", "qa"]);
+    for row in &mut d.specs[1].plan.install {
+        if row.name == plan::SERENA {
+            row.version = "0.0.0-other";
+        }
+    }
+    let mut f = Fake {
+        fail_shared_version: [(plan::SERENA, "0.0.0-other")].into(),
+        ..Default::default()
+    };
+    let (r, _) = go(&d, Consent::Given, false, &mut Script::default(), &mut f);
+    assert!(r.unwrap_err().to_string().contains("1 of 2"));
+    assert!(f.log.contains(&"install 0".to_owned()), "{:?}", f.log);
+    assert!(!f.log.contains(&"install 1".to_owned()), "{:?}", f.log);
 }
 
 #[test]
