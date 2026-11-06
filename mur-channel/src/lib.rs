@@ -2,6 +2,7 @@
 //! a rebuildable SQLite query index + a file-watcher. Shared by the CLI
 //! (`mur-core`) and the Hub (`mur-hub-gui`).
 pub mod anchor;
+pub mod conversation;
 pub mod governance;
 pub mod head;
 pub mod head_io;

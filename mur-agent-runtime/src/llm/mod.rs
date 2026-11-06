@@ -7,7 +7,9 @@ use std::time::Duration;
 /// Stand-in for a user turn whose text was empty (an image-only paste; the
 /// image is not kept in history). Every provider converter sends this instead
 /// of an empty text — Anthropic 400s on one, and it wedges the channel.
-pub const BLANK_USER_TURN: &str = "(no text \u{2014} an image was attached)";
+/// Defined in `mur-channel` so murmur's persist path and the runtime's
+/// watermark check share one definition.
+pub use mur_channel::conversation::BLANK_USER_TURN;
 
 pub mod anthropic;
 pub mod claude;
