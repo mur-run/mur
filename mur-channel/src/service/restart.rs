@@ -30,6 +30,7 @@ use mur_common::identity::AgentIdentity;
 
 use super::ChannelService;
 use super::anchored::HeadSigner;
+use crate::store::ManifestPolicy;
 
 /// Who signs the fresh chain's first line.
 pub struct RestartSigner<'a> {
@@ -77,7 +78,7 @@ impl ChannelService {
         });
         let store = &self.store;
         let mur_home = store.mur_home();
-        let done = store.with_append_lock(channel_id, || {
+        let done = store.with_append_lock(channel_id, ManifestPolicy::Restore, || {
             if !still_damaged()? {
                 return Ok(None);
             }

@@ -142,22 +142,24 @@ impl ChannelStore {
         signer: impl FnOnce(chain::Unsealed<'_>) -> chain::Seal,
         hooks: SealHooks<'_>,
     ) -> Result<ChannelEvent> {
-        self.with_append_lock(id, || {
+        self.with_append_lock(id, ManifestPolicy::Require, || {
             self.append_locked(id, actor, kind, payload, idempotency_key, signer, hooks)
         })
     }
 
     /// Run `f` holding the channel's append lock. Creates the channel
-    /// directory and (write-if-absent) its manifest first.
+    /// directory; the manifest is checked under the lock per `policy` (§5
+    /// gate).
     ///
-    /// An append creates the directory, so it can resurrect a channel whose
-    /// manifest is gone — archived away, or never written because the first
-    /// thing that touched the id was an append. The events then accumulate
-    /// in a channel every reader calls unreadable, because `load_manifest`
-    /// is the existence check (the fleet rail's `⚠ channel unreadable` came
-    /// from exactly this, permanently, on a live install). Write-if-absent:
-    /// an existing manifest is authoritative and must never be clobbered by
-    /// a write on the event path.
+    /// The first append into a brand-new directory (no events file yet)
+    /// writes a placeholder manifest under either policy, so a channel that
+    /// holds events is never invisible to `load_manifest`, the existence
+    /// check (the fleet rail's `⚠ channel unreadable`). A log whose manifest
+    /// was LOST is different: writing a placeholder there would stamp this
+    /// build's `v` onto a channel a newer build wrote, so only
+    /// `ManifestPolicy::Restore` (the repair) may do it; `Require` refuses
+    /// with `ManifestError::Missing`. An existing manifest is never
+    /// rewritten; one that is unparseable or too new refuses the append.
     ///
     /// The lock is a SIDECAR file — never events.jsonl itself. On Windows OS
     /// file locks are mandatory (not advisory like flock on macOS/Linux), so
@@ -167,10 +169,14 @@ impl ChannelStore {
     ///
     /// Not re-entrant: `f` must use the `*_locked` bodies, never a locking
     /// append, or it deadlocks on its own lock.
-    pub(crate) fn with_append_lock<T>(&self, id: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    pub(crate) fn with_append_lock<T>(
+        &self,
+        id: &str,
+        policy: ManifestPolicy,
+        f: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
         let dir = self.channel_dir(id)?;
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-        self.ensure_manifest(id)?;
         let lock_path = dir.join(super::LOCK_FILE);
         let lock = OpenOptions::new()
             .create(true)
@@ -179,7 +185,13 @@ impl ChannelStore {
             .open(&lock_path)
             .with_context(|| format!("open {}", lock_path.display()))?;
         lock.lock_exclusive().context("lock channel events")?;
-        let out = f();
+        // Inside the lock: a manifest a racing repair just restored is seen.
+        let policy = if self.events_path(id)?.exists() {
+            policy
+        } else {
+            ManifestPolicy::Restore
+        };
+        let out = self.check_manifest_locked(id, policy).and_then(|()| f());
         FileExt::unlock(&lock).ok();
         out
     }
