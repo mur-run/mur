@@ -694,10 +694,14 @@ Agent** wizard offers the same catalog as a source.
   stop and ask. Browser MCP tools that act on your logged-in web session
   (navigate, click, fill a form, run page JavaScript) count as network egress,
   so they ask too; observers such as snapshots and screenshots are reads, and
-  exporting or replacing the session's cookies is privileged. While a gate is open the
-  decision keys only count when you aren't mid-message, and a session-wide
-  grant takes two presses — typing an ordinary sentence can't hand a tool
-  blanket approval. An open gate always renders somewhere, `/auto off` revokes
+  exporting or replacing the session's cookies is privileged. An open gate is
+  decided in one place: an approval panel docked above the input (the
+  transcript shrinks to make room, so the agent's reasons stay readable),
+  counting down to the runtime's own deadline. `y`/`n` or `1`–`4` pick a row
+  only while you aren't mid-message, so typing an ordinary sentence can't hand
+  a tool blanket approval; `Tab` moves to the *No* row without deciding, so a
+  reason can be typed there and goes to the agent with the denial; `Ctrl+O`
+  shows the full call. An open gate always renders somewhere, `/auto off` revokes
   the per-tool grants it claims to revoke, and a gate that times out stops
   asking. Tool calls from one model response arrive as a single card rather
   than one prompt each — every call is still decided on its own, and there is
@@ -983,7 +987,7 @@ Agent** wizard offers the same catalog as a source.
   turn finish and pauses before the next
   send (`⏸ after turn`); a second Esc cancels the turn, its reply is marked
   `discarded, not sent`, and resuming sends that turn again. When a review
-  member wants a tool, the usual approval modal opens with that member's name
+  member wants a tool, the usual approval panel opens with that member's name
   — only *once* or *deny*, never a session-wide approval, and Esc, a timeout
   or the review ending all count as deny. Known limit: the member remembers
   that answer for the same call (same tool and input) for 7 days, even in a
@@ -1315,7 +1319,7 @@ the exact `mur code-nav setup … --entry <name>` line to re-run.
 | Crate | Role |
 |---|---|
 | [`mur-core`](mur-core) | The `mur` CLI — memory pipeline, sync, sources, dashboard server, agent management |
-| [`mur-common`](mur-common) | Shared types — `Pattern`, `Workflow`, A2A envelopes, `.muragent` format |
+| [`mur-common`](mur-common) | Shared types — `KnowledgeBase`, `Skill`, `Workflow`, A2A envelopes, `.muragent` format |
 | [`mur-agent-runtime`](mur-agent-runtime) | Per-agent A2A v0.3 supervisor — sandbox, voice, export, telemetry |
 | [`mur-daemon`](mur-daemon) | Always-on background daemon — queues, schedules, dashboard API |
 | [`mur-mcp-server`](mur-mcp-server) | stdio MCP server exposing MUR to AI clients mid-conversation |
@@ -1343,7 +1347,7 @@ mur daemon serve     # web dashboard at http://localhost:3847
 ```
 
 <details>
-<summary><b>Full command tree</b> (35 top-level commands)</summary>
+<summary><b>Full command tree</b> (36 top-level commands)</summary>
 
 ```
 mur
@@ -1355,6 +1359,9 @@ mur
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run [--run-id] · review · review-setup · review-resume · prune-reviews · set-loop · limits · send · jobs [--since] · stop · start · pause · resume [--detach]   (squads of agents over a shared channel)
 ├── limits       <fleet|agent> [--json] · --global · --deadline · --stuck · --cost-usd · --unset   (every execution bound in force, with its source; global scope: ~/.mur/limits/global.yaml)
+├── job          list · status · stop   (inspect and stop job / fleet / workflow runs)
+├── track        prune   (reclaim stale `.worktrees/turn-*` tracks)
+├── git-push     enroll · revoke · repo · list · doctor   (brokered git pushes for agents; unix only)
 ├── monitor      add · list · show · cancel · retry   (durable monitors for work that outlives the turn: CI runs, MUR runs, subprocesses)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
 ├── deep-research  setup · secret · status · ask   (web research with wizard UX)
@@ -1378,7 +1385,7 @@ mur
 ├── channel      approve · verify · repair · backfill-purpose   (HITL approval; verify checks a log against its signed head, repair restarts a damaged one)
 ├── commander    pin · status · directive   (governance: pin the operator key, issue and inspect directives)
 ├── auth         login · logout
-├── team         shared skills (private registries)
+├── team         list · use   (shared skills from private registries)
 ├── push / fetch signal outbox / inbox ↔ server
 ├── deploy       Docker Compose deployment
 └── internals    low-level store access · reindex
