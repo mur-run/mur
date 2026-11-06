@@ -75,8 +75,12 @@ pub struct TaskError {
     pub code: String,
     pub message: String,
     pub recoverable: bool,
+    /// Boxed so `TaskError` stays small as the `Err` of hot `Result`s:
+    /// with serde_json's `preserve_order` (pulled in by lancedb ≥ 0.41)
+    /// an inline `Value` pushes it past clippy's `result_large_err` limit.
+    /// `Box` is transparent to serde, so the wire format is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub details: Option<serde_json::Value>,
+    pub details: Option<Box<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,4 +109,27 @@ pub struct JsonRpcError {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskError;
+
+    /// Boxing `details` must not change the wire format: peers on older
+    /// builds send and expect a bare JSON value here.
+    #[test]
+    fn task_error_details_wire_format_unchanged() {
+        let wire = r#"{"code":"x","message":"m","recoverable":false,"details":{"k":[1,2]}}"#;
+        let err: TaskError = serde_json::from_str(wire).unwrap();
+        assert_eq!(
+            err.details.as_deref(),
+            Some(&serde_json::json!({"k": [1, 2]}))
+        );
+        assert_eq!(serde_json::to_string(&err).unwrap(), wire);
+
+        let bare = r#"{"code":"x","message":"m","recoverable":true}"#;
+        let err: TaskError = serde_json::from_str(bare).unwrap();
+        assert!(err.details.is_none());
+        assert_eq!(serde_json::to_string(&err).unwrap(), bare);
+    }
 }
