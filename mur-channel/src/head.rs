@@ -125,8 +125,8 @@ pub struct Head {
 
 impl Head {
     /// Canonical signed bytes: the object `{v, channel_id, seq, lines,
-    /// chain_hash, key_version, legacy_through}` with sorted keys (`serde_json`
-    /// has no `preserve_order` here), no `sig`, no `ts`. Absent optionals are
+    /// chain_hash, key_version, legacy_through}` with keys sorted by
+    /// [`mur_common::canonical::canonical_json`], no `sig`, no `ts`. Absent optionals are
     /// signed as `null`, so dropping one changes the bytes.
     pub fn sign_input(&self) -> Vec<u8> {
         let canon = serde_json::json!({
@@ -138,7 +138,7 @@ impl Head {
             "key_version": self.key_version,
             "legacy_through": self.legacy_through,
         });
-        serde_json::to_vec(&canon).unwrap_or_default()
+        mur_common::canonical::canonical_json(&canon)
     }
 
     /// Sign `fields` with the router `identity` at [`HEAD_VERSION`].

@@ -47,8 +47,9 @@ fn strip_narration(input: &serde_json::Value) -> std::borrow::Cow<'_, serde_json
 }
 
 /// SHA-256 hex over the canonical action. `input` must already be the
-/// POST-substitution args (what will actually execute). `serde_json` sorts
-/// object keys (no preserve_order feature), so the encoding is deterministic.
+/// POST-substitution args (what will actually execute). Keys are sorted by
+/// [`crate::canonical::canonical_json`], not by `serde_json`'s map type, so the
+/// encoding is deterministic even when `preserve_order` is unified in.
 pub fn action_hash(
     tool_name: &str,
     input: &serde_json::Value,
@@ -64,7 +65,7 @@ pub fn action_hash(
         "step": step_or_call_id,
         "agent": agent_id,
     });
-    let bytes = serde_json::to_vec(&canon).unwrap_or_default();
+    let bytes = crate::canonical::canonical_json(&canon);
     let mut h = Sha256::new();
     h.update(&bytes);
     format!("{:x}", h.finalize())
@@ -78,7 +79,7 @@ mod tests {
     fn hash_is_stable_and_order_independent() {
         let a = action_hash("bash", &serde_json::json!({"b":1,"a":2}), "c", "s0", "mur");
         // Same logical input, keys written in a different order → same hash
-        // (serde_json sorts object keys).
+        // (canonical_json sorts object keys).
         let b = action_hash("bash", &serde_json::json!({"a":2,"b":1}), "c", "s0", "mur");
         assert_eq!(a, b);
         assert_eq!(a.len(), 64);

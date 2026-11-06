@@ -209,8 +209,10 @@ impl<B: SlackBotLike> SlackInboundLoop<B> {
             "thread_ts": event.thread_ts,
             "is_dm": is_dm,
         });
-        let canonical =
-            serde_json::to_vec(&payload_value).map_err(|e| SlackError::Parse(e.to_string()))?;
+        // Sorted keys by construction, not by `serde_json`'s map type: the
+        // envelope promises canonical bytes even if `preserve_order` is
+        // unified into the build by some dependency.
+        let canonical = mur_common::canonical::canonical_json(&payload_value);
         let sig_bytes = deps.identity.sign_bytes(&canonical);
         let bridge_pubkey = deps.identity.public_key_multibase();
 

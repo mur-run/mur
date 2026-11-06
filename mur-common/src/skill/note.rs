@@ -164,8 +164,8 @@ pub struct MemoryProposal {
 /// Canonicalization version — bump if the sign-input shape changes.
 pub const PROPOSAL_SIG_INPUT_VERSION: u32 = 1;
 
-/// Canonical signed bytes: `sig` excluded; `serde_json` sorts object keys so
-/// the encoding is deterministic. The `domain` tag prevents cross-context
+/// Canonical signed bytes: `sig` excluded; keys are sorted by
+/// [`crate::canonical::canonical_json`] so the encoding is deterministic. The `domain` tag prevents cross-context
 /// signature reuse.
 fn proposal_sign_input(p: &MemoryProposal) -> Vec<u8> {
     let canon = serde_json::json!({
@@ -176,7 +176,7 @@ fn proposal_sign_input(p: &MemoryProposal) -> Vec<u8> {
         "manifest": p.manifest,
         "key_version": p.key_version,
     });
-    serde_json::to_vec(&canon).unwrap_or_default()
+    crate::canonical::canonical_json(&canon)
 }
 
 impl MemoryProposal {
