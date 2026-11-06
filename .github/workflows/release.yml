@@ -6,10 +6,26 @@ on:
   # tag.yml pushes the tag with GITHUB_TOKEN, which suppresses the push event
   # (recursion guard), then dispatches this workflow at the tag ref — where
   # $GITHUB_REF_NAME is the tag name, same as under a human tag push.
+  #
+  # `tag` is for re-publishing an existing tag with the *current* workflow
+  # file: `gh workflow run release.yml --ref main -f tag=v2.99.0`. Without it
+  # a re-run at the tag ref would execute the release.yml frozen in that tag,
+  # so a fix to this file could never rescue the release that exposed the bug.
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)publish, e.g. v2.99.0. Empty = the ref this run was dispatched at."
+        required: false
+        type: string
 
 permissions:
   contents: write
+
+# Single source of the version under release. Every job reads $RELEASE_TAG
+# (never $GITHUB_REF_NAME) and checks out that ref, so a dispatch from main
+# with `tag=` builds and publishes exactly what the tag points at.
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 # Required secrets:
 #   APPLE_SIGNING_CERT       - base64-encoded Developer ID p12 bundle
@@ -27,10 +43,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Check version consistency
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TAG_VERSION="${RELEASE_TAG#v}"
           CARGO_VERSION="$(grep '^version ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')"
           if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
             echo "❌ Tag version (v${TAG_VERSION}) does not match Cargo.toml version (${CARGO_VERSION})"
@@ -40,7 +58,7 @@ jobs:
             echo ""
             exit 1
           fi
-          echo "✅ Tag version v${TAG_VERSION} matches Cargo.toml"
+          echo "✅ Tag version v${TAG_VERSION} matches Cargo.toml (ref: ${RELEASE_TAG})"
 
   build:
     name: Build (${{ matrix.target }})
@@ -75,6 +93,8 @@ jobs:
             name: mur-x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Checkout mur-web
         uses: actions/checkout@v6
@@ -229,10 +249,12 @@ jobs:
     if: always() && needs.build.result == 'success'
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Get version from tag
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@v4
         with:
@@ -404,6 +426,8 @@ jobs:
       RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       # Under `cargo build --target aarch64-apple-darwin`, ggml's CMake CPU
       # detection (in the whisper-rs-sys build) fails and falls back to
@@ -418,7 +442,7 @@ jobs:
 
       - name: Get Hub version from tag
         id: hub_version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Stamp Hub version into tauri.conf.json
         run: |
@@ -635,6 +659,9 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
+          # Defaults to github.ref, which under a `tag=` dispatch from main
+          # would publish a release named "main".
+          tag_name: ${{ env.RELEASE_TAG }}
           # Auto-notes list the PRs merged since the previous tag. Every
           # change lands via a conventional-title PR, so this IS the
           # changelog — the hand-written CHANGELOG.md died at v2.10.0.
@@ -655,10 +682,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Get version from tag
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Wait for release assets
         run: sleep 10
@@ -666,13 +695,13 @@ jobs:
       - name: Get SHA256
         id: sha
         run: |
-          URL="https://github.com/mur-run/mur/releases/download/${GITHUB_REF_NAME}/mur-aarch64-apple-darwin.tar.gz"
+          URL="https://github.com/mur-run/mur/releases/download/${RELEASE_TAG}/mur-aarch64-apple-darwin.tar.gz"
           SHA=$(curl -sL "$URL" | sha256sum | cut -d' ' -f1)
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Verify Homebrew archive contents
         run: |
-          curl -sSL "https://github.com/mur-run/mur/releases/download/${GITHUB_REF_NAME}/mur-aarch64-apple-darwin.tar.gz" -o mur.tar.gz
+          curl -sSL "https://github.com/mur-run/mur/releases/download/${RELEASE_TAG}/mur-aarch64-apple-darwin.tar.gz" -o mur.tar.gz
           tar -tzf mur.tar.gz | sed 's#^\./##' | sort > actual.txt
           python3 scripts/release-manifest.py names | tr ' ' '\n' | sort > expected.txt
           diff -u expected.txt actual.txt
@@ -744,6 +773,8 @@ jobs:
     timeout-minutes: 60 # ~20 crates published sequentially with index waits
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install protobuf
@@ -751,7 +782,7 @@ jobs:
 
       - name: Get version from tag
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Publish mur-common
         run: |
