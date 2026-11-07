@@ -323,14 +323,23 @@ impl TaskRunner {
     /// per turn by the caller, before any tool-loop step, so a file edited
     /// mid-turn does not change what later steps see (§3.1). The block is
     /// returned separately and is never stored.
+    ///
+    /// `channel_prior` is a channel turn's reconciled history (at-mention
+    /// §3.4, [`Self::channel_prior`]); when present it replaces the task-id
+    /// prior and gets the same send-time trim.
     pub(super) fn pinned_and_prior(
         &self,
         turn: &str,
         ctx: Option<&str>,
+        channel_prior: Option<Vec<crate::llm::RichMessage>>,
     ) -> (Option<String>, Vec<crate::llm::RichMessage>) {
         let (budget_tokens, prior) = {
             let store = self.conversations.lock().unwrap_or_else(|e| e.into_inner());
-            (store.budget_tokens, store.prior(ctx))
+            let prior = match channel_prior {
+                Some(p) => p,
+                None => store.prior(ctx),
+            };
+            (store.budget_tokens, prior)
         };
         let pinned = match (&self.project_instructions, self.working_dir(Some(turn))) {
             (Some(p), Some(dir)) => p
@@ -352,12 +361,18 @@ impl TaskRunner {
     /// remembered as `narrative_only`, because "ran nothing" is the fact the
     /// next turn most needs. Roles `user`/`agent` map to Anthropic
     /// `user`/`assistant`.
+    ///
+    /// A channel turn (`channel` is `Some`) is remembered in the channel store
+    /// instead, keyed by the channel, with `reply_pre_settlement` — the reply
+    /// text before the settlement card — as its provisional tail (§3.4).
     pub(super) fn remember_turn(
         &self,
         key: &str,
         ctx: Option<&str>,
+        channel: Option<&crate::protocol::methods::message_send::ChannelContext>,
         input: &Message,
         reply: &Message,
+        reply_pre_settlement: &str,
     ) {
         let attachments = image_count(input);
         let memory = match ledger_of(reply) {
@@ -365,6 +380,20 @@ impl TaskRunner {
             None => crate::turn_ledger::TurnMemory::empty(attachments),
         };
         let turn = u32::try_from(self.turn_counter.load(Ordering::Relaxed)).unwrap_or(u32::MAX);
+        if let (Some(ch), Some(cc)) = (channel, &self.channel_conversations) {
+            let user = text_of(input);
+            cc.store
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remember_turn(
+                    &ch.channel_id,
+                    ch.channel_seq,
+                    mur_channel::conversation::normalize_user_text(&user),
+                    reply_pre_settlement,
+                    crate::llm::RichMessage::TurnLedger { turn, memory },
+                );
+            return;
+        }
         let mut store = self.conversations.lock().unwrap_or_else(|e| e.into_inner());
         let mut h = store.prior(ctx);
         h.push(crate::llm::RichMessage::Text {
@@ -431,6 +460,7 @@ impl TaskRunner {
         &self,
         key: &str,
         ctx: Option<&str>,
+        channel: Option<&crate::protocol::methods::message_send::ChannelContext>,
         input: &Message,
         stop: crate::turn_ledger::StopKind,
     ) {
@@ -442,8 +472,8 @@ impl TaskRunner {
             ledger.agent = self.agent_name.clone();
         }
         let text = format!("turn ended: {}", end_marker(&ledger));
-        let reply = settle(text, &ledger);
-        self.remember_turn(key, ctx, input, &reply);
+        let reply = settle(text.clone(), &ledger);
+        self.remember_turn(key, ctx, channel, input, &reply, &text);
     }
 }
 

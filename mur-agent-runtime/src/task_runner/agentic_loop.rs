@@ -18,6 +18,7 @@ impl TaskRunner {
         bounds: crate::bounds::TurnBounds,
         autonomy: mur_common::hitl::Autonomy,
         allowlist: Option<&[String]>,
+        channel_prior: Option<Vec<crate::llm::RichMessage>>,
     ) -> Result<(Message, Option<LoopExit>), TaskError> {
         use crate::llm::{LlmRequest, RichMessage, StopReason};
 
@@ -47,7 +48,7 @@ impl TaskRunner {
         // below and stays ephemeral (never persisted into chat memory).
         // The pinned block is rendered here, once, before the loop: every
         // step resends this same list, so it rides at index 1 throughout.
-        let (pinned, prior) = self.pinned_and_prior(task_id, context_task_id);
+        let (pinned, prior) = self.pinned_and_prior(task_id, context_task_id, channel_prior);
         let mut history: Vec<RichMessage> = seed_history(system_prompt, pinned, prior, input);
         // #2175: this turn's untrusted wrappers, just before its message.
         if let Some(m) = self.take_untrusted_message(task_id) {

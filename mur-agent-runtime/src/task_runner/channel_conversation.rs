@@ -22,6 +22,11 @@ use crate::llm::RichMessage;
 /// Subdirectory of the runtime's conversation dir holding channel histories.
 const CHANNELS_SUBDIR: &str = "channels";
 
+/// Tracing target of the Phase 1 conversation audit (§6). The runtime never
+/// writes to the channel, so the audit is the runtime log; a channel-signed
+/// audit is Phase 2.
+pub(crate) const AUDIT: &str = "mur_agent_runtime::audit";
+
 /// One stored message of a channel conversation. `seq == None` is a
 /// provisional entry (the reply the runtime produced and murmur has not yet
 /// persisted), together with its ledger.
@@ -113,7 +118,12 @@ impl ChannelConversationStore {
     ) -> Vec<RichMessage> {
         let mut h = self.take(channel_id);
         if let Some(old_watermark) = a.rebuilt_after_repair {
-            tracing::warn!(channel_id, old_watermark, "rebuilt after verified repair");
+            tracing::info!(
+                target: AUDIT,
+                channel_id,
+                old_watermark,
+                "rebuilt after repair (old watermark {old_watermark})"
+            );
             h = ChannelHistory::default();
         }
 
@@ -150,10 +160,11 @@ impl ChannelConversationStore {
                         }
                         other => {
                             if other.is_some() {
-                                tracing::warn!(
+                                tracing::info!(
+                                    target: AUDIT,
                                     channel_id,
                                     seq = p.seq,
-                                    "provisional reply differs from the log; dropped"
+                                    "provisional reply dropped: differs from the log"
                                 );
                             }
                             entries.push(Entry {
@@ -167,9 +178,10 @@ impl ChannelConversationStore {
             }
         }
         if !provisional.is_empty() {
-            tracing::warn!(
+            tracing::info!(
+                target: AUDIT,
                 channel_id,
-                "provisional reply not confirmed by the log; dropped"
+                "provisional reply dropped: not confirmed by the log"
             );
         }
         // Stable: a ledger keeps its place right after the reply sharing its seq.
@@ -201,6 +213,8 @@ impl ChannelConversationStore {
         ledger: RichMessage,
     ) {
         let mut h = self.take(channel_id);
+        // A retry of the same seq replaces that turn instead of repeating it.
+        h.entries.retain(|e| e.seq != Some(channel_seq));
         h.entries.push(Entry {
             seq: Some(channel_seq),
             message: text("user", user),

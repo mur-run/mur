@@ -386,6 +386,9 @@ pub struct TaskRunner {
     /// whose actions the next turn most needs; the loop parks a copy here
     /// before returning, and the run wrapper takes it to remember the turn.
     partial_ledgers: Mutex<HashMap<String, crate::turn_ledger::TurnLedger>>,
+    /// Turn → the reply text `settle_turn` was handed, before the settlement
+    /// card. A channel turn remembers it as its provisional tail (§3.4).
+    pre_settlement: Mutex<HashMap<String, String>>,
     /// Reads the working project's `AGENTS.md` / `CLAUDE.md` into the prompt,
     /// through the same entitlement gate as `read_file`. `None` (stubs, tests)
     /// or no `session_cwd` means no block.

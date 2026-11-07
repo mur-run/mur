@@ -238,7 +238,7 @@ fn remember_turn_reads_the_ledger_part_and_counts_images() {
             },
         ],
     };
-    runner.remember_turn("k1", None, &input, &reply);
+    runner.remember_turn("k1", None, None, &input, &reply, "");
     let store = runner.conversations.lock().unwrap();
     let h = store.map.get("k1").expect("remembered");
     assert_eq!(h.len(), 3);
@@ -281,7 +281,7 @@ fn a_malformed_ledger_part_falls_back_to_narrative_only() {
         role: "user".into(),
         parts: vec![MessagePart::Text { text: "hi".into() }],
     };
-    runner.remember_turn("k2", None, &input, &reply);
+    runner.remember_turn("k2", None, None, &input, &reply, "");
     let store = runner.conversations.lock().unwrap();
     let h = store.map.get("k2").expect("remembered");
     assert!(matches!(&h[2], RichMessage::TurnLedger { memory, .. } if memory.narrative_only));
@@ -326,7 +326,7 @@ fn the_turn_before_a_new_message_says_whether_it_ran_anything() {
         "推了一格：#1402 已 merged。".into(),
         &crate::turn_ledger::TurnLedger::default(),
     );
-    runner.remember_turn("fab", Some("prior"), &input, &reply);
+    runner.remember_turn("fab", Some("prior"), None, &input, &reply, "");
 
     let next = Message {
         role: "user".into(),

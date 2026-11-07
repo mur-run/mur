@@ -650,3 +650,488 @@ mod gate {
         );
     }
 }
+
+// ---- B3: channel-keyed history and remember through a real turn ----------
+//
+// Every fixture is a real `ChannelService` in a tmp home with this agent's
+// identity planted under `<home>/agents/<AGENT>/`. The test plays murmur: it
+// appends the human event, dials the turn with that `channel_seq`, and
+// persists the reply signed by the agent. A recording LLM shows what history
+// each turn was actually sent.
+mod turns {
+    use crate::llm::RichMessage;
+    use crate::protocol::a2a_server::{MethodHandler, RequestContext};
+    use crate::protocol::methods::channel_delegate::ChannelDelegateHandler;
+    use crate::protocol::methods::message_send::ChannelContext;
+    use crate::task_runner::tests::{empty_pending_approvals, end_turn_response, user_turn};
+    use crate::task_runner::{TaskOutcome, TaskRunner, TaskSpec};
+    use mur_channel::ChannelService;
+    use mur_common::a2a::MessagePart;
+    use mur_common::channel::{ChannelActor, EventKind};
+    use mur_common::identity::AgentIdentity;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tokio::sync::Semaphore;
+
+    const AGENT: &str = "smith";
+
+    /// Replies `reply: <last user text>`; records every request as sent.
+    /// `gate` parks every call until a permit is added; `hold` keeps each
+    /// call in flight long enough for an overlapping turn to show.
+    #[derive(Default)]
+    struct Recorder {
+        seen: Mutex<Vec<Vec<RichMessage>>>,
+        gate: Option<Arc<Semaphore>>,
+        hold: Duration,
+        entered: AtomicUsize,
+        inflight: AtomicUsize,
+        max_inflight: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::llm::LlmClient for Recorder {
+        async fn generate(
+            &self,
+            req: crate::llm::LlmRequest,
+        ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
+            let last_user = req
+                .messages
+                .iter()
+                .rev()
+                .find_map(|m| match m {
+                    RichMessage::Text { role, content } if role == "user" => Some(content.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            self.seen.lock().unwrap().push(req.messages);
+            let now = self.inflight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_inflight.fetch_max(now, Ordering::SeqCst);
+            self.entered.fetch_add(1, Ordering::SeqCst);
+            if let Some(g) = &self.gate {
+                g.acquire().await.expect("gate").forget();
+            }
+            if !self.hold.is_zero() {
+                tokio::time::sleep(self.hold).await;
+            }
+            self.inflight.fetch_sub(1, Ordering::SeqCst);
+            Ok(end_turn_response(&format!("reply: {last_user}")))
+        }
+        fn model_name(&self) -> &str {
+            "b3-recorder"
+        }
+    }
+
+    struct Fx {
+        tmp: tempfile::TempDir,
+        svc: ChannelService,
+        me: AgentIdentity,
+        ch: String,
+    }
+
+    impl Fx {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().expect("tmp");
+            let me = AgentIdentity::generate();
+            me.save(&tmp.path().join("agents").join(AGENT))
+                .expect("plant");
+            let svc = ChannelService::open(tmp.path()).expect("open");
+            let ch = svc.create_for_agent(AGENT).expect("ch").id;
+            Self { tmp, svc, me, ch }
+        }
+
+        fn home(&self) -> &Path {
+            self.tmp.path()
+        }
+
+        fn conv_dir(&self) -> PathBuf {
+            self.home().join("conversations")
+        }
+
+        /// A runner serving channel conversations; `dir` = the on-disk cache.
+        fn runner(
+            &self,
+            llm: Arc<Recorder>,
+            dir: Option<PathBuf>,
+            max_waiting: usize,
+        ) -> Arc<TaskRunner> {
+            let mut r = TaskRunner::with_llm(llm)
+                .with_agent_name(AGENT)
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(1024).0);
+            if let Some(d) = &dir {
+                r = r.with_conversation_memory(d.clone(), None);
+            }
+            Arc::new(r.with_channel_conversations(self.home().to_path_buf(), dir, max_waiting))
+        }
+
+        /// murmur: the human's message lands in the log first.
+        fn human(&self, text: &str) -> u64 {
+            self.svc
+                .append_message(
+                    &self.ch,
+                    ChannelActor::local_human(),
+                    EventKind::Message,
+                    text,
+                    None,
+                )
+                .expect("append human")
+                .seq
+        }
+
+        /// murmur: the reply it received is persisted, signed by the agent.
+        fn persist_reply(&self, text: &str) -> u64 {
+            self.svc
+                .append_signed(
+                    &self.ch,
+                    &self.me,
+                    1,
+                    ChannelActor::Agent { id: AGENT.into() },
+                    EventKind::Message,
+                    serde_json::json!({ "text": text }),
+                    None,
+                )
+                .expect("append reply")
+                .seq
+        }
+
+        fn spec(&self, text: &str, seq: u64) -> TaskSpec {
+            TaskSpec {
+                channel: Some(ChannelContext {
+                    channel_id: self.ch.clone(),
+                    channel_seq: seq,
+                }),
+                ..user_turn(text, &format!("task-{}", uuid::Uuid::now_v7()), None)
+            }
+        }
+
+        /// One full round as murmur does it: append, dial, persist the reply.
+        async fn round(&self, runner: &TaskRunner, text: &str) -> String {
+            let seq = self.human(text);
+            let reply = reply_of(runner.run_sync(self.spec(text, seq)).await);
+            self.persist_reply(&reply);
+            reply
+        }
+    }
+
+    fn reply_of(outcome: TaskOutcome) -> String {
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("turn did not complete: {outcome:?}");
+        };
+        task.messages
+            .last()
+            .and_then(|m| {
+                m.parts.iter().find_map(|p| match p {
+                    MessagePart::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+            })
+            .expect("reply text")
+    }
+
+    fn failure_of(outcome: TaskOutcome) -> String {
+        let TaskOutcome::Failed(task) = outcome else {
+            panic!("turn was expected to fail: {outcome:?}");
+        };
+        task.error
+            .map(|e| format!("{}: {}", e.code, e.message))
+            .unwrap_or_default()
+    }
+
+    /// The text history the last request carried BEFORE this turn's input:
+    /// no system prompt, no current user message, no ledgers.
+    fn last_prior(llm: &Recorder) -> Vec<(String, String)> {
+        let seen = llm.seen.lock().unwrap();
+        let req = seen.last().expect("the model was called");
+        let mut texts: Vec<(String, String)> = req
+            .iter()
+            .filter_map(|m| match m {
+                RichMessage::Text { role, content } if role != "system" => {
+                    Some((role.clone(), content.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        texts.pop();
+        texts
+    }
+
+    fn s(role: &str, content: &str) -> (String, String) {
+        (role.into(), content.into())
+    }
+
+    fn count(h: &[(String, String)], content: &str) -> usize {
+        h.iter().filter(|(_, c)| c == content).count()
+    }
+
+    #[tokio::test]
+    async fn channel_turn_after_restart_continues() {
+        let fx = Fx::new();
+        let first = fx.runner(Arc::new(Recorder::default()), Some(fx.conv_dir()), 4);
+        let reply = fx.round(&first, "one").await;
+        drop(first);
+
+        // A new process: same cache dir, nothing in memory.
+        let llm = Arc::new(Recorder::default());
+        let second = fx.runner(Arc::clone(&llm), Some(fx.conv_dir()), 4);
+        fx.round(&second, "two").await;
+        assert_eq!(last_prior(&llm), vec![s("user", "one"), s("agent", &reply)]);
+    }
+
+    #[tokio::test]
+    async fn cache_evicted_rehydrates_with_user_message_once() {
+        let fx = Fx::new();
+        let llm = Arc::new(Recorder::default());
+        let runner = fx.runner(Arc::clone(&llm), Some(fx.conv_dir()), 4);
+        let reply = fx.round(&runner, "one").await;
+
+        // Evict: drop the in-memory entry and its file.
+        let cc = runner.channel_conversations.as_ref().expect("served");
+        cc.store.lock().unwrap().map.clear();
+        let _ = std::fs::remove_file(
+            fx.conv_dir()
+                .join("channels")
+                .join(format!("{}.json", fx.ch)),
+        );
+
+        fx.round(&runner, "two").await;
+        let prior = last_prior(&llm);
+        assert_eq!(prior, vec![s("user", "one"), s("agent", &reply)]);
+        assert_eq!(
+            count(&prior, "two"),
+            0,
+            "this turn's input is not also history"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_hit_and_miss_yield_same_text_history() {
+        let fx = Fx::new();
+        let hit_llm = Arc::new(Recorder::default());
+        let hit = fx.runner(Arc::clone(&hit_llm), None, 4);
+        fx.round(&hit, "one").await;
+        fx.round(&hit, "two").await;
+        let seq = fx.human("three");
+        reply_of(hit.run_sync(fx.spec("three", seq)).await);
+        let from_cache = last_prior(&hit_llm);
+
+        let miss_llm = Arc::new(Recorder::default());
+        let miss = fx.runner(Arc::clone(&miss_llm), None, 4);
+        reply_of(miss.run_sync(fx.spec("three", seq)).await);
+        let from_log = last_prior(&miss_llm);
+
+        assert_eq!(from_cache.len(), 4, "two prior rounds: {from_cache:?}");
+        assert_eq!(from_cache, from_log);
+    }
+
+    #[tokio::test]
+    async fn cache_behind_folds_before_turn() {
+        let fx = Fx::new();
+        let llm = Arc::new(Recorder::default());
+        let runner = fx.runner(Arc::clone(&llm), None, 4);
+        let reply = fx.round(&runner, "one").await;
+        // The human speaks again without dialing this agent (an aside).
+        fx.human("aside");
+        fx.round(&runner, "three").await;
+        assert_eq!(
+            last_prior(&llm),
+            vec![s("user", "one"), s("agent", &reply), s("user", "aside")]
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_lost_resend_appends_new_seq() {
+        let fx = Fx::new();
+        let llm = Arc::new(Recorder::default());
+        let runner = fx.runner(Arc::clone(&llm), None, 4);
+        // murmur appended at seq 0, the turn was lost; resend appends anew.
+        fx.human("q");
+        let seq = fx.human("q");
+        assert_eq!(seq, 1);
+        reply_of(runner.run_sync(fx.spec("q", seq)).await);
+        assert_eq!(
+            last_prior(&llm),
+            vec![s("user", "q")],
+            "both sends are in the history"
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_send_same_seq_not_duplicated() {
+        let fx = Fx::new();
+        let llm = Arc::new(Recorder::default());
+        let runner = fx.runner(Arc::clone(&llm), None, 4);
+        let seq = fx.human("q");
+        // First dial's reply never reached murmur; it retries the same seq.
+        reply_of(runner.run_sync(fx.spec("q", seq)).await);
+        let reply = reply_of(runner.run_sync(fx.spec("q", seq)).await);
+        assert!(
+            last_prior(&llm).is_empty(),
+            "the retry sees no copy of itself"
+        );
+        fx.persist_reply(&reply);
+
+        fx.round(&runner, "r").await;
+        assert_eq!(last_prior(&llm), vec![s("user", "q"), s("agent", &reply)]);
+    }
+
+    #[tokio::test]
+    async fn three_hundred_task_keyed_turns_do_not_evict_channel_conversation() {
+        let fx = Fx::new();
+        let runner = fx.runner(Arc::new(Recorder::default()), None, 4);
+        fx.round(&runner, "one").await;
+        for i in 0..300 {
+            let _ = runner
+                .run_sync(user_turn("x", &format!("t{i}"), None))
+                .await;
+        }
+        let cc = runner.channel_conversations.as_ref().expect("served");
+        let store = cc.store.lock().unwrap();
+        assert!(
+            store.map.contains_key(&fx.ch),
+            "the channel conversation is still cached"
+        );
+        assert!(store.cache_state(&fx.ch).watermark.is_some());
+    }
+
+    #[tokio::test]
+    async fn two_concurrent_turns_serialize_both_in_history() {
+        let fx = Fx::new();
+        let llm = Arc::new(Recorder {
+            hold: Duration::from_millis(100),
+            ..Default::default()
+        });
+        let runner = fx.runner(Arc::clone(&llm), None, 4);
+        let a = fx.human("a");
+        let b = fx.human("b");
+        let (ra, rb) = tokio::join!(
+            runner.run_sync(fx.spec("a", a)),
+            runner.run_sync(fx.spec("b", b)),
+        );
+        reply_of(ra);
+        reply_of(rb);
+        assert_eq!(
+            llm.max_inflight.load(Ordering::SeqCst),
+            1,
+            "turns on one conversation never overlap"
+        );
+        fx.round(&runner, "c").await;
+        let prior = last_prior(&llm);
+        assert_eq!(count(&prior, "a"), 1, "{prior:?}");
+        assert_eq!(count(&prior, "b"), 1, "{prior:?}");
+    }
+
+    #[tokio::test]
+    async fn max_waiting_plus_one_gets_busy() {
+        let fx = Fx::new();
+        let gate = Arc::new(Semaphore::new(0));
+        let llm = Arc::new(Recorder {
+            gate: Some(Arc::clone(&gate)),
+            ..Default::default()
+        });
+        let runner = fx.runner(Arc::clone(&llm), None, 1);
+        let specs: Vec<TaskSpec> = ["one", "two", "three"]
+            .iter()
+            .map(|t| fx.spec(t, fx.human(t)))
+            .collect();
+        let mut specs = specs.into_iter();
+
+        let holder = tokio::spawn({
+            let (r, s) = (Arc::clone(&runner), specs.next().unwrap());
+            async move { r.run_sync(s).await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while llm.entered.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the first turn reached the model");
+        let waiter = tokio::spawn({
+            let (r, s) = (Arc::clone(&runner), specs.next().unwrap());
+            async move { r.run_sync(s).await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let third = tokio::time::timeout(
+            Duration::from_secs(5),
+            runner.run_sync(specs.next().unwrap()),
+        )
+        .await
+        .expect("past max_waiting the turn is refused at once, not queued");
+        let why = failure_of(third);
+        assert!(why.contains("conversation busy"), "{why}");
+
+        gate.add_permits(16);
+        reply_of(holder.await.expect("join"));
+        reply_of(waiter.await.expect("join"));
+        assert_eq!(
+            llm.entered.load(Ordering::SeqCst),
+            2,
+            "the busy turn never reached the model"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_task_id_only_unchanged() {
+        let fx = Fx::new();
+        let llm = Arc::new(Recorder::default());
+        let runner = fx.runner(Arc::clone(&llm), None, 4);
+        let first = reply_of(runner.run_sync(user_turn("first", "t1", None)).await);
+        reply_of(runner.run_sync(user_turn("second", "t2", Some("t1"))).await);
+        assert_eq!(
+            last_prior(&llm),
+            vec![s("user", "first"), s("agent", &first)]
+        );
+        assert_eq!(
+            runner
+                .conversations
+                .lock()
+                .unwrap()
+                .map
+                .get("t2")
+                .map(Vec::len),
+            Some(6)
+        );
+        let cc = runner.channel_conversations.as_ref().expect("served");
+        assert!(
+            cc.store.lock().unwrap().map.is_empty(),
+            "no channel entry for a task-keyed turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn delegate_into_fleet_creates_no_channel_conversation() {
+        let fx = Fx::new();
+        let runner = fx.runner(Arc::new(Recorder::default()), Some(fx.conv_dir()), 4);
+        let fleet = fx.svc.create_for_fleet("f", AGENT, &[]).expect("fleet").id;
+        let handler = ChannelDelegateHandler::new(
+            Arc::clone(&runner),
+            Arc::new(AgentIdentity::from_secret_bytes(
+                &fx.me.secret_bytes_for_handoff(),
+            )),
+            AGENT.into(),
+            1,
+            fx.home().to_path_buf(),
+        );
+        let p = serde_json::json!({
+            "channel_id": fleet,
+            "message": { "role": "user", "parts": [{ "kind": "text", "text": "do it" }] },
+        });
+        handler
+            .handle(Some(p), &RequestContext::none())
+            .await
+            .expect("delegated");
+
+        let cc = runner.channel_conversations.as_ref().expect("served");
+        assert!(cc.store.lock().unwrap().map.is_empty());
+        let files = std::fs::read_dir(fx.conv_dir().join("channels"))
+            .map(|d| d.count())
+            .unwrap_or(0);
+        assert_eq!(
+            files, 0,
+            "no channel conversation file for a fleet delegate"
+        );
+    }
+}

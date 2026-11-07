@@ -149,6 +149,15 @@ impl TaskRunner {
         self.take_turn_track(turn)
     }
 
+    /// The reply text `settle_turn` was handed for `turn` — the text before
+    /// its settlement card (at-mention §3.4 provisional tail). Taken once.
+    pub(super) fn take_pre_settlement(&self, turn: &str) -> Option<String> {
+        self.pre_settlement
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(turn)
+    }
+
     pub(super) fn take_turn_track(&self, turn: &str) -> Option<OpenTrack> {
         self.turn_tracks
             .lock()
@@ -165,6 +174,10 @@ impl TaskRunner {
         text: String,
         ledger: &crate::turn_ledger::TurnLedger,
     ) -> Message {
+        self.pre_settlement
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(turn.to_string(), text.clone());
         match self.take_turn_track(turn) {
             Some(open) => {
                 let mut ledger = ledger.clone();

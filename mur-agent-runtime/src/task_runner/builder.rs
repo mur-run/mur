@@ -111,6 +111,7 @@ impl TaskRunner {
             refused_cwd: Mutex::new(HashMap::new()),
             mcp_notices: Mutex::new(HashMap::new()),
             partial_ledgers: Mutex::new(HashMap::new()),
+            pre_settlement: Mutex::new(HashMap::new()),
             project_instructions: None,
             draining: Arc::new(AtomicBool::new(false)),
         }

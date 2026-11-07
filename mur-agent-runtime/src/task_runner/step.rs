@@ -15,6 +15,7 @@ impl TaskRunner {
         output_artifact_path: Option<&std::path::Path>,
         sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
         intent: RequestIntent,
+        channel_prior: Option<Vec<crate::llm::RichMessage>>,
     ) -> Result<Message, TaskError> {
         let prompt = text_of(input);
 
@@ -40,7 +41,7 @@ impl TaskRunner {
 
         // Seed with prior conversation threaded via `context.task_id` so the
         // model has multi-turn memory (was: system + this message only).
-        let (pinned, prior) = self.pinned_and_prior(task_id, context_task_id);
+        let (pinned, prior) = self.pinned_and_prior(task_id, context_task_id, channel_prior);
         let mut messages = seed_history(system, pinned, prior, input);
         // #2175: this turn's untrusted wrappers, just before its message.
         if let Some(m) = self.take_untrusted_message(task_id) {
