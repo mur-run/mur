@@ -145,6 +145,11 @@ pub struct App {
     /// before the turn starts can be replayed once (the user's message is
     /// already persisted to the channel by then). Refreshed on each (re)send.
     pub inflight_params: Option<serde_json::Value>,
+    /// `(channel_id, seq)` of the channel event the next turn answers — the
+    /// user message, or a `!cmd`'s Note (S1). Sent as `context.channel_id` /
+    /// `context.channel_seq` (at-mention C1). Kept across `begin_turn` so a
+    /// replay still names it; cleared when the conversation changes.
+    pub pending_channel: Option<(String, u64)>,
     /// True once the current turn's send has been replayed (one retry max).
     pub send_retried: bool,
     /// True once the runtime produced anything for the current turn (delta,
@@ -471,6 +476,7 @@ impl App {
             review_gate: Default::default(),
             session,
             channel: None,
+            pending_channel: None,
             scroll_back: 0,
             scroll_page: 0,
             wrap_width: 0,

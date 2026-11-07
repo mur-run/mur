@@ -50,7 +50,15 @@ pub(super) fn run_plain(
             continue;
         }
         let task_id = uuid::Uuid::now_v7().to_string();
-        let params = build_params(&text, &task_id, context.as_deref(), None, cwd.as_deref());
+        // Plain mode persists nothing to a channel, so it names none.
+        let params = build_params(
+            &text,
+            &task_id,
+            context.as_deref(),
+            None,
+            cwd.as_deref(),
+            None,
+        );
         let streamed = Cell::new(false);
         // Track step_id → name from Started events so Completed can print the name.
         let step_names: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());

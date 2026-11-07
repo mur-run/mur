@@ -68,20 +68,27 @@ impl App {
     /// Append a turn to the session log, surfacing a write failure once.
     /// `suggested` carries the quick-reply options offered this turn (agent
     /// turns only) so they persist with the reply (#716).
+    ///
+    /// Returns the written event's seq, or `None` when the append failed. A
+    /// user turn that gets `None` is not sent (at-mention C1).
     pub(super) fn persist_turn(
         &mut self,
         role: &str,
         text: &str,
         task_id: Option<&str>,
         suggested: &[super::super::suggest::Suggestion],
-    ) {
+    ) -> Option<u64> {
         match self.session.append(role, text, task_id, suggested) {
-            Ok(()) => self.channel = self.session.current(),
+            Ok(seq) => {
+                self.channel = self.session.current();
+                Some(seq)
+            }
             Err(e) => {
                 if !self.persist_warned {
                     self.persist_warned = true;
                     self.push_system(format!("warning: session is not being saved: {e}"));
                 }
+                None
             }
         }
     }

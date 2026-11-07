@@ -37,7 +37,7 @@ fn hitl_respond_params_carry_the_token_only_on_allow() {
 
 #[test]
 fn build_params_threads_context() {
-    let p = build_params("hi", "t-2", Some("t-1"), None, None);
+    let p = build_params("hi", "t-2", Some("t-1"), None, None, None);
     assert_eq!(p["message"]["parts"][0]["text"], "hi");
     assert_eq!(p["task_id"], "t-2");
     assert_eq!(p["context"]["task_id"], "t-1");
@@ -46,10 +46,10 @@ fn build_params_threads_context() {
 #[test]
 fn build_params_carries_cwd_as_context_on_every_turn() {
     let dir = Path::new("/Users/x/Projects/ho-me");
-    let first = build_params("hi", "t-1", None, None, Some(dir));
+    let first = build_params("hi", "t-1", None, None, Some(dir), None);
     assert_eq!(first["context"]["cwd"], "/Users/x/Projects/ho-me");
     assert!(first["context"].get("task_id").is_none());
-    let later = build_params("hi", "t-2", Some("t-1"), None, Some(dir));
+    let later = build_params("hi", "t-2", Some("t-1"), None, Some(dir), None);
     assert_eq!(later["context"]["cwd"], "/Users/x/Projects/ho-me");
     assert_eq!(later["context"]["task_id"], "t-1");
     assert!(
@@ -63,8 +63,20 @@ fn build_params_carries_cwd_as_context_on_every_turn() {
 
 #[test]
 fn build_params_first_turn_has_no_context() {
-    let p = build_params("hi", "t-1", None, None, None);
+    let p = build_params("hi", "t-1", None, None, None, None);
     assert!(p.get("context").is_none());
+}
+
+/// at-mention C1: a channel turn names its conversation and the seq of the
+/// user event it answers; a turn without one sends neither (today's keying).
+#[test]
+fn build_params_carries_channel_id_and_seq() {
+    let p = build_params("hi", "t-1", None, None, None, Some(("ch-1", 7)));
+    assert_eq!(p["context"]["channel_id"], "ch-1");
+    assert_eq!(p["context"]["channel_seq"], 7);
+    let none = build_params("hi", "t-1", Some("t-0"), None, None, None);
+    assert!(none["context"].get("channel_id").is_none());
+    assert!(none["context"].get("channel_seq").is_none());
 }
 
 #[test]
@@ -75,6 +87,7 @@ fn build_params_attaches_image_as_data_part() {
         None,
         Some(("image/png", "QkFTRTY0")),
         None,
+        None,
     );
     let parts = p["message"]["parts"].as_array().unwrap();
     assert_eq!(parts.len(), 2, "text part + image data part");
@@ -83,10 +96,10 @@ fn build_params_attaches_image_as_data_part() {
     assert_eq!(parts[1]["mimeType"], "image/png");
     assert_eq!(parts[1]["data"]["base64"], "QkFTRTY0");
     // A non-PNG paste threads its own mime.
-    let jpg = build_params("x", "t-5", None, Some(("image/jpeg", "QQ==")), None);
+    let jpg = build_params("x", "t-5", None, Some(("image/jpeg", "QQ==")), None, None);
     assert_eq!(jpg["message"]["parts"][1]["mimeType"], "image/jpeg");
     // No image → no data part (back-compat).
-    let plain = build_params("hi", "t-4", None, None, None);
+    let plain = build_params("hi", "t-4", None, None, None, None);
     assert_eq!(plain["message"]["parts"].as_array().unwrap().len(), 1);
 }
 

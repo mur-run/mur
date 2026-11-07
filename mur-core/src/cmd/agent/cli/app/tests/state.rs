@@ -144,7 +144,7 @@ fn parse_slash_skin_variants() {
 #[test]
 fn turn_lifecycle_threads_context() {
     let mut a = app();
-    let tid = a.begin_user_turn("hi");
+    let tid = a.begin_user_turn("hi").expect("turn started");
     assert!(a.streaming);
     assert_eq!(a.current_task_id.as_deref(), Some(tid.as_str()));
     a.append_delta("Hel", false);
@@ -226,7 +226,7 @@ fn finish_agent_turn_survives_mid_turn_system_note() {
     // "approved `bash`") lands after the agent bubble; the turn's finish
     // must still find that bubble instead of silently dropping the reply.
     let mut a = app();
-    let tid = a.begin_user_turn("run ls");
+    let tid = a.begin_user_turn("run ls").expect("turn started");
     a.append_delta("partial", false);
     a.push_system("approved `bash`");
     a.append_delta(" more", false);

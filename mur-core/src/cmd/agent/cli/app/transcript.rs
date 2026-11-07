@@ -33,11 +33,21 @@ impl App {
     }
 
     /// Record a user turn (visible + persisted) and return the new task id for
-    /// the request.
-    pub fn begin_user_turn(&mut self, text: &str) -> String {
+    /// the request. `None` when the user event could not be written: the
+    /// bubble is withdrawn and nothing is sent, because a turn whose user
+    /// event is not in the channel cannot name it (at-mention C1).
+    pub fn begin_user_turn(&mut self, text: &str) -> Option<String> {
         self.messages.push(ChatMsg::new(Role::User, text));
-        self.persist_turn("user", text, None, &[]);
-        self.begin_turn()
+        let bubble = self.messages.len() - 1;
+        let Some(seq) = self.persist_turn("user", text, None, &[]) else {
+            // By index, not `pop`: a failed append may have pushed its
+            // once-per-session warning after the bubble.
+            self.messages.remove(bubble);
+            self.push_error("message not saved to the channel; not sent");
+            return None;
+        };
+        self.pending_channel = self.channel.as_ref().map(|c| (c.id.clone(), seq));
+        Some(self.begin_turn())
     }
 
     /// Start a turn the transcript already shows — a `!cmd` whose Shell card

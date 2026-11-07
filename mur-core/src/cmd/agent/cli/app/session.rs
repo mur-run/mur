@@ -18,6 +18,7 @@ impl App {
     pub fn start_new_session(&mut self, session: Session) {
         self.session = session;
         self.channel = None;
+        self.pending_channel = None;
         self.messages.clear();
         self.flushed_upto = 0;
         self.flushed_bytes = 0;
@@ -45,6 +46,7 @@ impl App {
         let turns = super::super::persist::load(&self.home, channel_id, &self.agent)?;
         self.session = session;
         self.channel = None;
+        self.pending_channel = None;
         self.messages.clear();
         self.flushed_upto = 0;
         self.flushed_bytes = 0;
@@ -252,7 +254,11 @@ impl App {
         m.streaming = false;
         let text = m.text.trim_end().to_string();
         m.text = text.clone();
-        self.persist_turn("shell", &text, None, &[]);
+        // S1: a turn started from this card answers the Note, so name it.
+        // A failed append names nothing (no stale seq): that turn falls back
+        // to today's keying.
+        let seq = self.persist_turn("shell", &text, None, &[]);
+        self.pending_channel = seq.and_then(|s| self.channel.as_ref().map(|c| (c.id.clone(), s)));
         // The block wants the output alone; the card's first line is `$ cmd`
         // and `shell_block` re-adds it.
         text.split_once('\n')

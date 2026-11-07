@@ -102,13 +102,16 @@ impl Session {
     /// quick-reply options offered alongside the reply (#716): they are
     /// persisted into the event payload as an additive `suggested_replies`
     /// field so channel history is not lossy about what was offered.
+    ///
+    /// Returns the written event's `seq` — the `context.channel_seq` a turn
+    /// answering it sends (at-mention C1).
     pub fn append(
         &mut self,
         role: &str,
         text: &str,
         task_id: Option<&str>,
         suggested: &[super::suggest::Suggestion],
-    ) -> Result<()> {
+    ) -> Result<u64> {
         let (actor, kind) = match role {
             "agent" => (
                 ChannelActor::Agent {
@@ -133,8 +136,8 @@ impl Session {
         // in history. Never save that as an empty user text: it is replayed on
         // every later turn and an empty text block 400s the provider, wedging
         // the channel. Save the same marker the converters use instead.
-        let text = if role == "user" && text.trim().is_empty() {
-            mur_agent_runtime::llm::BLANK_USER_TURN
+        let text = if role == "user" {
+            mur_channel::conversation::normalize_user_text(text)
         } else {
             text
         };
@@ -148,7 +151,7 @@ impl Session {
         if role == "agent" && !suggested.is_empty() {
             payload["suggested_replies"] = suggestions_to_json(suggested);
         }
-        crate::channel_writer::append_as_writer(
+        let ev = crate::channel_writer::append_as_writer(
             &self.svc,
             &self.home,
             &id,
@@ -158,7 +161,7 @@ impl Session {
             payload,
             None,
         )?;
-        Ok(())
+        Ok(ev.seq)
     }
 }
 
@@ -301,6 +304,29 @@ mod tests {
                 "caption".to_string(),
             ]
         );
+    }
+
+    /// at-mention C1: `append` hands back the seq of the event it wrote, so
+    /// the turn can name it as `context.channel_seq`.
+    #[test]
+    fn append_returns_the_written_events_seq() {
+        let tmp = TempDir::new().unwrap();
+        crate::channel_writer::plant_identity_for(tmp.path(), "qa");
+        let mut s = Session::create(tmp.path(), "qa").unwrap();
+        let first = s.append("user", "one", None, &[]).unwrap();
+        let second = s.append("agent", "two", None, &[]).unwrap();
+        let third = s.append("shell", "$ ls", None, &[]).unwrap();
+        let id = s.channel_id().unwrap().to_string();
+        let seqs: Vec<u64> = ChannelService::open(tmp.path())
+            .unwrap()
+            .load_events(&id)
+            .unwrap()
+            .iter()
+            .filter(|e| e.payload.get("text").is_some())
+            .map(|e| e.seq)
+            .collect();
+        assert_eq!(seqs, vec![first, second, third]);
+        assert!(first < second && second < third);
     }
 
     #[test]
