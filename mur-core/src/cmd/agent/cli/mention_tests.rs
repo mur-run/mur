@@ -42,14 +42,16 @@ fn parses_name_with_ordinal() {
 }
 
 #[test]
-fn ordinal_must_be_a_positive_integer() {
-    for line in [
-        "@bob# x",
-        "@bob#0 x",
-        "@bob#abc x",
-        "@bob#-1 x",
-        "@bob#1#2 x",
-    ] {
+fn ordinal_zero_parses_and_is_left_to_resolution() {
+    // Spec §3.5: `#0` is the index's "not numbered" sentinel; it parses and
+    // resolves to UNKNOWN_CONVERSATION rather than failing as malformed.
+    let m = ok("@bob#0 x");
+    assert_eq!((m.name.as_str(), m.ordinal), ("bob", Some(0)));
+}
+
+#[test]
+fn ordinal_must_be_an_integer() {
+    for line in ["@bob# x", "@bob#abc x", "@bob#-1 x", "@bob#1#2 x"] {
         assert!(
             matches!(err(line), MentionError::Malformed(_)),
             "{line:?} should be malformed"

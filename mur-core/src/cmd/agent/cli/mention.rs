@@ -64,9 +64,11 @@ fn parse_token(token: &str) -> Result<Parts<'_>, MentionError> {
     let malformed = |why: &str| Err(MentionError::Malformed(format!("@{token}: {why}")));
     let (head, ordinal) = match token.split_once('#') {
         None => (token, None),
+        // `#0` parses: it is the index's "not numbered" sentinel and resolves
+        // to UNKNOWN_CONVERSATION (spec §3.5), not a malformed mention.
         Some((head, n)) => match n.parse::<u64>() {
-            Ok(n) if n >= 1 => (head, Some(n)),
-            _ => return malformed("`#` must be followed by a conversation number (1, 2, …)"),
+            Ok(n) => (head, Some(n)),
+            Err(_) => return malformed("`#` must be followed by a conversation number (1, 2, …)"),
         },
     };
     let (namespace, name) = match head.split_once(':') {
