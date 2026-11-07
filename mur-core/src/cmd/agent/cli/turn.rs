@@ -130,6 +130,18 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         });
         return;
     }
+    // at-mention C3 (S2): `@<pane agent>[#N] text`. Before the streaming
+    // branch, so a `#N` switch is refused rather than steered. A refused
+    // mention leaves the composer as typed, to fix the target.
+    let Some(text) = mention_submit::route(app, &trimmed) else {
+        return;
+    };
+    if text.is_empty() && app.pending_image.is_none() {
+        // A bare `@a#N`: the switch was the whole request.
+        app.clear_input();
+        return;
+    }
+    trimmed = text;
     // While a turn is generating: steer it if we have a live task id,
     // otherwise fall back to the old reject message.
     if app.streaming {

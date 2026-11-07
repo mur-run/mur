@@ -146,9 +146,11 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         // columns to its right — so the bar routinely read
         // `⏵ 019ff831:working   ready`. Two sources for one fact; the live one
         // wins and the stale one is gone (#940).
+        // at-mention C3: the ordinal reads as the `@` address of this
+        // conversation (`@mur#3`), so the chip shows `{agent}#{ordinal}`.
         let short: String = meta.id.chars().take(8).collect();
         let chip = if meta.ordinal > 0 {
-            format!(" ⏵ {} · {short} ", meta.ordinal)
+            format!(" ⏵ {}#{} · {short} ", app.agent, meta.ordinal)
         } else {
             format!(" ⏵ {short} ")
         };
@@ -575,6 +577,22 @@ mod status_chip_tests {
         let dump = term.backend().to_string();
 
         assert!(dump.contains("7 · 019ff831"), "chip shows both: {dump}");
+    }
+
+    /// at-mention C3: the chip names the conversation the way `@` addresses
+    /// it — `{agent}#{ordinal}` — so what you read is what you type.
+    #[test]
+    fn the_chip_reads_as_an_at_address() {
+        let mut app = App::test_fixture();
+        app.channel = Some(ChannelMeta {
+            id: "019ff831dead".into(),
+            ordinal: 7,
+        });
+        let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
+        term.draw(|f| render_status(f, &app, f.area())).unwrap();
+        let dump = term.backend().to_string();
+
+        assert!(dump.contains("a#7 · 019ff831"), "agent#ordinal: {dump}");
     }
 
     /// A channel indexed before ordinals existed and not yet backfilled has

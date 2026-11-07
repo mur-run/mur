@@ -1,5 +1,6 @@
 //! Unit tests for the murmur TUI shell. One module per file (§4).
 
+mod at_mention_tests;
 mod auto_ceiling_tests;
 mod browser_live_chooser_tests;
 mod browser_slash_live_tests;

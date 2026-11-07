@@ -355,6 +355,19 @@ impl App {
     }
 
     pub fn fail_turn(&mut self, err: &str) {
+        self.end_failed_turn(err);
+        self.push_system(format!("error: {err}"));
+    }
+
+    /// [`Self::fail_turn`] for a refused channel-conversation turn (at-mention
+    /// §7): the same teardown, shown as denied, with no retry offered.
+    pub fn fail_turn_denied(&mut self, err: &str) {
+        self.end_failed_turn(err);
+        self.push_denied(err.to_string());
+        self.inflight_params = None;
+    }
+
+    fn end_failed_turn(&mut self, err: &str) {
         if let Some(i) = self
             .messages
             .iter()
@@ -362,7 +375,6 @@ impl App {
         {
             self.messages.remove(i);
         }
-        self.push_system(format!("error: {err}"));
         self.resolve_open_steps(err);
         self.streaming = false;
         self.current_task_id = None;
