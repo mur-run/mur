@@ -180,6 +180,44 @@ layout:
 
 Colours are `#rrggbb`, the sixteen terminal slots (`red`, `light-blue`, `dark-gray`, …) or `default`. Under `inherits: none` the ten core tokens (`text muted emphasis accent accent_alt ok warn error border badge`) are required and the rest are derived from them. Every colour is contrast-checked against the background it is painted on when the file loads (7:1 for body text, 4.5:1 for other text), and a skin that fails any rule — an unknown key, a typo, an unreadable colour — is rejected whole: at startup murmur falls back to `ansi`, and a mid-chat `/skin` keeps the skin you had, both with a one-line reason. `/skin` on its own lists the built-ins and every file in `skins/`, a broken one with its errors. A file can't take a built-in's name, and nothing but you writes to `skins/` — no agent, fleet or install brings one along.
 
+#### `@` mentions: one conversation that survives restarts
+
+Every chat is a numbered channel, and the agent rebuilds the conversation
+from that channel's signed log on every turn. So `#3` is the same thread after
+the runtime restarts, after its cache evicts it, and after
+`mur channel repair`. `@agent#N` addresses it from anywhere:
+
+```bash
+mur agent send '@coach#3' 'and the second option?'  # continue conversation #3 (writes as coach, then dials)
+mur agent send '@coach' 'hi'                        # coach's latest conversation, or a new one
+mur agent send '@agent:coach#3' '…'                 # explicit namespace; @fleet:name is refused until fleet delivery ships
+```
+
+In murmur, `@coach#3 text` switches the pane to `#3` and sends; `/channels 3`
+only switches. The status bar shows the address as `coach#3`. A pane is bound
+to its agent, so `@other …` sends nothing and points you at
+`mur agent send '@other' …`. Addressing refusals print their code, exit
+non-zero, and never create a channel or add a participant: `RESERVED_NAME`
+(`agent`, `fleet`, `all`), `UNKNOWN_TARGET`, `AMBIGUOUS_TARGET` (use `@agent:`
+or `@fleet:`), `UNKNOWN_CONVERSATION`, `CHANNEL_NOT_CONVERSATION`,
+`NOT_A_PARTICIPANT`, `TARGET_OFFLINE`.
+
+The agent refuses a channel turn it cannot trust, and murmur shows the
+refusal instead of retrying it. Checks run in this order; the first failure wins:
+
+| JSON-RPC code | Message prefix | When |
+|---|---|---|
+| -32020 | `unknown conversation:` | no channel with that id on this host |
+| -32021 | `channel too new:` | written by a newer MUR |
+| -32022 | `channel is not a conversation:` | a fleet or workflow run |
+| -32023 | `not a participant:` | the agent is not a member |
+| -32024 | `conversation repairing:` | `mur channel repair` is in progress |
+| -32025 | `conversation damaged:` | `data.reason` is one of `manifest`, `unparseable`, `signature`, `chain`, `anchor`, `log-regressed`, `watermark` |
+| -32026 | `conversation busy:` | more than `mention.conversation_max_waiting` turns (default 4, `~/.mur/config.yaml`) already wait |
+
+A damaged conversation is fixed with `mur channel repair <channel>`. The full
+reference is in [docs/cookbook/at-mention-conversations.md](docs/cookbook/at-mention-conversations.md).
+
 ### Models & providers
 
 Agents draw from a local provider/model registry at `~/.mur/models.yaml`:
@@ -1348,7 +1386,7 @@ mur daemon serve     # web dashboard at http://localhost:3847
 ```
 mur
 ├── init / doctor / update / stats / verify
-├── agent        create · start · stop · restart (--no-hitl · --net · --full-perms) · remove · cli · send · card · dial · who · limits ·
+├── agent        create · start · stop · restart (--no-hitl · --net · --full-perms) · remove · cli · send ('@agent#N' continues conversation N) · card · dial · who · limits ·
 │                export · install · install-service · addon · companion · voice · pair ·
 │                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal · intent-check) · ssh (allow · revoke · list) · secret · hitl (list · forget · pending · approve · deny) ·
 │                fallback · smart · routing · effort · trash · rollback · turn (list · undo) … (40+)
