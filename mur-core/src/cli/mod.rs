@@ -272,7 +272,7 @@ pub enum Commands {
     /// Manage skills — list, install, author, audit, and evolve.
     #[command(after_help = "Command groups:
   Everyday:    list, show, search, info, install, remove, update, upgrade
-  Authoring:   new, edit, validate, fmt, deps, publish, exchange, drafts
+  Authoring:   new, edit, validate, fmt, deps, publish
   Trust:       audit, trust, scope, curate
   Lifecycle:   stats, doctor, pin, unpin, sweep, archive, consolidate,
                evolve, generate, suggest, recombine, credit, eval,
