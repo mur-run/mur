@@ -40,6 +40,13 @@ mod login;
 mod manage;
 mod markdown;
 pub mod memory_cmds;
+// Pure parsing/resolution, used by the lib today; C3 (`mur agent send
+// '@agent#N'`, murmur `@`) is the first `mur` bin caller — drop these
+// `allow`s there. (`expect` cannot work: the lib target sees them as used.)
+#[allow(dead_code)]
+pub mod mention;
+#[allow(dead_code)]
+pub mod mention_resolve;
 mod model_cmd;
 mod monitor;
 mod multiplex;
