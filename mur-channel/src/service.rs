@@ -476,6 +476,27 @@ impl ChannelService {
         Ok(None)
     }
 
+    /// `#N` for `agent`: the channel numbered `n` when it exists, resolves to
+    /// `Conversation` and lists `agent` as a participant. Returns the manifest
+    /// so a caller can show title and badge without a second read.
+    /// Distinguishing "no such channel" from "not a conversation" from "not a
+    /// participant" is the caller's job (§7 order); this is the murmur
+    /// listing/addressing helper. Never adds a participant.
+    pub fn conversation_by_ordinal(&self, n: u64, agent: &str) -> Result<Option<Channel>> {
+        let Some(id) = self.index.by_ordinal(n)? else {
+            return Ok(None);
+        };
+        let Ok(ch) = self.store.load_manifest(&id) else {
+            return Ok(None);
+        };
+        let ok = crate::purpose::effective_purpose(&ch) == ChannelPurpose::Conversation
+            && ch
+                .participants
+                .iter()
+                .any(|p| matches!(&p.actor, ChannelActor::Agent { id } if id == agent));
+        Ok(ok.then_some(ch))
+    }
+
     /// Add an agent as a participant (idempotent on agent id). Re-indexes.
     pub fn add_participant(
         &self,
@@ -734,6 +755,8 @@ mod anchored;
 pub mod restart;
 mod transition;
 
+#[cfg(test)]
+mod by_ordinal_tests;
 #[cfg(test)]
 mod hitl_tests;
 #[cfg(test)]

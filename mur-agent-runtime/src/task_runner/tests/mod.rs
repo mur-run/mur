@@ -148,6 +148,7 @@ fn ping_spec() -> TaskSpec {
         deadline_secs: None,
         tool_allowlist: None,
         consult_scope: None,
+        channel: None,
     }
 }
 
@@ -168,6 +169,7 @@ fn user_turn(text: &str, task_id: &str, ctx: Option<&str>) -> TaskSpec {
         deadline_secs: None,
         tool_allowlist: None,
         consult_scope: None,
+        channel: None,
     }
 }
 
@@ -207,6 +209,7 @@ fn loop_spec(text: &str) -> TaskSpec {
         deadline_secs: None,
         tool_allowlist: None,
         consult_scope: None,
+        channel: None,
     }
 }
 
@@ -217,6 +220,7 @@ fn empty_pending_approvals() -> HitlApprovals {
 mod approval;
 mod bash_ceiling;
 mod basics;
+mod channel_conversation;
 mod consult_scope;
 mod continuation;
 mod conversation;

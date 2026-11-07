@@ -182,6 +182,27 @@ impl Default for ConversationsConfig {
     }
 }
 
+/// Waiting turns per channel conversation before the runtime answers
+/// `CONVERSATION_BUSY` (at-mention design §4).
+pub const DEFAULT_CONVERSATION_MAX_WAITING: usize = 4;
+
+/// `mention:` section of `~/.mur/config.yaml` — `@` mention routing. Read by
+/// the agent runtime at boot; `mur-channel` never reads config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MentionConfig {
+    /// Waiting turns per conversation before CONVERSATION_BUSY (§4).
+    pub conversation_max_waiting: usize,
+}
+
+impl Default for MentionConfig {
+    fn default() -> Self {
+        Self {
+            conversation_max_waiting: DEFAULT_CONVERSATION_MAX_WAITING,
+        }
+    }
+}
+
 fn conv_default_retention_days() -> u32 {
     30
 }

@@ -104,6 +104,7 @@ fn unattended(text: &str) -> TaskSpec {
         deadline_secs: None,
         tool_allowlist: None,
         consult_scope: None,
+        channel: None,
     }
 }
 

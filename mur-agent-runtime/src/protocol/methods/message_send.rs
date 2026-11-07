@@ -78,6 +78,38 @@ impl MessageSendHandler {
 /// #2085: how long a headless caller will wait for a human to answer an
 /// approval. Only meaningful with `can_approve: false`; zero or absent means
 /// refuse at once (the #2087 behaviour).
+/// The channel conversation a turn belongs to (`context.channel_id` +
+/// `context.channel_seq` on the wire, at-mention §3.4). `channel_seq` is the
+/// seq of this turn's user event in the channel log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelContext {
+    pub channel_id: String,
+    pub channel_seq: u64,
+}
+
+/// `context.channel_id` requires `context.channel_seq`; a `channel_seq`
+/// without a `channel_id` is ignored (§3.4), so a caller that sends neither
+/// sees no change.
+pub(crate) fn parse_channel_context(p: &Value) -> Result<Option<ChannelContext>, HandlerError> {
+    let ctx = p.get("context");
+    let id = ctx
+        .and_then(|c| c.get("channel_id"))
+        .and_then(Value::as_str);
+    let seq = ctx
+        .and_then(|c| c.get("channel_seq"))
+        .and_then(Value::as_u64);
+    match (id, seq) {
+        (Some(id), Some(seq)) => Ok(Some(ChannelContext {
+            channel_id: id.to_string(),
+            channel_seq: seq,
+        })),
+        (Some(_), None) => Err(HandlerError::InvalidParams(
+            "context.channel_id requires context.channel_seq".into(),
+        )),
+        _ => Ok(None),
+    }
+}
+
 pub(crate) fn wait_approval(p: &Value) -> Option<std::time::Duration> {
     p.get(mur_common::hitl::WAIT_APPROVAL_PARAM)
         .and_then(|v| v.as_u64())
@@ -168,6 +200,7 @@ impl MethodHandler for MessageSendHandler {
             .and_then(|c| c.get("task_id"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let channel = parse_channel_context(&p)?;
         // Caller-supplied id for this turn (distinct from `context.task_id`,
         // which threads multi-turn context). When present the runner honors it
         // so the client can cancel by an id it already holds.
@@ -216,6 +249,7 @@ impl MethodHandler for MessageSendHandler {
             deadline_secs: caller_deadline_secs(&p),
             tool_allowlist: None,
             consult_scope: None,
+            channel,
         };
 
         // Fail at dispatch, not after the budget (spec §3.8): a declared need

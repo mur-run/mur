@@ -119,6 +119,11 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
                         proposal::offer(app, p);
                     }
                 }
+                Err(cause) if recover::is_conversation_refusal(&cause) => {
+                    // B3 refuses a channel turn as a failed task; nothing was
+                    // remembered, so there is nothing to thread onto.
+                    app.fail_turn_denied(&cause);
+                }
                 Err(cause) => {
                     // #2071: the runtime remembered this failed turn, so the
                     // next send threads onto it and the marker is persisted
@@ -134,6 +139,12 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             app.reveal_suggestions();
         }
         StreamMsg::Err { error, .. } => {
+            // at-mention C3: a refused channel turn is final — shown as
+            // denied, never replayed (the replay would be refused again).
+            if recover::is_conversation_refusal(&error) {
+                app.fail_turn_denied(&error);
+                return;
+            }
             // A dial that died before the runtime produced anything for this
             // turn means the user's message never became a task — yet it is
             // already persisted in the channel. Replay it once; on a second

@@ -22,6 +22,8 @@ use uuid::Uuid;
 mod agentic_loop;
 pub(crate) mod ask_origin;
 mod builder;
+pub(crate) mod channel_conversation;
+pub(crate) mod channel_gate;
 pub use builder::DrainOutcome;
 pub mod consult_scope;
 mod conversation;
@@ -105,6 +107,10 @@ pub struct TaskSpec {
     /// this one. Only the consult handler sets it; like `tool_allowlist` it
     /// binds only the built-in loop (R9).
     pub consult_scope: Option<Arc<consult_scope::ConsultScope>>,
+    /// `context.channel_id` + `context.channel_seq` (at-mention §3.4): the
+    /// turn belongs to a channel conversation and its history comes from the
+    /// channel log. `None` keeps the task-id keyed history unchanged.
+    pub channel: Option<crate::protocol::methods::message_send::ChannelContext>,
 }
 
 #[derive(Debug)]
@@ -163,6 +169,9 @@ const MAX_REGISTRY_ENTRIES: usize = 1_024;
 /// Cap on chat threads retained for multi-turn memory (LRU-evicted) so a
 /// long-lived agent serving many conversations doesn't leak unboundedly.
 const MAX_CONVERSATIONS: usize = 256;
+/// Cap on channel-keyed conversations (at-mention §3.4), separate from
+/// [`MAX_CONVERSATIONS`]: its own LRU, its own directory, its own sweep.
+const MAX_CHANNEL_CONVERSATIONS: usize = 256;
 /// Hard ceiling on stored messages per conversation, kept only so a pathological
 /// stream of empty turns cannot grow the vector without bound. The real limit is
 /// [`CONV_BUDGET_DIVISOR`] below — a turn count says nothing about how much
@@ -355,6 +364,8 @@ pub struct TaskRunner {
     startup_waiver: std::sync::OnceLock<mur_common::hitl::startup_waiver::StartupWaiver>,
     /// Multi-turn chat memory keyed by `context.task_id` (see `ConversationStore`).
     conversations: Mutex<ConversationStore>,
+    /// Channel-keyed memory + locks (at-mention §3.4); `None` = not served.
+    channel_conversations: Option<channel_conversation::ChannelConversations>,
     /// The session cwd shared with bash and the file tools, plus the roots a
     /// caller-supplied `TaskSpec.cwd` may move it to. `None` for runners built
     /// without tools (stubs, most tests): no cwd line in the prompt.
@@ -375,6 +386,9 @@ pub struct TaskRunner {
     /// whose actions the next turn most needs; the loop parks a copy here
     /// before returning, and the run wrapper takes it to remember the turn.
     partial_ledgers: Mutex<HashMap<String, crate::turn_ledger::TurnLedger>>,
+    /// Turn → the reply text `settle_turn` was handed, before the settlement
+    /// card. A channel turn remembers it as its provisional tail (§3.4).
+    pre_settlement: Mutex<HashMap<String, String>>,
     /// Reads the working project's `AGENTS.md` / `CLAUDE.md` into the prompt,
     /// through the same entitlement gate as `read_file`. `None` (stubs, tests)
     /// or no `session_cwd` means no block.

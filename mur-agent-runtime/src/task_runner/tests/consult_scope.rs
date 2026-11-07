@@ -134,6 +134,7 @@ impl World {
 fn read_spec(path: &Path, scope: Option<Arc<ConsultScope>>) -> TaskSpec {
     TaskSpec {
         consult_scope: scope,
+        channel: None,
         ..loop_spec(&format!("read:{}", path.display()))
     }
 }
@@ -182,6 +183,7 @@ async fn project_instructions_follow_the_consult_scope() {
     let spec = |scope| TaskSpec {
         cwd: Some(repo.clone()),
         consult_scope: scope,
+        channel: None,
         ..loop_spec("hello")
     };
 
@@ -237,6 +239,7 @@ async fn cancelled_consult_leaves_nothing_behind() {
     let spec = TaskSpec {
         task_id: Some("t-consult".into()),
         consult_scope: Some(w.scope("pm", &["proj"])),
+        channel: None,
         ..loop_spec("slow:")
     };
     let r2 = runner.clone();
@@ -259,6 +262,7 @@ async fn cli_backend_refuses_a_scoped_turn() {
     let runner = TaskRunner::with_cli_spawn(&mur_common::cli_backend::CLAUDE);
     let spec = TaskSpec {
         consult_scope: Some(w.scope("pm", &[])),
+        channel: None,
         ..loop_spec("consult")
     };
     let TaskOutcome::Failed(task) = runner.run_sync(spec).await else {

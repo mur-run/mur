@@ -107,6 +107,38 @@ impl TaskRunner {
         self.last_turn_truncated.store(false, Ordering::Relaxed);
 
         let output_artifact_path = spec.output_artifact_path.clone();
+        // At-mention §3.4: a channel turn is admitted (manifest gate → lock →
+        // locked read → reconcile) before anything else of the turn runs, and
+        // holds its conversation's lock until the turn ends. A refusal is a
+        // failed task carrying the §7 code; nothing is remembered.
+        let (channel_turn, channel) = match &spec.channel {
+            Some(ctx) => match self.begin_channel_turn(ctx, &text_of(&spec.input)).await {
+                Ok(Some(t)) => (Some(t), Some(ctx.clone())),
+                Ok(None) => (None, None),
+                Err(e) => {
+                    self.cancel_signals
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&id);
+                    self.set_state(&id, TaskState::Failed);
+                    return TaskOutcome::Failed(
+                        crate::protocol::methods::message_send::failed_task_before_start(
+                            Some(id),
+                            spec.input,
+                            channel_gate::wire_code(&e),
+                            &e.to_string(),
+                        ),
+                    );
+                }
+            },
+            None => (None, None),
+        };
+        // Held to the end of the turn: dropping it admits the next waiter.
+        let (_channel_permit, channel_prior) = match channel_turn {
+            Some(t) => (Some(t.permit), Some(t.prior)),
+            None => (None, None),
+        };
+        let channel = channel.as_ref();
         self.adopt_cwd(&id, spec.context_task_id.as_deref(), spec.cwd.as_deref());
         // Eager, before the prompt names the working directory: the model
         // must be handed the track path, never the project (spec §4.1).
@@ -199,6 +231,7 @@ impl TaskRunner {
                             bounds,
                             settings.autonomy,
                             spec.tool_allowlist.as_deref(),
+                            channel_prior,
                         )
                         .await
                     } else {
@@ -212,6 +245,7 @@ impl TaskRunner {
                             output_artifact_path.as_deref(),
                             sink,
                             spec.intent,
+                            channel_prior,
                         )
                         .await
                         .map(|m| (m, None))
@@ -241,6 +275,9 @@ impl TaskRunner {
         // reply carries them. A failed turn's notices are not repeated: refusals
         // stay in `mur agent doctor`.
         let mcp_notices = self.take_mcp_notices(&id);
+        // The reply text before its settlement card, for the channel store's
+        // provisional tail. Taken on every outcome so the table never grows.
+        let pre_settlement = self.take_pre_settlement(&id);
 
         // Always remove the cancel entry (success, failure, or cancel) to avoid
         // leaking senders in `cancel_signals`.
@@ -303,6 +340,7 @@ impl TaskRunner {
                 self.remember_ended_turn(
                     &id,
                     spec.context_task_id.as_deref(),
+                    channel,
                     &spec.input,
                     crate::turn_ledger::StopKind::Cancelled,
                 );
@@ -326,7 +364,15 @@ impl TaskRunner {
                 // the next send (context.task_id == id) recalls it. The parked
                 // checkpoint is stale once the reply carries the real ledger.
                 self.take_partial_ledger(&id);
-                self.remember_turn(&id, spec.context_task_id.as_deref(), &spec.input, &reply);
+                let pre_settlement = pre_settlement.unwrap_or_else(|| text_of(&reply));
+                self.remember_turn(
+                    &id,
+                    spec.context_task_id.as_deref(),
+                    channel,
+                    &spec.input,
+                    &reply,
+                    &pre_settlement,
+                );
                 // Artifact detection (#715 Part B): when the caller set an
                 // output_artifact_path and the agent wrote to it, replace the
                 // reply with a short path reference and populate Task.artifacts
@@ -420,6 +466,7 @@ impl TaskRunner {
                 self.remember_ended_turn(
                     &id,
                     spec.context_task_id.as_deref(),
+                    channel,
                     &spec.input,
                     crate::turn_ledger::StopKind::Failed {
                         error: err.message.clone(),

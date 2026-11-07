@@ -55,6 +55,7 @@ impl ChannelStore {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ManifestPolicy;
     use super::*;
     use mur_common::channel::{ChannelActor, EventKind};
     use tempfile::TempDir;
@@ -76,7 +77,9 @@ mod tests {
             .unwrap();
         let before = fs::read(store.events_path("c1").unwrap()).unwrap();
         let moved = store
-            .with_append_lock("c1", || store.quarantine_locked("c1", Utc::now()))
+            .with_append_lock("c1", ManifestPolicy::Require, || {
+                store.quarantine_locked("c1", Utc::now())
+            })
             .unwrap()
             .expect("there was a log to move");
         assert!(!store.events_path("c1").unwrap().exists());
@@ -109,7 +112,8 @@ mod tests {
         let store = ChannelStore::new(tmp.path());
         assert!(
             store
-                .with_append_lock("c1", || store.quarantine_locked("c1", Utc::now()))
+                .with_append_lock("c1", ManifestPolicy::Require, || store
+                    .quarantine_locked("c1", Utc::now()))
                 .unwrap()
                 .is_none()
         );

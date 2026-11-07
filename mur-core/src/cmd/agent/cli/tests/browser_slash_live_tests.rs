@@ -232,6 +232,12 @@ fn browser_add_then_mode_arg_reaches_a_live_agent_as_a_turn() {
 
     write_profile(home, "browsertest", &sock_str);
     install_browser_skill(home, "browsertest");
+    // The turn below is only sent once its user event is in the channel
+    // (C1), and under `MUR_CHANNEL_REQUIRE_SIG` that append needs this
+    // agent's writer key. Plant it before boot so the runtime loads the same
+    // key (`supervisor/identity.rs` falls back to an ephemeral one otherwise)
+    // instead of this test refusing the turn on the CI step that sets it.
+    crate::channel_writer::plant_identity_for(home, "browsertest");
 
     let _guard = boot_runtime(home, "browsertest", &runtime_str, &sock_str);
 

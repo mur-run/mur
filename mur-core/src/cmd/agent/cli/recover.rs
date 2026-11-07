@@ -92,6 +92,27 @@ pub fn should_retry_send(turn_produced_output: bool, already_retried: bool) -> b
     !turn_produced_output && !already_retried
 }
 
+/// The message prefixes of the runtime's channel-conversation refusals
+/// (`HandlerError` Display in `mur-agent-runtime`, at-mention §7). A refused
+/// channel turn is final: replaying the dial would hit the same refusal.
+const CONVERSATION_REFUSALS: &[&str] = &[
+    "conversation damaged:",
+    "unknown conversation:",
+    "not a participant:",
+    "channel too new:",
+    "channel is not a conversation:",
+    "conversation repairing:",
+    "conversation busy:",
+];
+
+/// True when `err` (a dial error display string or a task error message) is
+/// a channel-conversation refusal. Matches the embedded JSON-RPC message when
+/// there is one, else the raw string.
+pub fn is_conversation_refusal(err: &str) -> bool {
+    let msg = jsonrpc_error_message(err).unwrap_or_else(|| err.to_string());
+    CONVERSATION_REFUSALS.iter().any(|p| msg.starts_with(p))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

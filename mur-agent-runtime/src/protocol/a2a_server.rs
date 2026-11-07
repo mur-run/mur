@@ -69,6 +69,29 @@ pub enum HandlerError {
     /// "this approval window closed".
     #[error("approval refused: {0}")]
     ApprovalRefused(String),
+    // ---- channel conversations (at-mention §7) ----
+    /// `context.channel_id` names no channel directory on this host.
+    #[error("unknown conversation: {0}")]
+    UnknownConversation(String),
+    /// The manifest was written by a newer build than this runtime.
+    #[error("channel too new: {0}")]
+    ChannelTooNew(String),
+    /// The channel exists but is a fleet / workflow run, not a conversation.
+    #[error("channel is not a conversation: {0}")]
+    ChannelNotConversation(String),
+    /// This agent is not a participant of the channel.
+    #[error("not a participant: {0}")]
+    NotAParticipant(String),
+    /// A `mur channel repair` is in progress on the channel.
+    #[error("conversation repairing: {0}")]
+    ConversationRepairing(String),
+    /// The log cannot be trusted; [`HandlerError::data`] carries the
+    /// serialized damage so a client can show its `reason` (and `lines`).
+    #[error("conversation damaged: {0}")]
+    ConversationDamaged(mur_channel::conversation::ConversationDamage),
+    /// Too many turns already wait on this conversation.
+    #[error("conversation busy: {0}")]
+    ConversationBusy(String),
 }
 
 impl HandlerError {
@@ -85,6 +108,21 @@ impl HandlerError {
             Self::CommunicationDenied(_) => -32011,
             Self::ApprovalExpired(_) => -32012,
             Self::ApprovalRefused(_) => -32013,
+            Self::UnknownConversation(_) => -32020,
+            Self::ChannelTooNew(_) => -32021,
+            Self::ChannelNotConversation(_) => -32022,
+            Self::NotAParticipant(_) => -32023,
+            Self::ConversationRepairing(_) => -32024,
+            Self::ConversationDamaged(_) => -32025,
+            Self::ConversationBusy(_) => -32026,
+        }
+    }
+
+    /// Structured `JsonRpcError.data` for errors that carry more than text.
+    pub fn data(&self) -> Option<Value> {
+        match self {
+            Self::ConversationDamaged(d) => serde_json::to_value(d).ok(),
+            _ => None,
         }
     }
 }
@@ -126,7 +164,12 @@ impl Dispatcher {
     ) -> Result<JsonRpcResponse, HandlerError> {
         let id = req.id.clone().unwrap_or(json!(null));
         if req.jsonrpc != "2.0" {
-            return Ok(Self::err_response(id, -32600, "jsonrpc must be '2.0'"));
+            return Ok(Self::err_response(
+                id,
+                -32600,
+                "jsonrpc must be '2.0'",
+                None,
+            ));
         }
         match self.methods.get(&req.method) {
             Some(handler) => match handler.handle(req.params, ctx).await {
@@ -136,17 +179,18 @@ impl Dispatcher {
                     result: Some(result),
                     error: None,
                 }),
-                Err(e) => Ok(Self::err_response(id, e.code(), &e.to_string())),
+                Err(e) => Ok(Self::err_response(id, e.code(), &e.to_string(), e.data())),
             },
             None => Ok(Self::err_response(
                 id,
                 -32601,
                 &format!("method not found: {}", req.method),
+                None,
             )),
         }
     }
 
-    fn err_response(id: Value, code: i32, message: &str) -> JsonRpcResponse {
+    fn err_response(id: Value, code: i32, message: &str, data: Option<Value>) -> JsonRpcResponse {
         JsonRpcResponse {
             jsonrpc: "2.0".into(),
             id,
@@ -154,7 +198,7 @@ impl Dispatcher {
             error: Some(JsonRpcError {
                 code,
                 message: message.to_string(),
-                data: None,
+                data,
             }),
         }
     }

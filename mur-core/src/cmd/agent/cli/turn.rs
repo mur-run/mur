@@ -130,6 +130,18 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         });
         return;
     }
+    // at-mention C3 (S2): `@<pane agent>[#N] text`. Before the streaming
+    // branch, so a `#N` switch is refused rather than steered. A refused
+    // mention leaves the composer as typed, to fix the target.
+    let Some(text) = mention_submit::route(app, &trimmed) else {
+        return;
+    };
+    if text.is_empty() && app.pending_image.is_none() {
+        // A bare `@a#N`: the switch was the whole request.
+        app.clear_input();
+        return;
+    }
+    trimmed = text;
     // While a turn is generating: steer it if we have a live task id,
     // otherwise fall back to the old reject message.
     if app.streaming {
@@ -194,7 +206,11 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 /// once — by then the user's message is already persisted to the channel and
 /// must not be dropped silently (#714).
 pub(super) fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<StreamMsg>) {
-    let task_id = app.begin_user_turn(&trimmed);
+    // The user event could not be written: `begin_user_turn` already said so
+    // and withdrew the bubble; nothing is dialed (at-mention C1).
+    let Some(task_id) = app.begin_user_turn(&trimmed) else {
+        return;
+    };
     // The working directory is NOT prose here — it rides as `context.cwd`
     // in `build_params`, every turn.
     let params = build_params(
@@ -205,6 +221,9 @@ pub(super) fn start_turn(app: &mut App, trimmed: String, tx: &mpsc::Sender<Strea
             .as_ref()
             .map(|(m, b)| (m.as_str(), b.as_str())),
         app.cwd.as_deref(),
+        app.pending_channel
+            .as_ref()
+            .map(|(id, seq)| (id.as_str(), *seq)),
     );
     app.pending_image = None;
     app.inflight_params = Some(params.clone());
@@ -264,12 +283,16 @@ pub(super) fn finish_shell_turn(
 /// next typed message.
 pub(super) fn start_shell_turn(app: &mut App, block: String, tx: &mpsc::Sender<StreamMsg>) {
     let task_id = app.begin_turn();
+    // S1: the turn answers the shell Note `finish_shell` just wrote.
     let params = build_params(
         &block,
         &task_id,
         app.context_task_id.as_deref(),
         None,
         app.cwd.as_deref(),
+        app.pending_channel
+            .as_ref()
+            .map(|(id, seq)| (id.as_str(), *seq)),
     );
     app.inflight_params = Some(params.clone());
     spawn_stream(

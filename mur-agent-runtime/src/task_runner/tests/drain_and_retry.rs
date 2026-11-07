@@ -290,6 +290,7 @@ async fn drain_cancels_inflight_turn_after_wait_and_lets_it_settle() {
         deadline_secs: None,
         tool_allowlist: None,
         consult_scope: None,
+        channel: None,
     };
     let r2 = runner.clone();
     let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx, None).await });
@@ -358,6 +359,7 @@ async fn drain_stays_within_budget_when_jobs_ignore_sigterm() {
         deadline_secs: None,
         tool_allowlist: None,
         consult_scope: None,
+        channel: None,
     };
     let r2 = runner.clone();
     let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx, None).await });

@@ -254,6 +254,7 @@ pub fn build_params(
     context_task_id: Option<&str>,
     image: Option<(&str, &str)>,
     cwd: Option<&Path>,
+    channel: Option<(&str, u64)>,
 ) -> Value {
     let mut parts = vec![json!({ "kind": "text", "text": text })];
     if let Some((mime, b64)) = image {
@@ -272,6 +273,12 @@ pub fn build_params(
     }
     if let Some(dir) = cwd {
         params["context"]["cwd"] = json!(dir.to_string_lossy());
+    }
+    // at-mention C1: the channel conversation and the seq of the event this
+    // turn answers. Absent = today's keying.
+    if let Some((id, seq)) = channel {
+        params["context"]["channel_id"] = json!(id);
+        params["context"]["channel_seq"] = json!(seq);
     }
     params
 }

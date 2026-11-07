@@ -23,6 +23,7 @@ async fn sync_task_reaches_completed_state() {
         deadline_secs: None,
         tool_allowlist: None,
         consult_scope: None,
+        channel: None,
     };
     let outcome = runner.run_sync(spec).await;
     match outcome {
@@ -55,6 +56,7 @@ async fn cancellation_transitions_to_cancelled() {
         deadline_secs: None,
         tool_allowlist: None,
         consult_scope: None,
+        channel: None,
     };
     let handle = runner.start_async(spec);
     let task_id = handle.task_id().to_string();

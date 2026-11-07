@@ -529,6 +529,30 @@ impl ChannelIndex {
         })
     }
 
+    /// Reverse of [`Self::ordinal_of`]: the channel id numbered `n`, or `None`.
+    /// Reads `channel_ordinals` only — never joined with `channels`, which
+    /// `mur channel repair` deletes (`remove`) while the ordinal row stays.
+    /// `0` is the "not numbered yet" sentinel and never resolves.
+    pub fn by_ordinal(&self, n: u64) -> Result<Option<String>> {
+        if n == 0 {
+            return Ok(None);
+        }
+        // Ordinals are written as MAX+1 into an INTEGER column; a `u64`
+        // above `i64::MAX` cannot name a row.
+        let Ok(n) = i64::try_from(n) else {
+            return Ok(None);
+        };
+        let id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT id FROM channel_ordinals WHERE ordinal = ?1",
+                [n],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(id)
+    }
+
     /// Newest-first channel list (the Hub left-rail / CLI "my work" inbox).
     pub fn list(&self, limit: usize) -> Result<Vec<ChannelRow>> {
         let mut stmt = self.conn.prepare(
@@ -662,6 +686,8 @@ impl ChannelIndex {
     }
 }
 
+#[cfg(test)]
+mod by_ordinal_tests;
 mod pending;
 #[cfg(test)]
 mod pending_tests;

@@ -145,6 +145,11 @@ pub struct App {
     /// before the turn starts can be replayed once (the user's message is
     /// already persisted to the channel by then). Refreshed on each (re)send.
     pub inflight_params: Option<serde_json::Value>,
+    /// `(channel_id, seq)` of the channel event the next turn answers — the
+    /// user message, or a `!cmd`'s Note (S1). Sent as `context.channel_id` /
+    /// `context.channel_seq` (at-mention C1). Kept across `begin_turn` so a
+    /// replay still names it; cleared when the conversation changes.
+    pub pending_channel: Option<(String, u64)>,
     /// True once the current turn's send has been replayed (one retry max).
     pub send_retried: bool,
     /// True once the runtime produced anything for the current turn (delta,
@@ -206,6 +211,10 @@ pub struct App {
     /// Set once we've warned the user that session writes are failing, so the
     /// warning isn't repeated every turn.
     persist_warned: bool,
+    /// Keeps `test_fixture`'s home alive for the app's lifetime, so session
+    /// writes land (and are signed) instead of failing on a vanished dir.
+    #[cfg(test)]
+    _test_home: Option<tempfile::TempDir>,
     /// Panel server handle (`/panel` companion window). None only in tests;
     /// dropping it removes the session record + socket.
     pub panel: Option<super::panel::PanelHandle>,
@@ -471,6 +480,7 @@ impl App {
             review_gate: Default::default(),
             session,
             channel: None,
+            pending_channel: None,
             scroll_back: 0,
             scroll_page: 0,
             wrap_width: 0,
@@ -480,6 +490,8 @@ impl App {
             auto_approve: true,
             session_tool_allow: HashSet::new(),
             persist_warned: false,
+            #[cfg(test)]
+            _test_home: None,
             panel: None,
             panel_stream: false,
             cwd: std::env::current_dir().ok(),
@@ -740,18 +752,23 @@ pub(crate) fn take_due_input(app: &mut App, now: std::time::Instant) -> Option<S
 
 #[cfg(test)]
 impl App {
-    /// Minimal fixture for unit tests. Backed by a temporary directory that is
-    /// dropped on return — persist calls may fail silently (see `persist_turn`),
-    /// which is fine: all state-logic tests work on the in-memory transcript.
+    /// Minimal fixture for unit tests. Backed by a temporary directory that
+    /// lives as long as the app and holds the agent's writer key, so session
+    /// appends succeed even under `MUR_CHANNEL_REQUIRE_SIG` (#2145). That
+    /// matters since at-mention C1: a user turn whose append fails is not
+    /// sent at all, so a fixture that cannot persist cannot start a turn.
     pub fn test_fixture() -> Self {
         let home = tempfile::tempdir().unwrap();
+        crate::channel_writer::plant_identity_for(home.path(), "a");
         let session = Session::create(home.path(), "a").unwrap();
-        App::new(
+        let mut app = App::new(
             home.path().to_path_buf(),
             "a".into(),
             session,
             &super::theme::ANSI,
-        )
+        );
+        app._test_home = Some(home);
+        app
     }
 }
 

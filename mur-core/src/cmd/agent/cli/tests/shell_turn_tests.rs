@@ -48,7 +48,7 @@ async fn shell_done_while_idle_starts_a_turn_without_a_user_bubble() {
 async fn shell_done_while_streaming_steers_the_live_turn() {
     let (tx, _rx) = mpsc::channel(16);
     let mut app = App::test_fixture();
-    let before = app.begin_user_turn("working");
+    let before = app.begin_user_turn("working").expect("turn started");
     let (c_tx, _c_rx) = tokio::sync::oneshot::channel();
     let gen_id = app.shell.begin(0, c_tx).expect("slot");
     app.begin_shell("ls");
@@ -110,7 +110,7 @@ fn cancelled_shell_output_is_never_sent() {
 async fn ctrl_c_ends_the_shell_before_the_turn() {
     let (tx, _rx) = mpsc::channel(16);
     let mut app = App::test_fixture();
-    let task = app.begin_user_turn("working");
+    let task = app.begin_user_turn("working").expect("turn started");
     let (c_tx, mut c_rx) = tokio::sync::oneshot::channel();
     app.shell.begin(0, c_tx).expect("slot");
     app.begin_shell("sleep 60");

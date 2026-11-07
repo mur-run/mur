@@ -244,6 +244,7 @@ fn turn(text: &str) -> mur_agent_runtime::task_runner::TaskSpec {
         deadline_secs: None,
         tool_allowlist: None,
         consult_scope: None,
+        channel: None,
     }
 }
 

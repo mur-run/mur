@@ -18,12 +18,25 @@ pub fn cmd_send(
     // Parsed before anything is sent: a typo must not cost a turn.
     let wait = wait_approval.map(parse_wait).transpose()?;
     let home = resolve_mur_home()?;
+    // at-mention C3: `@agent[#N]` continues a channel conversation. Resolve
+    // the target first, so the budget gate below reads the canonical agent.
+    let mention = name
+        .starts_with('@')
+        .then(|| super::cli::mention_target::resolve_agent(&home, name))
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let gate_name = mention.as_ref().map_or(name, |(a, _)| a.as_str());
     // Required-budget gate (plan §9), same refusal the TUI and --plain apply.
     // A script is still a turn: the runtime injects every Required memory
     // unconditionally, so sending while over the reservation would inject a
     // prompt the interactive user is blocked from sending.
-    if let Some(overlay) = crate::cmd::agent::cli::memory_cmds::required_budget_block(&home, name) {
+    if let Some(overlay) =
+        crate::cmd::agent::cli::memory_cmds::required_budget_block(&home, gate_name)
+    {
         anyhow::bail!("{overlay}");
+    }
+    if mention.is_some() {
+        return send_mention(&home, name, &msg, output_artifact_path, wait);
     }
     // One-shot send: the caller is a script or a shell, not a person watching
     // for a prompt. Saying so lets the runtime refuse a gated tool at once
@@ -46,6 +59,50 @@ pub fn cmd_send(
             )?
         }
         Some(wait) => send_waiting(&home, name, params, wait)?,
+    };
+    println!("{}", serde_json::to_string(&result)?);
+    Ok(())
+}
+
+/// at-mention C3: `mur agent send '@agent[#N]' <message>`. The Human event
+/// is appended (writer = the target agent) before the dial, and the dial
+/// names it with `context.channel_id` + `context.channel_seq`. Refusals
+/// print their §7 code and exit non-zero without writing anything.
+fn send_mention(
+    home: &std::path::Path,
+    target: &str,
+    msg: &serde_json::Value,
+    output_artifact_path: Option<&str>,
+    wait: Option<std::time::Duration>,
+) -> Result<()> {
+    // The runtime compares the first text part with the event (watermark),
+    // so the event carries exactly that text.
+    let text = msg
+        .get("parts")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|ps| ps.iter().find_map(|p| p.get("text")?.as_str()))
+        .unwrap_or_default();
+    let p = super::cli::mention_target::prepare_send(home, target, text)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    eprintln!(
+        "→ {}#{} (channel {}, seq {})",
+        p.agent, p.ordinal, p.channel_id, p.channel_seq
+    );
+    let mut params = p.params;
+    // Keep any non-text parts the caller sent.
+    params["message"] = msg.clone();
+    if let Some(path) = output_artifact_path {
+        params["output_artifact_path"] = serde_json::json!(path);
+    }
+    let result = match wait {
+        None => dial_method(
+            home,
+            &p.agent,
+            "message/send",
+            params,
+            DialMode::RequireRunning,
+        )?,
+        Some(wait) => send_waiting(home, &p.agent, params, wait)?,
     };
     println!("{}", serde_json::to_string(&result)?);
     Ok(())

@@ -161,7 +161,7 @@ impl ChannelStore {
         idempotency_key: Option<String>,
         hooks: super::SealHooks<'_>,
     ) -> Result<ChannelEvent> {
-        self.with_append_lock(id, || {
+        self.with_append_lock(id, super::ManifestPolicy::Require, || {
             self.append_signed_event_locked(
                 id,
                 identity,

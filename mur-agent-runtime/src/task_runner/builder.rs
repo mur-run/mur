@@ -105,11 +105,13 @@ impl TaskRunner {
             live: std::sync::OnceLock::new(),
             startup_waiver: std::sync::OnceLock::new(),
             conversations: Mutex::new(ConversationStore::default()),
+            channel_conversations: None,
             session_cwd: None,
             turn_tracks: Mutex::new(HashMap::new()),
             refused_cwd: Mutex::new(HashMap::new()),
             mcp_notices: Mutex::new(HashMap::new()),
             partial_ledgers: Mutex::new(HashMap::new()),
+            pre_settlement: Mutex::new(HashMap::new()),
             project_instructions: None,
             draining: Arc::new(AtomicBool::new(false)),
         }
@@ -380,7 +382,39 @@ impl TaskRunner {
             if let Some(w) = context_window.filter(|w| *w > 0) {
                 store.budget_tokens = (w / CONV_BUDGET_DIVISOR).max(1);
             }
+            if let Some(c) = &self.channel_conversations {
+                c.store
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .set_budget_tokens(store.budget_tokens);
+            }
         }
+        self
+    }
+
+    /// Serve channel conversations (at-mention §3.4): channels are read from
+    /// `mur_home`, their cache lives under `dir/channels` with the same token
+    /// budget as the task-id store, and at most `max_waiting` turns wait on
+    /// one conversation before `CONVERSATION_BUSY`. Order-independent with
+    /// [`Self::with_conversation_memory`]: both leave the two stores on the
+    /// same token budget.
+    pub fn with_channel_conversations(
+        mut self,
+        mur_home: std::path::PathBuf,
+        dir: Option<std::path::PathBuf>,
+        max_waiting: usize,
+    ) -> Self {
+        let budget = self
+            .conversations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .budget_tokens;
+        self.channel_conversations = Some(channel_conversation::ChannelConversations::new(
+            mur_home,
+            dir.as_deref(),
+            budget,
+            max_waiting,
+        ));
         self
     }
 

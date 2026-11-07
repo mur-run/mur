@@ -40,6 +40,12 @@ mod login;
 mod manage;
 mod markdown;
 pub mod memory_cmds;
+// Pure parsing/resolution (C2) and their callers: `mur agent send '@agent#N'`
+// and murmur `@` (C3).
+pub mod mention;
+pub mod mention_resolve;
+mod mention_submit;
+pub mod mention_target;
 mod model_cmd;
 mod monitor;
 mod multiplex;
