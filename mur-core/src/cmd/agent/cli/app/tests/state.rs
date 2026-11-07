@@ -5,14 +5,7 @@ use super::super::*;
 use tempfile::tempdir;
 
 fn app() -> App {
-    let home = tempdir().unwrap();
-    let session = Session::create(home.path(), "a").unwrap();
-    App::new(
-        home.path().to_path_buf(),
-        "a".into(),
-        session,
-        &super::super::super::theme::ANSI,
-    )
+    App::test_fixture()
 }
 
 #[test]
