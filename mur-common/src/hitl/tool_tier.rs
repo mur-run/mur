@@ -306,13 +306,38 @@ fn word_in(cmd: &str, words: &[&str]) -> bool {
 /// name, e.g. `/tmp/rm`), which prompts instead of auto-answering. An opaque
 /// body (`bash -c "$X"`, `eval`) is invisible here; `opaque_shell` (#1832)
 /// handles those shapes separately.
+///
+/// #2310: a word glued to an opening parenthesis (`mount(`) is dropped. In
+/// bash that shape is only ever a function *definition* (`mount() { …; }`),
+/// never an invocation, so it cannot be a command head — but it is exactly
+/// how a heredoc feeding python/node spells a call, and `mount(<Foo />)` in a
+/// React test was tiering `privileged` seven times a day. The word is still
+/// seen when it is executed: `$(sudo ls)` and `(sudo ls)` keep `sudo` because
+/// there the parenthesis comes BEFORE the word.
 fn tokens(cmd: &str) -> impl Iterator<Item = &str> {
-    cmd.split(|c: char| {
-        c.is_whitespace() || CHAINING.contains(&c) || matches!(c, '"' | '\'' | '(' | ')')
+    let mut rest = cmd;
+    std::iter::from_fn(move || {
+        loop {
+            rest = rest.trim_start_matches(is_token_sep);
+            if rest.is_empty() {
+                return None;
+            }
+            let end = rest.find(is_token_sep).unwrap_or(rest.len());
+            let (tok, tail) = rest.split_at(end);
+            rest = tail;
+            if tail.starts_with('(') {
+                continue;
+            }
+            let tok = tok.rsplit('/').next().unwrap_or(tok);
+            if !tok.is_empty() {
+                return Some(tok);
+            }
+        }
     })
-    .filter(|t| !t.is_empty())
-    .map(|t| t.rsplit('/').next().unwrap_or(t))
-    .filter(|t| !t.is_empty())
+}
+
+fn is_token_sep(c: char) -> bool {
+    c.is_whitespace() || CHAINING.contains(&c) || matches!(c, '"' | '\'' | '(' | ')')
 }
 
 fn git_sub_in(cmd: &str, subs: &[&str]) -> bool {
@@ -668,6 +693,49 @@ mod tests {
                 RiskTier::NetworkEgress,
             ),
             (r#"bash -c "bash -c 'sudo ls'""#, RiskTier::Privileged),
+        ] {
+            assert_eq!(classify("bash", Some(&bash(cmd))), want, "cmd: {cmd}");
+        }
+    }
+
+    /// #2310: a heredoc body is data fed to the command, not a command head.
+    /// `mount(<Foo />)` inside a python snippet must not tier the call
+    /// `privileged`; the same word outside the body still does.
+    #[test]
+    fn heredoc_bodies_are_not_scanned_for_heads() {
+        let data_only = [
+            "python3 - <<'EOF'\n# React test helper, not mount(8)\nmount(<Foo />)\nEOF",
+            "python3 - <<EOF\nimport os\nos.chmod('x', 0o755)\nEOF",
+            "cat <<'EOF' > notes.md\nrun sudo apt update later\nEOF",
+            "node - <<'A' && node - <<'B'\nsecurity()\nA\nmount()\nB",
+        ];
+        for cmd in data_only {
+            let tier = classify("bash", Some(&bash(cmd)));
+            assert!(
+                tier < RiskTier::Privileged,
+                "cmd: {cmd}\nheredoc data must not be privileged, got {tier:?}"
+            );
+        }
+        for (cmd, want) in [
+            ("cat <<EOF\nhello\nEOF\nsudo ls", RiskTier::Privileged),
+            ("cat <<EOF; sudo ls\nhello\nEOF", RiskTier::Privileged),
+            ("sudo tee /etc/x <<'EOF'\nhello\nEOF", RiskTier::Privileged),
+            (
+                "cat <<EOF && rm -rf target\nhello\nEOF",
+                RiskTier::Destructive,
+            ),
+            (
+                "cat <<EOF | git push origin main\nhello\nEOF",
+                RiskTier::NetworkEgress,
+            ),
+            // Unterminated body: everything is still scanned.
+            ("cat <<EOF\nsudo ls", RiskTier::Privileged),
+            // A heredoc fed to a shell IS executed (heredoc_data covers the
+            // launchctl case); the call shape alone does not exempt a word
+            // that precedes its parenthesis.
+            ("bash <<'EOF'\nsudo ls\nEOF", RiskTier::Privileged),
+            ("(sudo ls)", RiskTier::Privileged),
+            ("echo $(sudo ls)", RiskTier::Privileged),
         ] {
             assert_eq!(classify("bash", Some(&bash(cmd))), want, "cmd: {cmd}");
         }
