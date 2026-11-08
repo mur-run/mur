@@ -418,7 +418,14 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
         eprintln!("\n{hint}");
     }
 
-    if any_stale {
+    // Host-level, so outside the per-agent rows and independent of `--json`
+    // (stderr, like the volume hint). An error here fails the doctor.
+    let identity_errors = super::doctor_human_identity::lines(&mur_home);
+    for line in &identity_errors {
+        eprintln!("{line}");
+    }
+
+    if any_stale || !identity_errors.is_empty() {
         std::process::exit(1);
     }
     Ok(())

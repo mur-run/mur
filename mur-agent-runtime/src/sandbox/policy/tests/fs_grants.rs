@@ -619,3 +619,37 @@ fn fleet_grants_survive_the_partition_and_commander_is_read_only_per_file() {
     assert!(!policy.fleet_conversations_grant);
     assert!(policy.fs_read.iter().all(|p| !p.starts_with(&commander)));
 }
+
+/// A0: the human's public half is a DIRECTORY read grant, so the file that
+/// `mur identity rekey` replaces by rename stays readable after the seal
+/// (Landlock pins a file grant to its inode).
+#[test]
+fn identity_dir_read_grant_is_the_directory() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mur_home = tmp.path();
+    let agent_home = mur_home.join("agents").join("mur");
+    std::fs::create_dir_all(&agent_home).unwrap();
+    let dir = mur_common::identity::human::human_identity_dir(mur_home);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("identity.pub"), b"z").unwrap();
+    let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+    assert!(policy.fs_read.contains(&dir), "{:?}", policy.fs_read);
+    assert!(!policy.fs_read.contains(&dir.join("identity.pub")));
+    assert!(
+        !policy
+            .fs_write
+            .iter()
+            .any(|w| w.starts_with(&dir) || dir.starts_with(w))
+    );
+}
+
+/// Existence-checked like every grant: no `identity/`, no rule.
+#[test]
+fn absent_identity_dir_gets_no_read_grant() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let agent_home = tmp.path().join("agents").join("mur");
+    std::fs::create_dir_all(&agent_home).unwrap();
+    let dir = mur_common::identity::human::human_identity_dir(tmp.path());
+    let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+    assert!(!policy.fs_read.contains(&dir));
+}

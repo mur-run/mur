@@ -438,6 +438,17 @@ impl SandboxPolicy {
             if std::fs::metadata(&agents).is_ok() && !fs_read.contains(&agents) {
                 fs_read.push(agents);
             }
+            // The human owner's public half (at-mention phase 2, A0), for the
+            // same reason: verifying a human-signed event reads it. A
+            // DIRECTORY grant, because `mur identity rekey` replaces
+            // `identity.pub` by rename and Landlock pins a file grant to the
+            // inode present at seal time. Existence-checked like every grant:
+            // an `identity/` created after the seal is readable only after a
+            // restart, which `mur identity init` says.
+            let human = mur_common::identity::human::human_identity_dir(mur_home);
+            if std::fs::metadata(&human).is_ok() && !fs_read.contains(&human) {
+                fs_read.push(human);
+            }
         }
 
         // Standard system read paths: libraries, certs, DNS config.

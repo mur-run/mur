@@ -31,6 +31,9 @@ pub const CAPTURE_STORES: [&str; 5] = ["queue", "session", "conversations", "tel
 const PUBLISHER_DIR: &str = "publisher";
 /// The private half of an `AgentIdentity`, in whatever directory it lives.
 const IDENTITY_KEY: &str = "identity.key";
+/// Why `<mur_home>/identity` is never writable.
+pub const HUMAN_IDENTITY_REASON: &str = "the human owner's public key and rotation chain — the chain \
+     decides which key speaks for the human, so writing it is owner takeover";
 
 #[derive(Clone, Debug)]
 pub struct LaunchChain {
@@ -132,10 +135,29 @@ impl LaunchChain {
                  obeyed, so writing it lets an agent sign its own governance",
             );
         }
+        if path.starts_with(self.human_identity_dir()) {
+            return Some(HUMAN_IDENTITY_REASON);
+        }
         if let Some(reason) = self.protects_credential(path) {
             return Some(reason);
         }
         None
+    }
+
+    /// `<mur_home>/identity`: the human owner's public key and rotation chain
+    /// (at-mention phase 2, D-8). Readable by every agent, writable by none.
+    pub fn human_identity_dir(&self) -> PathBuf {
+        mur_common::identity::human::human_identity_dir(&self.mur_home)
+    }
+
+    /// Whether the human identity directory is in the kernel write-deny list.
+    ///
+    /// Owner enrollment (C1) asks this before trusting `identity/` at all:
+    /// an agent that can write `rotations.jsonl` there owns the human chain,
+    /// so enrolling on a build without the rule would hand that chain over.
+    pub fn protects_human_identity(&self) -> bool {
+        self.write_protected_paths()
+            .contains(&self.human_identity_dir())
     }
 
     /// Why `path` may never be read.
@@ -379,6 +401,7 @@ impl LaunchChain {
         let mut out = self.deny_paths();
         out.extend(self.credential_files());
         out.extend(self.commander_public_keys());
+        out.push(self.human_identity_dir());
         out
     }
 

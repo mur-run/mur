@@ -1,10 +1,16 @@
 //! Write grants that must never reach the router's signed channel heads
-//! (channel-log-integrity spec decision E2, #1875, parent #1770).
+//! (channel-log-integrity spec decision E2, #1875, parent #1770) or the human
+//! owner's identity (at-mention phase 2, A0 / D-8).
 //!
 //! `<mur_home>/channel-heads/` holds the commitment the seal exists to
 //! provide. A sandboxed process that can write there can forge or delete it,
 //! and a handoff child (sandboxed, borrowing the router identity) deliberately
 //! does not seal, so nothing else stands in the way.
+//!
+//! `<mur_home>/identity/` holds the human's public key and rotation chain.
+//! `verify_chain` has no trust anchor beyond that file, so a process that can
+//! write it decides which key speaks for the human — owner takeover. Landlock
+//! cannot carve it out of a broader grant, so the same refusal applies.
 //!
 //! The check is on the finished policy, after every runtime-added grant, and
 //! it is a refusal, not a clamp: a profile that reaches the heads directory
@@ -32,16 +38,25 @@ use super::policy::SandboxPolicy;
 /// A write grant that overlaps the protected heads directory.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "sandbox profile refused: write grant {} reaches {}, which holds the router's \
-     signed channel heads (E2, #1875). Narrow the grant so it does not include \
-     that directory; a deny entry does not make up for it.",
+    "sandbox profile refused: write grant {} reaches {}, which holds {}. Narrow \
+     the grant so it does not include that directory; a deny entry does not make \
+     up for it.",
     grant.display(),
-    protected.display()
+    protected.display(),
+    holds
 )]
 pub struct ProtectedPathWritable {
     pub grant: PathBuf,
     pub protected: PathBuf,
+    /// What the protected directory holds, for the message.
+    pub holds: &'static str,
 }
+
+/// What `channel-heads/` holds.
+const HEADS_HOLDS: &str = "the router's signed channel heads (E2, #1875)";
+/// What `identity/` holds.
+const HUMAN_IDENTITY_HOLDS: &str =
+    "the human owner's public key and rotation chain (at-mention phase 2, A0)";
 
 /// Whether `err` is a [`ProtectedPathWritable`] refusal, through any amount of
 /// `anyhow` context.
@@ -49,29 +64,46 @@ pub fn is_refusal(err: &anyhow::Error) -> bool {
     err.downcast_ref::<ProtectedPathWritable>().is_some()
 }
 
-/// Refuse a policy whose write grants overlap `<mur_home>/channel-heads`.
+/// The directories under `<mur_home>` no write grant may overlap, with what
+/// each holds. One list, so a new entry gets the whole refusal for free.
+fn protected_dirs() -> [(&'static str, &'static str); 2] {
+    [
+        (HEADS_DIR, HEADS_HOLDS),
+        (
+            mur_common::identity::human::HUMAN_IDENTITY_DIR,
+            HUMAN_IDENTITY_HOLDS,
+        ),
+    ]
+}
+
+/// Refuse a policy whose write grants overlap `<mur_home>/channel-heads` or
+/// `<mur_home>/identity`.
 pub fn check_protected_writes(
     policy: &SandboxPolicy,
     mur_home: &Path,
 ) -> Result<(), ProtectedPathWritable> {
-    let mut protected = vec![mur_home.join(HEADS_DIR)];
     // The kernel judges the resolved path, so a symlinked `mur_home` is
     // checked under both names.
-    if let Ok(real) = std::fs::canonicalize(mur_home) {
-        let resolved = real.join(HEADS_DIR);
-        if !protected.contains(&resolved) {
-            protected.push(resolved);
-        }
+    let mut roots = vec![mur_home.to_path_buf()];
+    if let Ok(real) = std::fs::canonicalize(mur_home)
+        && real != mur_home
+    {
+        roots.push(real);
     }
+    let protected: Vec<(PathBuf, &'static str)> = protected_dirs()
+        .into_iter()
+        .flat_map(|(dir, holds)| roots.iter().map(move |r| (r.join(dir), holds)))
+        .collect();
     for grant in &policy.fs_write {
         // Likewise a grant written through a symlink (macOS `/var` is
         // `/private/var`) is judged under the name the kernel will see.
         let resolved = std::fs::canonicalize(grant).ok();
-        for target in &protected {
+        for (target, holds) in &protected {
             if overlaps(grant, target) || resolved.as_deref().is_some_and(|r| overlaps(r, target)) {
                 return Err(ProtectedPathWritable {
                     grant: grant.clone(),
                     protected: target.clone(),
+                    holds,
                 });
             }
         }
@@ -314,6 +346,37 @@ mod tests {
         let extra = [f.mur_home.clone()];
         let err = crate::sandbox::apply(&ent, &f.agent_home, &[], &[], &extra).unwrap_err();
         assert!(is_refusal(&err), "{err:#}");
+    }
+
+    /// A0: `identity/` is refused like `channel-heads/` — the directory, a
+    /// path inside it, and a case-folded spelling. A parent of both (`<home>`)
+    /// is covered by `granting_mur_home_is_refused`.
+    #[test]
+    fn profile_writing_identity_dir_is_refused() {
+        use mur_common::identity::human::{HUMAN_IDENTITY_DIR, human_identity_dir};
+        let f = fixture();
+        let dir = human_identity_dir(&f.mur_home);
+        let inside = dir.join("rotations.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&inside, b"").unwrap();
+        for grant in [&dir, &inside] {
+            let err = f.check(&f.policy(&[grant], &[])).unwrap_err();
+            assert!(err.protected.ends_with(HUMAN_IDENTITY_DIR), "{err}");
+            assert!(err.to_string().contains("rotation chain"), "{err}");
+        }
+        let mut policy = f.policy(&[], &[]);
+        policy
+            .fs_write
+            .push(PathBuf::from(dir.to_string_lossy().to_uppercase()));
+        assert!(f.check(&policy).is_err());
+    }
+
+    #[test]
+    fn a_sibling_that_only_shares_the_identity_prefix_is_accepted() {
+        let f = fixture();
+        let sibling = f.mur_home.join("identity-backup");
+        std::fs::create_dir_all(&sibling).unwrap();
+        assert_eq!(f.check(&f.policy(&[&sibling], &[])), Ok(()));
     }
 
     #[test]

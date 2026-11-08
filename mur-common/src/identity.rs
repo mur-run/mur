@@ -453,6 +453,7 @@ pub fn default_dir(agent_home: &Path) -> PathBuf {
     agent_home.to_path_buf()
 }
 
+pub mod human;
 mod rotation;
 pub use rotation::*;
 
