@@ -1045,7 +1045,7 @@ Agent** wizard offers the same catalog as a source.
   consumed deadline and the same claimed job, and work already paid for is not
   redone. Paused time does not count against the deadline, and a resumed run
   never gets wider limits than it had. `--detach` resumes in the background
-  (log in `~/.mur/runs/<run_id>/resume.log`). `stop` still wins: it ends a
+  (log in `~/.mur/fleet-state/<fleet>/runs/<run_id>/resume.log`). `stop` still wins: it ends a
   paused run for good. `mur fleet list` marks a paused fleet `▮`; the Hub and
   murmur's `/deep-research pause|resume` reach the same commands.
 - **Bounded, not budgeted** — three knobs, one schema at every scope:

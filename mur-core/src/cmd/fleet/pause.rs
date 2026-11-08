@@ -40,7 +40,12 @@ fn verdict(mur_home: &Path, name: &str) -> Verdict {
     let held = run_lock::is_held(mur_home, name);
     if let Some(run_id) = control::paused_run_id(mur_home, name) {
         // The run named by the sentinel has exited with a checkpoint: paused.
-        if !held && checkpoint::load(mur_home, &run_id).ok().flatten().is_some() {
+        if !held
+            && checkpoint::load(mur_home, name, &run_id)
+                .ok()
+                .flatten()
+                .is_some()
+        {
             return Verdict::AlreadyPaused;
         }
     }
@@ -86,7 +91,7 @@ pub fn phase(mur_home: &Path, name: &str) -> PausePhase {
     let Some(run_id) = control::paused_run_id(mur_home, name) else {
         return PausePhase::None;
     };
-    let state = crate::run_status::store::load(mur_home, &run_id)
+    let state = crate::run_status::store::load_in_fleet(mur_home, name, &run_id)
         .ok()
         .flatten()
         .map(|r| r.state);
@@ -128,7 +133,7 @@ fn request_pause(
     run_id: &str,
     progress: &mut dyn FnMut(&str),
 ) -> Result<String> {
-    checkpoint::clear_pause_refusal(mur_home, run_id);
+    checkpoint::clear_pause_refusal(mur_home, name, run_id);
     let sentinel = control::paused_path(mur_home, name);
     let body = format!(
         "run_id: {run_id}\nrequested_at: {}\n",
@@ -194,10 +199,15 @@ fn poll(mur_home: &Path, name: &str, run_id: &str, is_held: &mut dyn FnMut() -> 
     // The checkpoint exists only once the loop wrote it, and the run
     // lock is released only once the process has exited: both together
     // mean the run is halted and resumable.
-    if !is_held() && checkpoint::load(mur_home, run_id).ok().flatten().is_some() {
+    if !is_held()
+        && checkpoint::load(mur_home, name, run_id)
+            .ok()
+            .flatten()
+            .is_some()
+    {
         return Poll::Paused;
     }
-    if let Some(why) = checkpoint::pause_refusal(mur_home, run_id) {
+    if let Some(why) = checkpoint::pause_refusal(mur_home, name, run_id) {
         return Poll::Refused(why);
     }
     if control::is_stopped(mur_home, name) {
@@ -207,7 +217,11 @@ fn poll(mur_home: &Path, name: &str, run_id: &str, is_held: &mut dyn FnMut() -> 
         // Re-read before concluding (design §8.5): the loop may have
         // checkpointed and released the lock between the first look and
         // this one. That run paused; it did not finish.
-        if checkpoint::load(mur_home, run_id).ok().flatten().is_some() {
+        if checkpoint::load(mur_home, name, run_id)
+            .ok()
+            .flatten()
+            .is_some()
+        {
             return Poll::Paused;
         }
         return Poll::Finished;
@@ -337,7 +351,8 @@ mod tests {
         let rec = RunState {
             schema: RUN_SCHEMA,
             run_id: "r1".into(),
-            channel_id: None,
+            // A fleet run is recorded in its fleet's tree (#2316).
+            channel_id: Some("fleet-dev".into()),
             kind: RunKind::Fleet,
             label: "fleet dev loop".into(),
             pid: 1,

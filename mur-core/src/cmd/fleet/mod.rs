@@ -23,6 +23,7 @@ pub mod progress;
 pub mod review;
 pub mod roster;
 pub mod run;
+pub mod run_migrate;
 pub mod run_monitor;
 pub mod settings;
 pub mod show;

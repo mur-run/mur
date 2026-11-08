@@ -307,7 +307,7 @@ fn a_fresh_run_over_a_paused_one_is_refused() {
 fn a_sentinel_left_by_a_crash_does_not_block_a_fresh_run_and_is_removed() {
     let home = paused_home(None);
     record(home.path(), crate::run_status::State::Failed);
-    checkpoint::remove(home.path(), RUN);
+    checkpoint::remove(home.path(), "dev", RUN);
     refuse_fresh_run_over_pause(home.path(), "dev").expect("stale sentinel is ignored");
     assert!(!control::paused_path(home.path(), "dev").exists());
 }
@@ -322,7 +322,7 @@ fn a_sentinel_beside_a_checkpoint_is_never_removed_by_a_fresh_run() {
     let err = refuse_fresh_run_over_pause(home.path(), "dev").unwrap_err();
     assert!(format!("{err}").contains("mur fleet stop dev"), "{err}");
     assert!(control::paused_path(home.path(), "dev").exists());
-    assert!(checkpoint::load(home.path(), RUN).unwrap().is_some());
+    assert!(checkpoint::load(home.path(), "dev", RUN).unwrap().is_some());
 }
 
 /// An unreadable checkpoint still exists: `checkpoint::load` failing is not
@@ -336,17 +336,17 @@ fn a_sentinel_beside_an_unreadable_checkpoint_is_never_removed_by_a_fresh_run() 
         checkpoint::save(home, &c).unwrap();
     };
     let malformed = |home: &Path| {
-        std::fs::write(checkpoint::checkpoint_path(home, RUN), b"{ not json").unwrap();
+        std::fs::write(checkpoint::checkpoint_path(home, "dev", RUN), b"{ not json").unwrap();
     };
     for corrupt in [&unsupported as &dyn Fn(&Path), &malformed] {
         let home = paused_home(None);
         record(home.path(), crate::run_status::State::Failed);
         corrupt(home.path());
-        assert!(checkpoint::load(home.path(), RUN).is_err());
+        assert!(checkpoint::load(home.path(), "dev", RUN).is_err());
         let err = refuse_fresh_run_over_pause(home.path(), "dev").unwrap_err();
         assert!(format!("{err}").contains("mur fleet stop dev"), "{err}");
         assert!(control::paused_path(home.path(), "dev").exists());
-        assert!(checkpoint::checkpoint_path(home.path(), RUN).exists());
+        assert!(checkpoint::checkpoint_path(home.path(), "dev", RUN).exists());
     }
 }
 
@@ -358,7 +358,7 @@ async fn run_guarded_refuses_a_fresh_run_over_a_paused_one() {
         .unwrap_err();
     assert!(format!("{err}").contains("has a paused run"), "{err}");
     // The paused run is untouched.
-    assert!(checkpoint::load(home.path(), RUN).unwrap().is_some());
+    assert!(checkpoint::load(home.path(), "dev", RUN).unwrap().is_some());
 }
 
 #[test]
@@ -382,7 +382,7 @@ fn stop_while_paused_ends_the_run_cancels_the_job_and_drops_the_checkpoint() {
         j.error.as_deref(),
         Some("stopped by `mur fleet stop` while paused")
     );
-    assert!(checkpoint::load(home.path(), RUN).unwrap().is_none());
+    assert!(checkpoint::load(home.path(), "dev", RUN).unwrap().is_none());
     assert!(!control::paused_path(home.path(), "dev").exists());
     // And it cannot be resumed afterwards — not even once `start` clears the switch.
     control::cmd_fleet_start(home.path(), "dev").unwrap();
@@ -395,7 +395,7 @@ fn stop_with_a_live_run_leaves_its_pause_state_to_the_run() {
     let home = paused_home(None);
     let _held = run_lock::acquire(home.path(), "dev").unwrap();
     assert!(!end_paused_run(home.path(), "dev"));
-    assert!(checkpoint::load(home.path(), RUN).unwrap().is_some());
+    assert!(checkpoint::load(home.path(), "dev", RUN).unwrap().is_some());
 }
 
 #[test]
@@ -677,7 +677,7 @@ fn every_crash_point_of_a_resume_is_resumable_again_or_finished() {
     // 3. Crash after the checkpoint went (the commit point) and before
     //    `.paused`: the resume committed; the run is an ordinary crashed run.
     //    Nothing offers to resume it twice, and the stale sentinel goes.
-    checkpoint::remove(h, RUN);
+    checkpoint::remove(h, "dev", RUN);
     assert!(
         control::paused_path(h, "dev").exists(),
         "sentinel goes last"
@@ -700,7 +700,7 @@ fn stop_in_an_interrupted_resume_ends_the_run_and_drops_both_files() {
     let h = home.path();
     record(h, State::Running);
     assert!(end_paused_run(h, "dev"), "the interrupted resume is ended");
-    assert!(checkpoint::load(h, RUN).unwrap().is_none());
+    assert!(checkpoint::load(h, "dev", RUN).unwrap().is_none());
     assert!(!control::paused_path(h, "dev").exists());
     assert_eq!(
         crate::run_status::store::load(h, RUN)
@@ -733,7 +733,7 @@ fn an_interrupted_resume_blocks_a_fresh_run_and_keeps_its_sentinel() {
 fn a_running_record_without_its_checkpoint_is_not_an_interrupted_resume() {
     let home = paused_home(None);
     record(home.path(), crate::run_status::State::Running);
-    checkpoint::remove(home.path(), RUN);
+    checkpoint::remove(home.path(), "dev", RUN);
     let err = admit(home.path(), "dev").unwrap_err();
     assert!(format!("{err}").contains("no checkpoint"), "{err}");
     refuse_fresh_run_over_pause(home.path(), "dev").expect("leftover sentinel");
@@ -749,6 +749,6 @@ fn stop_ends_an_interrupted_resume_like_a_paused_run() {
         .unwrap()
         .unwrap();
     assert_eq!(rec.state, crate::run_status::State::Stopped);
-    assert!(checkpoint::load(home.path(), RUN).unwrap().is_none());
+    assert!(checkpoint::load(home.path(), "dev", RUN).unwrap().is_none());
     assert!(!control::paused_path(home.path(), "dev").exists());
 }

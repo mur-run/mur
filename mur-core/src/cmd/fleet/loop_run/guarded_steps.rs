@@ -102,7 +102,8 @@ pub(super) async fn finish_run(
         b.stop().await;
     }
     let terminal = loop_terminal_state(stop);
-    if let Err(error) = crate::run_status::store::update(mur_home, &run_id, |r| r.state = terminal)
+    if let Err(error) =
+        crate::run_status::store::update_in_fleet(mur_home, name, &run_id, |r| r.state = terminal)
     {
         tracing::warn!(run_id = %run_id, %error, "fleet loop: terminal state not recorded");
     }

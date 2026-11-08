@@ -50,11 +50,8 @@ pub(super) fn dispatch_via_daemon(
     write_request(&tool.mur_home, &req)
         .map_err(|e| ToolError::Execution(format!("write fleet dispatch request: {e}")))?;
 
-    let log_path = tool
-        .mur_home
-        .join(mur_common::paths::RUNS)
-        .join(&run_id)
-        .join("fleet_run.log");
+    let log_path =
+        mur_common::paths::fleet_run_dir(&tool.mur_home, &fleet, &run_id).join("fleet_run.log");
     let mut reply = dispatched_reply(&run_id, &fleet, &log_path, stale_timeout);
     reply["via"] = serde_json::json!("daemon");
     reply["signed_as"] = serde_json::json!(router);

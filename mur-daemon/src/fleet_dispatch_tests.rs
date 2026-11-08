@@ -112,11 +112,11 @@ fn launched(home: &Path) -> Option<String> {
     }
 }
 
+/// The verdict, read from where the daemon writes it: the tree of the fleet
+/// the run id names (`fleet-<fleet>-<n>`, the only shape the daemon accepts).
 fn record(home: &Path, run_id: &str) -> Option<FleetDispatchRecord> {
-    let p = home
-        .join(mur_common::paths::RUNS)
-        .join(run_id)
-        .join(FLEET_DISPATCH_RECORD_FILE);
+    let fleet = run_id.strip_prefix("fleet-")?.rsplit_once('-')?.0;
+    let p = mur_common::paths::fleet_run_dir(home, fleet, run_id).join(FLEET_DISPATCH_RECORD_FILE);
     serde_json::from_slice(&std::fs::read(p).ok()?).ok()
 }
 

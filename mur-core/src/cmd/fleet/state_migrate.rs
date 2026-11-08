@@ -36,8 +36,10 @@ const MOVE_WHOLE: [&str; 6] = [
 const JOBS: &str = "jobs";
 const EVENTS: &str = "events.jsonl";
 
-/// Move every legacy run-state entry for every fleet. Never fails.
+/// Move every legacy run-state entry for every fleet, and (once) every legacy
+/// fleet run directory out of `runs/` — see `run_migrate`. Never fails.
 pub fn migrate_all(mur_home: &Path) {
+    super::run_migrate::migrate_once(mur_home);
     let Ok(entries) = std::fs::read_dir(mur_home.join(mur_common::paths::FLEETS)) else {
         return;
     };
@@ -280,7 +282,9 @@ mod tests {
         legacy(tmp.path(), "idle");
         std::fs::remove_dir(tmp.path().join("fleets/idle/jobs")).unwrap();
         migrate_all(tmp.path());
-        assert!(!tmp.path().join("fleet-state").exists());
+        // The `fleet-state/` root holds the one-time run-migration marker
+        // (`run_migrate`); the fleet itself must get no directory.
+        assert!(!tmp.path().join("fleet-state/idle").exists());
     }
 
     /// The failure a sandboxed child hits: the source tree is read-only.

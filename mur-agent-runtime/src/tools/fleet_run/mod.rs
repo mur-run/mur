@@ -5,7 +5,8 @@
 //! holding filesystem write grants on `~/.mur`. The spawned `mur` child
 //! inherits this process's kernel sandbox; the narrow carve-ins it needs
 //! (`fleet-state/<name>/` for each allowlisted fleet, `commander/`,
-//! `conversations/`, `runs/` + spawn of the `mur` binary) are added at seal
+//! `conversations/`, `runs/` for non-fleet run records + spawn of the `mur`
+//! binary) are added at seal
 //! time by `SandboxPolicy::from_entitlements`, gated on the same config
 //! allowlist checked here. `fleets/` — the definitions — stays read-only.
 //!
@@ -213,7 +214,7 @@ cost_usd) and by `mur fleet stop`."
         }
 
         // The handle: minted here, handed to the child with --run-id, and
-        // what the caller polls. One path segment under ~/.mur/runs/.
+        // what the caller polls. One path segment under ~/.mur/fleet-state/<fleet>/runs/.
         let run_id = format!("fleet-{fleet}-{}", uuid::Uuid::now_v7());
 
         // #2116: a fleet routed by ANOTHER agent must be signed with that
@@ -241,10 +242,10 @@ cost_usd) and by `mur fleet stop`."
             cwd.as_deref(),
             cwd_inferred,
         );
-        // The child's stdio goes to a log beside its run record — `runs/` is
-        // already inside the fleet_run carve-in — because nobody is waiting
-        // on this pipe any more.
-        let log_dir = self.mur_home.join("runs").join(&run_id);
+        // The child's stdio goes to a log beside its run record, in the
+        // fleet's own tree — the per-fleet carve-in (#2316) — because nobody
+        // is waiting on this pipe any more.
+        let log_dir = mur_common::paths::fleet_run_dir(&self.mur_home, &fleet, &run_id);
         std::fs::create_dir_all(&log_dir)
             .map_err(|e| ToolError::Execution(format!("create {}: {e}", log_dir.display())))?;
         let log_path = log_dir.join("fleet_run.log");

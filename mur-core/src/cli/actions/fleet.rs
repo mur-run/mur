@@ -249,7 +249,7 @@ pub enum FleetAction {
         /// Fleet name
         name: String,
         /// Continue in a detached child of this shell (own session, stdin
-        /// closed, output to ~/.mur/runs/<run_id>/resume.log) and return
+        /// closed, output to ~/.mur/fleet-state/<fleet>/runs/<run_id>/resume.log) and return
         #[arg(long)]
         detach: bool,
     },

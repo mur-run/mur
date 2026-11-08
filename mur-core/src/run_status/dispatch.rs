@@ -1,7 +1,8 @@
 //! The daemon's dispatch verdict as a run record (#2116).
 //!
 //! A cross-router `fleet_run` returns its handle BEFORE any process exists:
-//! the daemon decides later and writes `runs/<run_id>/dispatch.json`. A
+//! the daemon decides later and writes
+//! `fleet-state/<fleet>/runs/<run_id>/dispatch.json`. A
 //! rejected request never gets a `run.json` or a channel, so without this the
 //! handle polls as "no run recorded" and the reason sits unread beside it.
 //! Consulted only when there is no run record — once the child records one,
@@ -23,10 +24,9 @@ pub const DISPATCH_STEP: &str = "dispatch";
 /// `Ok(None)` when the daemon wrote no verdict for `run_id`. A present but
 /// unreadable verdict is an error, never "no such run".
 pub fn load(mur_home: &Path, run_id: &str) -> anyhow::Result<Option<RunState>> {
-    let path = mur_home
-        .join(mur_common::paths::RUNS)
-        .join(run_id)
-        .join(FLEET_DISPATCH_RECORD_FILE);
+    // Resolved like any run directory: the daemon writes it into the
+    // fleet's tree (#2316); a verdict from an older daemon sits in `runs/`.
+    let path = super::store::run_dir(mur_home, run_id).join(FLEET_DISPATCH_RECORD_FILE);
     let bytes = match std::fs::read(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
@@ -93,8 +93,9 @@ fn to_run_state(r: FleetDispatchRecord) -> RunState {
 mod tests {
     use super::*;
 
+    /// Where `mur-daemon` writes the verdict: the fleet's own tree.
     fn write(home: &Path, run_id: &str, body: serde_json::Value) {
-        let dir = home.join(mur_common::paths::RUNS).join(run_id);
+        let dir = mur_common::paths::fleet_run_dir(home, "council", run_id);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FLEET_DISPATCH_RECORD_FILE), body.to_string()).unwrap();
     }
@@ -139,9 +140,32 @@ mod tests {
     #[test]
     fn an_unreadable_verdict_is_an_error_not_no_such_run() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join(mur_common::paths::RUNS).join("fleet-x-1");
+        let dir = mur_common::paths::fleet_run_dir(tmp.path(), "x", "fleet-x-1");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FLEET_DISPATCH_RECORD_FILE), "{").unwrap();
         assert!(crate::run_status::status_of(tmp.path(), "fleet-x-1").is_err());
+    }
+
+    /// A verdict an older daemon left in `runs/` still reports.
+    #[test]
+    fn a_legacy_verdict_in_runs_is_still_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(mur_common::paths::RUNS)
+            .join("fleet-council-9");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(FLEET_DISPATCH_RECORD_FILE),
+            serde_json::json!({"run_id": "fleet-council-9", "fleet": "council",
+                "dispatched_by": "mur", "status": "rejected", "reason": "old",
+                "decided_at": "2026-09-27T00:00:00Z"})
+            .to_string(),
+        )
+        .unwrap();
+        let status = crate::run_status::status_of(tmp.path(), "fleet-council-9")
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.state, State::Failed);
     }
 }

@@ -187,19 +187,27 @@ pub fn paused_line(mur_home: &Path, s: &RunStatus) -> Option<String> {
     use crate::cmd::fleet::loop_run::checkpoint;
     // Never the record's `label`: it is display text (`fleet <name> loop`),
     // and a command built from it does not run.
-    let stop_hint = |what: String| match fleet_of_record(mur_home, s) {
+    let fleet = fleet_of_record(mur_home, s);
+    let stop_hint = |what: String| match fleet.as_deref() {
         Some(fleet) => format!("{what} — `mur fleet stop {fleet}` discards the run"),
         None => format!("{what} — the run's fleet could not be resolved"),
     };
-    Some(match checkpoint::load(mur_home, &s.run.run_id) {
-        Ok(Some(cp)) => format!(
-            "{} — `mur fleet resume {}` continues it",
-            checkpoint::summary_line(&cp),
-            cp.fleet
-        ),
-        Ok(None) => stop_hint("no checkpoint to resume from".to_string()),
-        Err(e) => stop_hint(format!("unreadable checkpoint ({e:#})")),
-    })
+    // The checkpoint lives in the fleet's own tree (#2316): no fleet, no
+    // checkpoint to read.
+    let Some(fleet_name) = fleet.as_deref() else {
+        return Some(stop_hint("no checkpoint to resume from".to_string()));
+    };
+    Some(
+        match checkpoint::load(mur_home, fleet_name, &s.run.run_id) {
+            Ok(Some(cp)) => format!(
+                "{} — `mur fleet resume {}` continues it",
+                checkpoint::summary_line(&cp),
+                cp.fleet
+            ),
+            Ok(None) => stop_hint("no checkpoint to resume from".to_string()),
+            Err(e) => stop_hint(format!("unreadable checkpoint ({e:#})")),
+        },
+    )
 }
 
 /// The fleet a run record belongs to, resolved from its channel: the persisted

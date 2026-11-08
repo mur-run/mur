@@ -2,7 +2,7 @@
 //!
 //! An operator-spawned child, never a daemon path: this process re-executes
 //! `mur fleet resume <name>` in a new session (`setsid`), with stdin closed and
-//! output appended to `~/.mur/runs/<run_id>/resume.log`, and returns once the
+//! output appended to `~/.mur/fleet-state/<fleet>/runs/<run_id>/resume.log`, and returns once the
 //! child holds the fleet's run lock. The daemon has no task queue, and
 //! enqueueing there would turn an attended resume into an unattended run.
 //!
@@ -39,11 +39,9 @@ const DETACHED_PROCESS: u32 = 0x0000_0008;
 #[cfg(windows)]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
-/// `<mur_home>/runs/<run_id>/resume.log`.
-pub fn resume_log_path(mur_home: &Path, run_id: &str) -> PathBuf {
-    crate::run_status::store::runs_dir(mur_home)
-        .join(run_id)
-        .join(RESUME_LOG_FILE)
+/// `<mur_home>/fleet-state/<fleet>/runs/<run_id>/resume.log`.
+pub fn resume_log_path(mur_home: &Path, fleet: &str, run_id: &str) -> PathBuf {
+    crate::run_status::store::fleet_run_dir(mur_home, fleet, run_id).join(RESUME_LOG_FILE)
 }
 
 /// The child command: this same binary, `fleet resume <name>` without
@@ -142,7 +140,7 @@ pub fn resume_detached(mur_home: &Path, name: &str, exe: &Path) -> Result<String
     // Admit here so a refusal reads where the operator is, not in a log. The
     // child admits again (and again under the lock) — this check grants nothing.
     let cp = resume::admit(mur_home, name)?;
-    let log_path = resume_log_path(mur_home, &cp.run_id);
+    let log_path = resume_log_path(mur_home, name, &cp.run_id);
     if let Some(dir) = log_path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
@@ -188,8 +186,8 @@ mod tests {
     #[test]
     fn log_lives_beside_the_run_record() {
         let home = Path::new("/h");
-        let log = resume_log_path(home, "run-1");
-        let record = crate::run_status::store::run_path(home, "run-1");
+        let log = resume_log_path(home, "dev", "run-1");
+        let record = crate::run_status::store::fleet_run_dir(home, "dev", "run-1").join("run.json");
         assert_eq!(log.parent(), record.parent());
         assert_eq!(log.file_name().unwrap(), RESUME_LOG_FILE);
     }

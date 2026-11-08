@@ -226,7 +226,8 @@ mod tests {
         let mut rec = crate::run_status::RunState {
             schema: crate::run_status::RUN_SCHEMA,
             run_id: "r1".into(),
-            channel_id: None,
+            // A fleet run is recorded in its fleet's tree (#2316).
+            channel_id: Some("fleet-dev".into()),
             kind: crate::run_status::RunKind::Fleet,
             label: "fleet dev loop".into(),
             pid: 1,

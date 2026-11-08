@@ -222,7 +222,7 @@ fn sealed_cross_router_dispatch_yields_verifiable_events_not_signed_by_the_reque
         .env(REQUIRE_SIG_ENV, "1");
     run_ok(sweep, "daemon sweep");
 
-    let run_dir = home.join(mur_common::paths::RUNS).join(&run_id);
+    let run_dir = mur_common::paths::fleet_run_dir(&home, FLEET, &run_id);
     let record: FleetDispatchRecord =
         serde_json::from_slice(&std::fs::read(run_dir.join(FLEET_DISPATCH_RECORD_FILE)).unwrap())
             .unwrap();

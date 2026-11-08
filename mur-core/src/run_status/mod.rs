@@ -1,6 +1,7 @@
 //! Run status: the one place a job / fleet / workflow run's state is derived.
 //!
-//! `~/.mur/runs/<run_id>/run.json` is a CACHE, not a source of truth — every
+//! `run.json` (in `~/.mur/fleet-state/<fleet>/runs/<run_id>/` for a fleet
+//! run, `~/.mur/runs/<run_id>/` otherwise — see `store`) is a CACHE, not a source of truth — every
 //! field except `last_heartbeat_at` is derivable from the run's channel event
 //! log (see `rebuild`). When the two disagree, the channel wins and the
 //! record is re-derived from it in memory — the cache file is never written
@@ -13,7 +14,7 @@
 //! `sidecar.json` rebuild index records the channel, kind, and first event
 //! seq — so a rebuild folds only THIS run's events even on a long-lived
 //! shared channel. Known limitation: if the whole run directory
-//! (`runs/<run_id>/`) is deleted, the run is still unrecoverable by
+//! (`store::run_dir`) is deleted, the run is still unrecoverable by
 //! `mur job *` even though its channel still exists — the sidecar that
 //! indexes the channel lives inside that directory, and without it there is
 //! no way to know which channel to fold.
@@ -240,12 +241,9 @@ pub fn stale_after(cfg: &mur_common::config::RunsConfig) -> chrono::Duration {
 /// can assemble them differently. `classify` stays pure so the table test can
 /// address every cell without a clock or a config file.
 /// A run id a caller may mint (`mur fleet run --run-id`): one path segment
-/// under `~/.mur/runs/`, so letters, digits, `-` and `_` only.
+/// under a runs directory, so letters, digits, `-` and `_` only.
 pub fn valid_run_id(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 96
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    mur_common::paths::is_single_segment(s)
 }
 
 pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Option<RunStatus>> {

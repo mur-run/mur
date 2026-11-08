@@ -11,7 +11,14 @@
 
 use std::path::{Path, PathBuf};
 
-/// Run-status records: `<mur_home>/runs/<run_id>/run.json`.
+/// Run-status records of runs that belong to no fleet (`parallel_jobs`,
+/// workflows): `<mur_home>/runs/<run_id>/run.json`.
+///
+/// A FLEET run's directory is never here — it is
+/// [`fleet_run_dir`], inside the per-fleet carve-in. `runs/` is writable by
+/// every sandboxed agent (the MCP server records `parallel_jobs` runs from
+/// inside the sandbox), so anything a fleet resume trusts must not live in it
+/// (#2316).
 pub const RUNS: &str = "runs";
 
 /// Fleet definitions: `<mur_home>/fleets/<name>/fleet.yaml`, plus the
@@ -64,6 +71,32 @@ pub const RUN_STATE_DIRS: [&str; 4] = [FLEET_STATE, "conversations", "artifacts"
 pub fn fleet_state_dir(mur_home: &Path, name: &str) -> PathBuf {
     mur_home.join(FLEET_STATE).join(name)
 }
+
+/// `<mur_home>/fleet-state/<name>/runs/` — the run directories of `name`'s
+/// runs (`run.json`, `sidecar.json`, `checkpoint.json`, logs, the daemon's
+/// `dispatch.json`). Inside [`fleet_state_dir`] so only an agent allowed to
+/// run `name` can write them (#2316).
+pub fn fleet_runs_dir(mur_home: &Path, name: &str) -> PathBuf {
+    fleet_state_dir(mur_home, name).join(RUNS)
+}
+
+/// `<mur_home>/fleet-state/<name>/runs/<run_id>/`.
+pub fn fleet_run_dir(mur_home: &Path, name: &str, run_id: &str) -> PathBuf {
+    fleet_runs_dir(mur_home, name).join(run_id)
+}
+
+/// Is `s` safe to join as ONE path segment under a runs directory? Letters,
+/// digits, `-` and `_` only — the same alphabet `mur fleet run --run-id`
+/// accepts — so no `/`, `..`, or empty segment can steer a lookup elsewhere.
+pub fn is_single_segment(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= RUN_ID_MAX_LEN
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Longest run id accepted as a path segment.
+pub const RUN_ID_MAX_LEN: usize = 96;
 
 /// Directory holding the daemon's agent-readable heartbeat (#2116).
 ///

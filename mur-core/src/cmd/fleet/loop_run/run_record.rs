@@ -22,7 +22,7 @@ use crate::run_status::heartbeat::Heartbeat;
 pub(super) fn open(mur_home: &Path, fleet: &Fleet, name: &str, run_id: &str) -> Option<Heartbeat> {
     let runs_cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).runs;
     let now = chrono::Utc::now();
-    let started_at = crate::run_status::store::load(mur_home, run_id)
+    let started_at = crate::run_status::store::load_in_fleet(mur_home, name, run_id)
         .ok()
         .flatten()
         .map_or(now, |prev| prev.started_at);

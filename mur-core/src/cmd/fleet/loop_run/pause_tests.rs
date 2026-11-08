@@ -139,7 +139,7 @@ async fn a_pause_during_an_iteration_checkpoints_and_leaves_the_job_running() {
     assert_eq!(held.run_id.as_deref(), Some("pause-run-0"));
 
     // The checkpoint exists, names the job and the stored procedure.
-    let cp = checkpoint::load(&home, PAUSE_RUN)
+    let cp = checkpoint::load(&home, "dev", PAUSE_RUN)
         .unwrap()
         .expect("checkpoint written before the loop returned");
     assert_eq!(cp.iteration, 0);
@@ -330,7 +330,7 @@ async fn a_paused_run_resumes_under_its_run_id_and_finishes() {
     // Same run, now done; nothing left to resume.
     let rec = crate::run_status::store::load(&home, RUN).unwrap().unwrap();
     assert_eq!(rec.state, crate::run_status::State::Done);
-    assert!(checkpoint::load(&home, RUN).unwrap().is_none());
+    assert!(checkpoint::load(&home, "dev", RUN).unwrap().is_none());
     assert!(!crate::cmd::fleet::control::paused_path(&home, "dev").exists());
 
     // The claimed job finished; the later one was never claimed by the
@@ -511,7 +511,7 @@ async fn a_pause_between_iterations_names_the_next_one_and_resumes_there() {
     );
 
     // Checkpoint: re-enter iteration index 1, nothing in flight to replay.
-    let cp = checkpoint::load(&home, RUN)
+    let cp = checkpoint::load(&home, "dev", RUN)
         .unwrap()
         .expect("checkpoint written at the boundary");
     assert_eq!(cp.iteration, 1);
