@@ -175,8 +175,8 @@ fn heredoc_marker(i: usize) -> String {
 }
 
 /// A heredoc body lifted out of a command line.
-struct Heredoc {
-    body: String,
+pub(super) struct Heredoc {
+    pub(super) body: String,
     /// `<<'TAG'` / `<<"TAG"` — the body is sent literally. An unquoted tag is
     /// expanded locally first, which is a different (and more dangerous) thing.
     tag_quoted: bool,
@@ -189,7 +189,7 @@ struct Heredoc {
 /// redirected it, so `a <<X` and `b <<Y` cannot have their bodies swapped by a
 /// later pass. Returns `None` if a heredoc is opened and never terminated —
 /// an unterminated body is content this parser never sees.
-fn strip_heredocs(cmd: &str) -> Option<(String, Vec<Heredoc>)> {
+pub(super) fn strip_heredocs(cmd: &str) -> Option<(String, Vec<Heredoc>)> {
     let mut line = String::new();
     let mut docs: Vec<Heredoc> = Vec::new();
     let mut rest = cmd.to_string();
@@ -210,9 +210,16 @@ fn strip_heredocs(cmd: &str) -> Option<(String, Vec<Heredoc>)> {
         let (head_tail, body_and_rest) = body_start.split_at(nl + 1);
         let (body, remainder) = split_at_tag(body_and_rest, &tag)?;
         line.push_str(&heredoc_marker(docs.len()));
-        line.push_str(head_tail);
         docs.push(Heredoc { body, tag_quoted });
-        rest = remainder;
+        // `a <<X && b <<Y`: bash reads Y's body right after X's, so the rest
+        // of this head line goes back in front of the remainder to be lifted
+        // on the next pass (#2310).
+        if find_heredoc_op(head_tail).is_some() {
+            rest = format!("{head_tail}{remainder}");
+        } else {
+            line.push_str(head_tail);
+            rest = remainder;
+        }
     }
 }
 

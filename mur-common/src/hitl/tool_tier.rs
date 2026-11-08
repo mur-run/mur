@@ -290,8 +290,23 @@ fn classify_bash(cmd: &str) -> RiskTier {
 /// substring so `rm` does not fire on `cargo fmt --rm-nothing`, while still
 /// catching it after a chain operator (`a && rm b`) — which is why the
 /// splitter includes the chaining characters.
+///
+/// #2310: heredoc bodies get one narrower rule. The command line itself (with
+/// each body lifted out) is scanned with every token, exactly as before. Each
+/// body is then scanned with `word(` tokens dropped: a React helper's
+/// `mount(<Foo />)` inside `python3 - <<EOF` is a call in the interpreter's
+/// language, not a bash command head. The exemption is confined to the body
+/// because outside it the same shape IS a quoted program the shell hands to
+/// an interpreter — `python3 -c 'chmod("x", 0o777)'` keeps its tier. Anything
+/// the lifter refuses (unterminated body, here-string) scans as one string.
 fn word_in(cmd: &str, words: &[&str]) -> bool {
-    tokens(cmd).any(|t| words.contains(&t))
+    let Some((line, bodies)) = dest::strip_heredocs(cmd) else {
+        return tokens(cmd).any(|t| words.contains(&t));
+    };
+    tokens(&line).any(|t| words.contains(&t))
+        || bodies
+            .iter()
+            .any(|h| tokens_in_body(&h.body).any(|t| words.contains(&t)))
 }
 
 /// #1841: command words, normalised so a head cannot hide from the deny-list.
@@ -306,15 +321,20 @@ fn word_in(cmd: &str, words: &[&str]) -> bool {
 /// name, e.g. `/tmp/rm`), which prompts instead of auto-answering. An opaque
 /// body (`bash -c "$X"`, `eval`) is invisible here; `opaque_shell` (#1832)
 /// handles those shapes separately.
-///
-/// #2310: a word glued to an opening parenthesis (`mount(`) is dropped. In
-/// bash that shape is only ever a function *definition* (`mount() { …; }`),
-/// never an invocation, so it cannot be a command head — but it is exactly
-/// how a heredoc feeding python/node spells a call, and `mount(<Foo />)` in a
-/// React test was tiering `privileged` seven times a day. The word is still
-/// seen when it is executed: `$(sudo ls)` and `(sudo ls)` keep `sudo` because
-/// there the parenthesis comes BEFORE the word.
 fn tokens(cmd: &str) -> impl Iterator<Item = &str> {
+    split_tokens(cmd, false)
+}
+
+/// Tokens of a heredoc body (#2310): a word glued to an opening parenthesis
+/// (`mount(`) is dropped. In bash that shape is only ever a function
+/// *definition*, never an invocation; in the python/node a heredoc usually
+/// feeds, it is how a call is spelled. `$(sudo ls)` and `(sudo ls)` keep
+/// `sudo` because there the parenthesis comes BEFORE the word.
+fn tokens_in_body(body: &str) -> impl Iterator<Item = &str> {
+    split_tokens(body, true)
+}
+
+fn split_tokens(cmd: &str, drop_calls: bool) -> impl Iterator<Item = &str> {
     let mut rest = cmd;
     std::iter::from_fn(move || {
         loop {
@@ -325,7 +345,7 @@ fn tokens(cmd: &str) -> impl Iterator<Item = &str> {
             let end = rest.find(is_token_sep).unwrap_or(rest.len());
             let (tok, tail) = rest.split_at(end);
             rest = tail;
-            if tail.starts_with('(') {
+            if drop_calls && tail.starts_with('(') {
                 continue;
             }
             let tok = tok.rsplit('/').next().unwrap_or(tok);
@@ -736,6 +756,23 @@ mod tests {
             ("bash <<'EOF'\nsudo ls\nEOF", RiskTier::Privileged),
             ("(sudo ls)", RiskTier::Privileged),
             ("echo $(sudo ls)", RiskTier::Privileged),
+            // Review of #2311: the call shape is exempt ONLY inside a heredoc
+            // body. A quoted program on the command line is executed by the
+            // interpreter it is handed to, so `chmod(` there keeps its tier —
+            // the fix must never lower a genuine one.
+            (
+                r#"python3 -c 'from os import *; chmod("victim", 0o777)'"#,
+                RiskTier::Privileged,
+            ),
+            ("node -e 'security()'", RiskTier::Privileged),
+            (
+                "python3 - <<'EOF' && chmod(x)\npass\nEOF",
+                RiskTier::Privileged,
+            ),
+            // A body fed to a shell keeps every word, call-shaped or not.
+            ("bash <<'EOF'\nchmod 777 /etc/x\nEOF", RiskTier::Privileged),
+            // Here-string: the lifter refuses, so the whole text is scanned.
+            ("python3 <<< 'chmod(1)'", RiskTier::Privileged),
         ] {
             assert_eq!(classify("bash", Some(&bash(cmd))), want, "cmd: {cmd}");
         }
