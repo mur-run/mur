@@ -450,6 +450,13 @@ async fn a_parked_headless_privileged_ask_names_its_tier_when_it_expires() {
             && r.error.contains("--no-hitl never waives"),
         "got {:?}",
         r.error
+    ); // One timeout phrase, not "nobody answered …; timed out: …".
+    assert!(!r.error.contains("timed out"), "got {:?}", r.error);
+    assert_eq!(
+        r.error.matches("nobody answered").count(),
+        1,
+        "got {:?}",
+        r.error
     );
 }
 

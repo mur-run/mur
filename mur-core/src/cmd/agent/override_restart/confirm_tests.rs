@@ -42,6 +42,14 @@ fn banner_says_what_the_spec_requires() {
     }
     // Never the over-promise the spec forbids.
     assert!(!b.contains("privileged actions always ask"));
+    // #2313 (a): "never released" is scoped to fleets; a single agent's ask
+    // times out, and the banner says what the agent then sees.
+    assert!(b.contains("In a fleet, unattended"), "{b}");
+    assert!(b.contains("tier_not_waived"), "{b}");
+    assert!(
+        !b.contains("Unattended, a call that still has to ask"),
+        "{b}"
+    );
 }
 
 #[test]

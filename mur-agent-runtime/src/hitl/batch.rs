@@ -58,9 +58,13 @@ pub(crate) const TIMED_OUT: &str = "timed out";
 
 /// True for the decision [`BatchGate::ask`] gives a call nobody answered in
 /// time â no human said anything, so a headless caller reports it as still
-/// needing approval rather than as a denial (#2085).
+/// needing approval rather than as a denial (#2085). Also true once
+/// `explain_held` has rewritten the reason to name the tier (#2313): it is
+/// still the same unanswered ask.
 pub fn is_timeout(d: &HitlDecision) -> bool {
-    !d.allow && d.reason.as_deref() == Some(TIMED_OUT)
+    !d.allow
+        && (d.reason.as_deref() == Some(TIMED_OUT)
+            || d.refusal_code == Some(mur_common::hitl::startup_waiver::TIER_NOT_WAIVED))
 }
 
 impl BatchGate<'_> {
@@ -258,6 +262,20 @@ pub fn pending(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #2313: the tier-named rewrite of a timeout is still a timeout.
+    #[test]
+    fn a_tier_named_timeout_is_still_a_timeout() {
+        let d = HitlDecision {
+            allow: false,
+            reason: Some("timed out: this call is Privileged-tier, …".into()),
+            surface: None,
+            awaiting_human: false,
+            refusal_code: Some(mur_common::hitl::startup_waiver::TIER_NOT_WAIVED),
+        };
+        assert!(is_timeout(&d));
+        assert!(!is_timeout(&HitlDecision { allow: true, ..d }));
+    }
 
     fn call(id: &str) -> PendingCall {
         PendingCall {

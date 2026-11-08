@@ -90,19 +90,35 @@ fn origin_eligible(origin: AskOrigin) -> bool {
 /// never waived (#2313).
 pub const TIER_NOT_WAIVED: &str = "tier_not_waived";
 
-/// What the agent reads when such an ask times out. Starts with the gate's
-/// own timeout text so a reader of the reason still sees it was a timeout.
-pub fn tier_not_waived_reason(timed_out: &str, tier: Option<RiskTier>) -> String {
+/// What the agent is told to do next. No "use another form" hint: that
+/// reads as "reword the call so it classifies lower", the evasion #2314 closed.
+const TIER_NOT_WAIVED_NEXT: &str =
+    "Retrying will wait again. Ask the user to approve it, or continue without this operation";
+
+fn tier_not_waived_clause(tier: Option<RiskTier>) -> String {
     let tier = match tier {
         Some(t) => format!("{t:?}"),
         None => "undeclared".to_string(),
     };
     format!(
-        "{timed_out}: this call is {tier}-tier, and --no-hitl never waives \
-         Spend, Privileged or undeclared-tier calls, so it waited for a human \
-         and nobody answered. Retrying will wait again. Ask the user to \
-         approve it, or continue without this operation"
+        "this call is {tier}-tier, and --no-hitl never waives \
+         Spend, Privileged or undeclared-tier calls"
     )
+}
+
+/// What the agent reads when such an ask times out. Starts with the gate's
+/// own timeout text so a reader of the reason still sees it was a timeout.
+pub fn tier_not_waived_reason(timed_out: &str, tier: Option<RiskTier>) -> String {
+    format!(
+        "{timed_out}: {}, so it waited for a human and nobody answered. {TIER_NOT_WAIVED_NEXT}",
+        tier_not_waived_clause(tier)
+    )
+}
+
+/// The same explanation without the timeout framing, for a refusal whose
+/// own text already says the wait ran out (the headless parked ask).
+pub fn tier_not_waived_note(tier: Option<RiskTier>) -> String {
+    format!("{}. {TIER_NOT_WAIVED_NEXT}", tier_not_waived_clause(tier))
 }
 
 #[cfg(test)]

@@ -10,7 +10,9 @@
 use std::collections::HashMap;
 
 use mur_common::hitl::RiskTier;
-use mur_common::hitl::startup_waiver::{StartupWaiver, TIER_NOT_WAIVED, tier_not_waived_reason};
+use mur_common::hitl::startup_waiver::{
+    StartupWaiver, TIER_NOT_WAIVED, tier_not_waived_note, tier_not_waived_reason,
+};
 use mur_common::hitl::tool_tier::{is_spend_tool, spend_floor};
 use mur_common::telemetry::METHOD_STARTUP_WAIVED;
 
@@ -135,9 +137,11 @@ pub(super) fn explain_held(
 }
 
 /// The headless refusal for a parked ask whose wait ran out: same decision,
-/// with the tier explanation appended (#2313).
+/// with the tier explanation appended (#2313). The refusal already says the
+/// wait ran out, so the note carries no second "timed out". `refusal_code`
+/// stays the headless one: that caller keys on "still needs approval".
 pub(super) fn explain_held_refusal(d: &mut HitlDecision, tier: Option<RiskTier>) {
-    let why = tier_not_waived_reason(TIMED_OUT, tier);
+    let why = tier_not_waived_note(tier);
     d.reason = Some(match d.reason.take() {
         Some(r) => format!("{r}; {why}"),
         None => why,
