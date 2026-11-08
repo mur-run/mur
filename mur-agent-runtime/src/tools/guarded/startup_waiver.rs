@@ -73,9 +73,13 @@ impl GuardedToolCall {
             .filter_map(|c| {
                 let tier = c.risk.max(spend_floor(&c.tool_name));
                 let spend = is_spend_tool(&c.tool_name);
+                // A spend tool is held for being spend, whatever `tier` it
+                // maxed to (`risk: destructive` would read as waivable), so
+                // name it Spend.
+                let named = if spend { Some(RiskTier::Spend) } else { tier };
                 waiver
                     .held_by_tier(c.origin, tier, spend)
-                    .then(|| (c.call_id.clone(), tier))
+                    .then(|| (c.call_id.clone(), named))
             })
             .collect()
     }

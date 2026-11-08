@@ -61,7 +61,9 @@ pub fn banner(name: &str, flags: OverrideFlags) -> String {
              \x20   declared tier (declare a `risk:` tier to change that). Explicit per-tool\n\
              \x20   `ask` rules, `deny` rules and remembered denials still apply.\n\
              \x20   Unattended, a call that still has to ask is deferred — held until a\n\
-             \x20   human answers — never released on its own.\n",
+             \x20   human answers — never released on its own.\n\
+             \x20   When such an ask times out, the agent is told its tier is never\n\
+             \x20   waived by --no-hitl (refusal code `tier_not_waived`).\n",
         );
     }
     if flags.net_unrestricted {

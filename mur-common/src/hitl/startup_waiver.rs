@@ -65,13 +65,7 @@ impl StartupWaiver {
     /// an intent raise or a hook ask vetoes; an explicit `ask` is kept; only a
     /// default or a clamp is eligible; and then only at a waivable tier.
     pub fn may_waive(&self, origin: AskOrigin, tier: Option<RiskTier>) -> bool {
-        if origin.intent_raised || origin.hook_raised || origin.explicit {
-            return false;
-        }
-        if !(origin.default || origin.clamp) {
-            return false;
-        }
-        tier_may_be_waived(tier)
+        origin_eligible(origin) && tier_may_be_waived(tier)
     }
 
     /// Would this ask have been waived but for its tier? True when the
@@ -79,10 +73,17 @@ impl StartupWaiver {
     /// what keeps a human in the loop. Used only to explain the eventual
     /// timeout (#2313); it never changes what is waived.
     pub fn held_by_tier(&self, origin: AskOrigin, tier: Option<RiskTier>, spend: bool) -> bool {
-        let eligible = !(origin.intent_raised || origin.hook_raised || origin.explicit)
-            && (origin.default || origin.clamp);
-        eligible && (spend || !tier_may_be_waived(tier))
+        origin_eligible(origin) && (spend || !tier_may_be_waived(tier))
     }
+}
+
+/// The origin half of the waiver rule, shared by [`StartupWaiver::may_waive`]
+/// and [`StartupWaiver::held_by_tier`] so the explanation cannot drift from
+/// what is actually waived: an intent raise or a hook ask vetoes, an explicit
+/// `ask` is kept, and only a default or a clamp is eligible.
+fn origin_eligible(origin: AskOrigin) -> bool {
+    !(origin.intent_raised || origin.hook_raised || origin.explicit)
+        && (origin.default || origin.clamp)
 }
 
 /// `refusal_code` on a `--no-hitl` ask that timed out because its tier is
@@ -99,8 +100,8 @@ pub fn tier_not_waived_reason(timed_out: &str, tier: Option<RiskTier>) -> String
     format!(
         "{timed_out}: this call is {tier}-tier, and --no-hitl never waives \
          Spend, Privileged or undeclared-tier calls, so it waited for a human \
-         and nobody answered. Retrying the same call will wait again; use a \
-         form that does not need this tier, or ask the user to approve it"
+         and nobody answered. Retrying will wait again. Ask the user to \
+         approve it, or continue without this operation"
     )
 }
 
