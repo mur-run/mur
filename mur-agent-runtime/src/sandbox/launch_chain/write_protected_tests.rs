@@ -52,6 +52,11 @@ impl Fixture {
         let c = self.mur.join("commander");
         vec![c.join("identity.pub"), c.join("identity.prev.pub")]
     }
+
+    /// Write denied only, as a subtree: the human's public half (A0).
+    fn human_identity_row(&self) -> PathBuf {
+        self.mur.join("identity")
+    }
 }
 
 fn set(v: Vec<PathBuf>) -> BTreeSet<PathBuf> {
@@ -64,6 +69,7 @@ fn write_protected_paths_equals_the_write_rows_of_the_table() {
     let mut expected = f.chain.deny_paths();
     expected.extend(f.credential_rows());
     expected.extend(f.commander_public_rows());
+    expected.push(f.human_identity_row());
     assert_eq!(set(f.chain.write_protected_paths()), set(expected));
 }
 
@@ -253,4 +259,78 @@ fn a_symlink_to_an_ancestor_of_a_protected_path_is_dropped() {
     let (kept, dropped) = f.chain.partition_grants(std::slice::from_ref(&link));
     assert!(kept.is_empty());
     assert_eq!(dropped, vec![link]);
+}
+
+/// A0 (D-8): the human's public half is write-protected as a subtree.
+#[test]
+fn identity_dir_in_write_protected_paths() {
+    let f = fixture();
+    let dir = f.human_identity_row();
+    assert!(f.chain.write_protected_paths().contains(&dir));
+    for p in [
+        dir.clone(),
+        dir.join("identity.pub"),
+        dir.join("rotations.jsonl"),
+    ] {
+        assert!(f.chain.protects_write(&p).is_some(), "{}", p.display());
+    }
+    // Landlock cannot carve it out of a grant, so the grant is dropped whole.
+    let (kept, dropped) = f.chain.partition_grants(std::slice::from_ref(&dir));
+    assert!(kept.is_empty());
+    assert_eq!(dropped, vec![dir]);
+}
+
+/// A0: nothing in `identity/` is secret, so no read rule may name it — the
+/// directory grant on Linux and allow-default on macOS both depend on that.
+#[test]
+fn identity_pub_and_rotations_readable_every_profile() {
+    let f = fixture();
+    let dir = f.human_identity_row();
+    for p in [
+        dir.clone(),
+        dir.join("identity.pub"),
+        dir.join("rotations.jsonl"),
+    ] {
+        assert!(f.chain.protects_read(&p).is_none(), "{}", p.display());
+    }
+    assert!(
+        !f.chain
+            .credential_paths()
+            .iter()
+            .any(|c| c.starts_with(&dir) || dir.starts_with(c))
+    );
+    let (kept, dropped) = f.chain.partition_read_grants(std::slice::from_ref(&dir));
+    assert_eq!(kept, vec![dir]);
+    assert!(dropped.is_empty());
+}
+
+/// A0: the human's private key sits under `keys/`, so it is already denied
+/// for read and write, `.prev` included, with no new rule.
+#[test]
+fn human_private_key_under_keys_denied_read_and_write() {
+    let f = fixture();
+    let k = f.mur.join("keys").join(".human");
+    for p in [k.join("identity.key"), k.join("identity.key.prev")] {
+        assert!(f.chain.protects_read(&p).is_some(), "{}", p.display());
+        assert!(f.chain.protects_write(&p).is_some(), "{}", p.display());
+    }
+    assert!(f.chain.credential_paths().contains(&f.mur.join("keys")));
+    assert!(
+        f.chain
+            .write_protected_paths()
+            .contains(&f.mur.join("keys"))
+    );
+    // Same path the layout helper names, so the two cannot drift.
+    assert_eq!(k, mur_common::identity::human::human_key_dir(&f.mur));
+}
+
+/// D-7: the predicate C1 calls before it enrolls an owner.
+#[test]
+fn identity_dir_protected_is_queryable() {
+    let f = fixture();
+    assert!(f.chain.protects_human_identity());
+    assert_eq!(
+        f.chain.human_identity_dir(),
+        mur_common::identity::human::human_identity_dir(&f.mur)
+    );
 }

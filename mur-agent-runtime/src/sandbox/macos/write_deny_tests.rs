@@ -231,3 +231,24 @@ fn key_files_get_the_right_denies() {
         );
     }
 }
+
+/// A0: `identity/` is write-denied after every allow and never read-denied;
+/// the human's private key under `keys/.human` is covered by the `keys/`
+/// read and write denies — generated rules, not just the predicate.
+#[test]
+fn human_identity_rules_in_the_generated_profile() {
+    let mur = PathBuf::from(MUR);
+    let dir = mur.join("identity");
+    let keys = mur.join("keys");
+    // A grant on `<mur_home>` itself, so the denies must carve it.
+    let sbpl = build_sbpl_profile(&policy(std::slice::from_ref(&mur), &[], false));
+    let l = lines(&sbpl);
+    let start = credential_loop_start(&l);
+    assert!(write_denies_from(&l, start).contains(&dir), "{sbpl}");
+    assert!(pos(&l, &rule("deny file-read*", &dir)).is_none(), "{sbpl}");
+    let grant = last_pos(&l, &rule("allow file-write*", &mur)).unwrap();
+    for verb in ["deny file-read*", "deny file-write*"] {
+        let at = last_pos(&l, &rule(verb, &keys)).expect(verb);
+        assert!(at > grant, "{verb} must follow the grant:\n{sbpl}");
+    }
+}
