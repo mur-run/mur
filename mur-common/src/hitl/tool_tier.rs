@@ -673,6 +673,35 @@ mod tests {
         }
     }
 
+    /// #2310: only a heredoc fed to a proven data sink (`cat`/`tee`, see
+    /// `heredoc_data`) is exempt from the head scan. A body fed to an
+    /// interpreter is executed, and the tokenizer cannot tell a test helper's
+    /// `mount(<Foo />)` from a real `chmod(...)`, so a call-shaped deny-listed
+    /// word there keeps its tier — the fix must never lower a genuine one.
+    #[test]
+    fn heredoc_call_shapes_keep_their_tier_unless_fed_to_a_sink() {
+        for cmd in [
+            "cat <<'EOF' > notes.md\nrun sudo apt update later\nEOF",
+            "tee test.js <<'EOF' >/dev/null\nmount(<Foo />)\nEOF",
+        ] {
+            let tier = classify("bash", Some(&bash(cmd)));
+            assert!(tier < RiskTier::Privileged, "cmd: {cmd}\ngot {tier:?}");
+        }
+        for cmd in [
+            "python3 - <<'EOF'\nfrom os import *\nchmod(\"victim\", 0o777)\nEOF",
+            r#"python3 -c 'from os import *; chmod("victim", 0o777)'"#,
+            "node -e 'security()'",
+            "bash <<'EOF'\nchmod 777 /etc/x\nEOF",
+            "python3 <<< 'chmod(1)'",
+        ] {
+            assert_eq!(
+                classify("bash", Some(&bash(cmd))),
+                RiskTier::Privileged,
+                "cmd: {cmd}"
+            );
+        }
+    }
+
     /// #1832 (policy change, not a bug fix): a command whose body cannot be
     /// read from the text is arbitrary code execution, so it is asked about
     /// instead of falling back to `Write`.
