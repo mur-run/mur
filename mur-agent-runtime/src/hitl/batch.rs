@@ -54,7 +54,7 @@ pub struct BatchGate<'a> {
     pub parking: Option<&'a super::parked::Parking>,
 }
 
-const TIMED_OUT: &str = "timed out";
+pub(crate) const TIMED_OUT: &str = "timed out";
 
 /// True for the decision [`BatchGate::ask`] gives a call nobody answered in
 /// time â no human said anything, so a headless caller reports it as still

@@ -62,6 +62,7 @@ impl GuardedToolCall {
         if undecided.is_empty() {
             return;
         }
+        let held = self.held_by_tier(&undecided);
         for c in &undecided {
             self.record_pending_ceiling(task_id, calls, c).await;
         }
@@ -95,7 +96,11 @@ impl GuardedToolCall {
                 }
                 answer => {
                     let expired = answer.is_some();
-                    out.insert(c.call_id.clone(), self.refuse(task_id, calls, &c, expired));
+                    let mut d = self.refuse(task_id, calls, &c, expired);
+                    if let (true, Some(tier)) = (expired, held.get(&c.call_id)) {
+                        super::startup_waiver::explain_held_refusal(&mut d, *tier);
+                    }
+                    out.insert(c.call_id.clone(), d);
                 }
             }
         }

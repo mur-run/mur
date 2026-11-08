@@ -73,6 +73,35 @@ impl StartupWaiver {
         }
         tier_may_be_waived(tier)
     }
+
+    /// Would this ask have been waived but for its tier? True when the
+    /// origin alone is eligible and the tier (or a spend tool's name) is
+    /// what keeps a human in the loop. Used only to explain the eventual
+    /// timeout (#2313); it never changes what is waived.
+    pub fn held_by_tier(&self, origin: AskOrigin, tier: Option<RiskTier>, spend: bool) -> bool {
+        let eligible = !(origin.intent_raised || origin.hook_raised || origin.explicit)
+            && (origin.default || origin.clamp);
+        eligible && (spend || !tier_may_be_waived(tier))
+    }
+}
+
+/// `refusal_code` on a `--no-hitl` ask that timed out because its tier is
+/// never waived (#2313).
+pub const TIER_NOT_WAIVED: &str = "tier_not_waived";
+
+/// What the agent reads when such an ask times out. Starts with the gate's
+/// own timeout text so a reader of the reason still sees it was a timeout.
+pub fn tier_not_waived_reason(timed_out: &str, tier: Option<RiskTier>) -> String {
+    let tier = match tier {
+        Some(t) => format!("{t:?}"),
+        None => "undeclared".to_string(),
+    };
+    format!(
+        "{timed_out}: this call is {tier}-tier, and --no-hitl never waives \
+         Spend, Privileged or undeclared-tier calls, so it waited for a human \
+         and nobody answered. Retrying the same call will wait again; use a \
+         form that does not need this tier, or ask the user to approve it"
+    )
 }
 
 #[cfg(test)]

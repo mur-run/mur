@@ -158,6 +158,9 @@ impl Setup {
 
 struct Run {
     executed: u64,
+    /// `code: message` of the turn's error, empty when it did not fail —
+    /// what the caller reads when a denial ends the turn (#2313).
+    error: String,
     /// Calls named in `tool/approval_needed` requests.
     asked: usize,
     records: u64,
@@ -214,9 +217,17 @@ async fn run(s: Setup) -> Run {
     let mut spec = loop_spec("waiver");
     spec.task_id = Some(task.into());
     let runner = Arc::new(runner);
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), runner.run_sync(spec))
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), runner.run_sync(spec))
         .await
         .expect("turn finishes");
+    let error = match &outcome {
+        TaskOutcome::Failed(t) => t
+            .error
+            .as_ref()
+            .map(|e| format!("{}: {}", e.code, e.message))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
     let mut asked = 0;
     while let Ok(n) = nrx.try_recv() {
         if n["method"] == "tool/approval_needed" {
@@ -227,6 +238,7 @@ async fn run(s: Setup) -> Run {
     }
     Run {
         executed: calls.load(Ordering::Relaxed),
+        error,
         asked,
         records: store.records.load(Ordering::Relaxed) - records_before,
     }
@@ -347,6 +359,55 @@ async fn a_privileged_command_still_asks() {
     let mut s = Setup::new("bash", bash("sudo ls"));
     s.rules = vec![rule("bash", ToolPolicy::Allow, None)];
     still_asks(&run(s).await);
+}
+
+/// #2313: the Privileged ask still waits and times out, but the turn's error
+/// names the tier and says `--no-hitl` does not cover it — not a bare
+/// "timed out". Nothing is remembered, and a Write-level call in the same
+/// boot is still waived.
+#[tokio::test]
+async fn a_privileged_timeout_names_the_tier_and_the_waiver() {
+    let mut s = Setup::new("bash", bash("sudo ls"));
+    s.rules = vec![rule("bash", ToolPolicy::Allow, None)];
+    let r = run(s).await;
+    still_asks(&r);
+    assert_eq!(r.records, 0, "a timeout is never remembered");
+    assert!(
+        r.error.contains("Privileged-tier") && r.error.contains("--no-hitl never waives"),
+        "got {:?}",
+        r.error
+    );
+    waived(&run(Setup::new("bash", bash("rm -rf build"))).await);
+}
+
+/// A caller that cannot approve never waits: it is told up front that the
+/// tier always needs a human, so there is no timeout to explain.
+#[tokio::test]
+async fn a_headless_privileged_ask_names_its_tier_without_waiting() {
+    let mut s = Setup::new("bash", bash("sudo ls"));
+    s.rules = vec![rule("bash", ToolPolicy::Allow, None)];
+    s.can_approve = false;
+    let r = run(s).await;
+    still_asks(&r);
+    assert!(
+        r.error.starts_with("hitl_approval_required")
+            && r.error.contains("privileged")
+            && r.error.contains("always needs a human"),
+        "got {:?}",
+        r.error
+    );
+}
+
+/// Without a waiver the timeout text is untouched: the explanation is about
+/// `--no-hitl` and only appears under it.
+#[tokio::test]
+async fn without_a_waiver_the_timeout_is_not_rewritten() {
+    let mut s = Setup::new("bash", bash("sudo ls"));
+    s.rules = vec![rule("bash", ToolPolicy::Allow, None)];
+    s.waiver = false;
+    let r = run(s).await;
+    still_asks(&r);
+    assert!(!r.error.contains("--no-hitl"), "got {:?}", r.error);
 }
 
 /// An MCP tool with no `risk:` reaches the gate unclassified: not waived.
