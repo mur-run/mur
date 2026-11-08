@@ -10,11 +10,12 @@
 //! counts. This can only RAISE a tier: it adds matches, removes none.
 //!
 //! Known gaps, accepted: an aliased import (`import os as o; o.chmod`) and a
-//! call on an expression (`require('fs').chmodSync`) are not seen. A bare
-//! `chmod(...)` after `from os import *` is already caught by the plain head
-//! scan.
+//! call on an expression (`require('fs').chmodSync`), and a destructured
+//! import (`const {chmodSync} = require('fs'); chmodSync(...)` — bare
+//! `chmodsync` is not a deny-list head) are not seen. A bare `chmod(...)`
+//! after `from os import *` is already caught by the plain head scan.
 
-use super::{PRIVILEGED_HEADS, tokens};
+use super::PRIVILEGED_HEADS;
 
 /// Standard-library modules whose functions act on the real system:
 /// Python `os` / `posix` / `shutil`, Node `fs` (incl. `fs.promises.*`).
@@ -39,7 +40,13 @@ const PRIVILEGED_FUNCTIONS: &[&str] = &[
 /// Does `cmd` (already lowercased) call a privileged function through a
 /// system module, e.g. `os.chmod` or `fs.promises.chown`?
 pub(super) fn privileged_call_in(cmd: &str) -> bool {
-    tokens(cmd).any(|t| {
+    // Split on anything that cannot be part of a dotted name, not just on
+    // `tokens()`'s separators: `map(os.chmod,`, `f=os.chmod`, `{os.chmod(`
+    // and `[os.chmod]` would otherwise glue punctuation to the module or the
+    // function and miss the exact match. Whitespace is outside the class too,
+    // so this is a superset of the token split.
+    let is_name = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.';
+    cmd.split(|c: char| !is_name(c)).any(|t| {
         let Some((module, _)) = t.split_once('.') else {
             return false;
         };
@@ -70,6 +77,11 @@ mod tests {
             "python3 -c 'import shutil; shutil.chown(\"x\", \"root\")'",
             "node -e 'require(\"fs\"); fs.chmodSync(\"x\", 0o777)'",
             "node -e 'fs.promises.chown(\"x\", 0, 0)'",
+            // Punctuation glued to the call by `tokens()` (review of #2314).
+            "python3 -c 'import os; list(map(os.chmod, [\"x\"], [0o777]))'",
+            "python3 -c 'import os; f=os.chmod; f(\"x\", 0o777)'",
+            "node -e '{fs.chmodSync(\"x\", 0o777)}'",
+            "python3 -c 'import os; [os.chmod][0](\"x\", 0o777)'",
         ] {
             assert_eq!(tier(cmd), RiskTier::Privileged, "cmd: {cmd}");
         }
