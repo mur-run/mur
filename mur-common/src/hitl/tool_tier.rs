@@ -280,7 +280,7 @@ fn classify_bash(cmd: &str) -> RiskTier {
     if word_in(&lower, EGRESS_HEADS) || git_sub_in(&lower, GIT_EGRESS_SUBCMDS) {
         tier = tier.max(RiskTier::NetworkEgress);
     }
-    if word_in(&lower, PRIVILEGED_HEADS) {
+    if word_in(&lower, PRIVILEGED_HEADS) || dotted::privileged_call_in(&lower) {
         tier = tier.max(RiskTier::Privileged);
     }
     tier
@@ -320,6 +320,8 @@ fn git_sub_in(cmd: &str, subs: &[&str]) -> bool {
     toks.windows(2)
         .any(|w| w[0] == "git" && subs.contains(&w[1]))
 }
+
+mod dotted;
 
 #[cfg(test)]
 mod readonly_regressions;
