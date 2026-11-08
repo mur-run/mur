@@ -134,6 +134,10 @@ struct Setup {
     /// With `b0_home`: an image is already in its provenance ledger, so the
     /// turn starts after untrusted input.
     untrusted: bool,
+    /// A second call in the same model response (same boot, same batch).
+    also: Option<(&'static str, serde_json::Value)>,
+    /// Headless only: park undecided asks this long instead of refusing.
+    park: Option<std::time::Duration>,
 }
 
 impl Setup {
@@ -152,12 +156,17 @@ impl Setup {
             intent: None,
             b0_home: None,
             untrusted: false,
+            also: None,
+            park: None,
         }
     }
 }
 
 struct Run {
     executed: u64,
+    /// `code: message` of the turn's error, empty when it did not fail —
+    /// what the caller reads when a denial ends the turn (#2313).
+    error: String,
     /// Calls named in `tool/approval_needed` requests.
     asked: usize,
     records: u64,
@@ -165,19 +174,38 @@ struct Run {
 
 async fn run(s: Setup) -> Run {
     use crate::llm::stub::SequenceLlm;
-    let responses = vec![
-        calls_response(s.tool, s.input.clone(), s.n),
-        end_turn_response("OK"),
-    ];
+    let mut first = calls_response(s.tool, s.input.clone(), s.n);
+    let mut tools: Vec<Arc<dyn crate::tools::ToolExecutor>> = Vec::new();
+    let also_calls = Arc::new(AtomicU64::new(0));
+    if let Some((tool, input)) = &s.also {
+        // First in the batch: a denial ends the turn, so a call after it
+        // would never reach execution whatever its waiver said.
+        first.tool_calls.insert(
+            0,
+            crate::llm::ToolCallResult {
+                call_id: "c-also".into(),
+                tool_name: (*tool).into(),
+                input: input.clone(),
+            },
+        );
+        if *tool != s.tool {
+            tools.push(Arc::new(Named {
+                name: tool,
+                calls: also_calls.clone(),
+            }));
+        }
+    }
+    let responses = vec![first, end_turn_response("OK")];
     let calls = Arc::new(AtomicU64::new(0));
+    tools.push(Arc::new(Named {
+        name: s.tool,
+        calls: calls.clone(),
+    }));
     let store = s.store.clone().unwrap_or_else(|| Store::new(s.settled));
     let records_before = store.records.load(Ordering::Relaxed);
     let (ntx, mut nrx) = tokio::sync::mpsc::channel(256);
     let mut runner = TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
-        .with_tools(vec![Arc::new(Named {
-            name: s.tool,
-            calls: calls.clone(),
-        })])
+        .with_tools(tools)
         .with_tools_policy(s.rules)
         .with_pending_approvals(empty_pending_approvals())
         .with_sandbox_enforcing(s.sandbox)
@@ -208,15 +236,26 @@ async fn run(s: Setup) -> Run {
     runner
         .register_client_notifier(task, ntx, s.can_approve)
         .await;
+    if let Some(wait) = s.park {
+        runner.open_approval_window(task, wait);
+    }
     if s.one_shot {
         runner.mark_one_shot_approvals(task).await;
     }
     let mut spec = loop_spec("waiver");
     spec.task_id = Some(task.into());
     let runner = Arc::new(runner);
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), runner.run_sync(spec))
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), runner.run_sync(spec))
         .await
         .expect("turn finishes");
+    let error = match &outcome {
+        TaskOutcome::Failed(t) => t
+            .error
+            .as_ref()
+            .map(|e| format!("{}: {}", e.code, e.message))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
     let mut asked = 0;
     while let Ok(n) = nrx.try_recv() {
         if n["method"] == "tool/approval_needed" {
@@ -226,7 +265,8 @@ async fn run(s: Setup) -> Run {
         }
     }
     Run {
-        executed: calls.load(Ordering::Relaxed),
+        executed: calls.load(Ordering::Relaxed) + also_calls.load(Ordering::Relaxed),
+        error,
         asked,
         records: store.records.load(Ordering::Relaxed) - records_before,
     }
@@ -347,6 +387,107 @@ async fn a_privileged_command_still_asks() {
     let mut s = Setup::new("bash", bash("sudo ls"));
     s.rules = vec![rule("bash", ToolPolicy::Allow, None)];
     still_asks(&run(s).await);
+}
+
+/// #2313: the Privileged ask still waits and times out, but the turn's error
+/// names the tier and says `--no-hitl` does not cover it — not a bare
+/// "timed out". Nothing is remembered, and a waivable call in the same boot
+/// and batch still runs. (A Write-tier call under `allow` never asks at all,
+/// so the waived neighbour is the lowest tier that reaches the waiver.)
+#[tokio::test]
+async fn a_privileged_timeout_names_the_tier_and_the_waiver() {
+    let mut s = Setup::new("bash", bash("sudo ls"));
+    s.rules = vec![rule("bash", ToolPolicy::Allow, None)];
+    s.also = Some(("bash", bash("rm -rf build")));
+    let r = run(s).await;
+    assert_eq!(r.executed, 1, "only the waivable call runs");
+    assert_eq!(r.records, 0, "a timeout is never remembered");
+    assert!(
+        r.error.contains("Privileged-tier") && r.error.contains("--no-hitl never waives"),
+        "got {:?}",
+        r.error
+    );
+    assert!(
+        !r.error.contains("form that does not need"),
+        "never coach a way around the classifier: {:?}",
+        r.error
+    );
+}
+
+/// A spend tool declared `risk: destructive` is held for being spend, so the
+/// explanation names Spend — Destructive alone would have been waived.
+#[tokio::test]
+async fn a_spend_timeout_names_spend_not_its_declared_tier() {
+    let mut s = Setup::new("fleet_run", serde_json::json!({}));
+    s.rules = vec![rule(
+        "fleet_run",
+        ToolPolicy::Allow,
+        Some(RiskTier::Destructive),
+    )];
+    let r = run(s).await;
+    still_asks(&r);
+    assert!(
+        r.error.contains("Spend-tier") && !r.error.contains("Destructive-tier"),
+        "got {:?}",
+        r.error
+    );
+}
+
+/// A headless caller that opened an approval window parks the Privileged
+/// ask; when nobody answers, the refusal names the tier and the waiver.
+#[tokio::test]
+async fn a_parked_headless_privileged_ask_names_its_tier_when_it_expires() {
+    let mut s = Setup::new("bash", bash("sudo ls"));
+    s.rules = vec![rule("bash", ToolPolicy::Allow, None)];
+    s.can_approve = false;
+    s.park = Some(std::time::Duration::from_millis(300));
+    let r = run(s).await;
+    still_asks(&r);
+    assert_eq!(r.records, 0, "an expired wait is never remembered");
+    assert!(
+        r.error.starts_with("hitl_approval_required")
+            && r.error.contains("Privileged-tier")
+            && r.error.contains("--no-hitl never waives"),
+        "got {:?}",
+        r.error
+    ); // One timeout phrase, not "nobody answered …; timed out: …".
+    assert!(!r.error.contains("timed out"), "got {:?}", r.error);
+    assert_eq!(
+        r.error.matches("nobody answered").count(),
+        1,
+        "got {:?}",
+        r.error
+    );
+}
+
+/// A caller that cannot approve never waits: it is told up front that the
+/// tier always needs a human, so there is no timeout to explain.
+#[tokio::test]
+async fn a_headless_privileged_ask_names_its_tier_without_waiting() {
+    let mut s = Setup::new("bash", bash("sudo ls"));
+    s.rules = vec![rule("bash", ToolPolicy::Allow, None)];
+    s.can_approve = false;
+    let r = run(s).await;
+    still_asks(&r);
+    assert!(
+        r.error.starts_with("hitl_approval_required")
+            && r.error.contains("privileged")
+            && r.error.contains("always needs a human"),
+        "got {:?}",
+        r.error
+    );
+}
+
+/// Without a waiver the timeout text is untouched: the explanation is about
+/// `--no-hitl` and only appears under it.
+#[tokio::test]
+async fn without_a_waiver_the_timeout_is_not_rewritten() {
+    let mut s = Setup::new("bash", bash("sudo ls"));
+    s.rules = vec![rule("bash", ToolPolicy::Allow, None)];
+    s.waiver = false;
+    let r = run(s).await;
+    still_asks(&r);
+    assert!(!r.error.contains("--no-hitl"), "got {:?}", r.error);
 }
 
 /// An MCP tool with no `risk:` reaches the gate unclassified: not waived.

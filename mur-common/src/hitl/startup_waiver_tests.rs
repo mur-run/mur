@@ -112,6 +112,28 @@ mod waiver {
     }
 
     #[test]
+    fn held_by_tier_only_when_the_tier_is_the_reason() {
+        let w = waiver();
+        let default = o(false, true, false, false);
+        assert!(w.held_by_tier(default, Some(RiskTier::Privileged), false));
+        assert!(w.held_by_tier(default, None, false));
+        assert!(w.held_by_tier(default, Some(RiskTier::Destructive), true));
+        assert!(!w.held_by_tier(default, Some(RiskTier::Write), false));
+        assert!(!w.held_by_tier(
+            o(true, true, false, false),
+            Some(RiskTier::Privileged),
+            false
+        ));
+        assert!(!w.held_by_tier(
+            o(false, true, false, true),
+            Some(RiskTier::Privileged),
+            false
+        ));
+        assert!(!w.held_by_tier(hooked(default), Some(RiskTier::Privileged), false));
+        assert!(!w.held_by_tier(AskOrigin::default(), Some(RiskTier::Privileged), false));
+    }
+
+    #[test]
     fn default_origin_is_never_waived() {
         assert!(!waiver().may_waive(AskOrigin::default(), Some(RiskTier::Write)));
     }

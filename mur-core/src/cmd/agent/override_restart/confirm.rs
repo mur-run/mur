@@ -60,8 +60,11 @@ pub fn banner(name: &str, flags: OverrideFlags) -> String {
              \x20   Still ask: calls classified Spend or Privileged, and calls with no\n\
              \x20   declared tier (declare a `risk:` tier to change that). Explicit per-tool\n\
              \x20   `ask` rules, `deny` rules and remembered denials still apply.\n\
-             \x20   Unattended, a call that still has to ask is deferred — held until a\n\
-             \x20   human answers — never released on its own.\n",
+             \x20   In a fleet, unattended, a call that still has to ask is deferred —\n\
+             \x20   held until a human answers — never released on its own. A single\n\
+             \x20   agent waits out its approval window instead; if nobody answers, the\n\
+             \x20   call does not run and the agent is told its tier is never waived by\n\
+             \x20   --no-hitl (refusal code `tier_not_waived`).\n",
         );
     }
     if flags.net_unrestricted {

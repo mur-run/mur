@@ -65,14 +65,60 @@ impl StartupWaiver {
     /// an intent raise or a hook ask vetoes; an explicit `ask` is kept; only a
     /// default or a clamp is eligible; and then only at a waivable tier.
     pub fn may_waive(&self, origin: AskOrigin, tier: Option<RiskTier>) -> bool {
-        if origin.intent_raised || origin.hook_raised || origin.explicit {
-            return false;
-        }
-        if !(origin.default || origin.clamp) {
-            return false;
-        }
-        tier_may_be_waived(tier)
+        origin_eligible(origin) && tier_may_be_waived(tier)
     }
+
+    /// Would this ask have been waived but for its tier? True when the
+    /// origin alone is eligible and the tier (or a spend tool's name) is
+    /// what keeps a human in the loop. Used only to explain the eventual
+    /// timeout (#2313); it never changes what is waived.
+    pub fn held_by_tier(&self, origin: AskOrigin, tier: Option<RiskTier>, spend: bool) -> bool {
+        origin_eligible(origin) && (spend || !tier_may_be_waived(tier))
+    }
+}
+
+/// The origin half of the waiver rule, shared by [`StartupWaiver::may_waive`]
+/// and [`StartupWaiver::held_by_tier`] so the explanation cannot drift from
+/// what is actually waived: an intent raise or a hook ask vetoes, an explicit
+/// `ask` is kept, and only a default or a clamp is eligible.
+fn origin_eligible(origin: AskOrigin) -> bool {
+    !(origin.intent_raised || origin.hook_raised || origin.explicit)
+        && (origin.default || origin.clamp)
+}
+
+/// `refusal_code` on a `--no-hitl` ask that timed out because its tier is
+/// never waived (#2313).
+pub const TIER_NOT_WAIVED: &str = "tier_not_waived";
+
+/// What the agent is told to do next. No "use another form" hint: that
+/// reads as "reword the call so it classifies lower", the evasion #2314 closed.
+const TIER_NOT_WAIVED_NEXT: &str =
+    "Retrying will wait again. Ask the user to approve it, or continue without this operation";
+
+fn tier_not_waived_clause(tier: Option<RiskTier>) -> String {
+    let tier = match tier {
+        Some(t) => format!("{t:?}"),
+        None => "undeclared".to_string(),
+    };
+    format!(
+        "this call is {tier}-tier, and --no-hitl never waives \
+         Spend, Privileged or undeclared-tier calls"
+    )
+}
+
+/// What the agent reads when such an ask times out. Starts with the gate's
+/// own timeout text so a reader of the reason still sees it was a timeout.
+pub fn tier_not_waived_reason(timed_out: &str, tier: Option<RiskTier>) -> String {
+    format!(
+        "{timed_out}: {}, so it waited for a human and nobody answered. {TIER_NOT_WAIVED_NEXT}",
+        tier_not_waived_clause(tier)
+    )
+}
+
+/// The same explanation without the timeout framing, for a refusal whose
+/// own text already says the wait ran out (the headless parked ask).
+pub fn tier_not_waived_note(tier: Option<RiskTier>) -> String {
+    format!("{}. {TIER_NOT_WAIVED_NEXT}", tier_not_waived_clause(tier))
 }
 
 #[cfg(test)]
