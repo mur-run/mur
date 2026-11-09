@@ -196,4 +196,18 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         assert!(cmd_fleet_stop(tmp.path(), "nope").is_err());
     }
+
+    #[test]
+    fn a_pause_sentinel_naming_a_path_is_not_a_run_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        save_dev(home);
+        let p = paused_path(home, "dev");
+        for bad in ["../x", "a/b", ".."] {
+            std::fs::write(&p, format!("run_id: {bad}\n")).unwrap();
+            assert_eq!(paused_run_id(home, "dev"), None, "{bad}");
+        }
+        std::fs::write(&p, "run_id: fleet-dev-1\n").unwrap();
+        assert_eq!(paused_run_id(home, "dev").as_deref(), Some("fleet-dev-1"));
+    }
 }
