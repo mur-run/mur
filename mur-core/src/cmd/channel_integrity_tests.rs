@@ -374,3 +374,87 @@ fn verify_works_without_a_usable_index() {
     assert!(r.is_intact(), "{}", r.render());
     assert_eq!(std::fs::read(&index).unwrap(), b"not a directory");
 }
+
+/// A head an agent sealed with its own key before H1: the router key fails,
+/// the writer key of the event the head covers holds it.
+fn agent_sealed(n: usize) -> Fixture {
+    let f = Fixture::anchored(0);
+    let worker_home = f.home.path().join("agents").join("worker");
+    std::fs::create_dir_all(&worker_home).unwrap();
+    AgentIdentity::generate().save(&worker_home).unwrap();
+    for i in 0..n {
+        append_as_writer(
+            &f.svc,
+            f.home.path(),
+            &f.id,
+            "worker",
+            ChannelActor::Agent {
+                id: "worker".into(),
+            },
+            EventKind::Note,
+            serde_json::json!({ "text": format!("worker {i}") }),
+            None,
+        )
+        .unwrap();
+    }
+    f
+}
+
+#[test]
+fn integrity_accepts_legacy_agent_sealed_head() {
+    let f = agent_sealed(2);
+    let r = f.check();
+    assert!(r.is_intact(), "{}", r.render());
+    assert_eq!(r.legacy_sealer.as_deref(), Some("worker"));
+    assert!(
+        r.render().contains("sealed by agent `worker`"),
+        "{}",
+        r.render()
+    );
+}
+
+#[test]
+fn an_edited_agent_sealed_head_is_still_forged() {
+    let f = agent_sealed(2);
+    let mut head: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(f.head_path()).unwrap()).unwrap();
+    head["lines"] = serde_json::json!(1);
+    std::fs::write(f.head_path(), serde_json::to_vec(&head).unwrap()).unwrap();
+    let r = f.check();
+    assert_eq!(r.anchor_mismatch, Some(AnchorMismatchKind::BadSignature));
+    assert_eq!(r.legacy_sealer, None);
+}
+
+#[test]
+fn a_router_sealed_head_reports_no_legacy_sealer() {
+    let f = Fixture::anchored(2);
+    let r = f.check();
+    assert!(r.is_intact(), "{}", r.render());
+    assert_eq!(r.legacy_sealer, None);
+}
+
+#[test]
+fn an_agent_sealed_head_over_a_system_event_is_not_vouched_for() {
+    // The covered event is the router's, so the fallback has no agent to ask:
+    // a head re-sealed by `worker` over it stays a bad signature.
+    let f = Fixture::anchored(1);
+    let worker_home = f.home.path().join("agents").join("worker");
+    std::fs::create_dir_all(&worker_home).unwrap();
+    let worker = AgentIdentity::generate();
+    worker.save(&worker_home).unwrap();
+    let head: mur_channel::head::Head =
+        serde_json::from_slice(&std::fs::read(f.head_path()).unwrap()).unwrap();
+    let fields = mur_channel::head::HeadFields {
+        channel_id: head.channel_id.clone(),
+        seq: head.seq,
+        lines: head.lines,
+        chain_hash: head.chain_hash.clone(),
+        key_version: head.key_version,
+        legacy_through: head.legacy_through,
+    };
+    let forged = mur_channel::head::Head::seal(&worker, fields, head.ts);
+    std::fs::write(f.head_path(), serde_json::to_vec(&forged).unwrap()).unwrap();
+    let r = f.check();
+    assert_eq!(r.anchor_mismatch, Some(AnchorMismatchKind::BadSignature));
+    assert_eq!(r.legacy_sealer, None);
+}

@@ -48,6 +48,10 @@ pub struct IntegrityReport {
     pub anchor_dirty: bool,
     /// An earlier `mur channel repair` never finished (`repair_marker`).
     pub repair_pending: bool,
+    /// The agent whose key sealed the head, when it was not the router's:
+    /// a legacy head written by an agent's own anchored append (H1). Not
+    /// damage — it is reported so the operator can see who vouches for it.
+    pub legacy_sealer: Option<String>,
     /// The head file exists but could not be read or parsed. When set the
     /// other checks were skipped, because the reader refuses such a channel.
     pub head_error: Option<String>,
@@ -100,11 +104,15 @@ impl IntegrityReport {
             (Some(n), None) => {
                 let past = self.log_lines.saturating_sub(n);
                 out.push_str(&format!(
-                    "  head: covers {n} lines{}\n",
+                    "  head: covers {n} lines{}{}\n",
                     if past > 0 && self.anchor_mismatch.is_none() {
                         format!(" ({past} written past it, not yet anchored)")
                     } else {
                         String::new()
+                    },
+                    match &self.legacy_sealer {
+                        Some(agent) => format!(", sealed by agent `{agent}` (legacy, pre-router)"),
+                        None => String::new(),
                     }
                 ));
             }
@@ -230,7 +238,18 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
     // ignored (the per-actor pass below decides), so the key is inert here.
     let router_key = router_key.unwrap_or(NO_HEAD_INERT_KEY);
     // `require_sig` is applied by the per-actor pass below, not here.
-    let (events, damage) = store.load_events_with_damage(channel_id, &router_key, false)?;
+    let (events, mut damage) = store.load_events_with_damage(channel_id, &router_key, false)?;
+    // A head that fails under the router key may be a legacy one an agent
+    // sealed with its own key (H1): re-check it under that writer's key
+    // before calling it forged. Only the anchor verdict is taken from the
+    // second read; events and their per-actor verdicts stay from the first.
+    if let Some((agent, key)) = legacy_sealer_key(mur_home, &events, &damage, &router_key) {
+        let (_, again) = store.load_events_with_damage(channel_id, &key, false)?;
+        if again.anchor_mismatch.is_none() {
+            report.legacy_sealer = Some(agent);
+        }
+        damage.anchor_mismatch = again.anchor_mismatch;
+    }
 
     report.events = events.len();
     report.unverified_seqs = events
@@ -244,6 +263,36 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
     report.anchor_dirty = damage.anchor_dirty;
     report.repair_pending = damage.repair_pending;
     Ok(report)
+}
+
+/// The writer key a legacy agent-sealed head would verify under, when the
+/// head failed its signature under the router key.
+///
+/// Before H1 an agent's anchored append sealed the head with the same key
+/// that signed the event, so the sealer of a legacy head is the actor of the
+/// event at `head.seq`. Only an `Agent` actor qualifies: `System` and `Human`
+/// events resolve to the router key, which already failed. The key is the
+/// one that agent's directory gives the head's `key_version`.
+///
+/// C1 (owned channels) must gate this on "no live record yet", as the
+/// writer's transition arm does; PR 1 has no owned channels, so it is
+/// unconditional here.
+fn legacy_sealer_key(
+    mur_home: &Path,
+    events: &[mur_common::channel::ChannelEvent],
+    damage: &mur_channel::store::DamageReport,
+    tried: &[u8; 32],
+) -> Option<(String, [u8; 32])> {
+    let m = damage.anchor_mismatch.as_ref()?;
+    if m.kind != AnchorMismatchKind::BadSignature {
+        return None;
+    }
+    let sealed = events.iter().find(|ev| ev.seq == m.head.seq)?;
+    let ChannelActor::Agent { id } = &sealed.actor else {
+        return None;
+    };
+    let key = crate::channel_verify::actor_pubkey(mur_home, &sealed.actor, m.head.key_version)?;
+    (key != *tried).then(|| (id.clone(), key))
 }
 
 /// Run the command: print the report, return the process exit code.
