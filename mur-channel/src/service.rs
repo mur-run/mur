@@ -11,7 +11,7 @@ use mur_common::channel::{
 use crate::anchor;
 use crate::head_io::remove_head;
 use crate::index::{ChannelIndex, ChannelRow};
-use crate::store::{ChannelStore, SealInput};
+use crate::store::{ChannelStore, ManifestPolicy, SealInput};
 use anchored::HeadSigner;
 
 /// Shared truncation limit for auto-derived conversation titles. One constant
@@ -167,16 +167,23 @@ impl ChannelService {
 
     /// Manifest + read-model bookkeeping after any successful append.
     fn after_write(&self, channel_id: &str, ev: &ChannelEvent, new_state: Option<ChannelState>) {
-        if let Ok(mut ch) = self.store.load_manifest(channel_id) {
-            if let Some(state) = new_state {
-                ch.state = state;
-            }
-            // Monotonic: a dedup hit hands back the ORIGINAL event, whose `ts`
-            // predates any activity since. Replaying it must not rewind recency.
-            ch.updated_at = ch.updated_at.max(ev.ts);
-            if let Some(t) = Self::derived_title(&ch, ev) {
-                ch.title = t;
-            }
+        // Only `state` / `updated_at` / `title` are ours to change, and only
+        // on the copy re-read under the append lock (N9).
+        let res = self
+            .store
+            .update_manifest(channel_id, ManifestPolicy::Require, |ch| {
+                if let Some(state) = new_state {
+                    ch.state = state;
+                }
+                // Monotonic: a dedup hit hands back the ORIGINAL event, whose
+                // `ts` predates any activity since. Replaying it must not
+                // rewind recency.
+                ch.updated_at = ch.updated_at.max(ev.ts);
+                if let Some(t) = Self::derived_title(ch, ev) {
+                    ch.title = t;
+                }
+            });
+        if let Ok(ch) = res {
             self.refresh_read_model(&ch, ev);
         }
     }
@@ -504,21 +511,27 @@ impl ChannelService {
         agent_id: &str,
         role: ParticipantRole,
     ) -> Result<()> {
-        let mut ch = self.store.load_manifest(channel_id)?;
-        let exists = ch
-            .participants
-            .iter()
-            .any(|p| matches!(&p.actor, ChannelActor::Agent { id } if id == agent_id));
-        if !exists {
-            ch.participants.push(Participant {
-                actor: ChannelActor::Agent {
-                    id: agent_id.to_string(),
-                },
-                role,
-                joined_at: Utc::now(),
-            });
-            ch.updated_at = Utc::now();
-            self.store.save_manifest(&ch)?;
+        let mut added = false;
+        let ch = self
+            .store
+            .update_manifest(channel_id, ManifestPolicy::Require, |ch| {
+                let exists = ch
+                    .participants
+                    .iter()
+                    .any(|p| matches!(&p.actor, ChannelActor::Agent { id } if id == agent_id));
+                if !exists {
+                    ch.participants.push(Participant {
+                        actor: ChannelActor::Agent {
+                            id: agent_id.to_string(),
+                        },
+                        role,
+                        joined_at: Utc::now(),
+                    });
+                    ch.updated_at = Utc::now();
+                    added = true;
+                }
+            })?;
+        if added {
             self.index.upsert(&ch)?;
         }
         Ok(())
@@ -526,13 +539,19 @@ impl ChannelService {
 
     /// Remove an agent participant (no-op if absent). Re-indexes.
     pub fn remove_participant(&self, channel_id: &str, agent_id: &str) -> Result<()> {
-        let mut ch = self.store.load_manifest(channel_id)?;
-        let before = ch.participants.len();
-        ch.participants
-            .retain(|p| !matches!(&p.actor, ChannelActor::Agent { id } if id == agent_id));
-        if ch.participants.len() != before {
-            ch.updated_at = Utc::now();
-            self.store.save_manifest(&ch)?;
+        let mut removed = false;
+        let ch = self
+            .store
+            .update_manifest(channel_id, ManifestPolicy::Require, |ch| {
+                let before = ch.participants.len();
+                ch.participants
+                    .retain(|p| !matches!(&p.actor, ChannelActor::Agent { id } if id == agent_id));
+                if ch.participants.len() != before {
+                    ch.updated_at = Utc::now();
+                    removed = true;
+                }
+            })?;
+        if removed {
             self.index.upsert(&ch)?;
         }
         Ok(())
@@ -712,13 +731,12 @@ impl ChannelService {
     ///
     /// Every caller here has an event to fold — manifest-only changes
     /// (participant edits, in `add_participant`/`remove_participant`) go
-    /// straight through `save_manifest` + `index.upsert` and never call
+    /// straight through `update_manifest` + `index.upsert` and never call
     /// this, precisely so they can't touch activity columns.
     fn refresh_read_model(&self, ch: &Channel, ev: &ChannelEvent) {
         let res = self
-            .store
-            .save_manifest(ch)
-            .and_then(|()| self.index.upsert(ch))
+            .index
+            .upsert(ch)
             .and_then(|()| self.index.record_event(&ch.id, ev));
         if let Err(e) = res {
             tracing::warn!(

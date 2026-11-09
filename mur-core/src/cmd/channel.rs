@@ -182,7 +182,7 @@ pub fn backfill_purpose(home: &Path, apply: bool, limit: usize) -> Result<Backfi
         if report.changed >= limit || report.would_change >= limit {
             break;
         }
-        let Ok(mut ch) = svc.store().load_manifest(&id) else {
+        let Ok(ch) = svc.store().load_manifest(&id) else {
             continue;
         };
         if ch.purpose.is_some() {
@@ -191,8 +191,16 @@ pub fn backfill_purpose(home: &Path, apply: bool, limit: usize) -> Result<Backfi
         }
         let inferred = mur_channel::purpose::effective_purpose(&ch);
         if apply {
-            ch.purpose = Some(inferred);
-            svc.store().save_manifest(&ch)?;
+            // Re-checked under the lock: a racing writer may have set it.
+            let ch = svc.store().update_manifest(
+                &id,
+                mur_channel::store::ManifestPolicy::Require,
+                |ch| {
+                    if ch.purpose.is_none() {
+                        ch.purpose = Some(inferred);
+                    }
+                },
+            )?;
             svc.index().upsert(&ch)?;
             report.changed += 1;
             println!("  {id} → {inferred:?}");
