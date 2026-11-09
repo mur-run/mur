@@ -95,7 +95,7 @@ impl ChannelStore {
     /// Title and participants fill in through the normal paths.
     fn write_placeholder(&self, id: &str) -> Result<()> {
         let now = chrono::Utc::now();
-        self.save_manifest(&Channel {
+        self.write_manifest_file(&Channel {
             v: CHANNEL_SCHEMA_VERSION,
             id: id.to_string(),
             title: id.to_string(),
