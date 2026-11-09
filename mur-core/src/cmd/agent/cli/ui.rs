@@ -7,6 +7,7 @@
 
 mod approval;
 mod band;
+mod band_window;
 mod chooser;
 mod hitl;
 mod message;
