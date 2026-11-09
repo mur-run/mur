@@ -100,7 +100,7 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
         if !quiet {
             println!("  🔄 Index outdated — reindexing...");
         }
-        match crate::cmd::reindex::cmd_reindex().await {
+        match crate::cmd::reindex::reindex_workflows().await {
             Ok(()) => {}
             Err(e) => {
                 if !quiet {
