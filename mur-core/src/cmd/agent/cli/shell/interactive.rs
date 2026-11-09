@@ -31,6 +31,8 @@ const INTERACTIVE_PREFIXES: &[&[&str]] = &[
     &["mur", "agent", "ssh", "allow"],
     // A batch revoke (only --key or only --host-key) asks first.
     &["mur", "agent", "ssh", "revoke"],
+    // Asks before rotating the owner key; `--yes` opts out.
+    &["mur", "identity", "rekey"],
 ];
 
 /// Flags that make an otherwise interactive command safe on piped stdio, so
@@ -40,6 +42,7 @@ const PIPED_OPT_OUTS: &[(&[&str], &str)] = &[
     (&["mur", "code-nav", "setup", "--wizard"], "--yes"),
     (&["mur", "agent", "ssh", "allow"], "--yes"),
     (&["mur", "agent", "ssh", "revoke"], "--yes"),
+    (&["mur", "identity", "rekey"], "--yes"),
 ];
 
 /// `mur agent start|restart` asks the person to type the agent name only when

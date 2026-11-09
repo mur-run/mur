@@ -218,6 +218,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
         }
         Commands::Track { action } => cmd::track::run(&crate::paths::mur_root(None), action)?,
+        Commands::Identity { action } => cmd::identity::run(&crate::paths::mur_root(None), action)?,
         Commands::Monitor { action } => {
             let mur_home = crate::paths::mur_root(None);
             cmd::monitor::run(&mur_home, action)?

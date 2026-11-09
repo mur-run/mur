@@ -208,6 +208,10 @@ impl HumanSigner {
         self.identity.verifying_key_bytes()
     }
 
+    pub(crate) fn signing_key(&self) -> &ed25519_dalek::SigningKey {
+        self.identity.signing_key()
+    }
+
     pub fn sign_bytes(&self, msg: &[u8]) -> [u8; 64] {
         self.identity.sign_bytes(msg)
     }

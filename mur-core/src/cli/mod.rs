@@ -158,6 +158,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: crate::cmd::track::TrackAction,
     },
+    /// The human owner's signing identity: `init`, `show`, `rekey`
+    Identity {
+        #[command(subcommand)]
+        action: crate::cmd::identity::IdentityAction,
+    },
     /// Durable monitors for asynchronous work (CI runs, MUR runs, subprocesses)
     Monitor {
         #[command(subcommand)]

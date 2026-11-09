@@ -437,6 +437,11 @@ pub fn encode_pubkey(key: &VerifyingKey) -> String {
     multibase::encode(multibase::Base::Base58Btc, key.as_bytes())
 }
 
+/// `encode_pubkey` for raw key bytes.
+pub fn encode_pubkey_bytes(bytes: &[u8; 32]) -> String {
+    multibase::encode(multibase::Base::Base58Btc, bytes)
+}
+
 /// Decode a multibase-encoded pubkey. Accepts any multibase variant.
 pub fn decode_pubkey(text: &str) -> Result<[u8; 32], IdentityError> {
     let (_base, bytes) = multibase::decode(text)?;
