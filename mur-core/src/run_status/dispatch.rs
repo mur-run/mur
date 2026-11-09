@@ -24,9 +24,18 @@ pub const DISPATCH_STEP: &str = "dispatch";
 /// `Ok(None)` when the daemon wrote no verdict for `run_id`. A present but
 /// unreadable verdict is an error, never "no such run".
 pub fn load(mur_home: &Path, run_id: &str) -> anyhow::Result<Option<RunState>> {
+    load_in(mur_home, None, run_id)
+}
+
+/// [`load`] from the directory `store::run_dir_in` resolves.
+pub fn load_in(
+    mur_home: &Path,
+    fleet: Option<&str>,
+    run_id: &str,
+) -> anyhow::Result<Option<RunState>> {
     // Resolved like any run directory: the daemon writes it into the
     // fleet's tree (#2316); a verdict from an older daemon sits in `runs/`.
-    let path = super::store::run_dir(mur_home, run_id).join(FLEET_DISPATCH_RECORD_FILE);
+    let path = super::store::run_dir_in(mur_home, fleet, run_id).join(FLEET_DISPATCH_RECORD_FILE);
     let bytes = match std::fs::read(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),

@@ -270,6 +270,19 @@ pub fn run(mur_home: &Path, action: JobAction) -> Result<()> {
             // for this run may still be beating its heartbeat, and a bare
             // read-modify-write here would be reverted by the next beat —
             // leaving a stopped run reporting `running` forever.
+            // By id alone, refuse a run recorded in more than one place:
+            // another fleet's agent can plant a copy under this id in its
+            // own tree, and stopping that copy would leave the real run as
+            // it was while saying "marked stopped".
+            let dirs = store::run_dirs_of(mur_home, &run_id);
+            if dirs.len() > 1 {
+                let list: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+                anyhow::bail!(
+                    "run `{run_id}` is recorded in more than one place ({}); not stopping \
+                     either — for a fleet's run use `mur fleet stop <name>`",
+                    list.join(", ")
+                );
+            }
             let mut was_terminal = None;
             let existed = store::update(mur_home, &run_id, |record| {
                 if record.state.is_terminal() {

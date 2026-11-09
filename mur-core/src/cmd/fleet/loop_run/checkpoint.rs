@@ -110,7 +110,10 @@ pub fn save(mur_home: &Path, cp: &Checkpoint) -> Result<()> {
 /// there but unreadable or from another schema (resume says "use `stop`").
 pub fn load(mur_home: &Path, fleet: &str, run_id: &str) -> Result<Option<Checkpoint>> {
     let path = checkpoint_path(mur_home, fleet, run_id);
-    let body = match std::fs::read(&path) {
+    // Not `fs::read`: a linked checkpoint reads the fleet's trusted path out
+    // of a tree any agent can write (#2316).
+    let dir = path.parent().context("checkpoint path has no parent")?;
+    let body = match mur_common::paths::read_unlinked(dir, CHECKPOINT_FILE) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
@@ -279,6 +282,26 @@ mod tests {
         let err = save(home.path(), &cp).expect_err("over the cap");
         assert!(format!("{err:#}").contains("checkpoint limit"), "{err:#}");
         assert!(!checkpoint_path(home.path(), "dev", "r2").exists());
+    }
+
+    /// A checkpoint that is a link reads the fleet's trusted path out of a
+    /// tree any agent writes; resume must refuse it, not trust it (#2316).
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_checkpoint_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = tmp.path();
+        let cp = sample("fleet-dev-1");
+        save(h, &cp).unwrap();
+        let path = checkpoint_path(h, &cp.fleet, &cp.run_id);
+        let forged = h.join("forged.json");
+        std::fs::rename(&path, &forged).unwrap();
+        std::os::unix::fs::symlink(&forged, &path).unwrap();
+        assert!(load(h, &cp.fleet, &cp.run_id).is_err());
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::hard_link(&forged, &path).unwrap();
+        assert!(load(h, &cp.fleet, &cp.run_id).is_err());
     }
 
     #[test]

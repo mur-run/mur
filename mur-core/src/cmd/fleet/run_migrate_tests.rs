@@ -122,3 +122,46 @@ fn a_fresh_home_is_claimed_before_anything_can_be_planted() {
     migrate_once(h);
     assert!(!mur_common::paths::fleet_run_dir(h, "dev", "fleet-dev-late").exists());
 }
+
+/// The review's attack: rename fleet B's real run aside, leave a symlink in
+/// its place. Moving the link would put a trusted-looking path in front of a
+/// directory every agent can still write.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_run_directory_is_never_moved() {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    let aside = legacy_run(h, "x", &[(RUN_FILE, fleet_record("fleet-dev"))]);
+    let link = h.join(mur_common::paths::RUNS).join("fleet-dev-4");
+    std::os::unix::fs::symlink(&aside, &link).unwrap();
+
+    migrate_once(h);
+
+    let target = mur_common::paths::fleet_run_dir(h, "dev", "fleet-dev-4");
+    assert!(
+        target.symlink_metadata().is_err(),
+        "no link in the fleet tree"
+    );
+    assert!(link.symlink_metadata().is_ok(), "left where it was");
+}
+
+/// Same hole one level down: a real directory whose checkpoint is a link.
+#[cfg(unix)]
+#[test]
+fn a_run_holding_a_linked_file_is_never_moved() {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    let forged = h.join(mur_common::paths::RUNS).join("forged.json");
+    let dir = legacy_run(h, "fleet-dev-5", &[(RUN_FILE, fleet_record("fleet-dev"))]);
+    std::fs::write(&forged, "{}").unwrap();
+    std::os::unix::fs::symlink(
+        &forged,
+        dir.join(crate::cmd::fleet::loop_run::checkpoint::CHECKPOINT_FILE),
+    )
+    .unwrap();
+
+    migrate_once(h);
+
+    assert!(!mur_common::paths::fleet_run_dir(h, "dev", "fleet-dev-5").exists());
+    assert!(dir.exists());
+}

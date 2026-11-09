@@ -19,7 +19,20 @@
 //!   migrates, and cannot delete the marker to re-arm it;
 //! - a run that fails to move stays in `runs/`, where `mur job status` still
 //!   reports it but `mur fleet resume` does not trust it — the warning names
-//!   `mur fleet stop` as the way out.
+//!   `mur fleet stop` as the way out;
+//! - a process that dies mid-move leaves the runs it had not reached in
+//!   `runs/` for good, WITHOUT that warning (the marker already exists, so
+//!   nothing retries). A paused fleet run found there after an upgrade is
+//!   one of those: `mur fleet stop <fleet>` discards it.
+//!
+//! **Only real directories of plain files move.** `runs/` was writable by
+//! every agent until this move, so an entry there may be a symlink (to
+//! another run's directory, renamed aside) or hold a symlinked or
+//! hard-linked file. Moved into the fleet tree, such an entry would read the
+//! trusted path out of a tree any agent still writes. Those entries stay in
+//! `runs/`, with the same warning; the trusted readers also refuse links
+//! (`mur_common::paths::read_unlinked`), so one missed here is not trusted
+//! either.
 //!
 //! Best-effort like `state_migrate`: never an error, the caller is about to
 //! do the user's real work.
@@ -49,7 +62,16 @@ pub fn migrate_once(mur_home: &Path) {
         let Some(run_id) = e.file_name().to_str().map(str::to_string) else {
             continue;
         };
-        if !mur_common::paths::is_single_segment(&run_id) || !e.path().is_dir() {
+        // `file_type` does not follow a symlink, unlike `Path::is_dir`.
+        let real_dir = e.file_type().is_ok_and(|t| t.is_dir());
+        if !mur_common::paths::is_single_segment(&run_id) || !real_dir {
+            continue;
+        }
+        if mur_common::paths::holds_links(&e.path()) {
+            // Only worth a warning when it would otherwise have moved.
+            if let Some(fleet) = fleet_of_dir(&e.path()) {
+                warn_left(&fleet, &run_id, "it holds a symlink or hard link");
+            }
             continue;
         }
         if let Some(fleet) = fleet_of_dir(&e.path()) {
@@ -111,15 +133,21 @@ fn move_run(mur_home: &Path, fleet: &str, run_id: &str) {
             .and_then(|()| std::fs::rename(&from, &to))
     };
     if let Err(e) = result {
-        tracing::warn!(
+        warn_left(
             fleet,
             run_id,
-            "could not move {} to {} ({e}); it still reports in `mur job status`, but \
-             `mur fleet resume {fleet}` will not continue it — `mur fleet stop {fleet}` discards it",
-            from.display(),
-            to.display()
+            &format!("moving {} to {} failed: {e}", from.display(), to.display()),
         );
     }
+}
+
+fn warn_left(fleet: &str, run_id: &str, why: &str) {
+    tracing::warn!(
+        fleet,
+        run_id,
+        "fleet run left in runs/ ({why}); it still reports in `mur job status`, but \
+         `mur fleet resume {fleet}` will not continue it — `mur fleet stop {fleet}` discards it"
+    );
 }
 
 #[cfg(test)]

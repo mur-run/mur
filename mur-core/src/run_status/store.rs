@@ -90,6 +90,32 @@ pub fn run_dir(mur_home: &Path, run_id: &str) -> PathBuf {
         .unwrap_or_else(|| runs_dir(mur_home).join(run_id))
 }
 
+/// [`run_dir`], or only `fleet`'s tree when the caller knows the fleet. A
+/// caller that knows it must pass it: an agent of fleet `a` can create
+/// `fleet-state/a/runs/<b's run id>`, and the unscoped search, in name
+/// order, would show that copy as fleet `b`'s run.
+pub fn run_dir_in(mur_home: &Path, fleet: Option<&str>, run_id: &str) -> PathBuf {
+    match fleet {
+        Some(f) => fleet_run_dir(mur_home, f, run_id),
+        None => run_dir(mur_home, run_id),
+    }
+}
+
+/// Every directory recorded under `run_id`: each fleet tree that has it,
+/// then `runs/`. More than one means the id alone cannot say which run is
+/// meant — a mutation by id refuses rather than guess.
+pub fn run_dirs_of(mur_home: &Path, run_id: &str) -> Vec<PathBuf> {
+    if !mur_common::paths::is_single_segment(run_id) {
+        return vec![];
+    }
+    fleet_names(mur_home)
+        .into_iter()
+        .map(|f| fleet_run_dir(mur_home, &f, run_id))
+        .chain(std::iter::once(runs_dir(mur_home).join(run_id)))
+        .filter(|d| d.is_dir())
+        .collect()
+}
+
 /// `run.json` of an existing run, resolved by [`run_dir`].
 pub fn run_path(mur_home: &Path, run_id: &str) -> PathBuf {
     run_dir(mur_home, run_id).join(RUN_FILE)
@@ -147,7 +173,16 @@ pub fn save_sidecar(mur_home: &Path, run_id: &str, sidecar: &Sidecar) -> Result<
 /// `run.json`, a never-recorded run is not an error, it is simply not
 /// rebuildable.
 pub fn load_sidecar(mur_home: &Path, run_id: &str) -> Result<Option<Sidecar>> {
-    let path = run_dir(mur_home, run_id).join(SIDECAR_FILE);
+    load_sidecar_in(mur_home, None, run_id)
+}
+
+/// [`load_sidecar`] from the directory [`run_dir_in`] resolves.
+pub fn load_sidecar_in(
+    mur_home: &Path,
+    fleet: Option<&str>,
+    run_id: &str,
+) -> Result<Option<Sidecar>> {
+    let path = run_dir_in(mur_home, fleet, run_id).join(SIDECAR_FILE);
     match std::fs::read(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
@@ -177,14 +212,42 @@ where
 }
 
 /// [`update`] of a fleet run, read from that fleet's tree only.
+///
+/// Like [`load_in_fleet`], a linked `run.json` is refused rather than read.
 pub fn update_in_fleet<F>(mur_home: &Path, fleet: &str, run_id: &str, mutate: F) -> Result<bool>
 where
     F: FnOnce(&mut RunState),
 {
-    update_in(&fleet_run_dir(mur_home, fleet, run_id), mutate)
+    update_at(
+        &fleet_run_dir(mur_home, fleet, run_id),
+        ReadMode::Trusted,
+        mutate,
+    )
+}
+
+/// How a record is read: as found, or only when it is not a link
+/// ([`mur_common::paths::read_unlinked`]).
+#[derive(Clone, Copy)]
+enum ReadMode {
+    AsFound,
+    Trusted,
+}
+
+fn read_record(dir: &Path, how: ReadMode) -> std::io::Result<Vec<u8>> {
+    match how {
+        ReadMode::AsFound => std::fs::read(dir.join(RUN_FILE)),
+        ReadMode::Trusted => mur_common::paths::read_unlinked(dir, RUN_FILE),
+    }
 }
 
 fn update_in<F>(dir: &Path, mutate: F) -> Result<bool>
+where
+    F: FnOnce(&mut RunState),
+{
+    update_at(dir, ReadMode::AsFound, mutate)
+}
+
+fn update_at<F>(dir: &Path, how: ReadMode, mutate: F) -> Result<bool>
 where
     F: FnOnce(&mut RunState),
 {
@@ -216,7 +279,7 @@ where
     // branch inside it returned.
     let result = (|| -> Result<bool> {
         let path = dir.join(RUN_FILE);
-        let mut run = match std::fs::read(&path) {
+        let mut run = match read_record(dir, how) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
             Ok(bytes) => serde_json::from_slice::<RunState>(&bytes)
@@ -238,14 +301,27 @@ pub fn load(mur_home: &Path, run_id: &str) -> Result<Option<RunState>> {
     load_from(&run_path(mur_home, run_id))
 }
 
+/// [`load`] from the directory [`run_dir_in`] resolves. For reporting; a
+/// decision that trusts the record uses [`load_in_fleet`].
+pub fn load_scoped(mur_home: &Path, fleet: Option<&str>, run_id: &str) -> Result<Option<RunState>> {
+    load_from(&run_dir_in(mur_home, fleet, run_id).join(RUN_FILE))
+}
+
 /// [`load`] of a fleet run, from that fleet's tree only — for every decision
-/// that trusts the record (resume, pause). Never falls back to `runs/`.
+/// that trusts the record (resume, pause). Never falls back to `runs/`, and
+/// refuses a `run.json` that is a link (symlink or hard link), which would
+/// read the fleet's trusted path out of a tree every agent can write.
 pub fn load_in_fleet(mur_home: &Path, fleet: &str, run_id: &str) -> Result<Option<RunState>> {
-    load_from(&fleet_run_dir(mur_home, fleet, run_id).join(RUN_FILE))
+    let dir = fleet_run_dir(mur_home, fleet, run_id);
+    parse_record(&dir.join(RUN_FILE), read_record(&dir, ReadMode::Trusted))
 }
 
 fn load_from(path: &Path) -> Result<Option<RunState>> {
-    match std::fs::read(path) {
+    parse_record(path, std::fs::read(path))
+}
+
+fn parse_record(path: &Path, read: std::io::Result<Vec<u8>>) -> Result<Option<RunState>> {
+    match read {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
         Ok(bytes) => Ok(Some(
@@ -316,6 +392,45 @@ mod tests {
             binary_version: "0.0.0-test".into(),
             build_sha: "deadbee".into(),
         }
+    }
+
+    /// A fleet's trusted read never follows a link out of its tree (#2316).
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_fleet_record_is_refused_by_the_trusted_readers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = tmp.path();
+        let mut run = sample("fleet-dev-1");
+        run.kind = RunKind::Fleet;
+        run.channel_id = Some("fleet-dev".into());
+        let forged = h.join("runs").join("forged");
+        std::fs::create_dir_all(&forged).unwrap();
+        std::fs::write(forged.join(RUN_FILE), serde_json::to_vec(&run).unwrap()).unwrap();
+        let dir = fleet_run_dir(h, "dev", "fleet-dev-1");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(forged.join(RUN_FILE), dir.join(RUN_FILE)).unwrap();
+
+        assert!(load_in_fleet(h, "dev", "fleet-dev-1").is_err());
+        assert!(update_in_fleet(h, "dev", "fleet-dev-1", |_| {}).is_err());
+    }
+
+    /// Another fleet's agent can create a copy of B's run id in its own tree;
+    /// a scoped read sees only B's, and the id-only list names both.
+    #[test]
+    fn a_copy_in_another_fleets_tree_does_not_shadow_a_scoped_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = tmp.path();
+        let mut real = sample("fleet-b-1");
+        real.kind = RunKind::Fleet;
+        real.channel_id = Some("fleet-b".into());
+        save(h, &real).unwrap();
+        let mut forged = real.clone();
+        forged.state = State::Done;
+        save_in(&fleet_run_dir(h, "a", "fleet-b-1"), &forged).unwrap();
+
+        let scoped = load_scoped(h, Some("b"), "fleet-b-1").unwrap().unwrap();
+        assert_eq!(scoped.state, State::Running);
+        assert_eq!(run_dirs_of(h, "fleet-b-1").len(), 2);
     }
 
     #[test]

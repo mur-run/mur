@@ -247,21 +247,40 @@ pub fn valid_run_id(s: &str) -> bool {
 }
 
 pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Option<RunStatus>> {
-    let loaded = store::load(mur_home, run_id);
+    status_of_in(mur_home, None, run_id)
+}
+
+/// [`status_of`] read from one fleet's tree only, for a caller that knows
+/// which fleet it is asking about (`mur fleet status`). Without the scope,
+/// another fleet's agent could shadow the run with a copy in its own tree.
+pub fn status_of_in_fleet(
+    mur_home: &std::path::Path,
+    fleet: &str,
+    run_id: &str,
+) -> anyhow::Result<Option<RunStatus>> {
+    status_of_in(mur_home, Some(fleet), run_id)
+}
+
+fn status_of_in(
+    mur_home: &std::path::Path,
+    fleet: Option<&str>,
+    run_id: &str,
+) -> anyhow::Result<Option<RunStatus>> {
+    let loaded = store::load_scoped(mur_home, fleet, run_id);
     let record = match loaded {
         Ok(Some(record)) => Some(record),
         // No record and no channel: the daemon's dispatch verdict is the
         // only thing that can know about this run (#2116).
-        Ok(None) => match rebuild_for(mur_home, run_id)? {
+        Ok(None) => match rebuild_for(mur_home, fleet, run_id)? {
             Some(record) => Some(record),
-            None => dispatch::load(mur_home, run_id)?,
+            None => dispatch::load_in(mur_home, fleet, run_id)?,
         },
         // Rebuild first; re-propagate the cache error only when there is no
         // rebuild candidate — a run that has a channel to rebuild from must
         // not be hidden by a parse failure. A genuine rebuild I/O error is
         // also reported (chained onto the cache error), never collapsed into
         // "no run recorded".
-        Err(e) => match rebuild_for(mur_home, run_id) {
+        Err(e) => match rebuild_for(mur_home, fleet, run_id) {
             Ok(Some(record)) => Some(record),
             Ok(None) => return Err(e),
             Err(rebuild_err) => {
@@ -287,7 +306,7 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
     // corrupt sidecar silently disabling reconciliation is exactly the kind
     // of observability gap an operator cannot see.
     if !record.state.is_terminal() {
-        match store::load_sidecar(mur_home, run_id) {
+        match store::load_sidecar_in(mur_home, fleet, run_id) {
             Ok(Some(sidecar)) => match rebuild::run_tail_state(mur_home, &sidecar, run_id) {
                 Ok(Some(channel_state))
                     if channel_state.is_terminal() && record.state != channel_state =>
@@ -322,8 +341,12 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
 /// channel read: `status_of` must report it instead of pretending the run
 /// never existed. `load_sidecar` already answers `Ok(None)` for an absent
 /// sidecar, so `?` here costs the absent case nothing.
-fn rebuild_for(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Option<RunState>> {
-    let Some(sidecar) = store::load_sidecar(mur_home, run_id)? else {
+fn rebuild_for(
+    mur_home: &std::path::Path,
+    fleet: Option<&str>,
+    run_id: &str,
+) -> anyhow::Result<Option<RunState>> {
+    let Some(sidecar) = store::load_sidecar_in(mur_home, fleet, run_id)? else {
         return Ok(None);
     };
     rebuild::from_channel(mur_home, run_id, &sidecar)
