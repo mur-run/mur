@@ -138,6 +138,10 @@ jobs:
     # room for a cold cache (new runner image / cache-key change), where the
     # macOS nextest step alone takes ~51 min.
     timeout-minutes: 75
+    env:
+      # Must match AST_GREP_PINNED_VERSION (checked in the install step). Job
+      # level so the zip cache key and the install step read one value.
+      AST_GREP_VERSION: "0.45.3"
     strategy:
       fail-fast: false
       matrix:
@@ -225,14 +229,21 @@ jobs:
       - name: Create test signing identity (macOS)
         if: runner.os == 'macOS'
         run: bash scripts/test-signing-identity.sh
+      # Cache the release zip so a flaky GitHub release CDN only matters on a
+      # cold cache. Keyed on OS + version: a version bump is a fresh key, and
+      # the install step re-verifies the sha256 of whatever it restores.
+      # The key is not under the `v0-rust-` prefix the prune job sweeps.
+      - name: Cache pinned ast-grep zip
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ast-grep-dl
+          key: ast-grep-zip-${{ runner.os }}-${{ env.AST_GREP_VERSION }}
       - name: Install pinned ast-grep
         # The ast_grep_search live tests (mur-mcp-server) run against the exact
         # binary MUR pins. MUR_REQUIRE_AST_GREP=1 makes a missing binary fail
         # instead of skip. Release zips are checked against pinned sha256s;
         # bump them together with AST_GREP_PINNED_VERSION.
         shell: bash
-        env:
-          AST_GREP_VERSION: "0.45.3"
         run: |
           set -euo pipefail
           grep -q "AST_GREP_PINNED_VERSION: &str = \"$AST_GREP_VERSION\"" \
@@ -247,10 +258,23 @@ jobs:
                      sha=3751b7d6be7fd39a80df1180ffe7e053903dcf92d3190e5a8336ff1746af9059 ;;
           esac
           dir="$RUNNER_TEMP/ast-grep"
-          zip="$RUNNER_TEMP/ast-grep.zip"
-          curl -fsSL --retry 3 -o "$zip" \
-            "https://github.com/ast-grep/ast-grep/releases/download/$AST_GREP_VERSION/app-$t.zip"
+          mkdir -p "$RUNNER_TEMP/ast-grep-dl"
+          zip="$RUNNER_TEMP/ast-grep-dl/app-$t.zip"
           if command -v sha256sum >/dev/null; then sum=sha256sum; else sum="shasum -a 256"; fi
+          if [ -f "$zip" ] && echo "$sha  $zip" | $sum -c - >/dev/null 2>&1; then
+            echo "Using cached $zip"
+          else
+            rm -f "$zip"
+            # GitHub's release CDN intermittently returns 504 / drops the body
+            # mid-transfer (curl exit 22 / 56). Plain --retry skips exit 56, so
+            # retry every error with a real backoff; the sha256 check below
+            # still rejects anything that is not the pinned artifact (#2322).
+            curl -fsSL --connect-timeout 20 \
+              --retry 6 --retry-delay 10 --retry-max-time 300 \
+              --retry-all-errors --retry-connrefused \
+              -o "$zip" \
+              "https://github.com/ast-grep/ast-grep/releases/download/$AST_GREP_VERSION/app-$t.zip"
+          fi
           echo "$sha  $zip" | $sum -c -
           unzip -q -o "$zip" -d "$dir"
           bin="$dir/$exe"
