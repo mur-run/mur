@@ -261,3 +261,17 @@ mod prune {
         );
     }
 }
+
+/// #2320: children name their agent so a run they record lands in its home.
+#[test]
+fn run_owner_env_names_the_agent() {
+    let got = run_owner_env(Path::new("/m/agents/bob")).unwrap();
+    assert_eq!(
+        got,
+        (
+            mur_common::paths::RUN_OWNER_ENV.to_string(),
+            "bob".to_string()
+        )
+    );
+    assert!(run_owner_env(Path::new("/m/agents/..")).is_none());
+}

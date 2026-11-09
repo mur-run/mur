@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 ///
 /// A FLEET run's directory is never here — it is
 /// [`fleet_run_dir`], inside the per-fleet carve-in. `runs/` is writable by
-/// every sandboxed agent (the MCP server records `parallel_jobs` runs from
-/// inside the sandbox), so anything a fleet resume trusts must not live in it
-/// (#2316).
+/// writable by no sandboxed agent since #2320, but it was before, so
+/// anything a fleet resume trusts still must not be read from it (#2316).
+/// Runs an agent dispatches go to [`agent_runs_dir`] instead.
 pub const RUNS: &str = "runs";
 
 /// Fleet definitions: `<mur_home>/fleets/<name>/fleet.yaml`, plus the
@@ -65,7 +65,39 @@ pub const FLEET_RUN_OWNER_FILE: &str = "run.owner";
 /// `commander/` is deliberately absent: it holds the commander's private key
 /// and `.env`, and its public keys are trust anchors. A run writes nothing
 /// there; the sandbox grants read on the two public key files instead.
-pub const RUN_STATE_DIRS: [&str; 4] = [FLEET_STATE, "conversations", "artifacts", RUNS];
+///
+/// [`RUNS`] is deliberately absent (#2320): it holds the operator's own
+/// non-fleet runs, and a whole-tree grant let every allowlisted agent rewrite
+/// every other agent's records. An agent's own runs go to
+/// [`agent_runs_dir`], inside its home.
+pub const RUN_STATE_DIRS: [&str; 3] = [FLEET_STATE, "conversations", "artifacts"];
+
+/// Agent homes: `<mur_home>/agents/<name>/`.
+pub const AGENTS: &str = "agents";
+
+/// Env var naming the agent a child process runs for, set by the agent
+/// runtime on its bash and MCP children. A run recorded by that child goes to
+/// [`agent_runs_dir`] of this agent.
+///
+/// Not a credential: the path it names is the agent's own home, which the
+/// kernel sandbox lets no other agent write. A forged value only makes the
+/// record fail to write.
+pub const RUN_OWNER_ENV: &str = "MUR_RUN_OWNER";
+
+/// `<mur_home>/agents/<agent>/runs/` — the non-fleet runs (`parallel_jobs`,
+/// workflows) `agent` dispatched (#2320). Inside the agent's home, so only
+/// that agent (and the operator) can write them.
+pub fn agent_runs_dir(mur_home: &Path, agent: &str) -> PathBuf {
+    mur_home.join(AGENTS).join(agent).join(RUNS)
+}
+
+/// The run owner named by [`RUN_OWNER_ENV`], if set to a valid agent name.
+/// An invalid name is ignored rather than joined: it becomes a path segment.
+pub fn run_owner_from_env() -> Option<String> {
+    std::env::var(RUN_OWNER_ENV)
+        .ok()
+        .filter(|n| crate::agent_name::validate_agent_name(n).is_ok())
+}
 
 /// `<mur_home>/fleet-state/<name>/` — every file a run of `name` writes.
 pub fn fleet_state_dir(mur_home: &Path, name: &str) -> PathBuf {
@@ -270,10 +302,17 @@ mod tests {
     }
 
     #[test]
-    fn runs_is_listed() {
-        // The drift that broke agent-triggered runs was exactly this: the
-        // writer knew about `runs`, the sandbox list did not.
-        assert!(RUN_STATE_DIRS.contains(&RUNS));
+    fn runs_is_not_run_state() {
+        // #2320: fleet runs live under `fleet-state/` and an agent's own runs
+        // under its home, so nothing a sandboxed run writes needs `runs/` —
+        // and granting it whole let one agent rewrite another's records.
+        assert!(!RUN_STATE_DIRS.contains(&RUNS));
+    }
+
+    #[test]
+    fn agent_runs_live_in_the_agent_home() {
+        let d = agent_runs_dir(Path::new("/m"), "bob");
+        assert_eq!(d, Path::new("/m").join(AGENTS).join("bob").join(RUNS));
     }
 
     #[test]

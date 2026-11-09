@@ -296,6 +296,12 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
             }
             crate::agent_paths::extend_scratch_env(&mut env, d);
         }
+        // Last, so neither the vault nor an inherited value moves it: a run
+        // this child records goes to the agent's own home (#2320).
+        if let Some((mur_home, name)) = &self.agent {
+            let home = mur_home.join(mur_common::paths::AGENTS).join(name);
+            env.extend(crate::agent_paths::run_owner_env(&home));
+        }
         // Parallel first compiles race to start the agent's own server (#1860).
         crate::agent_paths::sccache_server::ensure_for(&command, &env).await;
         let spool_dir = self.working_dir.join("jobs");
