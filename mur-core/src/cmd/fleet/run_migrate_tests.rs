@@ -165,3 +165,13 @@ fn a_run_holding_a_linked_file_is_never_moved() {
     assert!(!mur_common::paths::fleet_run_dir(h, "dev", "fleet-dev-5").exists());
     assert!(dir.exists());
 }
+
+#[test]
+fn a_moved_run_is_flagged_so_resume_can_warn() {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    legacy_run(h, "fleet-dev-3", &[(RUN_FILE, fleet_record("fleet-dev"))]);
+    migrate_once(h);
+    assert!(was_migrated(h, "dev", "fleet-dev-3"));
+    assert!(!was_migrated(h, "dev", "fleet-dev-other"));
+}

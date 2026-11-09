@@ -44,6 +44,19 @@ use mur_common::fleet::valid_fleet_name;
 /// Written to the `fleet-state/` root once the move has been claimed.
 pub const MARKER: &str = ".runs-migrated";
 
+/// Dropped into a run directory after it was moved from `runs/`. While in
+/// `runs/` any agent could write it, so a moved run with no signed
+/// `run_paused` cannot be vouched for; resume warns on this flag.
+pub const MIGRATED_FLAG: &str = ".migrated-from-runs";
+
+/// Whether this fleet run directory was moved out of the shared `runs/`.
+pub fn was_migrated(mur_home: &Path, fleet: &str, run_id: &str) -> bool {
+    mur_common::paths::fleet_run_dir(mur_home, fleet, run_id)
+        .join(MIGRATED_FLAG)
+        .symlink_metadata()
+        .is_ok()
+}
+
 /// Files whose content names a run's fleet, most specific first.
 const RUN_FILE: &str = "run.json";
 const SIDECAR_FILE: &str = "sidecar.json";
@@ -131,6 +144,10 @@ fn move_run(mur_home: &Path, fleet: &str, run_id: &str) {
         to.parent()
             .map_or(Ok(()), std::fs::create_dir_all)
             .and_then(|()| std::fs::rename(&from, &to))
+            // Best-effort: a missing flag only loses the resume warning.
+            .inspect(|()| {
+                let _ = std::fs::write(to.join(MIGRATED_FLAG), b"");
+            })
     };
     if let Err(e) = result {
         warn_left(

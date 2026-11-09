@@ -330,6 +330,13 @@ pub async fn cmd_fleet_resume(mur_home: &Path, name: &str) -> Result<()> {
             "  ⚠ no signed run_paused carries this run's original limits; resuming under the checkpoint's copy, tightened by fleet.yaml (check `mur fleet limits {name}`)"
         );
     }
+    if !from.bounds_authenticated
+        && crate::cmd::fleet::run_migrate::was_migrated(mur_home, name, &from.run_id)
+    {
+        println!(
+            "  ⚠ this run was moved out of the shared runs/ directory and has no signed run_paused; it may have been altered before the move — review it before trusting the checkpoint"
+        );
+    }
     println!(
         "Resuming fleet '{name}' (run {}) at iteration {}, {} spent, paused by mur {}…",
         from.run_id,
