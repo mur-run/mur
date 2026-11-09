@@ -313,6 +313,13 @@ impl StdioMcpClient {
         for (k, v) in scratch_env_for(policy) {
             std_cmd.env(k, v);
         }
+        // `parallel_jobs` records its run from this child (#2320).
+        if let Some((k, v)) = policy
+            .agent_home()
+            .and_then(crate::agent_paths::run_owner_env)
+        {
+            std_cmd.env(k, v);
+        }
         if let Some((k, v)) = crate::sandbox::sealed_child_env(crate::sandbox::last_status()) {
             std_cmd.env(k, v);
         }

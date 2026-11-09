@@ -303,6 +303,13 @@ fn fleet_run_carveins_are_config_gated() {
         );
     }
     assert!(policy.fs_write.contains(&dr_state), "{:?}", policy.fs_write);
+    // #2320: the shared `runs/` tree is never carved in — an agent's own runs
+    // go to its home, and a whole-tree grant reaches every other agent's.
+    assert!(
+        !policy
+            .fs_write
+            .contains(&mur_home.join(mur_common::paths::RUNS))
+    );
     // Not the whole tree: an agent must not queue work for a fleet it was
     // never allowed to run (a cron fleet would then run it unattended).
     assert!(

@@ -86,6 +86,18 @@ pub fn scratch_env(dir: &Path) -> [(String, String); 3] {
     SCRATCH_ENV_KEYS.map(|k| (k.to_string(), v.clone()))
 }
 
+/// `(MUR_RUN_OWNER, <agent>)` for a child of the agent at `agent_home`, so a
+/// run it records lands in that agent's own home (#2320) rather than the
+/// shared `runs/`. `None` when the home has no valid agent name.
+pub fn run_owner_env(agent_home: &Path) -> Option<(String, String)> {
+    let name = agent_home.file_name()?.to_str()?;
+    mur_common::agent_name::validate_agent_name(name).ok()?;
+    Some((
+        mur_common::paths::RUN_OWNER_ENV.to_string(),
+        name.to_string(),
+    ))
+}
+
 /// Longest Unix-socket path we will hand out. macOS `sun_path` is 104 bytes
 /// including the NUL; leave headroom rather than sit on the limit.
 const MAX_SOCKET_PATH: usize = 100;
