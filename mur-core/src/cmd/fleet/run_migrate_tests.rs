@@ -175,3 +175,17 @@ fn a_moved_run_is_flagged_so_resume_can_warn() {
     assert!(was_migrated(h, "dev", "fleet-dev-3"));
     assert!(!was_migrated(h, "dev", "fleet-dev-other"));
 }
+
+#[test]
+fn a_run_whose_process_is_alive_is_not_moved_from_under_it() {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    let live = serde_json::json!({
+        "kind": "fleet", "channel_id": "fleet-dev",
+        "state": "running", "pid": std::process::id(),
+    });
+    legacy_run(h, "fleet-dev-4", &[(RUN_FILE, live)]);
+    migrate_once(h);
+    assert!(h.join(mur_common::paths::RUNS).join("fleet-dev-4").is_dir());
+    assert!(!mur_common::paths::fleet_run_dir(h, "dev", "fleet-dev-4").exists());
+}

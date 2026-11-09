@@ -52,7 +52,8 @@ async fn finalize_run_records_a_paused_outcome_as_state_paused() {
     };
     store::save(tmp.path(), &record).unwrap();
     let mut hb = None;
-    finalize_run(tmp.path(), "r", true, &mut hb, RunOutcome::Paused, 0).await;
+    let dir = store::run_dir(tmp.path(), "r");
+    finalize_run(tmp.path(), &dir, true, &mut hb, RunOutcome::Paused, 0).await;
     let after = store::load(tmp.path(), "r").unwrap().unwrap();
     assert_eq!(after.state, State::Paused);
     assert!(!after.state.is_terminal());

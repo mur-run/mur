@@ -34,6 +34,12 @@
 //! (`mur_common::paths::read_unlinked`), so one missed here is not trusted
 //! either.
 //!
+//! **Limits.** A process that already holds an open handle on a file or
+//! directory in `runs/<id>` keeps write access after the rename; the move
+//! cannot revoke it. The `.migrated-from-runs` flag and resume's warning are
+//! the only mitigation. A run whose process is still alive is left in
+//! `runs/` rather than moved from under it.
+//!
 //! Best-effort like `state_migrate`: never an error, the caller is about to
 //! do the user's real work.
 
@@ -88,6 +94,10 @@ pub fn migrate_once(mur_home: &Path) {
             continue;
         }
         if let Some(fleet) = fleet_of_dir(&e.path()) {
+            if still_running(&e.path()) {
+                warn_left(&fleet, &run_id, "its process is still running");
+                continue;
+            }
             move_run(mur_home, &fleet, &run_id);
         }
     }
@@ -129,6 +139,25 @@ fn fleet_of_dir(dir: &Path) -> Option<String> {
             read(mur_track::fleet_dispatch_request::FLEET_DISPATCH_RECORD_FILE).and_then(named)
         })
         .filter(|f| valid_fleet_name(f))
+}
+
+/// A run whose record is neither finished nor paused and whose process is
+/// alive: an older binary is still writing `runs/<id>`, and moving it would
+/// leave its later updates finding no directory.
+fn still_running(dir: &Path) -> bool {
+    let Some(v) = std::fs::read(dir.join(RUN_FILE))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+    else {
+        return false;
+    };
+    let state = v.get("state").and_then(|s| s.as_str()).unwrap_or("");
+    let done = matches!(state, "done" | "failed" | "stopped" | "skipped" | "paused");
+    let pid = v
+        .get("pid")
+        .and_then(|p| p.as_u64())
+        .and_then(|p| u32::try_from(p).ok());
+    !done && pid.is_some_and(mur_common::lock_file::pid_alive)
 }
 
 fn move_run(mur_home: &Path, fleet: &str, run_id: &str) {

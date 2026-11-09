@@ -25,7 +25,14 @@ use super::store;
 /// fresh, inside the locked section, every time — checking before calling
 /// `update` would just move the stale-view window one line earlier.
 pub fn beat_once(mur_home: &Path, run_id: &str, now: DateTime<Utc>) -> Result<()> {
-    store::update(mur_home, run_id, |run| {
+    beat_dir(&store::run_dir(mur_home, run_id), now)
+}
+
+/// [`beat_once`] on the record in `dir`. A writer that created the record
+/// knows where it is; searching by id would let another fleet's planted copy
+/// of the id take the beats (#2316).
+pub fn beat_dir(dir: &Path, now: DateTime<Utc>) -> Result<()> {
+    store::update_dir(dir, |run| {
         if !run.state.is_terminal() {
             run.last_heartbeat_at = Some(now);
         }
@@ -43,6 +50,11 @@ pub struct Heartbeat {
 impl Heartbeat {
     /// Start beating `run_id` every `interval` until `stop` (or drop).
     pub fn spawn(mur_home: PathBuf, run_id: String, interval: std::time::Duration) -> Self {
+        Self::spawn_at(store::run_dir(&mur_home, &run_id), interval)
+    }
+
+    /// [`Self::spawn`] against a fixed record directory ([`store::record_dir`]).
+    pub fn spawn_at(dir: PathBuf, interval: std::time::Duration) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let handle = tokio::spawn(async move {
@@ -55,7 +67,7 @@ impl Heartbeat {
                     return;
                 }
                 // A failed beat is not fatal to the run it is observing.
-                let _ = beat_once(&mur_home, &run_id, Utc::now());
+                let _ = beat_dir(&dir, Utc::now());
             }
         });
         Self {
@@ -375,5 +387,75 @@ mod tests {
             Liveness::Alive,
             "a finished run must never classify as alive, no matter how fresh its heartbeat looks"
         );
+    }
+}
+
+#[cfg(test)]
+mod scoped_tests {
+    use super::*;
+    use crate::run_status::{RUN_SCHEMA, RunKind, RunState, State};
+
+    fn fleet_rec(id: &str, fleet: &str) -> RunState {
+        RunState {
+            schema: RUN_SCHEMA,
+            run_id: id.into(),
+            channel_id: Some(format!("fleet-{fleet}")),
+            kind: RunKind::Fleet,
+            label: "l".into(),
+            pid: std::process::id(),
+            started_at: chrono::Utc::now(),
+            last_heartbeat_at: None,
+            state: State::Running,
+            steps: vec![],
+            blocked_on: None,
+            binary_version: "0.0.0-test".into(),
+            build_sha: "deadbee".into(),
+        }
+    }
+
+    /// An agent of fleet `a` plants `fleet-state/a/runs/<b's id>`; the real
+    /// run of `b` must still get its beats, and the plant none.
+    #[test]
+    fn a_beat_goes_to_the_recorded_dir_not_a_planted_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = tmp.path();
+        store::save(h, &fleet_rec("fleet-b-1", "b")).unwrap();
+        let planted = mur_common::paths::fleet_run_dir(h, "a", "fleet-b-1");
+        std::fs::create_dir_all(&planted).unwrap();
+        std::fs::write(
+            planted.join("run.json"),
+            serde_json::to_vec(&fleet_rec("fleet-b-1", "b")).unwrap(),
+        )
+        .unwrap();
+        let real = store::record_dir(h, RunKind::Fleet, Some("fleet-b"), "fleet-b-1");
+        beat_dir(&real, chrono::Utc::now()).unwrap();
+        let load = |d: &Path| {
+            store::load_in_fleet(
+                h,
+                d.parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                "fleet-b-1",
+            )
+            .unwrap()
+            .unwrap()
+        };
+        assert!(load(&real).last_heartbeat_at.is_some());
+        assert!(load(&planted).last_heartbeat_at.is_none());
+    }
+
+    #[test]
+    fn status_of_refuses_an_id_recorded_in_two_places() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = tmp.path();
+        store::save(h, &fleet_rec("fleet-b-2", "b")).unwrap();
+        let planted = mur_common::paths::fleet_run_dir(h, "a", "fleet-b-2");
+        std::fs::create_dir_all(&planted).unwrap();
+        assert!(crate::run_status::status_of(h, "fleet-b-2").is_err());
     }
 }

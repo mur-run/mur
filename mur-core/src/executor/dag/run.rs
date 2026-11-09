@@ -64,6 +64,13 @@ pub async fn execute_dag(
     // recorded when it has both an id and a kind; the legacy callers that
     // pass neither behave exactly as before.
     let recorded = (!opts.run_id.is_empty()).then_some(opts.run_kind).flatten();
+    // Fixed when the record is created; every later write goes here.
+    let record_dir = crate::run_status::store::record_dir(
+        mur_home,
+        recorded.unwrap_or(crate::run_status::RunKind::Job),
+        opts.channel_id.as_deref(),
+        &opts.run_id,
+    );
     let mut heartbeat = if let Some(kind) = recorded {
         let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
         let now = chrono::Utc::now();
@@ -127,9 +134,8 @@ pub async fn execute_dag(
                         }
                     }
                 }
-                Some(crate::run_status::heartbeat::Heartbeat::spawn(
-                    mur_home.to_path_buf(),
-                    opts.run_id.clone(),
+                Some(crate::run_status::heartbeat::Heartbeat::spawn_at(
+                    record_dir.clone(),
                     std::time::Duration::from_secs(cfg.runs.heartbeat_interval_secs),
                 ))
             }
@@ -158,11 +164,11 @@ pub async fn execute_dag(
     // sees the just-applied step.
     let internal_on_step: Option<std::sync::Arc<dyn Fn(StepEvent) + Send + Sync>> =
         if recorded.is_some() {
-            let home = mur_home.to_path_buf();
+            let dir = record_dir.clone();
             let rid = opts.run_id.clone();
             let warn_once = Arc::new(std::sync::Once::new());
             Some(Arc::new(move |event: StepEvent| {
-                if let Err(error) = crate::run_status::store::update(&home, &rid, |record| {
+                if let Err(error) = crate::run_status::store::update_dir(&dir, |record| {
                     apply_step_event(record, &event);
                 }) {
                     warn_once.call_once(|| {
@@ -459,7 +465,7 @@ pub async fn execute_dag(
                         emit_final(RunOutcome::Failed);
                         finalize_run(
                             mur_home,
-                            &opts.run_id,
+                            &record_dir,
                             recorded.is_some(),
                             &mut heartbeat,
                             RunOutcome::Failed,
@@ -524,7 +530,7 @@ pub async fn execute_dag(
                                 emit_final(RunOutcome::Failed);
                                 finalize_run(
                                     mur_home,
-                                    &opts.run_id,
+                                    &record_dir,
                                     recorded.is_some(),
                                     &mut heartbeat,
                                     RunOutcome::Failed,
@@ -624,7 +630,7 @@ pub async fn execute_dag(
     emit_final(outcome);
     finalize_run(
         mur_home,
-        &opts.run_id,
+        &record_dir,
         recorded.is_some(),
         &mut heartbeat,
         outcome,
@@ -673,7 +679,7 @@ pub(super) fn terminal_channel_state(outcome: RunOutcome) -> Option<ChannelState
 /// can be reached once a run has been recorded.
 pub(super) async fn finalize_run(
     mur_home: &std::path::Path,
-    run_id: &str,
+    record_dir: &std::path::Path,
     recorded: bool,
     heartbeat: &mut Option<crate::run_status::heartbeat::Heartbeat>,
     outcome: RunOutcome,
@@ -703,7 +709,7 @@ pub(super) async fn finalize_run(
     // `update` holds an exclusive lock across load-modify-save. A bare
     // load/save pair here would race `mur job stop` in another process, which
     // does the same read-modify-write on the same file.
-    let _ = crate::run_status::store::update(mur_home, run_id, |record| {
+    let _ = crate::run_status::store::update_dir(record_dir, |record| {
         record.state = match outcome {
             RunOutcome::Failed => crate::run_status::State::Failed,
             RunOutcome::Blocked => crate::run_status::State::Blocked,

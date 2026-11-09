@@ -56,6 +56,27 @@ fn dir_for(mur_home: &Path, kind: RunKind, channel_id: Option<&str>, run_id: &st
     }
 }
 
+/// The directory a writer records this run in, fixed once when the record is
+/// created. Later writes for the same run (heartbeats, step progress, the
+/// terminal state) go to THIS directory via [`update_dir`] instead of
+/// searching by id, which another fleet's planted copy could win.
+pub fn record_dir(
+    mur_home: &Path,
+    kind: RunKind,
+    channel_id: Option<&str>,
+    run_id: &str,
+) -> PathBuf {
+    dir_for(mur_home, kind, channel_id, run_id)
+}
+
+/// [`update`] of the record in `dir` (from [`record_dir`]), no id search.
+pub fn update_dir<F>(dir: &Path, mutate: F) -> Result<bool>
+where
+    F: FnOnce(&mut RunState),
+{
+    update_in(dir, mutate)
+}
+
 /// Every fleet name that may own run directories: what `fleet-state/` lists,
 /// plus every defined fleet. Inside a sandbox `fleet-state/` itself may not
 /// be listable (only its per-fleet children are granted), while `fleets/`

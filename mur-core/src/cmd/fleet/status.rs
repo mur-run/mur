@@ -71,8 +71,6 @@ pub fn find_latest_run_for_channel(
     Ok(newest.map(|(_, status)| status))
 }
 
-/// `mur fleet status <name>` — the fleet's most recent run via the shared
-/// `job::print_status` renderer.
 /// `status_of`, from `fleet`'s tree when the channel names one.
 fn status_scoped(
     mur_home: &Path,
@@ -85,6 +83,8 @@ fn status_scoped(
     }
 }
 
+/// `mur fleet status <name>` — the fleet's most recent run via the shared
+/// `job::print_status` renderer.
 pub fn cmd_fleet_status(mur_home: &Path, name: &str, out: &mut dyn std::io::Write) -> Result<()> {
     let fleet = super::store::load_fleet(mur_home, name)?;
     let pause_target = super::control::paused_run_id(mur_home, name);

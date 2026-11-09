@@ -31,7 +31,8 @@ pub fn paused_run_id(mur_home: &Path, name: &str) -> Option<String> {
     text.lines()
         .find_map(|l| l.strip_prefix("run_id:"))
         .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+        // The id becomes a path segment under the fleet's tree.
+        .filter(|v| mur_common::paths::is_single_segment(v))
 }
 
 /// Is `run_id` the run the fleet's pause sentinel names? A sentinel for another

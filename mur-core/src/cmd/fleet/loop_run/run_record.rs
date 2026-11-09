@@ -42,9 +42,13 @@ pub(super) fn open(mur_home: &Path, fleet: &Fleet, name: &str, run_id: &str) -> 
         build_sha: mur_common::build::SHORT_SHA.to_string(),
     };
     match crate::run_status::store::save(mur_home, &record) {
-        Ok(()) => Some(Heartbeat::spawn(
-            mur_home.to_path_buf(),
-            run_id.to_string(),
+        Ok(()) => Some(Heartbeat::spawn_at(
+            crate::run_status::store::record_dir(
+                mur_home,
+                record.kind,
+                record.channel_id.as_deref(),
+                run_id,
+            ),
             std::time::Duration::from_secs(runs_cfg.heartbeat_interval_secs),
         )),
         Err(error) => {
