@@ -140,7 +140,7 @@ pub(crate) fn reconcile_running(
 /// the per-iteration vs outer run id mismatch.
 pub(crate) fn paused_job_id(mur_home: &Path, fleet: &str) -> Option<String> {
     let run_id = super::control::paused_run_id(mur_home, fleet)?;
-    super::loop_run::checkpoint::load(mur_home, &run_id)
+    super::loop_run::checkpoint::load(mur_home, fleet, &run_id)
         .ok()
         .flatten()
         .and_then(|cp| cp.job_id)

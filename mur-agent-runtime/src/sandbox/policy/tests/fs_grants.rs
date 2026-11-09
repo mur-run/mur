@@ -619,3 +619,39 @@ fn fleet_grants_survive_the_partition_and_commander_is_read_only_per_file() {
     assert!(!policy.fleet_conversations_grant);
     assert!(policy.fs_read.iter().all(|p| !p.starts_with(&commander)));
 }
+
+/// #2316, as Landlock sees it: the grants that survive `partition_write_grants`
+/// cover an allowlisted fleet's run directories, and NO granted path covers a
+/// fleet the operator did not allowlist — so an agent of `deep-research`
+/// cannot write `council`'s checkpoint, on either platform.
+#[test]
+fn fleet_run_dirs_are_writable_only_for_allowlisted_fleets() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mur_home = tmp.path();
+    let agent_home = mur_home.join("agents").join("mur");
+    std::fs::create_dir_all(&agent_home).unwrap();
+    std::fs::write(
+        mur_home.join("config.yaml"),
+        "fleet_run:\n  agents: [mur]\n  fleets: [deep-research]\n",
+    )
+    .unwrap();
+    let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+    let (kept, _) =
+        crate::sandbox::linux::partition_write_grants(&policy.fs_write, &policy.launch_chain);
+    let covered = |p: &std::path::Path| kept.iter().any(|g| p.starts_with(g));
+
+    let mine = mur_common::paths::fleet_run_dir(mur_home, "deep-research", "fleet-deep-research-1");
+    let theirs = mur_common::paths::fleet_run_dir(mur_home, "council", "fleet-council-1");
+    assert!(
+        covered(&mine.join("checkpoint.json")),
+        "own fleet's run not writable"
+    );
+    assert!(
+        !covered(&theirs.join("checkpoint.json")),
+        "another fleet's checkpoint is writable"
+    );
+    assert!(
+        !kept.contains(&mur_home.join(mur_common::paths::FLEET_STATE)),
+        "the fleet-state root is granted whole"
+    );
+}

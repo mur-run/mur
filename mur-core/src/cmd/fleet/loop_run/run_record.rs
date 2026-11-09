@@ -22,7 +22,7 @@ use crate::run_status::heartbeat::Heartbeat;
 pub(super) fn open(mur_home: &Path, fleet: &Fleet, name: &str, run_id: &str) -> Option<Heartbeat> {
     let runs_cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).runs;
     let now = chrono::Utc::now();
-    let started_at = crate::run_status::store::load(mur_home, run_id)
+    let started_at = crate::run_status::store::load_in_fleet(mur_home, name, run_id)
         .ok()
         .flatten()
         .map_or(now, |prev| prev.started_at);
@@ -42,9 +42,13 @@ pub(super) fn open(mur_home: &Path, fleet: &Fleet, name: &str, run_id: &str) -> 
         build_sha: mur_common::build::SHORT_SHA.to_string(),
     };
     match crate::run_status::store::save(mur_home, &record) {
-        Ok(()) => Some(Heartbeat::spawn(
-            mur_home.to_path_buf(),
-            run_id.to_string(),
+        Ok(()) => Some(Heartbeat::spawn_at(
+            crate::run_status::store::record_dir(
+                mur_home,
+                record.kind,
+                record.channel_id.as_deref(),
+                run_id,
+            ),
             std::time::Duration::from_secs(runs_cfg.heartbeat_interval_secs),
         )),
         Err(error) => {

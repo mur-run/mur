@@ -1,4 +1,19 @@
-//! Atomic read/write of `~/.mur/runs/<run_id>/run.json`. Pure I/O — no policy.
+//! Atomic read/write of a run's `run.json` and `sidecar.json`. Pure I/O — no
+//! policy.
+//!
+//! A run directory lives in one of two places (#2316):
+//!
+//! - a fleet run: `<mur_home>/fleet-state/<fleet>/runs/<run_id>/`, inside the
+//!   per-fleet sandbox carve-in, so only an agent allowed to run that fleet
+//!   can write it;
+//! - every other run (`parallel_jobs`, workflows): `<mur_home>/runs/<run_id>/`.
+//!
+//! Writers know which one from the record itself (`kind` + `channel_id`).
+//! A reader holding only a run id resolves it with [`run_dir`]: the fleet
+//! trees first, then `runs/`. Anything that TRUSTS a fleet run's files
+//! (resume, pause, checkpoints) must not use that fallback — it reads
+//! [`fleet_run_dir`] directly, because `runs/` is writable by every sandboxed
+//! agent.
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -7,26 +22,137 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use fs2::FileExt;
 
-use super::{RunState, Sidecar};
+use super::{RunKind, RunState, Sidecar};
 
-/// `<mur_home>/runs`.
+const RUN_FILE: &str = "run.json";
+const SIDECAR_FILE: &str = "sidecar.json";
+
+/// `<mur_home>/runs` — non-fleet runs only.
 pub fn runs_dir(mur_home: &Path) -> PathBuf {
     // Shared with the sandbox carve-in — see `mur_common::paths`.
     mur_home.join(mur_common::paths::RUNS)
 }
 
-/// `<mur_home>/runs/<run_id>/run.json`.
+/// `<mur_home>/fleet-state/<fleet>/runs/<run_id>`.
+pub fn fleet_run_dir(mur_home: &Path, fleet: &str, run_id: &str) -> PathBuf {
+    mur_common::paths::fleet_run_dir(mur_home, fleet, run_id)
+}
+
+/// The fleet a record belongs to: a `RunKind::Fleet` record on a
+/// `fleet-<name>` channel. `None` for every other run.
+fn fleet_of(kind: RunKind, channel_id: Option<&str>) -> Option<&str> {
+    (kind == RunKind::Fleet)
+        .then_some(channel_id)
+        .flatten()
+        .and_then(mur_common::fleet::fleet_name_from_channel_id)
+}
+
+/// Where a writer records this run: its fleet's tree for a fleet run,
+/// `runs/` otherwise.
+fn dir_for(mur_home: &Path, kind: RunKind, channel_id: Option<&str>, run_id: &str) -> PathBuf {
+    match fleet_of(kind, channel_id) {
+        Some(fleet) => fleet_run_dir(mur_home, fleet, run_id),
+        None => runs_dir(mur_home).join(run_id),
+    }
+}
+
+/// The directory a writer records this run in, fixed once when the record is
+/// created. Later writes for the same run (heartbeats, step progress, the
+/// terminal state) go to THIS directory via [`update_dir`] instead of
+/// searching by id, which another fleet's planted copy could win.
+pub fn record_dir(
+    mur_home: &Path,
+    kind: RunKind,
+    channel_id: Option<&str>,
+    run_id: &str,
+) -> PathBuf {
+    dir_for(mur_home, kind, channel_id, run_id)
+}
+
+/// [`update`] of the record in `dir` (from [`record_dir`]), no id search.
+pub fn update_dir<F>(dir: &Path, mutate: F) -> Result<bool>
+where
+    F: FnOnce(&mut RunState),
+{
+    update_in(dir, mutate)
+}
+
+/// Every fleet name that may own run directories: what `fleet-state/` lists,
+/// plus every defined fleet. Inside a sandbox `fleet-state/` itself may not
+/// be listable (only its per-fleet children are granted), while `fleets/`
+/// is readable — so both are consulted. Invalid names are dropped: a name
+/// becomes a path segment.
+fn fleet_names(mur_home: &Path) -> Vec<String> {
+    let mut names: Vec<String> = [mur_common::paths::FLEET_STATE, mur_common::paths::FLEETS]
+        .iter()
+        .filter_map(|d| std::fs::read_dir(mur_home.join(d)).ok())
+        .flat_map(|it| it.flatten())
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter(|n| mur_common::fleet::valid_fleet_name(n))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Resolve the directory of an existing run from its id alone: the first
+/// fleet whose tree has it, else `runs/<run_id>` (which may not exist).
+///
+/// For reporting (`mur job status`, `mur_job_status`, heartbeats) only.
+/// Never for a decision that trusts the run's files — see the module doc.
+pub fn run_dir(mur_home: &Path, run_id: &str) -> PathBuf {
+    if !mur_common::paths::is_single_segment(run_id) {
+        return runs_dir(mur_home).join(run_id);
+    }
+    fleet_names(mur_home)
+        .into_iter()
+        .map(|f| fleet_run_dir(mur_home, &f, run_id))
+        .find(|d| d.is_dir())
+        .unwrap_or_else(|| runs_dir(mur_home).join(run_id))
+}
+
+/// [`run_dir`], or only `fleet`'s tree when the caller knows the fleet. A
+/// caller that knows it must pass it: an agent of fleet `a` can create
+/// `fleet-state/a/runs/<b's run id>`, and the unscoped search, in name
+/// order, would show that copy as fleet `b`'s run.
+pub fn run_dir_in(mur_home: &Path, fleet: Option<&str>, run_id: &str) -> PathBuf {
+    match fleet {
+        Some(f) => fleet_run_dir(mur_home, f, run_id),
+        None => run_dir(mur_home, run_id),
+    }
+}
+
+/// Every directory recorded under `run_id`: each fleet tree that has it,
+/// then `runs/`. More than one means the id alone cannot say which run is
+/// meant — a mutation by id refuses rather than guess.
+pub fn run_dirs_of(mur_home: &Path, run_id: &str) -> Vec<PathBuf> {
+    if !mur_common::paths::is_single_segment(run_id) {
+        return vec![];
+    }
+    fleet_names(mur_home)
+        .into_iter()
+        .map(|f| fleet_run_dir(mur_home, &f, run_id))
+        .chain(std::iter::once(runs_dir(mur_home).join(run_id)))
+        .filter(|d| d.is_dir())
+        .collect()
+}
+
+/// `run.json` of an existing run, resolved by [`run_dir`].
 pub fn run_path(mur_home: &Path, run_id: &str) -> PathBuf {
-    runs_dir(mur_home).join(run_id).join("run.json")
+    run_dir(mur_home, run_id).join(RUN_FILE)
 }
 
 /// Write `run` atomically: serialize to `run.json.tmp`, then rename over
 /// `run.json`. A reader therefore never observes a half-written record — the
 /// same temp-file-plus-rename discipline `store/yaml.rs` uses.
 pub fn save(mur_home: &Path, run: &RunState) -> Result<()> {
-    let dir = runs_dir(mur_home).join(&run.run_id);
-    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-    let final_path = dir.join("run.json");
+    let dir = dir_for(mur_home, run.kind, run.channel_id.as_deref(), &run.run_id);
+    save_in(&dir, run)
+}
+
+fn save_in(dir: &Path, run: &RunState) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    let final_path = dir.join(RUN_FILE);
     let tmp_path = dir.join("run.json.tmp");
     let body = serde_json::to_vec_pretty(run).context("serialize run state")?;
     {
@@ -45,13 +171,13 @@ pub fn save(mur_home: &Path, run: &RunState) -> Result<()> {
 /// separate from `run.json`: a corrupt cache must not take the index down
 /// with it. See `status_of`'s fallback and `rebuild`'s boundary rule.
 pub fn save_sidecar(mur_home: &Path, run_id: &str, sidecar: &Sidecar) -> Result<()> {
-    let dir = runs_dir(mur_home).join(run_id);
+    let dir = dir_for(mur_home, sidecar.kind, Some(&sidecar.channel_id), run_id);
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     // Temp-file-plus-rename, same discipline as `save`: a crash mid-write
     // must leave either the previous sidecar or none at all, never a
     // truncated one (a truncated sidecar reads as "no sidecar", so the run
     // silently becomes unrecoverable instead of corrupting).
-    let final_path = dir.join("sidecar.json");
+    let final_path = dir.join(SIDECAR_FILE);
     let tmp_path = dir.join("sidecar.json.tmp");
     let body = serde_json::to_vec_pretty(sidecar).context("serialize sidecar")?;
     {
@@ -68,7 +194,16 @@ pub fn save_sidecar(mur_home: &Path, run_id: &str, sidecar: &Sidecar) -> Result<
 /// `run.json`, a never-recorded run is not an error, it is simply not
 /// rebuildable.
 pub fn load_sidecar(mur_home: &Path, run_id: &str) -> Result<Option<Sidecar>> {
-    let path = runs_dir(mur_home).join(run_id).join("sidecar.json");
+    load_sidecar_in(mur_home, None, run_id)
+}
+
+/// [`load_sidecar`] from the directory [`run_dir_in`] resolves.
+pub fn load_sidecar_in(
+    mur_home: &Path,
+    fleet: Option<&str>,
+    run_id: &str,
+) -> Result<Option<Sidecar>> {
+    let path = run_dir_in(mur_home, fleet, run_id).join(SIDECAR_FILE);
     match std::fs::read(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
@@ -94,7 +229,49 @@ pub fn update<F>(mur_home: &Path, run_id: &str, mutate: F) -> Result<bool>
 where
     F: FnOnce(&mut RunState),
 {
-    let dir = runs_dir(mur_home).join(run_id);
+    update_in(&run_dir(mur_home, run_id), mutate)
+}
+
+/// [`update`] of a fleet run, read from that fleet's tree only.
+///
+/// Like [`load_in_fleet`], a linked `run.json` is refused rather than read.
+pub fn update_in_fleet<F>(mur_home: &Path, fleet: &str, run_id: &str, mutate: F) -> Result<bool>
+where
+    F: FnOnce(&mut RunState),
+{
+    update_at(
+        &fleet_run_dir(mur_home, fleet, run_id),
+        ReadMode::Trusted,
+        mutate,
+    )
+}
+
+/// How a record is read: as found, or only when it is not a link
+/// ([`mur_common::paths::read_unlinked`]).
+#[derive(Clone, Copy)]
+enum ReadMode {
+    AsFound,
+    Trusted,
+}
+
+fn read_record(dir: &Path, how: ReadMode) -> std::io::Result<Vec<u8>> {
+    match how {
+        ReadMode::AsFound => std::fs::read(dir.join(RUN_FILE)),
+        ReadMode::Trusted => mur_common::paths::read_unlinked(dir, RUN_FILE),
+    }
+}
+
+fn update_in<F>(dir: &Path, mutate: F) -> Result<bool>
+where
+    F: FnOnce(&mut RunState),
+{
+    update_at(dir, ReadMode::AsFound, mutate)
+}
+
+fn update_at<F>(dir: &Path, how: ReadMode, mutate: F) -> Result<bool>
+where
+    F: FnOnce(&mut RunState),
+{
     // No directory at all ⇒ definitely no record. Return before creating
     // so much as a lock file for a run that was never saved.
     if !dir.exists() {
@@ -122,15 +299,16 @@ where
     // path (Ok or Err) since it runs after this closure regardless of which
     // branch inside it returned.
     let result = (|| -> Result<bool> {
-        let path = run_path(mur_home, run_id);
-        let mut run = match std::fs::read(&path) {
+        let path = dir.join(RUN_FILE);
+        let mut run = match read_record(dir, how) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
             Ok(bytes) => serde_json::from_slice::<RunState>(&bytes)
                 .with_context(|| format!("parse {}", path.display()))?,
         };
         mutate(&mut run);
-        save(mur_home, &run)?;
+        // Back where it was read from: a mutation never moves a record.
+        save_in(dir, &run)?;
         Ok(true)
     })();
 
@@ -141,8 +319,30 @@ where
 /// Read one run record. `Ok(None)` when the file does not exist — a run that
 /// was never recorded is not an error, it is a rebuild candidate.
 pub fn load(mur_home: &Path, run_id: &str) -> Result<Option<RunState>> {
-    let path = run_path(mur_home, run_id);
-    match std::fs::read(&path) {
+    load_from(&run_path(mur_home, run_id))
+}
+
+/// [`load`] from the directory [`run_dir_in`] resolves. For reporting; a
+/// decision that trusts the record uses [`load_in_fleet`].
+pub fn load_scoped(mur_home: &Path, fleet: Option<&str>, run_id: &str) -> Result<Option<RunState>> {
+    load_from(&run_dir_in(mur_home, fleet, run_id).join(RUN_FILE))
+}
+
+/// [`load`] of a fleet run, from that fleet's tree only — for every decision
+/// that trusts the record (resume, pause). Never falls back to `runs/`, and
+/// refuses a `run.json` that is a link (symlink or hard link), which would
+/// read the fleet's trusted path out of a tree every agent can write.
+pub fn load_in_fleet(mur_home: &Path, fleet: &str, run_id: &str) -> Result<Option<RunState>> {
+    let dir = fleet_run_dir(mur_home, fleet, run_id);
+    parse_record(&dir.join(RUN_FILE), read_record(&dir, ReadMode::Trusted))
+}
+
+fn load_from(path: &Path) -> Result<Option<RunState>> {
+    parse_record(path, std::fs::read(path))
+}
+
+fn parse_record(path: &Path, read: std::io::Result<Vec<u8>>) -> Result<Option<RunState>> {
+    match read {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
         Ok(bytes) => Ok(Some(
@@ -151,11 +351,31 @@ pub fn load(mur_home: &Path, run_id: &str) -> Result<Option<RunState>> {
     }
 }
 
-/// Every run id that has a directory under `runs/`. Missing `runs/` yields an
-/// empty list: no runs have happened yet, which is not a failure.
+/// Every recorded run id: each fleet's runs, then `runs/`. Missing
+/// directories yield nothing: no runs have happened yet, which is not a
+/// failure. Failing to list `runs/` itself is still an error.
 pub fn list_ids(mur_home: &Path) -> Result<Vec<String>> {
-    let dir = runs_dir(mur_home);
-    let entries = match std::fs::read_dir(&dir) {
+    let mut ids = Vec::new();
+    for fleet in fleet_names(mur_home) {
+        // A fleet tree that cannot be listed (sandbox) hides only that
+        // fleet's runs, never the whole list.
+        ids.extend(
+            list_dir_ids(&mur_common::paths::fleet_runs_dir(mur_home, &fleet)).unwrap_or_default(),
+        );
+    }
+    ids.extend(list_dir_ids(&runs_dir(mur_home))?);
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+/// The run ids of one fleet, from its tree only.
+pub fn list_fleet_ids(mur_home: &Path, fleet: &str) -> Result<Vec<String>> {
+    list_dir_ids(&mur_common::paths::fleet_runs_dir(mur_home, fleet))
+}
+
+fn list_dir_ids(dir: &Path) -> Result<Vec<String>> {
+    let entries = match std::fs::read_dir(dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
         Err(e) => return Err(e).with_context(|| format!("read_dir {}", dir.display())),
         Ok(entries) => entries,
@@ -193,6 +413,45 @@ mod tests {
             binary_version: "0.0.0-test".into(),
             build_sha: "deadbee".into(),
         }
+    }
+
+    /// A fleet's trusted read never follows a link out of its tree (#2316).
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_fleet_record_is_refused_by_the_trusted_readers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = tmp.path();
+        let mut run = sample("fleet-dev-1");
+        run.kind = RunKind::Fleet;
+        run.channel_id = Some("fleet-dev".into());
+        let forged = h.join("runs").join("forged");
+        std::fs::create_dir_all(&forged).unwrap();
+        std::fs::write(forged.join(RUN_FILE), serde_json::to_vec(&run).unwrap()).unwrap();
+        let dir = fleet_run_dir(h, "dev", "fleet-dev-1");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(forged.join(RUN_FILE), dir.join(RUN_FILE)).unwrap();
+
+        assert!(load_in_fleet(h, "dev", "fleet-dev-1").is_err());
+        assert!(update_in_fleet(h, "dev", "fleet-dev-1", |_| {}).is_err());
+    }
+
+    /// Another fleet's agent can create a copy of B's run id in its own tree;
+    /// a scoped read sees only B's, and the id-only list names both.
+    #[test]
+    fn a_copy_in_another_fleets_tree_does_not_shadow_a_scoped_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = tmp.path();
+        let mut real = sample("fleet-b-1");
+        real.kind = RunKind::Fleet;
+        real.channel_id = Some("fleet-b".into());
+        save(h, &real).unwrap();
+        let mut forged = real.clone();
+        forged.state = State::Done;
+        save_in(&fleet_run_dir(h, "a", "fleet-b-1"), &forged).unwrap();
+
+        let scoped = load_scoped(h, Some("b"), "fleet-b-1").unwrap().unwrap();
+        assert_eq!(scoped.state, State::Running);
+        assert_eq!(run_dirs_of(h, "fleet-b-1").len(), 2);
     }
 
     #[test]

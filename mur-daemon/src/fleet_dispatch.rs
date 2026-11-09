@@ -164,7 +164,9 @@ fn process_one(
         "signature verification failed"
     );
 
-    let run_dir = mur_dir.join(mur_common::paths::RUNS).join(&d.run_id);
+    // The fleet's own tree (#2316); `d.fleet` and `d.run_id` were both
+    // checked to be single path segments above.
+    let run_dir = mur_common::paths::fleet_run_dir(mur_dir, &d.fleet, &d.run_id);
     let record_path = run_dir.join(FLEET_DISPATCH_RECORD_FILE);
     // A record means this run id was already decided: a replayed request.
     // Checked before writing anything, so a replay cannot overwrite the

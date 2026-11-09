@@ -11,7 +11,14 @@
 
 use std::path::{Path, PathBuf};
 
-/// Run-status records: `<mur_home>/runs/<run_id>/run.json`.
+/// Run-status records of runs that belong to no fleet (`parallel_jobs`,
+/// workflows): `<mur_home>/runs/<run_id>/run.json`.
+///
+/// A FLEET run's directory is never here — it is
+/// [`fleet_run_dir`], inside the per-fleet carve-in. `runs/` is writable by
+/// every sandboxed agent (the MCP server records `parallel_jobs` runs from
+/// inside the sandbox), so anything a fleet resume trusts must not live in it
+/// (#2316).
 pub const RUNS: &str = "runs";
 
 /// Fleet definitions: `<mur_home>/fleets/<name>/fleet.yaml`, plus the
@@ -65,6 +72,130 @@ pub fn fleet_state_dir(mur_home: &Path, name: &str) -> PathBuf {
     mur_home.join(FLEET_STATE).join(name)
 }
 
+/// `<mur_home>/fleet-state/<name>/runs/` — the run directories of `name`'s
+/// runs (`run.json`, `sidecar.json`, `checkpoint.json`, logs, the daemon's
+/// `dispatch.json`). Inside [`fleet_state_dir`] so only an agent allowed to
+/// run `name` can write them (#2316).
+pub fn fleet_runs_dir(mur_home: &Path, name: &str) -> PathBuf {
+    fleet_state_dir(mur_home, name).join(RUNS)
+}
+
+/// `<mur_home>/fleet-state/<name>/runs/<run_id>/`.
+pub fn fleet_run_dir(mur_home: &Path, name: &str, run_id: &str) -> PathBuf {
+    fleet_runs_dir(mur_home, name).join(run_id)
+}
+
+/// Is `s` safe to join as ONE path segment under a runs directory? Letters,
+/// digits, `-` and `_` only — the same alphabet `mur fleet run --run-id`
+/// accepts — so no `/`, `..`, or empty segment can steer a lookup elsewhere.
+pub fn is_single_segment(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= RUN_ID_MAX_LEN
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Longest run id accepted as a path segment.
+pub const RUN_ID_MAX_LEN: usize = 96;
+
+/// Read `<run_dir>/<file>` only when both are what they look like: `run_dir`
+/// is a real directory and `file` a regular file with one link. Anything a
+/// resume or pause TRUSTS is read through this (#2316).
+///
+/// A fleet run directory sits in the fleet's sandbox carve-in, but the path
+/// alone does not make its bytes the fleet's: a symlink, or a hard link to a
+/// file elsewhere, reads through the trusted path into a tree every agent can
+/// write (`runs/`, before the one-time migration moved it). Both are refused
+/// as `InvalidData`; a missing file is still `NotFound`, so callers keep
+/// their "no record" answer. Windows has no stable link count, so there only
+/// symlinks are refused.
+pub fn read_unlinked(run_dir: &Path, file: &str) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let refuse = |what: &str, p: &Path| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{} is {what}; refusing to trust it", p.display()),
+        )
+    };
+    if std::fs::symlink_metadata(run_dir)?.file_type().is_symlink() {
+        return Err(refuse("a symlink", run_dir));
+    }
+    let path = run_dir.join(file);
+    let mut f = open_no_follow(&path).map_err(|e| {
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+            refuse("a symlink", &path)
+        } else {
+            e
+        }
+    })?;
+    let meta = f.metadata()?;
+    if !meta.is_file() {
+        return Err(refuse("not a regular file", &path));
+    }
+    if link_count(&meta) > 1 {
+        return Err(refuse("a hard link to another file", &path));
+    }
+    let mut out = Vec::new();
+    f.read_to_end(&mut out)?;
+    Ok(out)
+}
+
+#[cfg(unix)]
+fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+    // No O_NOFOLLOW: check, then open. The window is the caller's own tree.
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "symlink",
+        ));
+    }
+    std::fs::File::open(path)
+}
+
+#[cfg(unix)]
+fn link_count(meta: &std::fs::Metadata) -> u64 {
+    std::os::unix::fs::MetadataExt::nlink(meta)
+}
+
+#[cfg(not(unix))]
+fn link_count(_meta: &std::fs::Metadata) -> u64 {
+    1
+}
+
+/// Does the tree at `dir` hold anything [`read_unlinked`] would refuse — a
+/// symlink anywhere, or a regular file with more than one link? `dir` itself
+/// is checked without following it. An unreadable tree answers `true`: the
+/// caller is deciding whether to trust it.
+pub fn holds_links(dir: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(dir) else {
+        return true;
+    };
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    if meta.is_file() {
+        return link_count(&meta) > 1;
+    }
+    if !meta.is_dir() {
+        return true;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return true;
+    };
+    entries
+        .map(|e| e.map(|e| holds_links(&e.path())))
+        .any(|r| r.unwrap_or(true))
+}
+
 /// Directory holding the daemon's agent-readable heartbeat (#2116).
 ///
 /// Not `murmurd.lock`: a sealed agent must know the daemon is up before it
@@ -92,6 +223,51 @@ pub fn daemon_heartbeat_path(mur_home: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_unlinked_reads_a_plain_file_and_reports_a_missing_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("f"), b"ok").unwrap();
+        assert_eq!(read_unlinked(tmp.path(), "f").unwrap(), b"ok");
+        let missing = read_unlinked(tmp.path(), "nope").unwrap_err();
+        assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
+        assert!(!holds_links(tmp.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_unlinked_refuses_a_symlinked_file_or_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("f"), b"forged").unwrap();
+
+        let dir = tmp.path().join("run");
+        std::fs::create_dir(&dir).unwrap();
+        std::os::unix::fs::symlink(outside.join("f"), dir.join("f")).unwrap();
+        let e = read_unlinked(&dir, "f").unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        assert!(holds_links(&dir));
+
+        let linked_dir = tmp.path().join("run2");
+        std::os::unix::fs::symlink(&outside, &linked_dir).unwrap();
+        let e = read_unlinked(&linked_dir, "f").unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        assert!(holds_links(&linked_dir));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_unlinked_refuses_a_hard_link_to_a_file_elsewhere() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("elsewhere"), b"forged").unwrap();
+        let dir = tmp.path().join("run");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::hard_link(tmp.path().join("elsewhere"), dir.join("f")).unwrap();
+        let e = read_unlinked(&dir, "f").unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        assert!(holds_links(&dir));
+    }
 
     #[test]
     fn runs_is_listed() {

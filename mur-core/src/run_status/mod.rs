@@ -1,6 +1,7 @@
 //! Run status: the one place a job / fleet / workflow run's state is derived.
 //!
-//! `~/.mur/runs/<run_id>/run.json` is a CACHE, not a source of truth — every
+//! `run.json` (in `~/.mur/fleet-state/<fleet>/runs/<run_id>/` for a fleet
+//! run, `~/.mur/runs/<run_id>/` otherwise — see `store`) is a CACHE, not a source of truth — every
 //! field except `last_heartbeat_at` is derivable from the run's channel event
 //! log (see `rebuild`). When the two disagree, the channel wins and the
 //! record is re-derived from it in memory — the cache file is never written
@@ -13,7 +14,7 @@
 //! `sidecar.json` rebuild index records the channel, kind, and first event
 //! seq — so a rebuild folds only THIS run's events even on a long-lived
 //! shared channel. Known limitation: if the whole run directory
-//! (`runs/<run_id>/`) is deleted, the run is still unrecoverable by
+//! (`store::run_dir`) is deleted, the run is still unrecoverable by
 //! `mur job *` even though its channel still exists — the sidecar that
 //! indexes the channel lives inside that directory, and without it there is
 //! no way to know which channel to fold.
@@ -240,30 +241,55 @@ pub fn stale_after(cfg: &mur_common::config::RunsConfig) -> chrono::Duration {
 /// can assemble them differently. `classify` stays pure so the table test can
 /// address every cell without a clock or a config file.
 /// A run id a caller may mint (`mur fleet run --run-id`): one path segment
-/// under `~/.mur/runs/`, so letters, digits, `-` and `_` only.
+/// under a runs directory, so letters, digits, `-` and `_` only.
 pub fn valid_run_id(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 96
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    mur_common::paths::is_single_segment(s)
 }
 
 pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Option<RunStatus>> {
-    let loaded = store::load(mur_home, run_id);
+    // An id recorded in more than one place cannot say which run is meant. A
+    // monitor or MCP caller acts on this answer, so report it as an error
+    // (monitors read that as "unknown") instead of picking the first copy.
+    let places = store::run_dirs_of(mur_home, run_id).len();
+    anyhow::ensure!(
+        places < 2,
+        "run id {run_id} is recorded in {places} places (another fleet's tree or runs/); \
+         ask by fleet: `mur fleet status <fleet>`"
+    );
+    status_of_in(mur_home, None, run_id)
+}
+
+/// [`status_of`] read from one fleet's tree only, for a caller that knows
+/// which fleet it is asking about (`mur fleet status`). Without the scope,
+/// another fleet's agent could shadow the run with a copy in its own tree.
+pub fn status_of_in_fleet(
+    mur_home: &std::path::Path,
+    fleet: &str,
+    run_id: &str,
+) -> anyhow::Result<Option<RunStatus>> {
+    status_of_in(mur_home, Some(fleet), run_id)
+}
+
+fn status_of_in(
+    mur_home: &std::path::Path,
+    fleet: Option<&str>,
+    run_id: &str,
+) -> anyhow::Result<Option<RunStatus>> {
+    let loaded = store::load_scoped(mur_home, fleet, run_id);
     let record = match loaded {
         Ok(Some(record)) => Some(record),
         // No record and no channel: the daemon's dispatch verdict is the
         // only thing that can know about this run (#2116).
-        Ok(None) => match rebuild_for(mur_home, run_id)? {
+        Ok(None) => match rebuild_for(mur_home, fleet, run_id)? {
             Some(record) => Some(record),
-            None => dispatch::load(mur_home, run_id)?,
+            None => dispatch::load_in(mur_home, fleet, run_id)?,
         },
         // Rebuild first; re-propagate the cache error only when there is no
         // rebuild candidate — a run that has a channel to rebuild from must
         // not be hidden by a parse failure. A genuine rebuild I/O error is
         // also reported (chained onto the cache error), never collapsed into
         // "no run recorded".
-        Err(e) => match rebuild_for(mur_home, run_id) {
+        Err(e) => match rebuild_for(mur_home, fleet, run_id) {
             Ok(Some(record)) => Some(record),
             Ok(None) => return Err(e),
             Err(rebuild_err) => {
@@ -289,7 +315,7 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
     // corrupt sidecar silently disabling reconciliation is exactly the kind
     // of observability gap an operator cannot see.
     if !record.state.is_terminal() {
-        match store::load_sidecar(mur_home, run_id) {
+        match store::load_sidecar_in(mur_home, fleet, run_id) {
             Ok(Some(sidecar)) => match rebuild::run_tail_state(mur_home, &sidecar, run_id) {
                 Ok(Some(channel_state))
                     if channel_state.is_terminal() && record.state != channel_state =>
@@ -324,8 +350,12 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
 /// channel read: `status_of` must report it instead of pretending the run
 /// never existed. `load_sidecar` already answers `Ok(None)` for an absent
 /// sidecar, so `?` here costs the absent case nothing.
-fn rebuild_for(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Option<RunState>> {
-    let Some(sidecar) = store::load_sidecar(mur_home, run_id)? else {
+fn rebuild_for(
+    mur_home: &std::path::Path,
+    fleet: Option<&str>,
+    run_id: &str,
+) -> anyhow::Result<Option<RunState>> {
+    let Some(sidecar) = store::load_sidecar_in(mur_home, fleet, run_id)? else {
         return Ok(None);
     };
     rebuild::from_channel(mur_home, run_id, &sidecar)

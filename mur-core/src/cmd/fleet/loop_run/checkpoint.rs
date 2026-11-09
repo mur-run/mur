@@ -1,6 +1,6 @@
 //! The checkpoint a paused fleet run leaves behind (pause/resume design §5.3).
 //!
-//! `~/.mur/runs/<run_id>/checkpoint.json`, beside `run.json`, written temp +
+//! `~/.mur/fleet-state/<fleet>/runs/<run_id>/checkpoint.json`, beside `run.json`, written temp +
 //! rename like it. The loop can write there; it cannot write `fleets/`.
 //!
 //! The checkpoint is written BY THE RUN, so resume never trusts it to widen
@@ -60,11 +60,11 @@ pub struct Checkpoint {
     pub binary_version: String,
 }
 
-/// `<mur_home>/runs/<run_id>/checkpoint.json`.
-pub fn checkpoint_path(mur_home: &Path, run_id: &str) -> PathBuf {
-    crate::run_status::store::runs_dir(mur_home)
-        .join(run_id)
-        .join(CHECKPOINT_FILE)
+/// `<mur_home>/fleet-state/<fleet>/runs/<run_id>/checkpoint.json`. Only ever
+/// inside the fleet's own tree: a resume trusts this file, and `runs/` is
+/// writable by every sandboxed agent (#2316).
+pub fn checkpoint_path(mur_home: &Path, fleet: &str, run_id: &str) -> PathBuf {
+    crate::run_status::store::fleet_run_dir(mur_home, fleet, run_id).join(CHECKPOINT_FILE)
 }
 
 /// Serialized size of a planned procedure, as the checkpoint would store it.
@@ -89,7 +89,14 @@ pub fn save(mur_home: &Path, cp: &Checkpoint) -> Result<()> {
             "the planned procedure is {procedure_bytes} bytes, over the {CHECKPOINT_PROCEDURE_MAX_BYTES}-byte checkpoint limit"
         );
     }
-    let path = checkpoint_path(mur_home, &cp.run_id);
+    anyhow::ensure!(
+        mur_common::fleet::valid_fleet_name(&cp.fleet)
+            && mur_common::paths::is_single_segment(&cp.run_id),
+        "checkpoint names fleet `{}` / run `{}`, which cannot be a path",
+        cp.fleet,
+        cp.run_id
+    );
+    let path = checkpoint_path(mur_home, &cp.fleet, &cp.run_id);
     let dir = path.parent().context("checkpoint path has no parent")?;
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     let tmp = path.with_extension("json.tmp");
@@ -101,9 +108,12 @@ pub fn save(mur_home: &Path, cp: &Checkpoint) -> Result<()> {
 
 /// Load a run's checkpoint. `Ok(None)` when there is none; an error when it is
 /// there but unreadable or from another schema (resume says "use `stop`").
-pub fn load(mur_home: &Path, run_id: &str) -> Result<Option<Checkpoint>> {
-    let path = checkpoint_path(mur_home, run_id);
-    let body = match std::fs::read(&path) {
+pub fn load(mur_home: &Path, fleet: &str, run_id: &str) -> Result<Option<Checkpoint>> {
+    let path = checkpoint_path(mur_home, fleet, run_id);
+    // Not `fs::read`: a linked checkpoint reads the fleet's trusted path out
+    // of a tree any agent can write (#2316).
+    let dir = path.parent().context("checkpoint path has no parent")?;
+    let body = match mur_common::paths::read_unlinked(dir, CHECKPOINT_FILE) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
@@ -153,13 +163,13 @@ pub fn summary_line(cp: &Checkpoint) -> String {
 /// which can, removes the sentinel and reports the reason.
 pub const PAUSE_REFUSED_FILE: &str = "pause_refused";
 
-fn refusal_path(mur_home: &Path, run_id: &str) -> PathBuf {
-    checkpoint_path(mur_home, run_id).with_file_name(PAUSE_REFUSED_FILE)
+fn refusal_path(mur_home: &Path, fleet: &str, run_id: &str) -> PathBuf {
+    checkpoint_path(mur_home, fleet, run_id).with_file_name(PAUSE_REFUSED_FILE)
 }
 
 /// Record that this run cannot be paused right now, and why. Best-effort.
-pub fn refuse_pause(mur_home: &Path, run_id: &str, reason: &str) {
-    let path = refusal_path(mur_home, run_id);
+pub fn refuse_pause(mur_home: &Path, fleet: &str, run_id: &str, reason: &str) {
+    let path = refusal_path(mur_home, fleet, run_id);
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -167,19 +177,19 @@ pub fn refuse_pause(mur_home: &Path, run_id: &str, reason: &str) {
 }
 
 /// Why this run said it cannot be paused, if it did.
-pub fn pause_refusal(mur_home: &Path, run_id: &str) -> Option<String> {
-    std::fs::read_to_string(refusal_path(mur_home, run_id)).ok()
+pub fn pause_refusal(mur_home: &Path, fleet: &str, run_id: &str) -> Option<String> {
+    std::fs::read_to_string(refusal_path(mur_home, fleet, run_id)).ok()
 }
 
 /// Withdraw the refusal (the run can be paused again). Idempotent.
-pub fn clear_pause_refusal(mur_home: &Path, run_id: &str) {
-    let _ = std::fs::remove_file(refusal_path(mur_home, run_id));
+pub fn clear_pause_refusal(mur_home: &Path, fleet: &str, run_id: &str) {
+    let _ = std::fs::remove_file(refusal_path(mur_home, fleet, run_id));
 }
 
 /// Remove a run's checkpoint (idempotent). Used by `resume` once the run is
 /// running again, and by `stop` of a paused run.
-pub fn remove(mur_home: &Path, run_id: &str) {
-    let _ = std::fs::remove_file(checkpoint_path(mur_home, run_id));
+pub fn remove(mur_home: &Path, fleet: &str, run_id: &str) {
+    let _ = std::fs::remove_file(checkpoint_path(mur_home, fleet, run_id));
 }
 
 /// A filled-in checkpoint for tests in other modules.
@@ -245,7 +255,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let cp = sample("r1");
         save(home.path(), &cp).unwrap();
-        let back = load(home.path(), "r1")
+        let back = load(home.path(), "dev", "r1")
             .unwrap()
             .expect("checkpoint present");
         assert_eq!(
@@ -253,12 +263,12 @@ mod tests {
             serde_json::to_value(&cp).unwrap()
         );
         assert!(
-            !checkpoint_path(home.path(), "r1")
+            !checkpoint_path(home.path(), "dev", "r1")
                 .with_extension("json.tmp")
                 .exists()
         );
-        remove(home.path(), "r1");
-        assert!(load(home.path(), "r1").unwrap().is_none());
+        remove(home.path(), "dev", "r1");
+        assert!(load(home.path(), "dev", "r1").unwrap().is_none());
     }
 
     #[test]
@@ -271,7 +281,27 @@ mod tests {
         }];
         let err = save(home.path(), &cp).expect_err("over the cap");
         assert!(format!("{err:#}").contains("checkpoint limit"), "{err:#}");
-        assert!(!checkpoint_path(home.path(), "r2").exists());
+        assert!(!checkpoint_path(home.path(), "dev", "r2").exists());
+    }
+
+    /// A checkpoint that is a link reads the fleet's trusted path out of a
+    /// tree any agent writes; resume must refuse it, not trust it (#2316).
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_checkpoint_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = tmp.path();
+        let cp = sample("fleet-dev-1");
+        save(h, &cp).unwrap();
+        let path = checkpoint_path(h, &cp.fleet, &cp.run_id);
+        let forged = h.join("forged.json");
+        std::fs::rename(&path, &forged).unwrap();
+        std::os::unix::fs::symlink(&forged, &path).unwrap();
+        assert!(load(h, &cp.fleet, &cp.run_id).is_err());
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::hard_link(&forged, &path).unwrap();
+        assert!(load(h, &cp.fleet, &cp.run_id).is_err());
     }
 
     #[test]
@@ -280,6 +310,6 @@ mod tests {
         let mut cp = sample("r3");
         cp.schema = CHECKPOINT_SCHEMA + 1;
         save(home.path(), &cp).unwrap();
-        assert!(load(home.path(), "r3").is_err());
+        assert!(load(home.path(), "dev", "r3").is_err());
     }
 }

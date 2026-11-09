@@ -281,7 +281,7 @@ fn admit_state(mur_home: &Path, name: &str) -> Result<Checkpoint> {
             "fleet '{name}': governance could not be read ({e:#}), so it is not resumed (fail-closed)"
         ),
     }
-    let cp = match checkpoint::load(mur_home, &run_id) {
+    let cp = match checkpoint::load(mur_home, name, &run_id) {
         Ok(Some(cp)) => cp,
         Ok(None) => bail!(
             "fleet '{name}': run {run_id} has no checkpoint, so there is nothing to resume from — `mur fleet stop {name}` discards it"
@@ -293,7 +293,7 @@ fn admit_state(mur_home: &Path, name: &str) -> Result<Checkpoint> {
             "fleet '{name}': the checkpoint of run {run_id} names another run — `mur fleet stop {name}` discards it"
         );
     }
-    match crate::run_status::store::load(mur_home, &run_id) {
+    match crate::run_status::store::load_in_fleet(mur_home, name, &run_id) {
         Ok(Some(r)) if awaits_resume(r.state, true) => {}
         Ok(Some(r)) => bail!(
             "fleet '{name}': run {run_id} is `{:?}`, not paused — nothing to resume",
@@ -328,6 +328,13 @@ pub async fn cmd_fleet_resume(mur_home: &Path, name: &str) -> Result<()> {
     if !from.bounds_authenticated {
         println!(
             "  ⚠ no signed run_paused carries this run's original limits; resuming under the checkpoint's copy, tightened by fleet.yaml (check `mur fleet limits {name}`)"
+        );
+    }
+    if !from.bounds_authenticated
+        && crate::cmd::fleet::run_migrate::was_migrated(mur_home, name, &from.run_id)
+    {
+        println!(
+            "  ⚠ this run was moved out of the shared runs/ directory and has no signed run_paused; it may have been altered before the move — review it before trusting the checkpoint"
         );
     }
     println!(
@@ -437,15 +444,19 @@ pub(super) fn awaits_resume(state: crate::run_status::State, checkpoint_present:
     }
 }
 
-/// [`awaits_resume`] for `run_id`, read from its record and checkpoint.
-fn pending_resume(mur_home: &Path, run_id: &str) -> bool {
-    crate::run_status::store::load(mur_home, run_id)
+/// [`awaits_resume`] for `run_id`, read from its record and checkpoint in
+/// `name`'s own tree.
+fn pending_resume(mur_home: &Path, name: &str, run_id: &str) -> bool {
+    crate::run_status::store::load_in_fleet(mur_home, name, run_id)
         .ok()
         .flatten()
         .is_some_and(|r| {
             awaits_resume(
                 r.state,
-                checkpoint::load(mur_home, run_id).ok().flatten().is_some(),
+                checkpoint::load(mur_home, name, run_id)
+                    .ok()
+                    .flatten()
+                    .is_some(),
             )
         })
 }
@@ -460,7 +471,7 @@ pub(super) fn refuse_fresh_run_over_pause(mur_home: &Path, name: &str) -> Result
     let Some(run_id) = control::paused_run_id(mur_home, name) else {
         return Ok(());
     };
-    if pending_resume(mur_home, &run_id) {
+    if pending_resume(mur_home, name, &run_id) {
         bail!(
             "fleet '{name}' has a paused run ({run_id}): continue it with `mur fleet resume {name}`, or discard it with `mur fleet stop {name}`"
         );
@@ -468,7 +479,7 @@ pub(super) fn refuse_fresh_run_over_pause(mur_home: &Path, name: &str) -> Result
     // Only a checkpoint that is provably absent (`Ok(None)`) makes the
     // sentinel stale. An unreadable one still exists; dropping the sentinel
     // over it would orphan it without the `mur fleet stop` §8.5 requires.
-    match checkpoint::load(mur_home, &run_id) {
+    match checkpoint::load(mur_home, name, &run_id) {
         Ok(None) => {}
         Ok(Some(_)) => bail!(
             "fleet '{name}' holds a checkpoint for run {run_id}, whose record is not paused, so it cannot be resumed: discard it with `mur fleet stop {name}`"
@@ -494,9 +505,9 @@ pub(crate) fn end_paused_run(mur_home: &Path, name: &str) -> bool {
     if run_lock::is_held(mur_home, name) {
         return false;
     }
-    let paused = pending_resume(mur_home, &run_id);
+    let paused = pending_resume(mur_home, name, &run_id);
     if paused {
-        if let Ok(Some(cp)) = checkpoint::load(mur_home, &run_id)
+        if let Ok(Some(cp)) = checkpoint::load(mur_home, name, &run_id)
             && let Some(job_id) = cp.job_id
             && let Ok(jobs) = crate::cmd::fleet::jobs::list_jobs_raw(mur_home, name)
             && let Some(mut job) = jobs.into_iter().find(|j| j.id == job_id)
@@ -509,12 +520,12 @@ pub(crate) fn end_paused_run(mur_home: &Path, name: &str) -> bool {
         }
         // The loop's record AND the paused iteration's: `mur fleet status`
         // shows the iteration, which otherwise stayed `paused` forever.
-        let iteration_run_id = checkpoint::load(mur_home, &run_id)
+        let iteration_run_id = checkpoint::load(mur_home, name, &run_id)
             .ok()
             .flatten()
             .map(|cp| cp.iteration_run_id);
         for id in std::iter::once(run_id.as_str()).chain(iteration_run_id.as_deref()) {
-            let _ = crate::run_status::store::update(mur_home, id, |r| {
+            let _ = crate::run_status::store::update_in_fleet(mur_home, name, id, |r| {
                 r.state = crate::run_status::State::Stopped
             });
         }
@@ -527,8 +538,8 @@ pub(crate) fn end_paused_run(mur_home: &Path, name: &str) -> bool {
         }
         announce_discard(mur_home, name, &run_id);
     }
-    checkpoint::remove(mur_home, &run_id);
-    checkpoint::clear_pause_refusal(mur_home, &run_id);
+    checkpoint::remove(mur_home, name, &run_id);
+    checkpoint::clear_pause_refusal(mur_home, name, &run_id);
     let _ = std::fs::remove_file(control::paused_path(mur_home, name));
     paused
 }
@@ -547,7 +558,7 @@ fn announce_discard(mur_home: &Path, name: &str, run_id: &str) {
         return;
     };
     let mut ids = vec![run_id.to_string()];
-    if let Ok(Some(cp)) = checkpoint::load(mur_home, run_id) {
+    if let Ok(Some(cp)) = checkpoint::load(mur_home, name, run_id) {
         ids.insert(0, cp.iteration_run_id);
     }
     for id in ids {
@@ -577,3 +588,7 @@ fn announce_discard(mur_home: &Path, name: &str, run_id: &str) {
 #[cfg(test)]
 #[path = "resume_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "resume_scope_tests.rs"]
+mod scope_tests;

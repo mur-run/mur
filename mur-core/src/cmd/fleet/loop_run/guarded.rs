@@ -235,7 +235,7 @@ async fn run_guarded_inner(
         // not wait for the first resumed iteration: after that it would roll
         // spend and elapsed time back.
         super::resume::record_resumed(&svc, mur_home, &fleet, r);
-        checkpoint::remove(mur_home, &run_id);
+        checkpoint::remove(mur_home, name, &run_id);
         let _ = std::fs::remove_file(super::super::control::paused_path(mur_home, name));
     }
 
@@ -269,7 +269,7 @@ async fn run_guarded_inner(
             if let Some(b) = loop_beat {
                 b.stop().await;
             }
-            let _ = crate::run_status::store::update(mur_home, &run_id, |r| {
+            let _ = crate::run_status::store::update_in_fleet(mur_home, name, &run_id, |r| {
                 r.state = crate::run_status::State::Blocked
             });
             anyhow::bail!(
@@ -318,7 +318,7 @@ async fn run_guarded_inner(
             };
             match pause::record_pause(&svc, &snap) {
                 Ok(()) => break LoopStop::Paused,
-                Err(error) => refuse_pause(mur_home, &run_id, &error),
+                Err(error) => refuse_pause(mur_home, name, &run_id, &error),
             }
         }
         if let Some(stop) = check_guards(
@@ -440,6 +440,7 @@ async fn run_guarded_inner(
         if !pausable {
             refuse_pause(
                 mur_home,
+                name,
                 &run_id,
                 &format!(
                     "iteration {} plans more than the {}-byte checkpoint limit; `mur fleet stop` is the way out",
@@ -448,7 +449,7 @@ async fn run_guarded_inner(
                 ),
             );
         } else {
-            checkpoint::clear_pause_refusal(mur_home, &run_id);
+            checkpoint::clear_pause_refusal(mur_home, name, &run_id);
         }
         let opts = crate::executor::dag::DagExecOptions {
             // Fail-closed on the unattended loop path: never blanket-approve.
@@ -544,7 +545,7 @@ async fn run_guarded_inner(
                 Err(error) => {
                     // No checkpoint exists, so the run must not read as
                     // paused. Say so and let the operator stop it.
-                    refuse_pause(mur_home, &run_id, &error);
+                    refuse_pause(mur_home, name, &run_id, &error);
                     break LoopStop::IterationFailed;
                 }
             }

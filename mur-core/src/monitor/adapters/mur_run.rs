@@ -287,4 +287,16 @@ mod tests {
         assert!(a.validate_reference("run-1").is_ok());
         assert!(a.validate_reference("bad id!").is_err());
     }
+
+    #[test]
+    fn an_id_recorded_in_two_fleets_is_unknown_not_a_pick() {
+        let d = tempfile::tempdir().unwrap();
+        let mut r = run(State::Done, None);
+        r.channel_id = Some("fleet-b".into());
+        crate::run_status::store::save(d.path(), &r).unwrap();
+        let planted = mur_common::paths::fleet_run_dir(d.path(), "a", "run-1");
+        std::fs::create_dir_all(&planted).unwrap();
+        let a = MurRunAdapter::new(d.path());
+        assert_eq!(a.observe("run-1", None).outcome, Outcome::Unknown);
+    }
 }

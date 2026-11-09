@@ -16,12 +16,22 @@ pub fn find_latest_run_for_channel(
     use crate::run_status::store;
 
     let mut newest: Option<(chrono::DateTime<chrono::Utc>, crate::run_status::RunStatus)> = None;
-    for run_id in store::list_ids(mur_home)? {
+    // A fleet's runs live in its own tree (#2316); `runs/` is writable by
+    // every sandboxed agent, so a record there must not pose as this fleet's
+    // latest run. Any other channel still searches everything.
+    let fleet = mur_common::fleet::fleet_name_from_channel_id(channel_id);
+    let candidates = match fleet {
+        Some(fleet) => store::list_fleet_ids(mur_home, fleet)?,
+        None => store::list_ids(mur_home)?,
+    };
+    for run_id in candidates {
         // A sidecar read failure skips the candidate — a corrupt index on an
         // unrelated run must not hide this fleet's runs — but it is warned,
         // never silent: `load_sidecar` distinguishes "absent" from "unreadable"
         // and that distinction is the operator's only clue.
-        let sidecar = match store::load_sidecar(mur_home, &run_id) {
+        // Read from this fleet's tree: the id alone would resolve to the
+        // first fleet that has it, which another fleet's agent can plant.
+        let sidecar = match store::load_sidecar_in(mur_home, fleet, &run_id) {
             Ok(Some(sidecar)) => sidecar,
             Ok(None) => continue,
             Err(error) => {
@@ -39,7 +49,7 @@ pub fn find_latest_run_for_channel(
         // Same rule for the record itself: one unreadable `run.json` on the
         // fleet's channel must not make `mur fleet status` fail outright. It
         // is warned, because skipping it may mean an older run is shown.
-        let status = match crate::run_status::status_of(mur_home, &run_id) {
+        let status = match status_scoped(mur_home, fleet, &run_id) {
             Ok(Some(status)) => status,
             Ok(None) => continue,
             Err(error) => {
@@ -59,6 +69,18 @@ pub fn find_latest_run_for_channel(
         }
     }
     Ok(newest.map(|(_, status)| status))
+}
+
+/// `status_of`, from `fleet`'s tree when the channel names one.
+fn status_scoped(
+    mur_home: &Path,
+    fleet: Option<&str>,
+    run_id: &str,
+) -> Result<Option<crate::run_status::RunStatus>> {
+    match fleet {
+        Some(f) => crate::run_status::status_of_in_fleet(mur_home, f, run_id),
+        None => crate::run_status::status_of(mur_home, run_id),
+    }
 }
 
 /// `mur fleet status <name>` — the fleet's most recent run via the shared
@@ -104,7 +126,8 @@ fn pause_targeted_run(
     channel_id: &str,
     run_id: &str,
 ) -> Option<crate::run_status::RunStatus> {
-    let status = match crate::run_status::status_of(mur_home, run_id) {
+    let fleet = mur_common::fleet::fleet_name_from_channel_id(channel_id);
+    let status = match status_scoped(mur_home, fleet, run_id) {
         Ok(Some(status)) => status,
         Ok(None) => return None,
         Err(error) => {
@@ -216,7 +239,8 @@ mod tests {
 
         // The fleet's real run, plus an unrelated run whose sidecar is corrupt.
         save_run(mur_home, "run-good", "fleet-x", base);
-        let dir = store::runs_dir(mur_home).join("run-bad");
+        // In the same fleet tree the lookup lists (#2316).
+        let dir = store::fleet_run_dir(mur_home, "x", "run-bad");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("sidecar.json"), b"{ not json").unwrap();
 

@@ -152,9 +152,14 @@ pub(super) fn emit_stop_event(
 
 /// Tell `mur fleet pause` this run cannot be paused, and why. Logged as well,
 /// since nobody may be watching the checkpoint directory.
-pub(super) fn refuse_pause(mur_home: &Path, run_id: &str, reason: &dyn std::fmt::Display) {
+pub(super) fn refuse_pause(
+    mur_home: &Path,
+    fleet: &str,
+    run_id: &str,
+    reason: &dyn std::fmt::Display,
+) {
     let reason = reason.to_string();
     tracing::warn!(run_id, %reason, "pause refused; the run keeps going");
     println!("  ⚠ pause refused — the run keeps going: {reason}");
-    checkpoint::refuse_pause(mur_home, run_id, &reason);
+    checkpoint::refuse_pause(mur_home, fleet, run_id, &reason);
 }
