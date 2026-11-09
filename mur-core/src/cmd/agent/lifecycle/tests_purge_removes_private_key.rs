@@ -44,3 +44,21 @@ fn purge_does_not_double_remove_a_non_agent_directory() {
     assert!(purge_agent_state(&stray).unwrap().is_none());
     assert!(!stray.exists());
 }
+
+/// `mur agent remove .human --purge` with a stray `agents/.human` must not
+/// reach `keys/.human`, the human owner's private key (D-8). The name is
+/// refused before it becomes a path.
+#[test]
+fn agent_remove_dot_human_purge_is_refused() {
+    let tmp = TempDir::new().unwrap();
+    let _env = mur_common::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
+    std::fs::create_dir_all(tmp.path().join("agents").join(".human")).unwrap();
+    let key = mur_common::identity::human::human_private_key_path(tmp.path());
+    std::fs::create_dir_all(key.parent().unwrap()).unwrap();
+    std::fs::write(&key, b"human").unwrap();
+
+    let err = cmd_remove(".human", true, true).unwrap_err();
+
+    assert!(format!("{err:#}").contains("invalid agent name"), "{err:#}");
+    assert!(key.exists(), "the human key was purged");
+}

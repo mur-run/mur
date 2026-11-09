@@ -36,6 +36,7 @@ pub mod extract_llm;
 pub mod federation;
 pub mod harvest;
 pub mod hitl;
+pub mod identity_enroll;
 pub mod inject;
 pub mod install_request;
 pub mod interactive;

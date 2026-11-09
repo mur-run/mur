@@ -115,6 +115,10 @@ fn wait_for_no_live_lock(lock_path: &Path) -> Option<u32> {
 }
 
 pub fn cmd_remove(name: &str, purge: bool, force: bool) -> Result<()> {
+    // Validate before the name becomes a path. `--purge` derives a key
+    // directory from it, and `agents/.human` would map to `keys/.human` — the
+    // human owner's private key (D-8). Valid agent names never contain `.`.
+    validate_name(name)?;
     let mur_home = resolve_mur_home()?;
     let agent_home = mur_home.join("agents").join(name);
     if !agent_home.exists() {
