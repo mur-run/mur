@@ -71,11 +71,9 @@ impl ChannelService {
         still_damaged: impl FnOnce() -> Result<bool>,
         prepare: impl FnOnce(Option<&Path>) -> Result<serde_json::Value>,
     ) -> Result<Option<Restarted>> {
-        let head_signer = signer.anchor_home.map(|key_home| HeadSigner {
-            identity: signer.identity,
-            kv: signer.kv,
-            key_home,
-        });
+        let head_signer = signer
+            .anchor_home
+            .map(|key_home| HeadSigner::event(signer.identity, signer.kv, key_home));
         let store = &self.store;
         let mur_home = store.mur_home();
         let done = store.with_append_lock(channel_id, ManifestPolicy::Restore, || {

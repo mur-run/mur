@@ -29,7 +29,8 @@ use crate::head_io;
 use crate::store::{PreSealInput, SealHook, SealHooks, SealInput, line_seq};
 
 /// Who signs the head of an anchored append: the writer's identity and its
-/// key version, the same pair that signs the event.
+/// key version, the same pair that signs the event. Which key actually
+/// seals the head is a separate choice, [`HeadSealer`] (H1, D-3 rev 4).
 #[derive(Clone, Copy)]
 pub(super) struct HeadSigner<'a> {
     pub identity: &'a AgentIdentity,
@@ -38,18 +39,90 @@ pub(super) struct HeadSigner<'a> {
     /// under an earlier key version are verified against the rotation chain
     /// found here; without it a normal rekey would brick every later append.
     pub key_home: &'a Path,
+    pub sealer: HeadSealer<'a>,
 }
 
-impl HeadSigner<'_> {
-    /// The pubkey that should have signed a head claiming `key_version`.
-    /// The signer's own key when the version is its own (or unstated);
-    /// otherwise whatever the trusted rotation history says. `None` means
-    /// the head cannot be attributed to any key we trust.
+/// The key that seals (and, going forward, vouches for) the head.
+// `Router` is unconstructed in PR 1 by design (H1 is behaviour-neutral); C1
+// is the first caller.
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+pub(super) enum HeadSealer<'a> {
+    /// Today's behaviour: the event signer seals its own head.
+    EventSigner,
+    /// The channel router seals every head on an owned channel. Nothing
+    /// selects this until C1/C5/C2 exist.
+    Router {
+        identity: &'a AgentIdentity,
+        kv: u32,
+        key_home: &'a Path,
+        /// The same load found a live owner record. Once true, a head that
+        /// does not verify under the router is never accepted under the
+        /// event signer's chain; before that it is, once, and is resealed.
+        live_record: bool,
+    },
+}
+
+impl<'a> HeadSigner<'a> {
+    /// The event signer seals its own head (every caller today).
+    pub(super) fn event(identity: &'a AgentIdentity, kv: u32, key_home: &'a Path) -> Self {
+        Self {
+            identity,
+            kv,
+            key_home,
+            sealer: HeadSealer::EventSigner,
+        }
+    }
+
+    /// The identity, key version and home that seal the head.
+    fn sealing(&self) -> (&'a AgentIdentity, u32, &'a Path) {
+        match self.sealer {
+            HeadSealer::EventSigner => (self.identity, self.kv, self.key_home),
+            HeadSealer::Router {
+                identity,
+                kv,
+                key_home,
+                ..
+            } => (identity, kv, key_home),
+        }
+    }
+
+    /// The pubkey that should have signed a head claiming `key_version`,
+    /// under the SEALER's own chain. The sealer's key when the version is its
+    /// own (or unstated); otherwise whatever the trusted rotation history
+    /// says. `None` means the head cannot be attributed to any key we trust.
     fn pubkey_for(&self, key_version: Option<u32>) -> Option<[u8; 32]> {
+        let (identity, kv, key_home) = self.sealing();
+        match key_version {
+            None => Some(identity.verifying_key_bytes()),
+            Some(v) if v == kv => Some(identity.verifying_key_bytes()),
+            Some(v) => crate::sign::resolve_writer_pubkey_strict(key_home, v),
+        }
+    }
+
+    /// The same lookup under the EVENT signer's chain: the legacy sealer of
+    /// a head written before the router took over.
+    fn event_pubkey_for(&self, key_version: Option<u32>) -> Option<[u8; 32]> {
         match key_version {
             None => Some(self.identity.verifying_key_bytes()),
-            Some(kv) if kv == self.kv => Some(self.identity.verifying_key_bytes()),
-            Some(kv) => crate::sign::resolve_writer_pubkey_strict(self.key_home, kv),
+            Some(v) if v == self.kv => Some(self.identity.verifying_key_bytes()),
+            Some(v) => crate::sign::resolve_writer_pubkey_strict(self.key_home, v),
+        }
+    }
+
+    /// Does the existing head verify? Under the sealer's chain; plus one
+    /// transition arm: a `Router` sealer with no live record yet also accepts
+    /// a head the event signer sealed (it is resealed under the router).
+    fn accepts(&self, h: &Head) -> bool {
+        let under = |key: Option<[u8; 32]>| key.is_some_and(|k| h.verify(&k));
+        if under(self.pubkey_for(h.key_version)) {
+            return true;
+        }
+        match self.sealer {
+            HeadSealer::Router {
+                live_record: false, ..
+            } => under(self.event_pubkey_for(h.key_version)),
+            _ => false,
         }
     }
 }
@@ -107,6 +180,7 @@ fn next_head(
     input: &SealInput<'_>,
     signer: HeadSigner<'_>,
 ) -> Result<Option<Head>> {
+    let (sealer_identity, sealer_kv, _) = signer.sealing();
     // One scan serves both the new head and the check of the old one.
     let (state, prefix) = chain_log_with_prefix(log, current.map_or(0, |h| h.lines));
     let (last_seq, before) = seqs(log, input.record);
@@ -130,14 +204,22 @@ fn next_head(
                     input.channel_id
                 );
             }
-            let Some(key) = signer.pubkey_for(h.key_version) else {
+            if signer.pubkey_for(h.key_version).is_none()
+                && !matches!(
+                    signer.sealer,
+                    HeadSealer::Router {
+                        live_record: false,
+                        ..
+                    }
+                )
+            {
                 bail!(
                     "existing head claims key_version {:?}, which the rotation history \
                      does not resolve; refusing to overwrite it",
                     h.key_version
                 );
-            };
-            if !h.verify(&key) {
+            }
+            if !signer.accepts(h) {
                 bail!("existing head fails signature verification; refusing to overwrite it");
             }
             let prefix = prefix
@@ -169,10 +251,10 @@ fn next_head(
         seq: last_seq.unwrap_or(input.event.seq),
         lines: state.lines,
         chain_hash: hex::encode(state.hash),
-        key_version: Some(signer.kv),
+        key_version: Some(sealer_kv),
         legacy_through,
     };
-    Ok(Some(Head::seal(signer.identity, fields, Utc::now())))
+    Ok(Some(Head::seal(sealer_identity, fields, Utc::now())))
 }
 
 /// Post-write half (also run on a dedup hit): fsync the log (spec 7.3.1
@@ -259,11 +341,7 @@ impl ChannelService {
         idempotency_key: Option<String>,
         anchored: Option<&Path>,
     ) -> Result<ChannelEvent> {
-        let signer = anchored.map(|key_home| HeadSigner {
-            identity,
-            kv,
-            key_home,
-        });
+        let signer = anchored.map(|key_home| HeadSigner::event(identity, kv, key_home));
         let ev = self.with_hooks(signer, |hooks| {
             self.store.append_signed_event_with(
                 channel_id,
@@ -294,11 +372,7 @@ impl ChannelService {
         idempotency_key: Option<String>,
         anchored: Option<&Path>,
     ) -> Result<ChannelEvent> {
-        let signer = anchored.map(|key_home| HeadSigner {
-            identity,
-            kv,
-            key_home,
-        });
+        let signer = anchored.map(|key_home| HeadSigner::event(identity, kv, key_home));
         let sig = crate::sign::sign_event(
             identity,
             channel_id,
@@ -470,5 +544,163 @@ mod seqs_tests {
         let record = line(5);
         log.extend(&record);
         assert_eq!(seqs(&log, &record), (Some(5), Some(4)));
+    }
+}
+
+#[cfg(test)]
+mod sealer_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn line(seq: u64) -> Vec<u8> {
+        let ev = ChannelEvent {
+            seq,
+            ts: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            actor: ChannelActor::System,
+            kind: EventKind::Message,
+            payload: serde_json::json!({ "n": seq }),
+            idempotency_key: None,
+            sig: None,
+            key_version: None,
+            prev_hash: None,
+        };
+        let mut v = serde_json::to_vec(&ev).unwrap();
+        v.push(b'\n');
+        v
+    }
+
+    fn log_of(n: u64) -> Vec<u8> {
+        (1..=n).flat_map(line).collect()
+    }
+
+    /// `next_head` over `log` whose last line is the freshly written record.
+    fn step(
+        current: Option<&Head>,
+        log: &[u8],
+        record: &[u8],
+        signer: HeadSigner<'_>,
+    ) -> Result<Option<Head>> {
+        let ev: ChannelEvent = serde_json::from_slice(record).unwrap();
+        let input = SealInput {
+            channel_id: "c1",
+            event: &ev,
+            record,
+        };
+        next_head(current, log, &input, signer)
+    }
+
+    fn router<'a>(
+        id: &'a AgentIdentity,
+        home: &'a Path,
+        live_record: bool,
+        writer: &'a AgentIdentity,
+    ) -> HeadSigner<'a> {
+        HeadSigner {
+            sealer: HeadSealer::Router {
+                identity: id,
+                kv: 1,
+                key_home: home,
+                live_record,
+            },
+            ..HeadSigner::event(writer, 1, home)
+        }
+    }
+
+    #[test]
+    fn event_sealer_is_byte_identical_to_today() {
+        let writer = AgentIdentity::generate();
+        let home = PathBuf::new();
+        let head = step(
+            None,
+            &log_of(2),
+            &line(2),
+            HeadSigner::event(&writer, 1, &home),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(head.key_version, Some(1));
+        assert!(head.verify(&writer.verifying_key_bytes()));
+        assert_eq!((head.seq, head.lines), (2, 2));
+    }
+
+    #[test]
+    fn router_sealer_reseals_agent_sealed_legacy_head_once() {
+        let (writer, rtr) = (AgentIdentity::generate(), AgentIdentity::generate());
+        let home = PathBuf::new();
+        let legacy = step(
+            None,
+            &log_of(1),
+            &line(1),
+            HeadSigner::event(&writer, 1, &home),
+        )
+        .unwrap()
+        .unwrap();
+        let log = log_of(2);
+        let sealed = step(
+            Some(&legacy),
+            &log,
+            &line(2),
+            router(&rtr, &home, false, &writer),
+        )
+        .unwrap()
+        .expect("resealed");
+        assert!(sealed.verify(&rtr.verifying_key_bytes()));
+        assert!(!sealed.verify(&writer.verifying_key_bytes()));
+        // Once: the next write sees a router head and needs no transition arm.
+        let log3 = log_of(3);
+        let next = step(
+            Some(&sealed),
+            &log3,
+            &line(3),
+            router(&rtr, &home, true, &writer),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(next.verify(&rtr.verifying_key_bytes()));
+    }
+
+    #[test]
+    fn router_sealed_head_refuses_agent_resealing_after_record() {
+        let (writer, rtr) = (AgentIdentity::generate(), AgentIdentity::generate());
+        let home = PathBuf::new();
+        let legacy = step(
+            None,
+            &log_of(1),
+            &line(1),
+            HeadSigner::event(&writer, 1, &home),
+        )
+        .unwrap()
+        .unwrap();
+        let err = step(
+            Some(&legacy),
+            &log_of(2),
+            &line(2),
+            router(&rtr, &home, true, &writer),
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("fails signature verification"));
+    }
+
+    #[test]
+    fn event_sealer_still_refuses_a_router_sealed_head() {
+        let (writer, rtr) = (AgentIdentity::generate(), AgentIdentity::generate());
+        let home = PathBuf::new();
+        let by_router = step(
+            None,
+            &log_of(1),
+            &line(1),
+            router(&rtr, &home, true, &writer),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            step(
+                Some(&by_router),
+                &log_of(2),
+                &line(2),
+                HeadSigner::event(&writer, 1, &home)
+            )
+            .is_err()
+        );
     }
 }

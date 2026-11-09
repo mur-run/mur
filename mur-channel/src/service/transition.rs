@@ -110,11 +110,9 @@ impl ChannelService {
             None => (None, None),
         };
         let head_signer = match (signer, anchored) {
-            (Some((identity, kv)), Some(key_home)) => Some(HeadSigner {
-                identity,
-                kv,
-                key_home,
-            }),
+            (Some((identity, kv)), Some(key_home)) => {
+                Some(HeadSigner::event(identity, kv, key_home))
+            }
             _ => None,
         };
         self.write_event(
