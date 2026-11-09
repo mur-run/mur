@@ -356,9 +356,11 @@ pub(super) fn band_rows(
     }
     let block = Block::default().padding(Padding::horizontal(theme.inner_padding as u16));
     let inner_width = block.inner(Rect::new(0, 0, outer_width.max(1), 1)).width;
-    Paragraph::new(Text::from(lines))
-        .wrap(Wrap { trim: false })
-        .line_count(inner_width.max(1)) as u16
+    let rows: u32 = lines
+        .iter()
+        .map(|l| super::band_window::rows(l, inner_width))
+        .sum();
+    rows.min(u32::from(u16::MAX)) as u16
 }
 
 /// Rows one `insert_before` call may carry. `Terminal::insert_before` starts
@@ -399,10 +401,7 @@ pub(super) const REPLAY_ROWS_MAX: u32 = 20_000;
 pub(super) fn line_rows(line: &Line<'static>, pad: u16, width: u16) -> u16 {
     let block = Block::default().padding(Padding::horizontal(pad));
     let inner = block.inner(Rect::new(0, 0, width.max(1), 1)).width;
-    let n = Paragraph::new(Text::from(line.clone()))
-        .wrap(Wrap { trim: false })
-        .line_count(inner.max(1));
-    n.clamp(1, u16::MAX as usize) as u16
+    super::band_window::rows(line, inner).clamp(1, u32::from(u16::MAX)) as u16
 }
 
 /// Print `lines` into the terminal's scrollback above the inline viewport,
@@ -775,18 +774,18 @@ pub(super) fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     // `scroll_back` counts lines up from the bottom (0 = follow the tail);
     // PageUp/PageDown and the chooser both rely on this so a long unflushed
     // reply stays reachable even while an option list is open.
-    let output = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-    let total = output.line_count(inner_width) as u16;
+    // Only the on-screen slice is wrapped by ratatui; heights come from a
+    // per-line cache (see `band_window`).
     let visible = inner.height;
     app.scroll_page = visible.max(1);
     // #003: record the width the transcript was wrapped at, so a paste of text
     // copied back out of this pane can tell a painted wrap from a typed break.
     app.wrap_width = inner_width;
-    let max_scroll = total.saturating_sub(visible);
-    app.scroll_back = app.scroll_back.min(max_scroll);
-    let offset = max_scroll - app.scroll_back;
+    let win = super::band_window::window(lines, inner_width, visible, &mut app.scroll_back);
+    let max_scroll = (win.total.min(u32::from(u16::MAX)) as u16).saturating_sub(visible);
+    let output = Paragraph::new(Text::from(win.lines)).wrap(Wrap { trim: false });
 
-    f.render_widget(output.block(block).scroll((offset, 0)), area);
+    f.render_widget(output.block(block).scroll((win.scroll, 0)), area);
     if let Some(marker) = scroll_marker(max_scroll, app.scroll_back) {
         let row = Rect { height: 1, ..inner };
         f.render_widget(Line::styled(marker, theme.muted).right_aligned(), row);
