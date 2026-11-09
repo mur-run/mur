@@ -71,7 +71,20 @@ impl std::fmt::Debug for AgentIdentity {
 /// - `<mur_home>` itself (the host key)
 ///
 /// Keying off "parent is literally `agents`" is what keeps those out.
+///
+/// One more exact-match arm (at-mention phase 2, D-8): `<mur_home>/identity`,
+/// the human owner's PUBLIC directory, maps to `<mur_home>/keys/.human`.
+/// Without it `save(<mur_home>/identity)` would write the human's private key
+/// into a directory every agent may read.
 pub fn private_key_dir(dir: &Path) -> PathBuf {
+    if dir
+        .file_name()
+        .is_some_and(|n| n == human::HUMAN_IDENTITY_DIR)
+        && let Some(mur_home) = dir.parent()
+        && mur_home.file_name().is_none_or(|n| n != "agents")
+    {
+        return human::human_key_dir(mur_home);
+    }
     let is_agent_home = dir
         .parent()
         .and_then(|p| p.file_name())
@@ -242,15 +255,25 @@ impl AgentIdentity {
     /// `publisher-identity.key` and wrote `identity.key`, so it overwrote the
     /// host key on every machine that had one (#1011).
     pub fn save(&self, dir: &Path) -> Result<(), IdentityError> {
-        fs::create_dir_all(dir)?;
         // Private half goes to `keys/<name>/` for an agent home, `dir` itself
         // otherwise (#850 option (c), step 1). Public half never moves — it is
         // what peers read to verify, and `agents/` staying public-only is the
         // whole point.
-        let key_dir = private_key_dir(dir);
-        fs::create_dir_all(&key_dir)?;
+        self.save_split(dir, &private_key_dir(dir))
+    }
+
+    /// `save` with the two halves' directories named explicitly: the public
+    /// key goes to `pub_dir/identity.pub`, the private key to
+    /// `key_dir/identity.key` (0600). Same write-if-absent contract as `save`.
+    ///
+    /// Exists for the human owner (D-8), whose halves live in two unrelated
+    /// trees (`identity/` and `keys/.human/`). Callers that can say where
+    /// each half goes should, rather than rely on `private_key_dir`'s mapping.
+    pub fn save_split(&self, pub_dir: &Path, key_dir: &Path) -> Result<(), IdentityError> {
+        fs::create_dir_all(pub_dir)?;
+        fs::create_dir_all(key_dir)?;
         let priv_path = key_dir.join("identity.key");
-        let pub_path = dir.join("identity.pub");
+        let pub_path = pub_dir.join("identity.pub");
 
         // `exists()` is the right call here despite #1010: a false from a
         // denied stat means we are about to fail the write anyway, and the
