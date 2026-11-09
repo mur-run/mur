@@ -3,10 +3,9 @@ use anyhow::Result;
 use crate::store::default_mur_dir;
 use crate::store::workflow_yaml::WorkflowYamlStore;
 
+/// `mur reindex`: rebuild the Channel SQLite read-model, then the workflow
+/// vectors.
 pub(crate) async fn cmd_reindex() -> Result<()> {
-    use crate::store::embedding::{EmbeddingConfig, embed_batch};
-    use crate::store::vector::LanceDbStore as VectorStore;
-
     // Rebuild the Channel SQLite read-model from the event-log manifests.
     {
         let home = crate::paths::mur_root(None);
@@ -15,6 +14,20 @@ pub(crate) async fn cmd_reindex() -> Result<()> {
         let n = index.rebuild_from(&store)?;
         println!("✅ rebuilt channel index: {n} channel(s)");
     }
+    reindex_workflows().await
+}
+
+/// Re-embed the workflow YAMLs into the vector index.
+///
+/// This is all `mur sync`'s auto-reindex needs: its dirty check only looks at
+/// workflow YAML mtimes. It must not touch the channel index — that rebuild
+/// is one `BEGIN IMMEDIATE` over every channel, holds the write lock for
+/// minutes on a large `channels.db`, and every murmur write behind it fails
+/// once its 5 s `busy_timeout` lapses ("database is locked"). The channel
+/// index is maintained incrementally; the full rebuild is a manual repair.
+pub(crate) async fn reindex_workflows() -> Result<()> {
+    use crate::store::embedding::{EmbeddingConfig, embed_batch};
+    use crate::store::vector::LanceDbStore as VectorStore;
 
     let workflow_store = WorkflowYamlStore::default_store()?;
     let workflows = workflow_store.list_all()?;
@@ -136,4 +149,30 @@ pub(crate) fn cmd_reindex_bootstrap() -> Result<()> {
 
     println!("Future saves are now auto-versioned. Try `mur agent history <name>`.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// `mur sync`'s auto-reindex must leave the channel index alone (#2326);
+    /// `mur reindex` still rebuilds it. With no workflows both return before
+    /// any embedding, so this needs no model.
+    #[tokio::test]
+    async fn sync_reindex_leaves_the_channel_index_alone() {
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        let d = tempfile::tempdir().unwrap();
+        envg.set_var("MUR_HOME", d.path());
+        let db = d.path().join("index").join("channels").join("channels.db");
+
+        super::reindex_workflows().await.unwrap();
+        assert!(!db.exists(), "sync's reindex opened the channel index");
+
+        // Control: the manual command does reach it, so the check above can fail.
+        super::cmd_reindex().await.unwrap();
+        assert!(
+            db.exists(),
+            "control: cmd_reindex should rebuild {}",
+            db.display()
+        );
+        envg.unset_var("MUR_HOME");
+    }
 }

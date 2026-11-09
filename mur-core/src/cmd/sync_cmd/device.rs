@@ -291,8 +291,9 @@ pub(crate) async fn device_sync(
                                         rejected.push(format!("{safe_name} ({e})"));
                                         continue;
                                     }
-                                    std::fs::write(&path, yaml_content)?;
-                                    pulled += 1;
+                                    if write_if_changed(&path, yaml_content)? {
+                                        pulled += 1;
+                                    }
                                 }
                                 if !quiet && pulled > 0 {
                                     eprintln!("  ✓ Pulled {} workflow(s) from server.", pulled);
@@ -687,5 +688,55 @@ impl DeviceSyncDirection {
             Self::Push => "push",
             Self::Both => "pull+push",
         }
+    }
+}
+
+/// Write `content` to `path` unless the file already holds exactly that.
+/// Returns whether it wrote.
+///
+/// The pull hands back every workflow on every sync. Rewriting identical
+/// bytes bumped each YAML's mtime, `is_index_dirty` (mtime-based) then saw
+/// the index as stale on every run, and each sync re-ran the reindex — which
+/// also rebuilt the whole channel index under one write lock (#2326).
+fn write_if_changed(path: &std::path::Path, content: &str) -> std::io::Result<bool> {
+    if std::fs::read(path).is_ok_and(|old| old == content.as_bytes()) {
+        return Ok(false);
+    }
+    std::fs::write(path, content)?;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod write_if_changed_tests {
+    use super::write_if_changed;
+
+    #[test]
+    fn identical_content_leaves_the_file_untouched() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("wf.yaml");
+        assert!(
+            write_if_changed(&p, "a: 1\n").unwrap(),
+            "new file must be written"
+        );
+
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+
+        assert!(!write_if_changed(&p, "a: 1\n").unwrap());
+        assert_eq!(
+            std::fs::metadata(&p).unwrap().modified().unwrap(),
+            old,
+            "mtime moved"
+        );
+
+        // Control: different content is written and moves the mtime.
+        assert!(write_if_changed(&p, "a: 2\n").unwrap());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "a: 2\n");
+        assert_ne!(std::fs::metadata(&p).unwrap().modified().unwrap(), old);
     }
 }
