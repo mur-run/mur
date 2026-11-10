@@ -44,6 +44,20 @@ const BASE_FILE: &str = "mur-turn-base.json";
 /// other tracks, large and regenerable.
 pub const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", WORKTREES_DIR];
 
+/// First bytes of a `CACHEDIR.TAG` file (<https://bford.info/cachedir/>).
+/// Cargo writes one into every target dir, whatever `CARGO_TARGET_DIR` names
+/// it, so a tagged directory is skipped like [`SKIP_DIRS`] (#2330).
+const CACHEDIR_TAG_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
+
+/// Whether `dir` declares itself regenerable cache via a valid `CACHEDIR.TAG`.
+fn is_cache_dir(dir: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; CACHEDIR_TAG_SIGNATURE.len()];
+    std::fs::File::open(dir.join("CACHEDIR.TAG"))
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok_and(|()| head == CACHEDIR_TAG_SIGNATURE)
+}
+
 /// A promote that deletes at least this many files AND more than
 /// [`MASS_DELETE_RATIO`] of the tracked files is refused as a gutted track,
 /// not a turn's edit. The floor keeps a tiny repo's legitimate cleanup legal.
@@ -532,7 +546,11 @@ fn fingerprint_dirty(root: &Path) -> Result<BaseState> {
         if rel.components().any(|c| match c {
             Component::Normal(n) => SKIP_DIRS.iter().any(|s| n == *s),
             _ => false,
-        }) {
+        }) || rel
+            .ancestors()
+            .skip(1)
+            .any(|a| !a.as_os_str().is_empty() && is_cache_dir(&root.join(a)))
+        {
             continue;
         }
         let hash = fingerprint_path(&root.join(&rel))?;
@@ -573,8 +591,9 @@ fn clone_tree(src: &Path, dst: &Path, method: TreeClone) -> Result<()> {
 }
 
 /// Recreate `src`'s directory structure under `dst`, calling `leaf` for every
-/// non-directory entry and skipping [`SKIP_DIRS`] at every depth. Directories
-/// are walked rather than cloned whole so a nested `target/` is skipped too.
+/// non-directory entry and skipping [`SKIP_DIRS`] and `CACHEDIR.TAG`-tagged
+/// directories at every depth. Directories are walked rather than cloned
+/// whole so a nested `target/` is skipped too.
 fn walk_tree(src: &Path, dst: &Path, leaf: &dyn Fn(&Path, &Path) -> Result<()>) -> Result<()> {
     for entry in std::fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
         let entry = entry?;
@@ -585,6 +604,9 @@ fn walk_tree(src: &Path, dst: &Path, leaf: &dyn Fn(&Path, &Path) -> Result<()>) 
         let from = entry.path();
         let to = dst.join(&name);
         if entry.file_type()?.is_dir() {
+            if is_cache_dir(&from) {
+                continue;
+            }
             std::fs::create_dir_all(&to)?;
             walk_tree(&from, &to, leaf)?;
         } else {
