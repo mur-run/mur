@@ -318,8 +318,19 @@ pub(crate) async fn cmd_project_index(
     };
 
     if run_in_background {
-        // Check lock
-        if !index.try_acquire_lock()? {
+        // Check lock. The post-commit hook also fires inside sandboxed
+        // agents, whose policy deliberately denies writes to the codebase
+        // lance stores — that is expected, not a failure, so the quiet
+        // (hook) path skips with one line instead of a bare EPERM.
+        let acquired = match index.try_acquire_lock() {
+            Ok(a) => a,
+            Err(e) if quiet && is_permission_denied(&e) => {
+                eprintln!("mur: skipped auto-index for '{project_name}' — {e:#}");
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+        if !acquired {
             eprintln!(
                 "Indexing already in progress for '{}' (lock held by another process).",
                 project_name
@@ -703,5 +714,40 @@ fn send_notification(title: &str, message: &str) {
                 .stderr(std::process::Stdio::null())
                 .spawn();
         }
+    }
+}
+
+/// True when the error chain bottoms out in an `EPERM`/`EACCES` I/O error —
+/// e.g. the sandbox denying the index lock write.
+fn is_permission_denied(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)
+    })
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::is_permission_denied;
+
+    #[test]
+    fn eperm_through_context_is_permission_denied() {
+        // The platform's raw "denied" code, so the OS → ErrorKind mapping is
+        // exercised: EPERM (1) is what a macOS Seatbelt write denial returns;
+        // on Windows raw 1 is ERROR_INVALID_FUNCTION, so use
+        // ERROR_ACCESS_DENIED (5) there.
+        #[cfg(unix)]
+        const DENIED: i32 = 1;
+        #[cfg(windows)]
+        const DENIED: i32 = 5;
+        let e = anyhow::Error::new(std::io::Error::from_raw_os_error(DENIED))
+            .context("writing index lock /x");
+        assert!(is_permission_denied(&e));
+    }
+
+    #[test]
+    fn other_io_errors_are_not_swallowed() {
+        let e = anyhow::Error::new(std::io::Error::other("disk full"));
+        assert!(!is_permission_denied(&e));
     }
 }
