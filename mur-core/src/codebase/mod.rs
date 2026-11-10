@@ -206,7 +206,9 @@ impl CodebaseIndex {
             project_name: self.project_name.clone(),
             started_at: chrono::Utc::now().to_rfc3339(),
         };
-        std::fs::write(&path, serde_json::to_string(&lock)?)?;
+        std::fs::write(&path, serde_json::to_string(&lock)?).map_err(|e| {
+            anyhow::Error::new(e).context(format!("writing index lock {}", path.display()))
+        })?;
         Ok(true)
     }
 

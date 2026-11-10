@@ -261,10 +261,13 @@ impl GuardedToolCall {
         let (settled, ask) = gate.recall(pending).await;
         out.extend(settled);
         let ask = self.apply_waiver(task_id, ask, remember, &mut out).await;
+        let held = self.held_by_tier(&ask);
         for c in &ask {
             self.record_pending_ceiling(task_id, calls, c).await;
         }
-        out.extend(gate.ask(ask).await);
+        let mut answers = gate.ask(ask).await;
+        startup_waiver::explain_held(&mut answers, &held);
+        out.extend(answers);
         (out, step_ids)
     }
 
