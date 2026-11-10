@@ -108,16 +108,111 @@ fn appended_link_on_disk_is_not_trusted() {
 }
 
 #[test]
-fn rekey_repin_moves_the_trusted_head() {
+fn rekey_extends_the_pinned_head() {
     let (tmp, home, id) = agent();
     pin_from_disk(tmp.path(), AGENT).unwrap();
     let next = AgentIdentity::generate();
-    std::fs::write(home.join(PUBKEY_FILE), next.pubkey_text()).unwrap();
-    write_chain(&home, &[bootstrap(&id), rotation(&id, &next, 0)]);
-    pin_from_disk(tmp.path(), AGENT).unwrap();
+    extend_pin(tmp.path(), AGENT, &rotation(&id, &next, 0)).unwrap();
     let t = head(&home);
     assert_eq!((t.head_pubkey, t.head_key_version), (next.pubkey_text(), 1));
     assert_eq!(t.chain.map(|c| c.len()), Some(2));
+}
+
+/// Review of #2340: the agent at version 1 rewrites its history to
+/// `bootstrap(A) -> A-signed rotation to the real v1 key`, which verifies
+/// without the real private key. A legitimate rekey then appends v2. The pin
+/// must keep the genuine history, so version 0 never resolves to A.
+#[test]
+fn forged_history_is_not_imported_by_a_legitimate_rekey() {
+    let (tmp, home, v0) = agent();
+    pin_from_disk(tmp.path(), AGENT).unwrap();
+    let v1 = AgentIdentity::generate();
+    extend_pin(tmp.path(), AGENT, &rotation(&v0, &v1, 0)).unwrap();
+
+    let attacker = AgentIdentity::generate();
+    let forged = [bootstrap(&attacker), rotation(&attacker, &v1, 0)];
+    assert!(verify_chain(&forged, strict()).is_ok(), "precondition");
+    write_chain(&home, &forged);
+
+    let v2 = AgentIdentity::generate();
+    let genuine = rotation(&v1, &v2, 1);
+    let mut on_disk = forged.to_vec();
+    on_disk.push(genuine.clone());
+    write_chain(&home, &on_disk);
+    extend_pin(tmp.path(), AGENT, &genuine).unwrap();
+
+    let chain = head(&home).chain.expect("strict chain");
+    assert_eq!(
+        chain[0].new_pubkey,
+        v0.pubkey_text(),
+        "v0 is still the real key"
+    );
+    assert!(chain.iter().all(|a| a.new_pubkey != attacker.pubkey_text()));
+    assert_eq!(chain.len(), 3);
+}
+
+#[test]
+fn extension_must_continue_the_pinned_head() {
+    let (tmp, _home, id) = agent();
+    pin_from_disk(tmp.path(), AGENT).unwrap();
+    let other = AgentIdentity::generate();
+    let next = AgentIdentity::generate();
+    // Old key is not the pinned key.
+    let wrong_key = rotation(&other, &next, 0);
+    // Right key, wrong version.
+    let wrong_version = rotation(&id, &next, 3);
+    // Claims the pinned key, signed by another.
+    let mut forged_sig = rotation(&other, &next, 0);
+    forged_sig.old_pubkey = id.pubkey_text();
+    for bad in [wrong_key, wrong_version, forged_sig, bootstrap(&next)] {
+        assert!(matches!(
+            extend_pin(tmp.path(), AGENT, &bad),
+            Err(IdentityPinError::NotAnExtension { .. })
+        ));
+    }
+    assert_eq!(
+        load_pin(tmp.path(), AGENT).unwrap().unwrap().pubkey,
+        id.pubkey_text()
+    );
+}
+
+#[test]
+fn rekey_of_an_unpinned_agent_pins_only_the_new_head() {
+    let (tmp, home, id) = agent();
+    let next = AgentIdentity::generate();
+    extend_pin(tmp.path(), AGENT, &rotation(&id, &next, 0)).unwrap();
+    let t = head(&home);
+    assert_eq!((t.head_pubkey, t.head_key_version), (next.pubkey_text(), 1));
+    assert!(t.chain.is_none(), "no on-disk history imported");
+}
+
+fn emergency(new: &AgentIdentity, from: u32) -> RotationAttestation {
+    RotationAttestation::new(
+        "u",
+        "",
+        new.pubkey_text(),
+        from,
+        from + 1,
+        "t2",
+        RotationReason::Emergency,
+    )
+}
+
+#[test]
+fn fail_closed_pin_trusts_no_key_and_ignores_disk() {
+    let (tmp, home, id) = agent();
+    write_fail_closed(tmp.path(), AGENT).unwrap();
+    assert_eq!(resolve(&home), Some(None), "pinned, but nothing trusted");
+    // A well-formed forged identity on disk still changes nothing.
+    let forged = AgentIdentity::generate();
+    std::fs::write(home.join(PUBKEY_FILE), forged.pubkey_text()).unwrap();
+    write_chain(&home, &[bootstrap(&forged)]);
+    assert_eq!(resolve(&home), Some(None));
+    // Only an emergency rotation resets it.
+    let next = AgentIdentity::generate();
+    assert!(extend_pin(tmp.path(), AGENT, &rotation(&id, &next, 0)).is_err());
+    extend_pin(tmp.path(), AGENT, &emergency(&next, 0)).unwrap();
+    assert_eq!(head(&home).head_pubkey, next.pubkey_text());
 }
 
 #[test]

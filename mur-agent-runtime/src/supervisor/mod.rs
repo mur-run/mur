@@ -260,7 +260,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
 
     // 3a. Load agent identity — see `identity::load_boot_identity`.
     let identity = Arc::new(identity::load_boot_identity(&agent_home));
-    identity::pin_identity_if_missing(&agent_home);
+    if let Err(msg) = identity::pin_identity_if_missing(&agent_home) {
+        pin::refuse(&agent_home, &msg);
+    }
 
     // 3b. M6.1: grace-period cleanup. If profile.identity.grace_expires_at
     //     has passed, shred identity.key.prev + clear the previous_pubkey

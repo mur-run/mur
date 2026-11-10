@@ -8,12 +8,15 @@
 //! generated would verify, and every verifier would accept that key as the
 //! agent's identity.
 //!
-//! The pin is the anchor. Trusted writers (`mur agent create`, `rekey`,
-//! import, clone, and the runtime's pre-seal trust-on-first-use) copy the
-//! identity to `<mur_home>/identity-pins/<name>.json`, a directory no agent
+//! The pin is the anchor. Trusted writers (`mur agent create`, import, clone,
+//! and the runtime's pre-seal trust-on-first-use) copy the identity to `<mur_home>/identity-pins/<name>.json`, a directory no agent
 //! sandbox may write (see `LaunchChain::deny_paths`). Verifiers of a pinned
 //! agent read the pin and never the agent's own copies, so a forged chain or a
-//! rewritten `identity.pub` changes nothing anyone trusts.
+//! rewritten `identity.pub` changes nothing anyone trusts. `mur agent rekey`
+//! never re-reads the disk chain: it extends the pin with the one rotation it
+//! just signed (`extend_pin`), so a history the agent forged is never imported.
+//! A runtime that cannot pin on first use writes a fail-closed pin and refuses
+//! to start, so the legacy read-from-disk fallback is never left open.
 //!
 //! Same mechanism and the same trust-on-first-use caveat as the entitlement
 //! pin (`crate::entitlements_pin`, #712).
@@ -41,6 +44,12 @@ pub struct IdentityPin {
     pub pubkey: String,
     pub key_version: u32,
     pub chain: Vec<RotationAttestation>,
+    /// Fail-closed marker: the runtime could not establish a trusted identity
+    /// (no key on disk, or an inconsistent one), so verifiers trust no key at
+    /// all rather than the agent's own files. Cleared only by
+    /// `mur agent rekey --emergency`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fail_closed: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -53,6 +62,8 @@ pub enum IdentityPinError {
     Inconsistent { agent: String, msg: String },
     #[error("invalid agent name '{0}'")]
     Name(String),
+    #[error("rotation of '{agent}' does not extend its pinned identity: {msg}")]
+    NotAnExtension { agent: String, msg: String },
 }
 
 /// What a verifier should trust for one agent.
@@ -146,7 +157,95 @@ pub fn pin_from_disk(mur_home: &Path, agent: &str) -> Result<IdentityPin, Identi
         pubkey,
         key_version,
         chain,
+        fail_closed: false,
     };
+    write_pin(mur_home, agent, &pin)?;
+    Ok(pin)
+}
+
+/// A pin that knows only the new head key, with no trusted history.
+fn pin_head_only(
+    mur_home: &Path,
+    agent: &str,
+    rotation: &RotationAttestation,
+) -> Result<IdentityPin, IdentityPinError> {
+    let pin = IdentityPin {
+        version: PIN_VERSION,
+        pubkey: rotation.new_pubkey.clone(),
+        key_version: rotation.new_key_version,
+        chain: Vec::new(),
+        fail_closed: false,
+    };
+    write_pin(mur_home, agent, &pin)?;
+    Ok(pin)
+}
+
+/// Mark `agent` fail-closed: verifiers trust no key for it, and never fall
+/// back to its own writable files. Used when trust on first use cannot pin a
+/// consistent identity.
+pub fn write_fail_closed(mur_home: &Path, agent: &str) -> Result<(), IdentityPinError> {
+    checked_name(agent)?;
+    let pin = IdentityPin {
+        version: PIN_VERSION,
+        pubkey: String::new(),
+        key_version: 0,
+        chain: Vec::new(),
+        fail_closed: true,
+    };
+    write_pin(mur_home, agent, &pin)
+}
+
+/// Extend the existing pin with one rotation the CLI just generated.
+///
+/// History comes from the pin only — never from the agent's `rotations.jsonl`,
+/// which the agent can rewrite. The rotation must continue the pinned head:
+/// same old key and version, version + 1, and (unless emergency) signed by the
+/// pinned key. A fail-closed pin accepts only an emergency rotation, which
+/// starts a fresh head with no trusted history.
+pub fn extend_pin(
+    mur_home: &Path,
+    agent: &str,
+    rotation: &RotationAttestation,
+) -> Result<IdentityPin, IdentityPinError> {
+    let Some(mut pin) = load_pin(mur_home, agent)? else {
+        // Never pinned (rekeyed before its first start since #2318): pin only
+        // the new head. The on-disk history is agent-writable, so none of it
+        // is imported.
+        return pin_head_only(mur_home, agent, rotation);
+    };
+    let refuse = |msg: String| IdentityPinError::NotAnExtension {
+        agent: agent.to_string(),
+        msg,
+    };
+    let emergency = rotation.reason == crate::identity::RotationReason::Emergency;
+    if pin.fail_closed {
+        if !emergency {
+            return Err(refuse(
+                "the pin is fail-closed; only an emergency rekey resets it".into(),
+            ));
+        }
+        return pin_head_only(mur_home, agent, rotation);
+    }
+    if rotation.bootstrap {
+        return Err(refuse("a bootstrap cannot extend a pin".into()));
+    }
+    if rotation.old_pubkey != pin.pubkey {
+        return Err(refuse("old key is not the pinned key".into()));
+    }
+    if rotation.old_key_version != pin.key_version
+        || Some(rotation.new_key_version) != pin.key_version.checked_add(1)
+    {
+        return Err(refuse(format!(
+            "version {} -> {} does not follow pinned version {}",
+            rotation.old_key_version, rotation.new_key_version, pin.key_version
+        )));
+    }
+    rotation
+        .verify_or_emergency(&pin.pubkey)
+        .map_err(|e| refuse(format!("not signed by the pinned key: {e}")))?;
+    pin.pubkey = rotation.new_pubkey.clone();
+    pin.key_version = rotation.new_key_version;
+    pin.chain.push(rotation.clone());
     write_pin(mur_home, agent, &pin)?;
     Ok(pin)
 }
@@ -238,6 +337,9 @@ pub fn resolve(agent_home: &Path) -> Option<Option<TrustedIdentity>> {
             return Some(None);
         }
     };
+    if pin.fail_closed {
+        return Some(None);
+    }
     let chain = (!pin.chain.is_empty() && verify_chain(&pin.chain, strict()).is_ok())
         .then(|| pin.chain.clone());
     Some(Some(TrustedIdentity {
