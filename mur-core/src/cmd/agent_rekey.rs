@@ -153,6 +153,13 @@ pub fn cmd_rekey(name: &str, reason: &str, yes: bool, emergency: bool) -> Result
 
     // Atomic on-disk rotation
     rotate_files_atomic(&agent_dir, &new_identity, &attestation)?;
+    // #2318: verifiers trust the pinned identity, so the rotation counts only
+    // once the pin carries it.
+    mur_common::identity_pin::pin_from_disk(&mur_home, name).with_context(|| {
+        format!(
+            "rekey written but the identity pin was not updated; rerun `mur agent rekey {name}`"
+        )
+    })?;
 
     // Update profile
     let grace_expires = now + chrono::Duration::days(GRACE_DAYS_DEFAULT);

@@ -159,3 +159,34 @@ pub(super) fn load_boot_identity(agent_home: &std::path::Path) -> AgentIdentity 
         }
     }
 }
+
+/// #2318 trust on first use: pin the on-disk identity of an agent that has no
+/// identity pin yet (installed before the pin existed). Runs before the seal,
+/// while the agent has executed nothing, which is the same window the
+/// entitlement pin trusts. An existing pin is never touched here — only the
+/// CLI's create / rekey / import paths replace one.
+pub(super) fn pin_identity_if_missing(agent_home: &std::path::Path) {
+    let Some((mur_home, name)) = mur_common::identity_pin::split_agent_home(agent_home) else {
+        return;
+    };
+    match mur_common::identity_pin::load_pin(mur_home, name) {
+        Ok(Some(_)) => {}
+        // No public key on disk: an ephemeral identity, nothing to pin.
+        Ok(None)
+            if !agent_home
+                .join(mur_common::identity_pin::PUBKEY_FILE)
+                .exists() => {}
+        Ok(None) => match mur_common::identity_pin::pin_from_disk(mur_home, name) {
+            Ok(_) => warn!(
+                agent = name,
+                "no identity pin; pinned the current identity (first start since #2318)"
+            ),
+            Err(e) => {
+                warn!(agent = name, error = %e, "could not pin identity; peers fall back to the agent's own files")
+            }
+        },
+        Err(e) => {
+            warn!(agent = name, error = %e, "identity pin unreadable; peers trust no key for this agent until `mur agent rekey`")
+        }
+    }
+}

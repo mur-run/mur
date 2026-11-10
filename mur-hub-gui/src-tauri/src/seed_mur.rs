@@ -335,6 +335,9 @@ pub fn seed_mur_if_missing(template_dir: &Path, mur_home: &Path) -> std::io::Res
     if mur_common::entitlements_pin::repin_from_profile(mur_home, "mur").is_err() {
         let _ = mur_common::entitlements_pin::remove_pin(mur_home, "mur");
     }
+    // #2318: the seeded dir carries a fresh identity (or none); a pin of the
+    // old one would make every verifier reject it. The runtime re-pins.
+    let _ = mur_common::identity_pin::remove_pin(mur_home, "mur");
     Ok(true)
 }
 

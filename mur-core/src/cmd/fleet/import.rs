@@ -474,6 +474,8 @@ pub(crate) fn install_bundled_members(
         fresh_id
             .save(&dir)
             .with_context(|| format!("generate identity for '{canon}'"))?;
+        mur_common::identity_pin::pin_from_disk(mur_home, &canon)
+            .with_context(|| format!("pin identity for '{canon}'"))?;
 
         // Parse the bundled profile and overwrite the identity block with the
         // fresh public key so profile.yaml is consistent with identity.pub.

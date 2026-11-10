@@ -152,6 +152,11 @@ pub fn cmd_remove(name: &str, purge: bool, force: bool) -> Result<()> {
         if let Err(e) = mur_common::entitlements_pin::remove_pin(&mur_home, name) {
             eprintln!("warning: could not remove entitlement pin: {e}");
         }
+        // #2318: likewise a stale identity pin would make verifiers reject the
+        // new agent's key.
+        if let Err(e) = mur_common::identity_pin::remove_pin(&mur_home, name) {
+            eprintln!("warning: could not remove identity pin: {e}");
+        }
         println!("Purged agent '{name}'");
     } else {
         println!(
@@ -223,6 +228,9 @@ pub fn cmd_rename(old: &str, new: &str) -> Result<()> {
         eprintln!(
             "warning: could not move entitlement pin ({e}); run `mur agent perm reseal {new}`"
         );
+    }
+    if let Err(e) = mur_common::identity_pin::rename_pin(&mur_home, old, new) {
+        eprintln!("warning: could not move identity pin ({e}); peers may not verify '{new}'");
     }
 
     let bin_dir = resolve_bin_dir()?;

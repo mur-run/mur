@@ -170,7 +170,29 @@ pub fn verify_one(
 /// Resolve the writer's pubkey for a given `key_version` by folding the agent's
 /// rotation chain (`<agent_home>/rotations.jsonl`). Falls back to the current
 /// `identity.pub` when no chain / version match (single-host bootstrap).
+///
+/// An installed agent with an identity pin (#2318) resolves through the pin
+/// instead: its own files are writable to it on Linux, so they count only as
+/// far as they extend the pinned chain. See `mur_common::identity_pin`.
 pub fn resolve_writer_pubkey(agent_home: &Path, key_version: Option<u32>) -> Option<[u8; 32]> {
+    use mur_common::identity::decode_pubkey;
+    if let Some(trusted) = mur_common::identity_pin::resolve(agent_home) {
+        let t = trusted?;
+        if key_version.is_none_or(|kv| kv == t.head_key_version) {
+            return decode_pubkey(&t.head_pubkey).ok();
+        }
+        let kv = key_version?;
+        let att = t.chain?.into_iter().find(|a| a.new_key_version == kv)?;
+        return decode_pubkey(&att.new_pubkey).ok();
+    }
+    resolve_writer_pubkey_from_disk(agent_home, key_version)
+}
+
+/// The pre-pin resolution, reading only the agent's own files.
+fn resolve_writer_pubkey_from_disk(
+    agent_home: &Path,
+    key_version: Option<u32>,
+) -> Option<[u8; 32]> {
     use mur_common::identity::{ChainOptions, RotationAttestation, decode_pubkey, verify_chain};
     let chain_path = agent_home.join("rotations.jsonl");
     if let Ok(text) = std::fs::read_to_string(&chain_path) {
@@ -209,22 +231,25 @@ pub fn resolve_writer_pubkey(agent_home: &Path, key_version: Option<u32>) -> Opt
 /// which is right for a single-host bootstrap but would let a head claiming
 /// an arbitrary old version be checked against (or accepted under) the wrong
 /// key. A missing, unreadable, or non-verifying chain resolves nothing.
+///
+/// With an identity pin (#2318) the chain is the one the pin vouches for.
 pub fn resolve_writer_pubkey_strict(agent_home: &Path, key_version: u32) -> Option<[u8; 32]> {
-    use mur_common::identity::{ChainOptions, RotationAttestation, decode_pubkey, verify_chain};
-    let text = std::fs::read_to_string(agent_home.join("rotations.jsonl")).ok()?;
-    let chain: Vec<RotationAttestation> = text
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(serde_json::from_str)
-        .collect::<Result<_, _>>()
-        .ok()?;
-    verify_chain(
-        &chain,
-        ChainOptions {
-            allow_emergency: false,
-        },
-    )
-    .ok()?;
+    use mur_common::identity::{ChainOptions, decode_pubkey, verify_chain};
+    let chain = match mur_common::identity_pin::resolve(agent_home) {
+        Some(trusted) => trusted?.chain?,
+        None => {
+            let text = std::fs::read_to_string(agent_home.join("rotations.jsonl")).ok()?;
+            let chain = mur_common::identity_pin::parse_chain(&text)?;
+            verify_chain(
+                &chain,
+                ChainOptions {
+                    allow_emergency: false,
+                },
+            )
+            .ok()?;
+            chain
+        }
+    };
     let att = chain.iter().find(|a| a.new_key_version == key_version)?;
     decode_pubkey(&att.new_pubkey).ok()
 }
@@ -410,5 +435,46 @@ mod tests {
         // legacy unsigned → tolerated iff !require_sig
         assert!(verify_one("c1", &mk(None), &pubkey, false));
         assert!(!verify_one("c1", &mk(None), &pubkey, true));
+    }
+
+    /// #2318: once an agent is pinned, both resolvers answer from the pin,
+    /// so a chain the agent forged in its own home is not believed.
+    #[test]
+    fn resolvers_follow_the_identity_pin_not_the_agent_files() {
+        use mur_common::identity::{RotationAttestation, RotationReason, decode_pubkey};
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("agents").join("qa");
+        std::fs::create_dir_all(&home).unwrap();
+        let boot = |id: &AgentIdentity| {
+            let a = RotationAttestation::new(
+                "u",
+                "",
+                id.pubkey_text(),
+                0,
+                0,
+                "t0",
+                RotationReason::Scheduled,
+            )
+            .into_bootstrap();
+            serde_json::to_string(&a).unwrap() + "\n"
+        };
+        let real = AgentIdentity::generate();
+        real.save(&home).unwrap();
+        std::fs::write(home.join("rotations.jsonl"), boot(&real)).unwrap();
+        mur_common::identity_pin::pin_from_disk(tmp.path(), "qa").unwrap();
+
+        let forged = AgentIdentity::generate();
+        std::fs::write(home.join("identity.pub"), forged.pubkey_text()).unwrap();
+        std::fs::write(home.join("rotations.jsonl"), boot(&forged)).unwrap();
+
+        let want = decode_pubkey(&real.pubkey_text()).unwrap();
+        assert_eq!(resolve_writer_pubkey(&home, None), Some(want));
+        assert_eq!(resolve_writer_pubkey(&home, Some(0)), Some(want));
+        assert_eq!(resolve_writer_pubkey_strict(&home, 0), Some(want));
+        assert_eq!(
+            resolve_writer_pubkey(&home, Some(1)),
+            None,
+            "no such version"
+        );
     }
 }

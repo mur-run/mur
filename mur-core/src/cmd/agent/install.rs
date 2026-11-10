@@ -185,9 +185,22 @@ fn clone_identity_and_profile(mur_home: &Path, clone_name: &str) -> Result<()> {
     std::fs::rename(&tmp, &profile_path)
         .with_context(|| format!("rename {} -> {}", tmp.display(), profile_path.display()))?;
 
+    // A chain shipped in the package belongs to the source agent's key; the
+    // clone's fresh key would never be its head, and pinning would refuse.
+    match std::fs::remove_file(agent_dir.join(mur_common::identity_pin::CHAIN_FILE)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(anyhow::anyhow!(
+                "drop source rotation chain for '{clone_name}': {e}"
+            ));
+        }
+        _ => {}
+    }
     AgentIdentity::generate()
         .save(&agent_dir)
         .map_err(|e| anyhow::anyhow!("save fresh identity for clone '{clone_name}': {e}"))?;
+    // #2318: the clone has a new key, so it starts from a pin of that key.
+    mur_common::identity_pin::pin_from_disk(mur_home, clone_name)
+        .map_err(|e| anyhow::anyhow!("pin identity for clone '{clone_name}': {e}"))?;
 
     Ok(())
 }
