@@ -98,7 +98,12 @@ fn resolve_api_key(cfg: &mur_common::config::Config) -> (String, Option<String>)
          launches it, or run `mur doctor`",
         misses.join("; ")
     );
-    tracing::warn!("{hint}");
+    // `debug`, not `warn`: this runs on every `EmbeddingConfig::from_config`,
+    // before any request — and a local server (oMLX, LM Studio) commonly
+    // accepts no key at all, so a configured-but-unset env var is often
+    // harmless. When it does matter, the hint rides `key_hint` into the
+    // HTTP error (`embed_error`), which is where the user actually looks.
+    tracing::debug!("{hint}");
     (String::new(), Some(hint))
 }
 
