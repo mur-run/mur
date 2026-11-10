@@ -15,7 +15,7 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
@@ -43,6 +43,30 @@ const BASE_FILE: &str = "mur-turn-base.json";
 /// the pointer file replaces it; the rest because they are build output or
 /// other tracks, large and regenerable.
 pub const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", WORKTREES_DIR];
+
+/// First bytes of a `CACHEDIR.TAG` file (<https://bford.info/cachedir/>).
+/// Cargo writes one into every target dir, whatever `CARGO_TARGET_DIR` names
+/// it, so a tagged directory is skipped like [`SKIP_DIRS`] (#2330) — unless
+/// it holds a tracked file (see [`skipped_cache_dir`]).
+const CACHEDIR_TAG_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
+
+/// Whether `dir` declares itself regenerable cache via a valid `CACHEDIR.TAG`.
+fn is_cache_dir(dir: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; CACHEDIR_TAG_SIGNATURE.len()];
+    std::fs::File::open(dir.join("CACHEDIR.TAG"))
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok_and(|()| head == CACHEDIR_TAG_SIGNATURE)
+}
+
+/// Whether `rel` (relative to `root`) is a cache dir the track leaves out: a
+/// tagged directory holding no tracked file. Project and track share one
+/// index, so both sides decide alike. A tagged dir WITH tracked files is
+/// cloned like any other — skipped, its files would read as deleted in the
+/// track and `promote` would delete them from the project.
+fn skipped_cache_dir(root: &Path, rel: &Path, tracked_dirs: &HashSet<PathBuf>) -> bool {
+    !tracked_dirs.contains(rel) && is_cache_dir(&root.join(rel))
+}
 
 /// A promote that deletes at least this many files AND more than
 /// [`MASS_DELETE_RATIO`] of the tracked files is refused as a gutted track,
@@ -478,6 +502,25 @@ pub(super) fn run_git(cwd: &Path, args: &[&str], path_arg: Option<&Path>) -> Res
 
 /// Files in the index of the worktree at `root` (`git ls-files`).
 fn tracked_file_count(root: &Path) -> Result<usize> {
+    Ok(tracked_files(root)?.count())
+}
+
+/// Every directory (relative to `root`) that holds at least one tracked file.
+fn tracked_dirs(root: &Path) -> Result<HashSet<PathBuf>> {
+    let mut dirs = HashSet::new();
+    for f in tracked_files(root)? {
+        for a in Path::new(&f).ancestors().skip(1) {
+            if a.as_os_str().is_empty() || !dirs.insert(a.to_path_buf()) {
+                break;
+            }
+        }
+    }
+    Ok(dirs)
+}
+
+/// Paths in the index of the worktree at `root`, `/`-separated as git prints
+/// them.
+fn tracked_files(root: &Path) -> Result<impl Iterator<Item = String>> {
     let out = Command::new("git")
         .args(["ls-files", "-z"])
         .current_dir(root)
@@ -489,11 +532,13 @@ fn tracked_file_count(root: &Path) -> Result<usize> {
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    Ok(out
+    let names: Vec<String> = out
         .stdout
         .split(|b| *b == 0)
         .filter(|e| !e.is_empty())
-        .count())
+        .map(|e| String::from_utf8_lossy(e).into_owned())
+        .collect();
+    Ok(names.into_iter())
 }
 
 /// Every path `git status` considers dirty or untracked under `root`, with
@@ -517,6 +562,7 @@ fn fingerprint_dirty(root: &Path) -> Result<BaseState> {
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
+    let tracked = tracked_dirs(root)?;
     let mut state = BaseState::new();
     for entry in out.stdout.split(|b| *b == 0) {
         // `XY path` — two status columns, a space, then the path.
@@ -532,7 +578,11 @@ fn fingerprint_dirty(root: &Path) -> Result<BaseState> {
         if rel.components().any(|c| match c {
             Component::Normal(n) => SKIP_DIRS.iter().any(|s| n == *s),
             _ => false,
-        }) {
+        }) || rel
+            .ancestors()
+            .skip(1)
+            .any(|a| !a.as_os_str().is_empty() && skipped_cache_dir(root, a, &tracked))
+        {
             continue;
         }
         let hash = fingerprint_path(&root.join(&rel))?;
@@ -569,14 +619,23 @@ fn clone_tree(src: &Path, dst: &Path, method: TreeClone) -> Result<()> {
         #[cfg(target_os = "macos")]
         TreeClone::ApfsClone => &apfs::clone_entry,
     };
-    walk_tree(src, dst, leaf)
+    let tracked = tracked_dirs(src)?;
+    walk_tree(src, Path::new(""), dst, leaf, &tracked)
 }
 
 /// Recreate `src`'s directory structure under `dst`, calling `leaf` for every
-/// non-directory entry and skipping [`SKIP_DIRS`] at every depth. Directories
-/// are walked rather than cloned whole so a nested `target/` is skipped too.
-fn walk_tree(src: &Path, dst: &Path, leaf: &dyn Fn(&Path, &Path) -> Result<()>) -> Result<()> {
-    for entry in std::fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
+/// non-directory entry and skipping [`SKIP_DIRS`] and `CACHEDIR.TAG`-tagged
+/// directories at every depth. Directories are walked rather than cloned
+/// whole so a nested `target/` is skipped too.
+fn walk_tree(
+    root: &Path,
+    rel: &Path,
+    dst: &Path,
+    leaf: &dyn Fn(&Path, &Path) -> Result<()>,
+    tracked: &HashSet<PathBuf>,
+) -> Result<()> {
+    let src = root.join(rel);
+    for entry in std::fs::read_dir(&src).with_context(|| format!("read {}", src.display()))? {
         let entry = entry?;
         let name = entry.file_name();
         if SKIP_DIRS.iter().any(|s| name == *s) {
@@ -585,8 +644,12 @@ fn walk_tree(src: &Path, dst: &Path, leaf: &dyn Fn(&Path, &Path) -> Result<()>) 
         let from = entry.path();
         let to = dst.join(&name);
         if entry.file_type()?.is_dir() {
+            let sub = rel.join(&name);
+            if skipped_cache_dir(root, &sub, tracked) {
+                continue;
+            }
             std::fs::create_dir_all(&to)?;
-            walk_tree(&from, &to, leaf)?;
+            walk_tree(root, &sub, &to, leaf, tracked)?;
         } else {
             leaf(&from, &to)?;
         }
