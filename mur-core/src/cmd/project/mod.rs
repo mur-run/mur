@@ -732,8 +732,15 @@ mod permission_tests {
 
     #[test]
     fn eperm_through_context_is_permission_denied() {
-        // os error 1 = EPERM, what a macOS Seatbelt write denial returns.
-        let e = anyhow::Error::new(std::io::Error::from_raw_os_error(1))
+        // The platform's raw "denied" code, so the OS → ErrorKind mapping is
+        // exercised: EPERM (1) is what a macOS Seatbelt write denial returns;
+        // on Windows raw 1 is ERROR_INVALID_FUNCTION, so use
+        // ERROR_ACCESS_DENIED (5) there.
+        #[cfg(unix)]
+        const DENIED: i32 = 1;
+        #[cfg(windows)]
+        const DENIED: i32 = 5;
+        let e = anyhow::Error::new(std::io::Error::from_raw_os_error(DENIED))
             .context("writing index lock /x");
         assert!(is_permission_denied(&e));
     }
