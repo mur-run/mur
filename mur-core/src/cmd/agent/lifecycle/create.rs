@@ -91,6 +91,9 @@ pub fn cmd_create(
     fs::write(&rotations_path, format!("{bootstrap_line}\n"))
         .with_context(|| format!("write {}", rotations_path.display()))?;
     tracing::debug!(uuid = %id, "bootstrap rotation attestation written");
+    // #2318: pin the identity while only MUR has written it.
+    mur_common::identity_pin::pin_from_disk(&mur_home, name)
+        .with_context(|| format!("pin identity for '{name}'"))?;
 
     let profile = AgentProfile {
         schema: 1,

@@ -38,6 +38,7 @@ pub mod hooks_config;
 pub mod host_pattern;
 pub mod hub;
 pub mod identity;
+pub mod identity_pin;
 pub mod jcs;
 pub mod knowledge;
 pub mod labels;

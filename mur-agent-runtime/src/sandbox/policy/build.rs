@@ -438,6 +438,12 @@ impl SandboxPolicy {
             if std::fs::metadata(&agents).is_ok() && !fs_read.contains(&agents) {
                 fs_read.push(agents);
             }
+            // #2318: verifiers resolve a pinned agent's key from its identity
+            // pin, not its own files. Read-only: the dir is in `deny_paths`.
+            let pins = mur_home.join(mur_common::identity_pin::IDENTITY_PINS_DIR);
+            if std::fs::metadata(&pins).is_ok() && !fs_read.contains(&pins) {
+                fs_read.push(pins);
+            }
         }
 
         // Standard system read paths: libraries, certs, DNS config.

@@ -111,6 +111,15 @@ impl LaunchChain {
                  whatever the profile says",
             );
         }
+        if path.starts_with(
+            self.mur_home
+                .join(mur_common::identity_pin::IDENTITY_PINS_DIR),
+        ) {
+            return Some(
+                "the identity pins — verifiers trust an agent's key and rotation \
+                 chain only as pinned, so rewriting a pin re-assigns an identity",
+            );
+        }
         if path.starts_with(mur_common::git_push::broker_dir(&self.mur_home)) {
             return Some(
                 "the git push broker's directory — its registry maps each repo_id to the \
@@ -389,6 +398,10 @@ impl LaunchChain {
         let mut out = vec![
             self.mur_home.join("agents"),
             self.mur_home.join(mur_common::entitlements_pin::PINS_DIR),
+            // #2318: the identity pins are the trust anchor that makes the
+            // agent-writable `identity.pub` / `rotations.jsonl` harmless.
+            self.mur_home
+                .join(mur_common::identity_pin::IDENTITY_PINS_DIR),
             // Premise 1 of the git-push registry decision: the broker dir is
             // daemon-written and agent-read-only. In this list, a Landlock write
             // grant overlapping it is dropped whole and SBPL denies it.

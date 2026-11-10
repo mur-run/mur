@@ -76,11 +76,19 @@ pub fn cmd_rekey(name: &str, reason: &str, yes: bool, emergency: bool) -> Result
         )
     };
 
-    let old_pubkey = old_identity_opt
+    let disk_pubkey = old_identity_opt
         .as_ref()
         .map(|id| id.pubkey_text())
         .unwrap_or_else(|| profile.identity.pubkey.clone());
-    let old_key_version = profile.identity.key_version;
+    // #2318: the pin, not the agent-writable files, says which key and version
+    // this rotation continues.
+    let (old_pubkey, old_key_version) = rekey_base(
+        &mur_home,
+        name,
+        emergency,
+        disk_pubkey,
+        profile.identity.key_version,
+    )?;
     let new_key_version = old_key_version + 1;
 
     // Interactive confirm
@@ -153,6 +161,13 @@ pub fn cmd_rekey(name: &str, reason: &str, yes: bool, emergency: bool) -> Result
 
     // Atomic on-disk rotation
     rotate_files_atomic(&agent_dir, &new_identity, &attestation)?;
+    // #2318: verifiers trust the pinned identity, so the rotation counts only
+    // once the pin carries it.
+    mur_common::identity_pin::extend_pin(&mur_home, name, &attestation).with_context(|| {
+        format!(
+            "rekey written but the identity pin was not updated; rerun `mur agent rekey {name}`"
+        )
+    })?;
 
     // Update profile
     let grace_expires = now + chrono::Duration::days(GRACE_DAYS_DEFAULT);
@@ -268,6 +283,44 @@ fn rotate_files_atomic(
     writeln!(f, "{att_json}")?;
 
     Ok(())
+}
+
+/// The key and version a rekey continues from.
+///
+/// A pinned agent continues its pin: a normal rekey must hold the pinned key's
+/// private half, or the agent's key on disk was replaced and only an emergency
+/// rekey (unsigned, approved out of band) may proceed. A fail-closed pin also
+/// takes an emergency rekey. An unpinned agent continues its disk identity.
+fn rekey_base(
+    mur_home: &Path,
+    name: &str,
+    emergency: bool,
+    disk_pubkey: String,
+    disk_version: u32,
+) -> Result<(String, u32)> {
+    let pin = mur_common::identity_pin::load_pin(mur_home, name)
+        .with_context(|| format!("read identity pin of '{name}'"))?;
+    match pin {
+        None => Ok((disk_pubkey, disk_version)),
+        Some(pin) if pin.fail_closed => {
+            if !emergency {
+                bail!(
+                    "'{name}' has no trusted identity (its first-start pin failed); \
+                     reset it with `mur agent rekey {name} --emergency`"
+                );
+            }
+            Ok((disk_pubkey, disk_version))
+        }
+        Some(pin) => {
+            if !emergency && pin.pubkey != disk_pubkey {
+                bail!(
+                    "'{name}''s key on disk is not its pinned identity; the agent may have \
+                     replaced it. Inspect it, then rotate with `mur agent rekey {name} --emergency`"
+                );
+            }
+            Ok((pin.pubkey, pin.key_version))
+        }
+    }
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {

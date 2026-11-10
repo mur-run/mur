@@ -159,3 +159,100 @@ pub(super) fn load_boot_identity(agent_home: &std::path::Path) -> AgentIdentity 
         }
     }
 }
+
+/// #2318 trust on first use: pin the on-disk identity of an agent that has no
+/// identity pin yet (installed before the pin existed). Runs before the seal,
+/// while the agent has executed nothing, which is the same window the
+/// entitlement pin trusts. An existing pin is never touched here — only the
+/// CLI's create / rekey / import paths replace one.
+///
+/// Without a pin, verifiers fall back to the agent's own writable files, so a
+/// start that cannot pin must never leave that fallback open:
+/// - no key on disk (ephemeral identity): pin fail-closed, then start — no
+///   key was trusted before, and none can be planted later;
+/// - an identity that cannot be pinned (malformed chain, head not
+///   `identity.pub`): pin fail-closed and refuse to start until
+///   `mur agent rekey --emergency`;
+/// - the fail-closed pin itself cannot be written: refuse to start.
+pub(super) fn pin_identity_if_missing(agent_home: &std::path::Path) -> Result<(), String> {
+    use mur_common::identity_pin as ip;
+    let Some((mur_home, name)) = ip::split_agent_home(agent_home) else {
+        return Ok(());
+    };
+    match ip::load_pin(mur_home, name) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) if !agent_home.join(ip::PUBKEY_FILE).exists() => {
+            ip::write_fail_closed(mur_home, name).map_err(|e| unpinnable(name, &e))
+        }
+        Ok(None) => match ip::pin_from_disk(mur_home, name) {
+            Ok(_) => {
+                warn!(
+                    agent = name,
+                    "no identity pin; pinned the current identity (first start since #2318)"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                if let Err(w) = ip::write_fail_closed(mur_home, name) {
+                    warn!(agent = name, error = %w, "could not write fail-closed identity pin");
+                }
+                Err(unpinnable(name, &e))
+            }
+        },
+        // Present but unusable: verifiers already trust no key (fail closed).
+        Err(e) => {
+            warn!(agent = name, error = %e, "identity pin unreadable; peers trust no key for this agent until `mur agent rekey --emergency`");
+            Ok(())
+        }
+    }
+}
+
+fn unpinnable(name: &str, e: &dyn std::fmt::Display) -> String {
+    format!(
+        "error[identity_unpinned]: {name}'s identity could not be pinned ({e}). \
+         Peers now trust no key for it. If the identity files were not changed by \
+         the agent, reset it with `mur agent rekey {name} --emergency`."
+    )
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+    use mur_common::identity_pin as ip;
+
+    fn home(tmp: &tempfile::TempDir) -> std::path::PathBuf {
+        let h = tmp.path().join("agents").join("qa");
+        std::fs::create_dir_all(&h).unwrap();
+        h
+    }
+
+    #[test]
+    fn consistent_identity_is_pinned_and_starts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = home(&tmp);
+        AgentIdentity::generate().save(&h).unwrap();
+        pin_identity_if_missing(&h).unwrap();
+        assert!(!ip::load_pin(tmp.path(), "qa").unwrap().unwrap().fail_closed);
+    }
+
+    /// Review of #2340: a failed first-use pin must not leave verifiers on the
+    /// agent's own files.
+    #[test]
+    fn unpinnable_identity_refuses_and_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = home(&tmp);
+        AgentIdentity::generate().save(&h).unwrap();
+        std::fs::write(h.join(ip::CHAIN_FILE), "{not json\n").unwrap();
+        let msg = pin_identity_if_missing(&h).unwrap_err();
+        assert!(msg.starts_with("error[identity_unpinned]"), "{msg}");
+        assert_eq!(ip::resolve(&h), Some(None), "trusts no key, not disk");
+    }
+
+    #[test]
+    fn keyless_agent_starts_fail_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = home(&tmp);
+        pin_identity_if_missing(&h).unwrap();
+        assert_eq!(ip::resolve(&h), Some(None));
+    }
+}

@@ -331,7 +331,16 @@ impl AgentIdentity {
 
     /// Load ONLY the public key from `<dir>/identity.pub` — for verifiers
     /// (inbox ingest, proposal review) that must not require the private key.
+    ///
+    /// An installed agent with an identity pin (#2318) answers with the pinned
+    /// head key, not whatever its (agent-writable) `identity.pub` says.
     pub fn load_pubkey(dir: &Path) -> Result<[u8; 32], IdentityError> {
+        if let Some(trusted) = crate::identity_pin::resolve(dir) {
+            let t = trusted.ok_or_else(|| {
+                IdentityError::InvalidKey("identity pin is unusable; no key is trusted".into())
+            })?;
+            return decode_pubkey(&t.head_pubkey);
+        }
         let path = dir.join("identity.pub");
         if !path.exists() {
             return Err(IdentityError::NotFound);
