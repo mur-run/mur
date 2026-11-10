@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 mod build;
 mod deny_carve;
+mod exec_deny;
 mod spawn;
 mod widen;
 
@@ -225,6 +226,24 @@ impl Default for SandboxPolicy {
 }
 
 impl SandboxPolicy {
+    /// The `mur` CLI files this policy must refuse to exec even though an
+    /// `fs_exec` directory contains them (#2317). See [`exec_deny`].
+    pub(crate) fn mur_cli_exec_denies(&self) -> Vec<PathBuf> {
+        exec_deny::mur_cli_exec_denies(
+            self.spawn_mode,
+            &self.fs_exec,
+            &self.spawn_allowed_paths,
+            Some(&crate::exec_dirs::mur_cli()),
+        )
+    }
+
+    /// `fs_exec` with [`Self::mur_cli_exec_denies`] carved out by listing,
+    /// for Landlock, which cannot deny beneath a grant.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn exec_grants_for_allow_only_backend(&self) -> Vec<PathBuf> {
+        exec_deny::exec_grants_without(&self.fs_exec, &self.mur_cli_exec_denies())
+    }
+
     /// `network.outbound.mode: off`. The only posture that denies general TCP
     /// (`Some([])`), names no host (`Some([])`) AND refuses loopback carve-outs —
     /// ProxyOnly shares the first two and differs on the third, Restricted

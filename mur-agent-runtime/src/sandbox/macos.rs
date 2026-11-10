@@ -114,6 +114,9 @@ pub fn exec_permitted(policy: &SandboxPolicy, path: &Path) -> bool {
     }
     let system = (policy.spawn_mode != SpawnMode::Strict)
         && MACOS_SYSTEM_EXEC_PATHS.iter().any(|p| path.starts_with(p));
+    if policy.mur_cli_exec_denies().iter().any(|d| d == path) {
+        return false;
+    }
     system
         || policy.fs_exec.iter().any(|d| path.starts_with(d))
         || policy.spawn_allowed_paths.iter().any(|p| p == path)
@@ -436,6 +439,14 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
             let p = sbpl_escape(&path.to_string_lossy());
             lines.push(format!("(allow process-exec* (subpath \"{p}\"))"));
         }
+
+        // #2317: the `mur` CLI sits in an exec directory granted above, but a
+        // directory grant is not consent to run it. Last match wins, so these
+        // literals close it again; an explicit allowlist entry is never here.
+        for path in policy.mur_cli_exec_denies() {
+            let p = sbpl_escape(&path.to_string_lossy());
+            lines.push(format!("(deny process-exec* (path-literal \"{p}\"))"));
+        }
     }
 
     // Network restrictions. NOTE: macOS SBPL `remote tcp` only accepts `*` or
@@ -532,6 +543,8 @@ unsafe extern "C" {
 
     fn sandbox_free_error(errorbuf: *mut libc::c_char);
 }
+#[cfg(test)]
+mod exec_deny_tests;
 #[cfg(test)]
 mod own_home_deny_tests;
 #[cfg(test)]
