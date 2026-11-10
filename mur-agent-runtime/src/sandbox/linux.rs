@@ -59,10 +59,13 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
             .context("add fs_write rules")?;
     }
 
-    // FS exec paths (execute + read file + read dir).
-    if !policy.fs_exec.is_empty() {
+    // FS exec paths (execute + read file + read dir). A directory holding the
+    // `mur` CLI is granted per entry, minus the CLI (#2317): Landlock has no
+    // deny rule to carve it out of a directory-wide grant.
+    let fs_exec = policy.exec_grants_for_allow_only_backend();
+    if !fs_exec.is_empty() {
         let exec_access = make_bitflags!(AccessFs::{ Execute | ReadFile | ReadDir });
-        let exec_rules = path_beneath_rules(policy.fs_exec.iter(), exec_access);
+        let exec_rules = path_beneath_rules(fs_exec.iter(), exec_access);
         created = created.add_rules(exec_rules).context("add fs_exec rules")?;
     }
 
