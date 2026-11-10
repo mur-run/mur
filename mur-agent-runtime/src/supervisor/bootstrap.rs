@@ -178,6 +178,22 @@ pub(super) fn migrate_bundled_spawn_grant(agent_home: &Path, mur_home: &Path) {
     }
 }
 
+/// Before `Profile::load`: flip a concierge seeded from the old Hub template
+/// off `processes.spawn.mode: none`, which refuses `bash` and leaves murmur
+/// unable to do anything (see `crate::concierge_spawn_migrate`). Installed
+/// agents only; best-effort like the grant migration above.
+pub(super) fn migrate_concierge_spawn_mode(agent_home: &Path, mur_home: &Path) {
+    let Some(name) = agent_home.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    if agent_home != mur_home.join("agents").join(name) {
+        return;
+    }
+    if let Err(e) = crate::concierge_spawn_migrate::migrate_concierge_spawn_mode(mur_home, name) {
+        tracing::warn!(error = %e, "could not migrate the concierge's spawn mode");
+    }
+}
+
 /// Boot step 8b: the companion subsystem (Phase 1.1 M5.7), ticking once a
 /// minute. `None` when the profile does not enable it (the zero-cost path),
 /// when no LLM provider is configured, or when init fails.

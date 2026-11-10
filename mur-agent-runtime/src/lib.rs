@@ -13,6 +13,7 @@ pub mod bridge;
 pub mod cli_spawn;
 pub mod communication_policy;
 pub mod companion;
+pub mod concierge_spawn_migrate;
 /// B0 M10 — redacted crashlog writer (panic hook + secret/home-path
 /// redaction). Closes the gap acknowledged in
 /// `docs/release/privacy-statement.md` §4.
