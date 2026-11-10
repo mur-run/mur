@@ -327,6 +327,34 @@ fn cachedir_tagged_dirs_are_skipped_whatever_their_name() {
     assert!(project.join("sub/build-out/debug/bin").exists());
 }
 
+/// A tagged dir that holds TRACKED files is cloned like any other: skipped,
+/// its files would read as deleted in the track and `promote` would delete
+/// them from the project (#2332 review). Its edits still promote.
+#[test]
+fn cachedir_tagged_dir_with_tracked_files_is_cloned_and_kept() {
+    let td = tempfile::tempdir().unwrap();
+    git(td.path(), &["init", "-q"]);
+    std::fs::create_dir_all(td.path().join("cache")).unwrap();
+    std::fs::write(
+        td.path().join("cache/CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55\n",
+    )
+    .unwrap();
+    std::fs::write(td.path().join("cache/data"), "tracked").unwrap();
+    std::fs::write(td.path().join("a.txt"), "a").unwrap();
+    git(td.path(), &["add", "."]);
+    git(td.path(), &["commit", "-q", "-m", "init"]);
+    let project = root(&td);
+
+    let track = TurnTrack::create(&project, "turn-t", TreeClone::Copy).unwrap();
+    assert_eq!(read(&track.path().join("cache/data")), "tracked");
+    assert!(track.diff_files().unwrap().is_empty());
+    std::fs::write(track.path().join("cache/data"), "edited").unwrap();
+    track.promote().unwrap();
+    assert_eq!(read(&project.join("cache/data")), "edited");
+    assert!(project.join("cache/CACHEDIR.TAG").exists());
+}
+
 /// Windows: `std::fs::canonicalize` returns `\\?\C:\...`, which git rejects
 /// in `worktree add` and which never matches the shell's view of a path.
 #[cfg(windows)]
