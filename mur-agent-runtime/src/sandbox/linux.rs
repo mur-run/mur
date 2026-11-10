@@ -39,10 +39,19 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     // and sibling signing keys (#850) — and partitioned THERE rather than here
     // because only the user-declared grants may be dropped; the system read
     // paths in this list are chosen by the builder and must always survive.
-    if !policy.fs_read.is_empty() {
-        let read_rules = path_beneath_rules(policy.fs_read.iter(), AccessFs::from_read(abi));
-        created = created.add_rules(read_rules).context("add fs_read rules")?;
-    }
+    //
+    // Every rule source below carries `Execute` (`from_read` and `from_all`
+    // include it), and Landlock grants are additive, so each one goes through
+    // the same `mur` CLI carve-out (#2317) — excluding it from `fs_exec` alone
+    // would leave a read or write grant above it still executable.
+    let deny = policy.landlock_exec_denies();
+    created = add_exec_split_rules(
+        created,
+        &policy.fs_read,
+        AccessFs::from_read(abi),
+        &deny,
+        "fs_read",
+    )?;
 
     // FS read+write paths (superset of read). Landlock is a pure allow-list,
     // so a grant that contains a protected launch-chain path cannot be carved
@@ -52,22 +61,22 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     // (e.g. the media-state extra grants) and keeps the kernel and the report
     // reading from the same code path.
     let (writable, _dropped) = partition_write_grants(&policy.fs_write, &policy.launch_chain);
-    if !writable.is_empty() {
-        let write_rules = path_beneath_rules(writable.iter(), AccessFs::from_all(abi));
-        created = created
-            .add_rules(write_rules)
-            .context("add fs_write rules")?;
-    }
+    created = add_exec_split_rules(
+        created,
+        &writable,
+        AccessFs::from_all(abi),
+        &deny,
+        "fs_write",
+    )?;
 
-    // FS exec paths (execute + read file + read dir). A directory holding the
-    // `mur` CLI is granted per entry, minus the CLI (#2317): Landlock has no
-    // deny rule to carve it out of a directory-wide grant.
-    let fs_exec = policy.exec_grants_for_allow_only_backend();
-    if !fs_exec.is_empty() {
-        let exec_access = make_bitflags!(AccessFs::{ Execute | ReadFile | ReadDir });
-        let exec_rules = path_beneath_rules(fs_exec.iter(), exec_access);
-        created = created.add_rules(exec_rules).context("add fs_exec rules")?;
-    }
+    // FS exec paths (execute + read file + read dir).
+    created = add_exec_split_rules(
+        created,
+        &policy.fs_exec,
+        make_bitflags!(AccessFs::{ Execute | ReadFile | ReadDir }),
+        &deny,
+        "fs_exec",
+    )?;
 
     // Network port rules — only when the mode restricts outbound TCP. The
     // helper merges the general allow-list with the loopback carve-outs
@@ -95,6 +104,34 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
         enforcing,
         dropped: Vec::new(),
     })
+}
+
+/// Install one rule source with `access`, except that a grant above a denied
+/// `mur` CLI file gets `access` minus `Execute`, and `Execute` alone goes to
+/// that grant carved around the denied files. See
+/// [`super::policy::split_exec_grants`].
+#[cfg(target_os = "linux")]
+fn add_exec_split_rules(
+    mut created: landlock::RulesetCreated,
+    grants: &[PathBuf],
+    access: landlock::BitFlags<AccessFs>,
+    deny: &[PathBuf],
+    what: &str,
+) -> anyhow::Result<landlock::RulesetCreated> {
+    let split = super::policy::split_exec_grants(grants, deny);
+    for (paths, access) in [
+        (&split.clean, access),
+        (&split.no_exec, access & !AccessFs::Execute),
+        (&split.exec_only, AccessFs::Execute.into()),
+    ] {
+        if paths.is_empty() || access.is_empty() {
+            continue;
+        }
+        created = created
+            .add_rules(path_beneath_rules(paths.iter(), access))
+            .with_context(|| format!("add {what} rules"))?;
+    }
+    Ok(created)
 }
 
 /// Install a seccomp BPF denylist for syscalls that have no legitimate use in an agent process.
