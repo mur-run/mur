@@ -9,8 +9,9 @@
 //! agent's identity.
 //!
 //! The pin is the anchor. Trusted writers (`mur agent create`, import, clone,
-//! and the runtime's pre-seal trust-on-first-use) copy the identity to `<mur_home>/identity-pins/<name>.json`, a directory no agent
-//! sandbox may write (see `LaunchChain::deny_paths`). Verifiers of a pinned
+//! and the runtime's pre-seal trust-on-first-use) copy the identity to
+//! `<mur_home>/identity-pins/<name>.json`, a directory no agent sandbox may
+//! write (see `LaunchChain::deny_paths`). Verifiers of a pinned
 //! agent read the pin and never the agent's own copies, so a forged chain or a
 //! rewritten `identity.pub` changes nothing anyone trusts. `mur agent rekey`
 //! never re-reads the disk chain: it extends the pin with the one rotation it
