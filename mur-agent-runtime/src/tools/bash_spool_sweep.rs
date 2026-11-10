@@ -18,6 +18,14 @@ pub const SPOOL_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// Delete stale spools in `dir`. Returns `(files removed, bytes freed)`.
 /// `live` are job ids still in the job table; their spools are always kept.
 pub fn sweep(dir: &Path, retention: Duration, live: &[String]) -> (usize, u64) {
+    // `read_dir` follows a symlinked root, which would hand us the target's
+    // entries as ordinary files. `symlink_metadata` does not follow it, so a
+    // symlink here reads as "not a dir" and the sweep stops.
+    // ponytail: check-then-open; a concurrent swap of `jobs/` for a symlink
+    // between the two calls is not covered — openat-relative ops if it matters.
+    if !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+        return (0, 0);
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return (0, 0);
     };
@@ -125,6 +133,21 @@ mod tests {
         std::os::unix::fs::symlink(&target, d.path().join("j-link.log")).unwrap();
 
         assert_eq!(sweep(d.path(), SPOOL_RETENTION, &[]), (0, 0));
+        assert!(target.exists());
+    }
+
+    /// Review of #2334: `read_dir` follows a symlinked root, so `jobs/`
+    /// pointing elsewhere must not let the sweep delete the target's files.
+    #[cfg(unix)]
+    #[test]
+    fn never_follows_a_symlinked_spool_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = spool(outside.path(), "j-old.log", 30 * DAY);
+        let jobs = home.path().join("jobs");
+        std::os::unix::fs::symlink(outside.path(), &jobs).unwrap();
+
+        assert_eq!(sweep(&jobs, SPOOL_RETENTION, &[]), (0, 0));
         assert!(target.exists());
     }
 
