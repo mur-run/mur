@@ -1,6 +1,6 @@
 //! TCP entitlement validation, the boot identity load, and identity-key grace cleanup.
 
-use mur_common::identity::AgentIdentity;
+use mur_common::identity::{AgentIdentity, IdentityError};
 use tracing::{info, warn};
 
 /// Error surfaced when the profile's declared TCP transport bind port is
@@ -124,8 +124,14 @@ fn shred_file(path: &std::path::Path) -> anyhow::Result<()> {
 }
 
 /// 3a. Load agent identity (Ed25519 keypair) for Noise-XK TCP transport.
-/// If missing, fall back to an ephemeral identity and warn that
-/// cross-host TCP won't work (peers can't verify our static key).
+/// If BOTH halves are missing (an agent home that never had a key), generate
+/// one and persist it — this runs before the seal, as trusted supervisor code,
+/// the same write `mur agent create` would have done. Channel conversations
+/// verify against the on-disk `identity.pub`, so an in-memory-only key fails
+/// every murmur turn with "no channel writer key". Any other failure (denied
+/// read, corrupt key, or an orphaned `identity.pub` whose private half is
+/// gone) still falls back to an ephemeral key: overwriting a published pubkey
+/// is a rotation, and that belongs to `mur agent rekey`.
 /// #850 option (c) step 2: move THIS agent's private key out of the agents
 /// tree, before it is loaded. Runs here rather than from `mur update`
 /// because that is not the only upgrade path — `build.sh --install` +
@@ -150,10 +156,23 @@ pub(super) fn load_boot_identity(agent_home: &std::path::Path) -> AgentIdentity 
 
     match AgentIdentity::load(agent_home) {
         Ok(id) => id,
+        Err(IdentityError::NotFound) if pub_is_absent(agent_home) => {
+            let id = AgentIdentity::generate();
+            match id.save(agent_home) {
+                Ok(()) => info!("no identity keypair found; generated and saved a new one"),
+                Err(e) => warn!(
+                    error = %e,
+                    "no identity keypair found and the new one could not be saved; \
+                     running on an ephemeral key (channel turns will fail)"
+                ),
+            }
+            id
+        }
         Err(e) => {
             warn!(
                 error = %e,
-                "no identity keypair found; generating ephemeral (cross-host TCP disabled)"
+                "identity keypair did not load; generating ephemeral (cross-host TCP \
+                 disabled). Run `mur agent rekey <name> --emergency` to replace it"
             );
             AgentIdentity::generate()
         }
@@ -254,5 +273,66 @@ mod pin_tests {
         let h = home(&tmp);
         pin_identity_if_missing(&h).unwrap();
         assert_eq!(ip::resolve(&h), Some(None));
+    }
+}
+
+/// `identity.pub` is definitely not there (a denied stat is not "absent").
+fn pub_is_absent(agent_home: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(agent_home.join("identity.pub"))
+        .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+}
+
+#[cfg(test)]
+mod boot_identity_tests {
+    use super::*;
+
+    fn agent_home(tmp: &tempfile::TempDir) -> std::path::PathBuf {
+        let home = tmp.path().join("agents").join("a");
+        std::fs::create_dir_all(&home).unwrap();
+        home
+    }
+
+    #[test]
+    fn missing_keypair_is_generated_and_persisted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = agent_home(&tmp);
+        let id = load_boot_identity(&home);
+        assert!(home.join("identity.pub").exists());
+        assert!(tmp.path().join("keys/a/identity.key").exists());
+        // The channel gate's resolver now finds the same key the runtime holds.
+        assert_eq!(
+            mur_channel::sign::resolve_writer_pubkey(&home, None),
+            Some(*id.signing_key().verifying_key().as_bytes())
+        );
+        // And the next boot loads it instead of minting another.
+        assert_eq!(load_boot_identity(&home).pubkey_text(), id.pubkey_text());
+    }
+
+    #[test]
+    fn orphaned_pubkey_is_not_overwritten() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = agent_home(&tmp);
+        std::fs::write(home.join("identity.pub"), "published").unwrap();
+        load_boot_identity(&home);
+        assert_eq!(
+            std::fs::read_to_string(home.join("identity.pub")).unwrap(),
+            "published"
+        );
+        assert!(!tmp.path().join("keys/a/identity.key").exists());
+    }
+
+    /// #2318 interaction: a key the supervisor just generated pre-seal is the
+    /// trusted one, so first-use pinning must pin it, not fail closed.
+    #[test]
+    fn generated_keypair_is_pinned_not_fail_closed() {
+        use mur_common::identity_pin as ip;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = agent_home(&tmp);
+        let id = load_boot_identity(&home);
+        pin_identity_if_missing(&home).unwrap();
+        let pin = ip::load_pin(tmp.path(), "a").unwrap().unwrap();
+        assert!(!pin.fail_closed);
+        let trusted = ip::resolve(&home).flatten().expect("a trusted key");
+        assert_eq!(trusted.head_pubkey, id.pubkey_text());
     }
 }
