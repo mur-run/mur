@@ -374,3 +374,52 @@ fn verify_works_without_a_usable_index() {
     assert!(r.is_intact(), "{}", r.render());
     assert_eq!(std::fs::read(&index).unwrap(), b"not a directory");
 }
+
+/// A line a newer MUR wrote: a real event of the last line's shape, but with
+/// an event `kind` this binary does not know, at the next `seq`.
+fn newer_kind_line(f: &Fixture) -> String {
+    let last = f.log_lines().pop().unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&last).unwrap();
+    let seq = v["seq"].as_u64().unwrap();
+    v["seq"] = serde_json::json!(seq + 1);
+    v["kind"] = serde_json::json!("kind-from-a-newer-mur");
+    serde_json::to_string(&v).unwrap()
+}
+
+fn push_raw_line(f: &Fixture, line: &str) {
+    let mut text = std::fs::read_to_string(f.log_path()).unwrap();
+    text.push_str(line);
+    text.push('\n');
+    std::fs::write(f.log_path(), text).unwrap();
+}
+
+/// #2287: a log whose only non-parsing line was written by a newer MUR is
+/// intact; the line is a note, never damage. Events appended after it (and
+/// anchored over it) stay intact too.
+#[test]
+fn a_newer_kind_line_is_a_note_not_damage() {
+    let f = Fixture::anchored(2);
+    let line = newer_kind_line(&f);
+    push_raw_line(&f, &line);
+    f.append(3);
+    let r = f.check();
+    assert!(r.is_intact(), "{}", r.render());
+    assert_eq!(r.exit_code(), EXIT_INTACT);
+    assert!(r.unparseable_lines.is_empty(), "{}", r.render());
+    assert_eq!(r.newer_kind_lines, vec![3]);
+    assert!(r.render().contains("newer MUR"), "{}", r.render());
+}
+
+/// Both classes side by side in one log: the corrupt line is still damage,
+/// the newer-kind line is still only a note.
+#[test]
+fn newer_kind_and_corrupt_lines_are_told_apart() {
+    let f = Fixture::anchored(2);
+    let line = newer_kind_line(&f);
+    push_raw_line(&f, &line);
+    push_raw_line(&f, "{\"truncated\": ");
+    let r = f.check();
+    assert_eq!(r.newer_kind_lines, vec![3], "{}", r.render());
+    assert_eq!(r.unparseable_lines, vec![4], "{}", r.render());
+    assert_eq!(r.exit_code(), EXIT_DAMAGED);
+}

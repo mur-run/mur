@@ -8,7 +8,15 @@ use super::*;
 pub struct DamageReport {
     /// 1-based line numbers of lines that failed to parse as a
     /// [`ChannelEvent`] at all (unparseable or truncated), in file order.
+    /// Corruption only: a line written by a newer MUR is in
+    /// [`Self::newer_kind_lines`] instead.
     pub unparseable_lines: Vec<usize>,
+    /// 1-based line numbers of lines that carry an integer `seq` but an
+    /// event `kind` this binary does not know — written by a newer MUR, not
+    /// damage (#2287). Informational: never part of [`Self::is_clean`], so
+    /// integrity, repair and review rollback leave them alone. The events
+    /// are still absent from this binary's folds.
+    pub newer_kind_lines: Vec<usize>,
     /// Events that parsed but whose signature failed verification (present
     /// and invalid, or missing while `require_sig` is set), in file order.
     /// Still included in the `events` this call returns — this is a report,
@@ -124,7 +132,7 @@ impl ChannelStore {
             None => return Ok(Vec::new()),
         };
         let mut events = Vec::new();
-        let mut damaged = Vec::new();
+        let (mut newer_kind, mut corrupt) = (Vec::new(), Vec::new());
         for (idx, line) in content.lines().enumerate() {
             if line.trim().is_empty() {
                 continue;
@@ -132,18 +140,12 @@ impl ChannelStore {
             match serde_json::from_str::<ChannelEvent>(line) {
                 Ok(ev) => events.push(ev),
                 // 1-based: matches what an editor or `sed -n` shows.
-                Err(_) => damaged.push(idx + 1),
+                Err(_) => {
+                    super::append::classify_unparsed(line, idx + 1, &mut newer_kind, &mut corrupt)
+                }
             }
         }
-        if !damaged.is_empty() {
-            tracing::warn!(
-                channel_id = %id,
-                path = %path.display(),
-                dropped = damaged.len(),
-                lines = ?damaged,
-                "unparseable event line(s) skipped — the events they carried are missing from every fold of this channel"
-            );
-        }
+        super::append::report_skipped_lines(id, &path, &newer_kind, &corrupt);
         Ok(events)
     }
 
@@ -230,7 +232,12 @@ impl ChannelStore {
                 }
                 // 1-based: matches what an editor or `sed -n` shows, and
                 // matches `load_events`'s own `lines` field.
-                Err(_) => report.unparseable_lines.push(idx + 1),
+                Err(_) => super::append::classify_unparsed(
+                    line,
+                    idx + 1,
+                    &mut report.newer_kind_lines,
+                    &mut report.unparseable_lines,
+                ),
             }
         }
         report.chain_breaks = super::chain::chain_breaks(&content);
