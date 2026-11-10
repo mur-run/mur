@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 mod build;
 mod deny_carve;
 mod exec_deny;
+#[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
+pub(crate) use exec_deny::split_exec_grants;
 mod spawn;
 mod widen;
 
@@ -227,21 +229,31 @@ impl Default for SandboxPolicy {
 
 impl SandboxPolicy {
     /// The `mur` CLI files this policy must refuse to exec even though an
-    /// `fs_exec` directory contains them (#2317). See [`exec_deny`].
+    /// `fs_exec` directory contains them (#2317). See [`exec_deny`]. SBPL
+    /// read and write grants never carry exec, so only `fs_exec` reaches.
     pub(crate) fn mur_cli_exec_denies(&self) -> Vec<PathBuf> {
+        self.exec_denies_reached_by(&self.fs_exec)
+    }
+
+    /// [`Self::mur_cli_exec_denies`] for Landlock, whose read and write
+    /// rights include `Execute`: every grant source reaches.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn landlock_exec_denies(&self) -> Vec<PathBuf> {
+        let reach: Vec<PathBuf> = [&self.fs_exec, &self.fs_read, &self.fs_write]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect();
+        self.exec_denies_reached_by(&reach)
+    }
+
+    fn exec_denies_reached_by(&self, reach: &[PathBuf]) -> Vec<PathBuf> {
         exec_deny::mur_cli_exec_denies(
             self.spawn_mode,
-            &self.fs_exec,
+            reach,
             &self.spawn_allowed_paths,
             Some(&crate::exec_dirs::mur_cli()),
         )
-    }
-
-    /// `fs_exec` with [`Self::mur_cli_exec_denies`] carved out by listing,
-    /// for Landlock, which cannot deny beneath a grant.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub(crate) fn exec_grants_for_allow_only_backend(&self) -> Vec<PathBuf> {
-        exec_deny::exec_grants_without(&self.fs_exec, &self.mur_cli_exec_denies())
     }
 
     /// `network.outbound.mode: off`. The only posture that denies general TCP

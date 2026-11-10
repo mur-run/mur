@@ -18,9 +18,11 @@
 //! here: the runtime re-execs itself after the seal (the ssh-agent bypass
 //! probe), and `agent perm` is not reachable through it.
 //!
-//! macOS emits each entry as a `deny process-exec*` literal after the allows.
-//! Landlock has no deny rule, so Linux uses [`exec_grants_without`] to split a
-//! directory holding a denied file into per-entry grants that skip it.
+//! macOS emits each entry as a `deny process-exec*` literal after the allows;
+//! SBPL read and write grants never carry exec. Landlock has no deny rule and
+//! its read and write rights include `Execute`, so Linux runs every rule
+//! source through [`split_exec_grants`]: a grant above a denied file loses
+//! `Execute`, which is given back by carving around the denied files.
 
 use std::path::{Path, PathBuf};
 
@@ -45,12 +47,14 @@ fn forms(p: &Path) -> Vec<PathBuf> {
 /// The exact `mur` CLI files the agent must not exec under `spawn_mode`.
 ///
 /// Empty for [`SpawnMode::Any`]: the operator chose unrestricted spawn, and no
-/// exec clause is emitted at all. `extra` is the CLI path the runtime itself
-/// would exec (`exec_dirs::mur_cli`), covered even when it sits outside the
-/// exec directories so long as one of them reaches it.
+/// exec clause is emitted at all. `reach` is every grant that can carry exec
+/// on the backend — `fs_exec` for SBPL, plus the read and write grants for
+/// Landlock. `extra` is the CLI path the runtime itself would exec
+/// (`exec_dirs::mur_cli`), covered even when it sits deeper than a grant's
+/// immediate entries so long as one of them reaches it.
 pub(crate) fn mur_cli_exec_denies(
     spawn_mode: SpawnMode,
-    fs_exec: &[PathBuf],
+    reach: &[PathBuf],
     spawn_allowed_paths: &[PathBuf],
     extra: Option<&Path>,
 ) -> Vec<PathBuf> {
@@ -58,7 +62,7 @@ pub(crate) fn mur_cli_exec_denies(
         return Vec::new();
     }
     let granted = |p: &Path| forms(p).iter().any(|f| spawn_allowed_paths.contains(f));
-    let mut candidates: Vec<PathBuf> = fs_exec
+    let mut candidates: Vec<PathBuf> = reach
         .iter()
         .flat_map(|dir| MUR_CLI_EXEC_NAMES.iter().map(move |n| dir.join(n)))
         .filter(|p| p.is_file())
@@ -66,9 +70,11 @@ pub(crate) fn mur_cli_exec_denies(
     if let Some(e) = extra
         && e.is_absolute()
         && e.is_file()
-        && fs_exec
-            .iter()
-            .any(|d| forms(e).iter().any(|f| f.starts_with(d)))
+        && reach.iter().any(|d| {
+            forms(e)
+                .iter()
+                .any(|f| forms(d).iter().any(|g| f.starts_with(g)))
+        })
     {
         candidates.push(e.to_path_buf());
     }
@@ -86,42 +92,83 @@ pub(crate) fn mur_cli_exec_denies(
     out
 }
 
-/// `fs_exec` with every denied file carved out, for a backend that can only
-/// allow (Landlock).
+/// `true` when `p` is a denied file or an ancestor of one, in either its
+/// written or symlink-resolved form. A rule installed on a symlink binds to
+/// its target, recursively, so containment is checked on the resolved form,
+/// not just by exact path or immediate parent. A link merely nested inside a
+/// kept-whole grant needs no check: Landlock matches a file against the
+/// ancestors of its resolved path, which a link elsewhere is not.
+fn reaches_denied(p: &Path, deny: &[PathBuf]) -> bool {
+    forms(p)
+        .iter()
+        .any(|f| deny.iter().any(|d| d.starts_with(f)))
+}
+
+/// Grant everything beneath `dir` except the denied files: entries that reach
+/// no denied file are kept whole, a directory above one is opened and carved
+/// in turn, and a denied file (or a link resolving to it) is dropped.
 ///
-/// A directory holding no denied file is kept whole. One that does is
-/// replaced by its entries, minus any whose resolved target is denied — a
-/// `murmur → mur` link would otherwise grant `mur`'s inode, since the rule
-/// follows the link. Entries are listed once, at seal time: a binary added to
-/// that directory later is not exec-able until the agent restarts, the same
-/// trade every literal grant makes.
-pub(crate) fn exec_grants_without(fs_exec: &[PathBuf], deny: &[PathBuf]) -> Vec<PathBuf> {
-    if deny.is_empty() {
-        return fs_exec.to_vec();
+/// `seen` holds the resolved directories already carved. A symlink that loops
+/// back to one of them is dropped rather than followed — granting it would
+/// re-grant that directory whole. Fail-closed: an unreadable directory grants
+/// nothing.
+fn carve(dir: &Path, deny: &[PathBuf], seen: &mut Vec<PathBuf>, out: &mut Vec<PathBuf>) {
+    let Ok(real) = std::fs::canonicalize(dir) else {
+        return;
+    };
+    if seen.contains(&real) {
+        return;
     }
-    let is_denied = |p: &Path| forms(p).iter().any(|f| deny.contains(f));
-    let mut out = Vec::new();
-    for dir in fs_exec {
-        let dir_forms = forms(dir);
-        let holds_denied = deny
-            .iter()
-            .any(|d| d.parent().is_some_and(|p| dir_forms.iter().any(|f| f == p)));
-        if !holds_denied {
-            out.push(dir.clone());
-            continue;
+    seen.push(real);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for p in entries {
+        if !reaches_denied(&p, deny) {
+            out.push(p);
+        } else if p.is_dir() {
+            carve(&p, deny, seen, out);
         }
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        let mut kept: Vec<PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| !is_denied(p))
-            .collect();
-        kept.sort();
-        out.extend(kept);
     }
-    out
+}
+
+/// One rule source split for a backend that can only allow (Landlock), where
+/// read and write rules carry `Execute` too, not just exec rules.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct ExecSplit {
+    /// Grants reaching no denied file: install with the source's full access.
+    pub clean: Vec<PathBuf>,
+    /// Grants above a denied file: install with the source's access minus
+    /// `Execute`, so reading and writing beneath them is unchanged.
+    pub no_exec: Vec<PathBuf>,
+    /// The `no_exec` grants carved around the denied files: install with
+    /// `Execute` alone. Listed once, at seal time — a binary added later is
+    /// not exec-able until the agent restarts, the trade every literal grant
+    /// makes.
+    pub exec_only: Vec<PathBuf>,
+}
+
+/// Split `grants` so no rule grants `Execute` on a denied file (#2317).
+///
+/// Landlock grants are additive: withholding `Execute` from one rule does
+/// nothing while another rule above the file still carries it. Every rule
+/// source that includes `Execute` must go through this, not just `fs_exec`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn split_exec_grants(grants: &[PathBuf], deny: &[PathBuf]) -> ExecSplit {
+    let mut split = ExecSplit::default();
+    let mut seen = Vec::new();
+    for g in grants {
+        if deny.is_empty() || !reaches_denied(g, deny) {
+            split.clean.push(g.clone());
+        } else {
+            split.no_exec.push(g.clone());
+            carve(g, deny, &mut seen, &mut split.exec_only);
+        }
+    }
+    split
 }
 
 #[cfg(test)]
