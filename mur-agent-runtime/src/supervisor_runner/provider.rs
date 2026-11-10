@@ -117,6 +117,11 @@ pub async fn build_provider_runner(
     // current snapshot. A `cd` inside a bash subprocess is NOT retained.
     let session_cwd = crate::tools::fs_policy::SessionCwd::new(agent_home.to_path_buf());
     let bash_jobs = crate::tools::bash_jobs::JobTable::new();
+    // #2333: spools are never removed otherwise; age them out off-thread.
+    crate::tools::bash_spool_sweep::sweep_in_background(
+        agent_home.join(crate::tools::bash_jobs::SPOOL_DIR),
+        bash_jobs.clone(),
+    );
     let bash = Arc::new(
         BashTool::new(agent_home.to_path_buf(), session_cwd.clone())
             .with_agent(mur_home.clone(), profile.inner.name.clone())
