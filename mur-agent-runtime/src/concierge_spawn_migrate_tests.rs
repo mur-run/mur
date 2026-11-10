@@ -161,3 +161,96 @@ fn hub_concierge_template_does_not_ship_spawn_none() {
     let p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
     assert_ne!(p.entitlements.processes.spawn.mode, SpawnMode::None);
 }
+
+/// What `mur agent perm set-mode <name> processes.spawn <mode>` leaves behind:
+/// the profile rewritten and the pin advanced to it.
+fn trusted_set_mode(fx: &Fx, mode: SpawnMode) {
+    let mut p = fx.reload();
+    p.entitlements.processes.spawn.mode = mode;
+    std::fs::write(fx.profile_path(), serde_yaml_ng::to_string(&p).unwrap()).unwrap();
+    write_pin(&fx.mur_home, &fx.name, &p.entitlements).unwrap();
+}
+
+/// Review regression (#2342): migrate, then the owner revokes the shell on
+/// purpose. Every later boot / `mur update` must keep it revoked.
+#[test]
+fn an_explicit_revocation_after_migration_survives_every_restart() {
+    let fx = fixture(CONCIERGE_AGENT, SpawnMode::None, true);
+    assert_eq!(fx.run(), Migration::Enabled);
+    assert!(marker_path(&fx.mur_home, &fx.name).is_file());
+
+    trusted_set_mode(&fx, SpawnMode::None);
+    for _ in 0..3 {
+        assert_eq!(fx.run(), Migration::Unchanged);
+        assert_eq!(fx.mode(), SpawnMode::None);
+        assert!(fx.pin_matches());
+    }
+}
+
+/// An install that never had the bad template is settled on first sight, so a
+/// `none` chosen later is never mistaken for it.
+#[test]
+fn a_profile_already_off_none_is_marked_so_a_later_none_sticks() {
+    let fx = fixture(CONCIERGE_AGENT, SpawnMode::Allowlist, true);
+    assert_eq!(fx.run(), Migration::Unchanged);
+    assert!(marker_path(&fx.mur_home, &fx.name).is_file());
+
+    trusted_set_mode(&fx, SpawnMode::None);
+    assert_eq!(fx.run(), Migration::Unchanged);
+    assert_eq!(fx.mode(), SpawnMode::None);
+}
+
+/// Skipped for a reseal is still the legacy install: not marked, so the next
+/// start after `mur agent perm reseal` repairs it, exactly once.
+#[test]
+fn a_skipped_profile_is_not_marked_and_is_repaired_after_reseal() {
+    let fx = fixture(CONCIERGE_AGENT, SpawnMode::None, true);
+    let mut p = fx.reload();
+    p.entitlements.processes.spawn.allowed.push("curl".into());
+    std::fs::write(fx.profile_path(), serde_yaml_ng::to_string(&p).unwrap()).unwrap();
+
+    assert_eq!(fx.run(), Migration::SkippedUnpinned);
+    assert!(!marker_path(&fx.mur_home, &fx.name).exists());
+
+    // `mur agent perm reseal mur`.
+    write_pin(&fx.mur_home, &fx.name, &p.entitlements).unwrap();
+    assert_eq!(fx.run(), Migration::Enabled);
+    assert!(marker_path(&fx.mur_home, &fx.name).is_file());
+
+    trusted_set_mode(&fx, SpawnMode::None);
+    assert_eq!(fx.run(), Migration::Unchanged);
+    assert_eq!(fx.mode(), SpawnMode::None);
+}
+
+/// A resumed run settles the profile too.
+#[test]
+fn a_resumed_run_leaves_the_marker() {
+    let fx = fixture(CONCIERGE_AGENT, SpawnMode::None, true);
+    let mut p = fx.reload();
+    p.entitlements.processes.spawn.mode = SpawnMode::Allowlist;
+    std::fs::write(fx.profile_path(), serde_yaml_ng::to_string(&p).unwrap()).unwrap();
+
+    assert_eq!(fx.run(), Migration::Resumed);
+    assert!(marker_path(&fx.mur_home, &fx.name).is_file());
+}
+
+/// No profile yet is not "settled": a concierge seeded later is still covered.
+#[test]
+fn a_missing_profile_leaves_no_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    migrate_concierge_spawn_mode(dir.path(), CONCIERGE_AGENT).unwrap();
+    assert!(!marker_path(dir.path(), CONCIERGE_AGENT).exists());
+}
+
+/// `mur agent delete --purge` forgets the pass with the pin.
+#[test]
+fn forget_rearms_the_pass_for_a_reseeded_concierge() {
+    let fx = fixture(CONCIERGE_AGENT, SpawnMode::Allowlist, true);
+    fx.run();
+    forget(&fx.mur_home, &fx.name).unwrap();
+    assert!(!marker_path(&fx.mur_home, &fx.name).exists());
+    forget(&fx.mur_home, &fx.name).unwrap(); // already gone: fine
+
+    trusted_set_mode(&fx, SpawnMode::None); // reseeded from an old template
+    assert_eq!(fx.run(), Migration::Enabled);
+}
