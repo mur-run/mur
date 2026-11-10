@@ -24,6 +24,8 @@ pub const MAX_JOBS: usize = 8;
 pub const TAIL_BYTES: usize = 16 * 1024;
 /// The spool stops growing here; the tail stays live.
 pub const SPOOL_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// Under the agent home: where every job's `j-<uuid>.log` spool goes.
+pub const SPOOL_DIR: &str = "jobs";
 /// An exited job nobody collected is dropped after this.
 pub const JOB_RESULT_TTL: Duration = Duration::from_secs(60 * 60);
 /// SIGTERM → this → SIGKILL, on the whole group.

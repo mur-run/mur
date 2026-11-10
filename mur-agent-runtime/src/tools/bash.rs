@@ -304,7 +304,7 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
         }
         // Parallel first compiles race to start the agent's own server (#1860).
         crate::agent_paths::sccache_server::ensure_for(&command, &env).await;
-        let spool_dir = self.working_dir.join("jobs");
+        let spool_dir = self.working_dir.join(crate::tools::bash_jobs::SPOOL_DIR);
         let job_id = self
             .jobs
             .spawn(crate::tools::bash_jobs::SpawnSpec {
