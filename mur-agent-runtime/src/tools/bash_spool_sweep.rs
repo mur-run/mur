@@ -62,19 +62,31 @@ pub fn sweep(dir: &Path, retention: Duration, live: &[String]) -> (usize, u64) {
     (removed, freed)
 }
 
-/// Run [`sweep`] on its own thread so it never blocks startup or a turn.
+/// How often a long-running runtime re-sweeps, so an agent that is never
+/// restarted still ages its spools out.
+pub const SWEEP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Sweep now, then every `interval`, forever. Live job ids are re-read each
+/// pass, so a job started after startup is protected while it runs.
+fn sweep_every(dir: &Path, jobs: &JobTable, retention: Duration, interval: Duration) -> ! {
+    loop {
+        let (removed, freed) = sweep(dir, retention, &jobs.running_ids());
+        tracing::info!(
+            dir = %dir.display(),
+            removed,
+            bytes_freed = freed,
+            "swept stale bash job spools"
+        );
+        std::thread::sleep(interval);
+    }
+}
+
+/// Run [`sweep`] at startup and every [`SWEEP_INTERVAL`] on its own thread,
+/// so it never blocks startup or a turn. The thread ends with the process.
 pub fn sweep_in_background(dir: PathBuf, jobs: Arc<JobTable>) {
     let spawned = std::thread::Builder::new()
         .name("bash-spool-sweep".into())
-        .spawn(move || {
-            let (removed, freed) = sweep(&dir, SPOOL_RETENTION, &jobs.running_ids());
-            tracing::info!(
-                dir = %dir.display(),
-                removed,
-                bytes_freed = freed,
-                "swept stale bash job spools"
-            );
-        });
+        .spawn(move || sweep_every(&dir, &jobs, SPOOL_RETENTION, SWEEP_INTERVAL));
     if let Err(e) = spawned {
         tracing::warn!(error = %e, "bash spool sweep not started");
     }
@@ -149,6 +161,26 @@ mod tests {
 
         assert_eq!(sweep(&jobs, SPOOL_RETENTION, &[]), (0, 0));
         assert!(target.exists());
+    }
+
+    /// A spool that ages past retention after the first pass is still swept:
+    /// the sweep repeats instead of running once at startup.
+    #[test]
+    fn a_later_pass_removes_a_spool_that_appears_after_startup() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().to_path_buf();
+        let jobs = JobTable::new();
+        std::thread::spawn(move || {
+            sweep_every(&dir, &jobs, SPOOL_RETENTION, Duration::from_millis(20))
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        let late = spool(d.path(), "j-late.log", 30 * DAY);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while late.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!late.exists(), "no later pass removed the spool");
     }
 
     #[test]
