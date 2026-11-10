@@ -157,6 +157,9 @@ pub fn cmd_remove(name: &str, purge: bool, force: bool) -> Result<()> {
         if let Err(e) = mur_common::identity_pin::remove_pin(&mur_home, name) {
             eprintln!("warning: could not remove identity pin: {e}");
         }
+        if let Err(e) = mur_agent_runtime::concierge_spawn_migrate::forget(&mur_home, name) {
+            eprintln!("warning: could not remove concierge migration marker: {e}");
+        }
         println!("Purged agent '{name}'");
     } else {
         println!(

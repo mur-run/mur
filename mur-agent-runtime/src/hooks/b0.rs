@@ -374,9 +374,11 @@ impl Hook for B0SafetyHook {
                 mur_common::agent::SpawnMode::None => {
                     return Ok(Decision::Deny {
                         reason: format!(
-                            "process spawn is disabled by entitlements (mode=none); \
-                             enable with `mur agent perm allow-spawn <name>` (or set \
-                             spawn.mode to `allowlist` / `any`). Tool: `{}`",
+                            "process spawn is disabled by entitlements (mode=none), \
+                             which ignores the allowlist; enable with `mur agent perm \
+                             set-mode {} processes.spawn allowlist` and restart the \
+                             agent. Tool: `{}`",
+                            ctx.agent_name,
                             call.name()
                         ),
                     });

@@ -48,6 +48,7 @@ pub fn post_upgrade(
     if let Some(dir) = install_dir {
         repin_first_party_mcp(dir);
     }
+    migrate_concierge_spawn();
 
     let daemon_running = crate::cmd::murmurd::murmurd_running();
     print_checklist(restart_agents, daemon_running);
@@ -103,6 +104,29 @@ fn repin_first_party_mcp(install_dir: &std::path::Path) {
             "granted the bundled mur-mcp-server by absolute path for: {}",
             granted.join(", ")
         );
+    }
+}
+
+/// The Hub's old concierge template shipped `spawn.mode: none`; since B0 rule
+/// 5 runs on the tool path (#2175) that refuses `bash` outright and murmur
+/// cannot do anything. Runs on every upgrade route, not only when the MCP
+/// re-pin has an install dir. The runtime repeats it at start.
+fn migrate_concierge_spawn() {
+    let home = crate::paths::mur_root(None);
+    let concierge = mur_common::fleet::CONCIERGE_AGENT;
+    use mur_agent_runtime::concierge_spawn_migrate::{Migration, migrate_concierge_spawn_mode};
+    match migrate_concierge_spawn_mode(&home, concierge) {
+        Ok(Migration::Enabled | Migration::Resumed) => {
+            println!("enabled the shell for '{concierge}': processes.spawn.mode none -> allowlist")
+        }
+        Ok(Migration::SkippedUnpinned) => eprintln!(
+            "warning: '{concierge}' has processes.spawn.mode: none, so murmur cannot run bash, \
+             but its entitlements were edited outside MUR. Review, then run:\n  \
+             mur agent perm reseal {concierge}\n  \
+             mur agent perm set-mode {concierge} processes.spawn allowlist"
+        ),
+        Ok(Migration::Unchanged) => {}
+        Err(e) => eprintln!("warning: could not migrate '{concierge}' spawn mode: {e:#}"),
     }
 }
 

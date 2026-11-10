@@ -56,6 +56,14 @@ async fn b0_denies_bash_when_spawn_mode_is_none() {
         .expect_err("a hook deny must stop the call");
     assert_eq!(err.code, "hook_deny");
     assert!(err.message.contains("mode=none"), "{}", err.message);
+    // `allow-spawn` cannot fix `none` (it ignores the allowlist): the hint
+    // must name the verb that does.
+    assert!(
+        err.message.contains("set-mode") && err.message.contains("processes.spawn allowlist"),
+        "{}",
+        err.message
+    );
+    assert!(!err.message.contains("allow-spawn"), "{}", err.message);
     assert_eq!(calls.load(Ordering::Relaxed), 0, "bash must not run");
 }
 

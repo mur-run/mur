@@ -201,6 +201,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     crate::crashlog::install_panic_hook(agent_home.clone());
 
     bootstrap::migrate_bundled_spawn_grant(&agent_home, &mur_home); // #1984, pre-pin
+    bootstrap::migrate_concierge_spawn_mode(&agent_home, &mur_home); // pre-pin
     let mut profile = match Profile::load(&agent_home) {
         Ok(p) => p,
         Err(e) => {
