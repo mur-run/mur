@@ -44,6 +44,7 @@ impl GuardedToolCall {
             tier = ?hit.tier,
             ceiling = ?hit.ceiling,
             rule = hit.rule.as_deref().unwrap_or(""),
+            matched_head = hit.matched_head.as_deref().unwrap_or(""),
             command = %command,
             "bash call above the bash tier ceiling needs approval (#1814)"
         );
@@ -97,6 +98,7 @@ fn record(
         "tier": hit.tier,
         "ceiling": hit.ceiling,
         "rule": hit.rule,
+        "matched_head": hit.matched_head,
         "enforced": true,
     })
 }

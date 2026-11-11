@@ -141,6 +141,12 @@ pub struct CeilingHit {
     pub ceiling: RiskTier,
     /// Pattern of the deciding rule (`None` = no rule).
     pub rule: Option<String>,
+    /// #2362: what the classifier matched to reach `tier` — a deny-listed
+    /// word (`chmod`), `git push`, `os.chmod`, `--force`, `opaque_shell`.
+    /// The ceiling record keeps only a command preview, so without this a
+    /// prompt whose trigger sits past the cut cannot be explained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_head: Option<String>,
 }
 
 /// Is `tool_name` with `input` above the bash ceiling? `None` for any tool
@@ -156,11 +162,12 @@ pub fn bash_ceiling_hit(
     }
     let rule = crate::agent::resolve_tool_rule(rules, BASH_TOOL);
     let ceiling = bash_ceiling(rule);
-    let tier = super::tool_tier::classify(BASH_TOOL, input);
+    let (tier, matched_head) = super::tool_tier::classify_with_trigger(BASH_TOOL, input);
     (tier > ceiling).then(|| CeilingHit {
         tier,
         ceiling,
         rule: rule.map(|r| r.pattern.clone()),
+        matched_head,
     })
 }
 
