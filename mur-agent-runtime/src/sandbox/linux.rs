@@ -112,7 +112,8 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
 /// Install one rule source with `access`, except that a grant above a denied
 /// `mur` CLI file gets `access` minus `Execute`, and `Execute` alone goes to
 /// that grant carved around the denied files. See
-/// [`super::policy::split_exec_grants`].
+/// [`super::policy::split_exec_grants`]. When `access` has no `Execute` there
+/// is nothing to carve and the grants go in unsplit.
 #[cfg(target_os = "linux")]
 fn add_exec_split_rules(
     mut created: landlock::RulesetCreated,
@@ -121,6 +122,17 @@ fn add_exec_split_rules(
     deny: &[PathBuf],
     what: &str,
 ) -> anyhow::Result<landlock::RulesetCreated> {
+    // No `Execute` to carve (a Strict read/write grant, #2343): install the
+    // grants as-is. Splitting would hand `exec_only` an `Execute` the caller
+    // never asked for, reopening every sibling of the denied file.
+    if !access.contains(AccessFs::Execute) {
+        if grants.is_empty() || access.is_empty() {
+            return Ok(created);
+        }
+        return created
+            .add_rules(path_beneath_rules(grants.iter(), access))
+            .with_context(|| format!("add {what} rules"));
+    }
     let split = super::policy::split_exec_grants(grants, deny);
     for (paths, access) in [
         (&split.clean, access),

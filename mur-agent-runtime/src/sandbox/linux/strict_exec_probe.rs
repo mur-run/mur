@@ -4,6 +4,10 @@
 //! Landlock rights are additive, so a read or write rule that still carried
 //! `Execute` would reopen those — which is what this pins.
 //!
+//! It also pins the `mur` CLI carve-out (#2317) against that change: a read
+//! grant holding a denied `mur` file is split around it, and the split must
+//! not hand `Execute` back to that file's siblings.
+//!
 //! `restrict_self` is irreversible, so the sandboxed half runs in a child
 //! re-exec of this test binary, selected by an env var (same shape as
 //! `unix_connect_probe`).
@@ -23,11 +27,16 @@ const EXIT_ALLOWED_DENIED: i32 = 22;
 const EXIT_READABLE_RAN: i32 = 23;
 const EXIT_WRITABLE_RAN: i32 = 24;
 const EXIT_CONTROL_READ_DENIED: i32 = 25;
+const EXIT_CARVED_SIBLING_RAN: i32 = 26;
 
 /// Allowlisted: must run. Unlisted, but under the `/usr` read grant: must not.
 const ALLOWED: &str = "true";
 const UNLISTED: &str = "id";
 const COPIED: &str = "copied-binary";
+/// Read-only dir holding a file named like the `mur` CLI (so the carve-out
+/// splits this grant) next to an unlisted binary that must stay refused.
+const CARVED_DIR: &str = "ro";
+const CARVED_SIBLING: &str = "sibling-binary";
 
 fn system_binary(name: &str) -> PathBuf {
     ["/usr/bin", "/bin"]
@@ -40,9 +49,10 @@ fn system_binary(name: &str) -> PathBuf {
 fn strict_policy(dir: &Path) -> SandboxPolicy {
     let yaml = format!(
         "network: {{inbound: {{ports: []}}, outbound: {{mode: unrestricted, allow_hosts: [], allow_ports: [], protocols: [tcp]}}}}\n\
-         filesystem: {{read: [\"/usr\"], write: [\"{w}\"], deny: []}}\n\
+         filesystem: {{read: [\"/usr\", \"{r}\"], write: [\"{w}\"], deny: []}}\n\
          processes: {{spawn: {{mode: strict, allowed: [\"{ALLOWED}\"], allowed_dirs: []}}}}\n",
         w = dir.join("work").display(),
+        r = dir.join(CARVED_DIR).display(),
     );
     let ent: Entitlements = serde_yaml_ng::from_str(&yaml).expect("entitlements yaml");
     assert_eq!(ent.processes.spawn.mode, SpawnMode::Strict);
@@ -58,6 +68,7 @@ fn runs(path: &Path) -> bool {
 fn child(dir: &Path) -> ! {
     let policy = strict_policy(dir);
     let copied = dir.join("work").join(COPIED);
+    let sibling = dir.join(CARVED_DIR).join(CARVED_SIBLING);
     let status = match apply_linux(&policy) {
         Ok(s) => s,
         Err(e) => {
@@ -70,7 +81,7 @@ fn child(dir: &Path) -> ! {
     }
     // Control: the write grant is live (the file is readable), so a refused
     // exec below is the missing `Execute`, not a missing grant.
-    if std::fs::read(&copied).is_err() {
+    if std::fs::read(&copied).is_err() || std::fs::read(&sibling).is_err() {
         std::process::exit(EXIT_CONTROL_READ_DENIED);
     }
     if !runs(&system_binary(ALLOWED)) {
@@ -81,6 +92,9 @@ fn child(dir: &Path) -> ! {
     }
     if runs(&copied) {
         std::process::exit(EXIT_WRITABLE_RAN);
+    }
+    if runs(&sibling) {
+        std::process::exit(EXIT_CARVED_SIBLING_RAN);
     }
     std::process::exit(EXIT_OK);
 }
@@ -96,11 +110,22 @@ fn strict_landlock_runs_only_allowlisted_binaries() {
     std::fs::create_dir_all(&work).unwrap();
     std::fs::create_dir_all(tmp.path().join("agent")).unwrap();
     std::fs::copy(system_binary(UNLISTED), work.join(COPIED)).unwrap();
+    let carved = tmp.path().join(CARVED_DIR);
+    std::fs::create_dir_all(&carved).unwrap();
+    std::fs::copy(system_binary(UNLISTED), carved.join(CARVED_SIBLING)).unwrap();
+    std::fs::copy(system_binary(ALLOWED), carved.join("mur")).unwrap();
+    // The scenario needs the carve-out to actually fire on this grant.
+    let deny = strict_policy(tmp.path()).landlock_exec_denies();
+    assert!(
+        deny.iter().any(|d| d.starts_with(&carved)),
+        "carve-out did not fire: {deny:?}"
+    );
 
     // Negative control outside the sandbox: both refused binaries do run
     // unsandboxed, so a refusal in the child is the sandbox's doing.
     assert!(runs(&system_binary(UNLISTED)));
     assert!(runs(&work.join(COPIED)));
+    assert!(runs(&carved.join(CARVED_SIBLING)));
 
     let name = concat!(
         module_path!(),
@@ -126,6 +151,7 @@ fn strict_landlock_runs_only_allowlisted_binaries() {
         Some(EXIT_ALLOWED_DENIED) => "allowlisted binary was refused",
         Some(EXIT_READABLE_RAN) => "unlisted binary under a read grant ran",
         Some(EXIT_WRITABLE_RAN) => "binary under a write grant ran",
+        Some(EXIT_CARVED_SIBLING_RAN) => "carve-out re-granted Execute to a read-only sibling",
         _ => "child exited unexpectedly",
     };
     panic!("{why}");
