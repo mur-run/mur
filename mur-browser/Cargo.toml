@@ -25,6 +25,7 @@ unicode-normalization = "0.1.25"
 unicode-width = "0.1"
 tempfile = "3"
 shell-words = "1"
+fs2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

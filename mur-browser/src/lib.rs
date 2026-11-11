@@ -16,6 +16,7 @@
 //! over MCP, so the crate has no Node or Chromium dependency at build time.
 //! Design source: `docs/superpowers/specs/2026-09-10-browser-phase1-spec.md`.
 
+pub mod abandon;
 pub mod auth;
 pub mod broker;
 pub mod chromium;
@@ -36,6 +37,7 @@ pub mod refresh;
 pub mod replay;
 pub mod server;
 pub mod session;
+pub mod split;
 pub mod state;
 pub mod summary;
 pub mod user_agent;

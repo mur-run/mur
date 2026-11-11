@@ -6532,6 +6532,7 @@ dependencies = [
  "age",
  "anyhow",
  "chrono",
+ "fs2",
  "keyring",
  "schemars 1.2.1",
  "serde",

@@ -38,6 +38,11 @@ pub struct ProfileMeta {
     /// ([`crate::refresh`]). `last_auth` stays the human login time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh: Option<DateTime<Utc>>,
+    /// A session's write-back that was dropped, until the user has been told
+    /// once ([`crate::abandon`]). An older `mur` drops it on rewrite, which
+    /// loses one notice, never the login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writeback_abandoned: Option<crate::abandon::Abandoned>,
 }
 
 /// Persist a verified Playwright storage-state document and its non-secret
@@ -65,6 +70,7 @@ pub fn save_profile(
         )?,
         allow_domains: allow_domains.to_vec(),
         last_refresh: None,
+        writeback_abandoned: None,
     };
     write_meta(meta_path, &meta)?;
     handoff.saved()?;
@@ -331,6 +337,7 @@ mod tests {
             earliest_cookie_expires: None,
             allow_domains: Vec::new(),
             last_refresh: None,
+            writeback_abandoned: None,
         };
         let yaml = serde_yaml::to_string(&meta).unwrap();
         assert!(!yaml.contains("allow_domains"), "{yaml}");

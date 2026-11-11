@@ -9,7 +9,7 @@
 use std::time::Duration;
 use tokio::time::Instant;
 
-use super::StdioMcpClient;
+use super::{McpClient, StdioMcpClient};
 
 /// Time a server gets between SIGTERM and SIGKILL. Taken from the end of
 /// the stop's deadline, so the stdin-EOF wait gets everything before it.
@@ -28,6 +28,20 @@ pub enum StopOutcome {
     Terminated,
     /// It needed SIGKILL.
     Killed,
+}
+
+impl McpClient {
+    /// Stop by `deadline`: the MCP stdio sequence for a stdio server (see
+    /// [`StdioMcpClient::stop`]), a best-effort session DELETE for HTTP.
+    pub async fn stop_by(self, deadline: tokio::time::Instant) -> StopOutcome {
+        match self {
+            McpClient::Stdio(c) => c.stop(deadline).await,
+            McpClient::Http(c) => {
+                let _ = tokio::time::timeout_at(deadline, c.shutdown()).await;
+                StopOutcome::Exited
+            }
+        }
+    }
 }
 
 impl StdioMcpClient {

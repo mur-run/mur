@@ -239,6 +239,7 @@ fn profile_domains_default_to_login_host_and_normalize() {
         earliest_cookie_expires: None,
         allow_domains: Vec::new(),
         last_refresh: None,
+        writeback_abandoned: None,
     };
     assert_eq!(profile_domains(&meta), Some(d(&["chat.deepseek.com"])));
     meta.allow_domains = d(&["DeepSeek.com"]);

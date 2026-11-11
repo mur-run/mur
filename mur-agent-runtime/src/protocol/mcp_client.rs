@@ -140,18 +140,6 @@ impl McpClient {
             McpClient::Http(c) => c.shutdown().await,
         }
     }
-
-    /// Stop by `deadline`: the MCP stdio sequence for a stdio server (see
-    /// [`StdioMcpClient::stop`]), a best-effort session DELETE for HTTP.
-    pub async fn stop_by(self, deadline: tokio::time::Instant) -> StopOutcome {
-        match self {
-            McpClient::Stdio(c) => c.stop(deadline).await,
-            McpClient::Http(c) => {
-                let _ = tokio::time::timeout_at(deadline, c.shutdown()).await;
-                StopOutcome::Exited
-            }
-        }
-    }
 }
 
 /// Resolve a bearer token from the entry's auth config.
