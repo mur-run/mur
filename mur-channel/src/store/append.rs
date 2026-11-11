@@ -26,39 +26,21 @@ pub(crate) fn line_seq(body: &str) -> Option<u64> {
     serde_json::from_str::<SeqOnly>(body).ok().map(|s| s.seq)
 }
 
-/// The raw `kind` string of a line that failed to parse.
-#[derive(serde::Deserialize)]
-struct KindOnly {
-    kind: String,
-}
-
-/// Where a line that failed to parse as a [`ChannelEvent`] goes (#2287): one
-/// with an integer `seq` and a string `kind` this binary does not know was
-/// written by a newer MUR — not damage. A line whose `kind` IS known failed
-/// on its body, so it is corrupt; so is anything else (no `seq`, no `kind`,
-/// not JSON, truncated).
+/// Where a line that failed to parse as a [`ChannelEvent`] goes (#2287): a
+/// well-formed envelope whose `kind` this binary does not know was written by
+/// a newer MUR — not damage by itself. Everything else is corrupt. Callers
+/// that judge integrity must still verify a newer-kind line's signature and
+/// chain link (see [`super::newer_kind`]); this only sorts lines for folding.
 pub(crate) fn classify_unparsed(
     body: &str,
     line: usize,
     newer_kind: &mut Vec<usize>,
     corrupt: &mut Vec<usize>,
 ) {
-    if is_newer_kind(body) {
-        newer_kind.push(line);
-    } else {
-        corrupt.push(line);
+    match super::newer_kind::parse_line(body) {
+        super::newer_kind::Line::NewerKind(_) => newer_kind.push(line),
+        _ => corrupt.push(line),
     }
-}
-
-fn is_newer_kind(body: &str) -> bool {
-    if line_seq(body).is_none() {
-        return false;
-    }
-    let Ok(raw) = serde_json::from_str::<KindOnly>(body) else {
-        return false;
-    };
-    serde_json::from_value::<mur_common::channel::EventKind>(serde_json::Value::String(raw.kind))
-        .is_err()
 }
 
 /// One log line per class of skipped line. Only corrupt lines are a warning:

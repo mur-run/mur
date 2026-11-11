@@ -39,7 +39,8 @@ pub struct IntegrityReport {
     /// 1-based numbers of lines that did not parse as an event (corrupt).
     pub unparseable_lines: Vec<usize>,
     /// 1-based numbers of lines written by a newer MUR with an event kind
-    /// this binary does not know (#2287). Informational — not damage.
+    /// this binary does not know (#2287). The kind alone is not damage; their
+    /// signatures and chain links are checked like every other line's.
     pub newer_kind_lines: Vec<usize>,
     /// `seq` of events whose signature failed under their actor's key.
     pub unverified_seqs: Vec<u64>,
@@ -245,6 +246,21 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
         .iter()
         .filter(|ev| !crate::channel_verify::verify_event(mur_home, channel_id, ev, require_sig))
         .map(|ev| ev.seq)
+        .chain(
+            // An unknown kind is no pass on the signature (#2287).
+            damage
+                .newer_kind_events
+                .iter()
+                .filter(|ev| {
+                    !mur_channel::verify::verify_newer_kind_event(
+                        mur_home,
+                        channel_id,
+                        ev,
+                        require_sig,
+                    )
+                })
+                .map(|ev| ev.seq),
+        )
         .collect();
     report.unparseable_lines = damage.unparseable_lines;
     report.newer_kind_lines = damage.newer_kind_lines;

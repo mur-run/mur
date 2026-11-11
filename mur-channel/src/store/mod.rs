@@ -29,6 +29,9 @@ mod load;
 mod manifest_gate;
 #[cfg(test)]
 mod manifest_gate_tests;
+mod newer_kind;
+#[cfg(test)]
+mod newer_kind_tests;
 mod quarantine;
 
 pub(crate) use append::line_seq;
@@ -38,6 +41,7 @@ pub use chain::{GENESIS_PREV_HASH, line_hash};
 use load::check_absence_is_not_corruption;
 pub use load::{AnchorMismatch, AnchorMismatchKind, DamageReport};
 pub use manifest_gate::{ManifestError, ManifestPolicy};
+pub use newer_kind::NewerKindEvent;
 pub use quarantine::QUARANTINE_PREFIX;
 
 impl ChannelStore {
@@ -406,92 +410,6 @@ mod tests {
         // The good event is untouched and still present in `events`.
         assert!(events.iter().any(|e| e.seq == good_sig_ev.seq));
         assert!(events.iter().any(|e| e.seq == forged_ev.seq));
-    }
-
-    /// #2287: a line with an integer `seq` but a `kind` this binary does not
-    /// know was written by a newer MUR — reported apart from corruption and
-    /// never part of `is_clean`. Both classes side by side in one log.
-    #[test]
-    fn newer_kind_lines_are_not_damage_but_corrupt_lines_are() {
-        let tmp = TempDir::new().unwrap();
-        let store = ChannelStore::new(tmp.path());
-        store.create(&sample_channel("c1")).unwrap();
-        let append = |n: u64| {
-            store
-                .append_event(
-                    "c1",
-                    ChannelActor::System,
-                    EventKind::Message,
-                    serde_json::json!({ "n": n }),
-                    None,
-                    None,
-                    Some(0),
-                )
-                .unwrap()
-        };
-        let first = append(1);
-        let path = store.events_path("c1").unwrap();
-        let raw = |line: &str| {
-            let mut f = OpenOptions::new().append(true).open(&path).unwrap();
-            f.write_all(line.as_bytes()).unwrap();
-            f.write_all(b"\n").unwrap();
-        };
-        let mut newer = serde_json::to_value(&first).unwrap();
-        newer["seq"] = serde_json::json!(first.seq + 1);
-        newer["kind"] = serde_json::json!("kind-from-a-newer-mur");
-        raw(&serde_json::to_string(&newer).unwrap()); // line 2
-        let key = mur_common::identity::AgentIdentity::generate().verifying_key_bytes();
-
-        let (events, report) = store.load_events_with_damage("c1", &key, false).unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(report.newer_kind_lines, vec![2]);
-        assert!(report.unparseable_lines.is_empty());
-        assert!(report.is_clean(), "a newer-kind line alone is not damage");
-
-        raw("{\"seq\": "); // line 3: truncated, no integer seq
-        let after = append(3); // line 4
-        assert_eq!(
-            after.seq,
-            first.seq + 2,
-            "the newer line's seq is still taken"
-        );
-        let (events, report) = store.load_events_with_damage("c1", &key, false).unwrap();
-        assert_eq!(events.len(), 2);
-        assert_eq!(report.newer_kind_lines, vec![2]);
-        assert_eq!(report.unparseable_lines, vec![3]);
-        assert!(!report.is_clean(), "the corrupt line is still damage");
-    }
-
-    /// #2287: a line whose `kind` this binary DOES know but whose body fails
-    /// to parse is damage, not a newer writer — it must not hide as a note.
-    #[test]
-    fn known_kind_with_a_broken_body_is_corrupt_not_newer() {
-        let tmp = TempDir::new().unwrap();
-        let store = ChannelStore::new(tmp.path());
-        store.create(&sample_channel("c1")).unwrap();
-        let first = store
-            .append_event(
-                "c1",
-                ChannelActor::System,
-                EventKind::Message,
-                serde_json::json!({}),
-                None,
-                None,
-                Some(0),
-            )
-            .unwrap();
-        let mut broken = serde_json::to_value(&first).unwrap();
-        broken["seq"] = serde_json::json!(first.seq + 1);
-        broken["actor"] = serde_json::json!(42); // known kind, invalid actor
-        let path = store.events_path("c1").unwrap();
-        let mut f = OpenOptions::new().append(true).open(&path).unwrap();
-        writeln!(f, "{}", serde_json::to_string(&broken).unwrap()).unwrap();
-        let key = mur_common::identity::AgentIdentity::generate().verifying_key_bytes();
-
-        let (_, report) = store.load_events_with_damage("c1", &key, false).unwrap();
-        assert!(report.newer_kind_lines.is_empty());
-        assert_eq!(report.unparseable_lines, vec![2]);
-        assert!(!report.is_clean());
     }
 
     /// A clean, fully-signed log reports no damage at all.

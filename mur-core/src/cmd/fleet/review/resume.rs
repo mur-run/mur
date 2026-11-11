@@ -181,10 +181,22 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
     };
     let raw_lines: Vec<&str> = raw.lines().collect();
     let unverified: HashSet<u64> = report.unverified.iter().map(|e| e.seq).collect();
+    // A newer-kind line that fails its signature (#2287) cannot be trusted
+    // any more than an unparseable one: replay stops at it the same way.
+    let mut untrusted_lines = report.unparseable_lines.clone();
+    untrusted_lines.extend(
+        report
+            .newer_kind_lines
+            .iter()
+            .zip(&report.newer_kind_events)
+            .filter(|(_, ev)| report.unverified_newer_kind.contains(ev))
+            .map(|(line, _)| *line),
+    );
+    untrusted_lines.sort_unstable();
     match replay_with_damage(
         &events,
         &report.event_lines,
-        &report.unparseable_lines,
+        &untrusted_lines,
         &unverified,
         &raw_lines,
     ) {

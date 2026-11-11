@@ -375,15 +375,43 @@ fn verify_works_without_a_usable_index() {
     assert_eq!(std::fs::read(&index).unwrap(), b"not a directory");
 }
 
-/// A line a newer MUR wrote: a real event of the last line's shape, but with
-/// an event `kind` this binary does not know, at the next `seq`.
-fn newer_kind_line(f: &Fixture) -> String {
-    let last = f.log_lines().pop().unwrap();
-    let mut v: serde_json::Value = serde_json::from_str(&last).unwrap();
-    let seq = v["seq"].as_u64().unwrap();
-    v["seq"] = serde_json::json!(seq + 1);
-    v["kind"] = serde_json::json!("kind-from-a-newer-mur");
-    serde_json::to_string(&v).unwrap()
+const FUTURE_KIND: &str = "kind-from-a-newer-mur";
+
+/// A record a newer MUR's router would append at the tail: next `seq`,
+/// chained to the last line, signed by the router's real key over its own
+/// (unknown here) kind string.
+fn future_record(f: &Fixture) -> serde_json::Value {
+    let lines = f.log_lines();
+    future_record_linked_to(f, &mur_channel::store::line_hash(lines.last().unwrap()))
+}
+
+/// [`future_record`] signed over `prev` as its predecessor, whatever the
+/// log's real tail is — a validly signed record that may name the wrong link.
+fn future_record_linked_to(f: &Fixture, prev: &str) -> serde_json::Value {
+    let lines = f.log_lines();
+    let last: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+    let prev = prev.to_owned();
+    let payload = serde_json::json!({ "future": true });
+    let input = mur_channel::sign::sign_input_v2_wire_kind(
+        &f.id,
+        &ChannelActor::System,
+        FUTURE_KIND,
+        &payload,
+        None,
+        &prev,
+    );
+    let router = AgentIdentity::load(&f.home.path().join("agents").join("mur")).unwrap();
+    let sig = multibase::encode(multibase::Base::Base58Btc, router.sign_bytes(&input));
+    serde_json::json!({
+        "seq": last["seq"].as_u64().unwrap() + 1,
+        "ts": chrono::Utc::now(),
+        "actor": ChannelActor::System,
+        "kind": FUTURE_KIND,
+        "payload": payload,
+        "sig": sig,
+        "key_version": last["key_version"],
+        "prev_hash": prev,
+    })
 }
 
 fn push_raw_line(f: &Fixture, line: &str) {
@@ -393,33 +421,80 @@ fn push_raw_line(f: &Fixture, line: &str) {
     std::fs::write(f.log_path(), text).unwrap();
 }
 
-/// #2287: a log whose only non-parsing line was written by a newer MUR is
-/// intact; the line is a note, never damage. Events appended after it (and
-/// anchored over it) stay intact too.
+/// #2287: a validly signed, correctly chained record of a kind this binary
+/// does not know is a note, never damage — past the anchor, and with events
+/// appended (and anchored) after it.
 #[test]
-fn a_newer_kind_line_is_a_note_not_damage() {
+fn a_valid_newer_kind_record_is_a_note_not_damage() {
     let f = Fixture::anchored(2);
-    let line = newer_kind_line(&f);
-    push_raw_line(&f, &line);
+    push_raw_line(&f, &future_record(&f).to_string());
+    let r = f.check();
+    assert!(r.is_intact(), "{}", r.render());
+    assert_eq!(r.newer_kind_lines, vec![3]);
+    assert!(r.render().contains("newer MUR"), "{}", r.render());
+
     f.append(3);
     let r = f.check();
     assert!(r.is_intact(), "{}", r.render());
     assert_eq!(r.exit_code(), EXIT_INTACT);
-    assert!(r.unparseable_lines.is_empty(), "{}", r.render());
     assert_eq!(r.newer_kind_lines, vec![3]);
-    assert!(r.render().contains("newer MUR"), "{}", r.render());
+}
+
+/// Review P1 on #2349: a future-kind tail record past the signed head whose
+/// signature does not verify is damage. Neither the anchor nor a later line
+/// covers it, so the record's own signature is the only check.
+#[test]
+fn a_newer_kind_tail_record_with_a_bad_signature_is_damage() {
+    let f = Fixture::anchored(2);
+    let mut rec = future_record(&f);
+    let seq = rec["seq"].as_u64().unwrap();
+    rec["payload"] = serde_json::json!({ "future": "forged" });
+    push_raw_line(&f, &rec.to_string());
+    let r = f.check();
+    assert_eq!(
+        r.anchored_lines,
+        Some(2),
+        "the record is outside the anchor"
+    );
+    assert_eq!(r.newer_kind_lines, vec![3]);
+    assert_eq!(r.unverified_seqs, vec![seq], "{}", r.render());
+    assert_eq!(r.exit_code(), EXIT_DAMAGED);
+}
+
+/// Review P1 on #2349: same, for a future-kind tail record that names the
+/// wrong predecessor. Signed over that wrong link, so the signature holds and
+/// the chain check alone must catch it.
+#[test]
+fn a_newer_kind_tail_record_with_a_broken_link_is_damage() {
+    let f = Fixture::anchored(2);
+    let rec = future_record_linked_to(&f, mur_channel::store::GENESIS_PREV_HASH);
+    let seq = rec["seq"].as_u64().unwrap();
+    push_raw_line(&f, &rec.to_string());
+    let r = f.check();
+    assert_eq!(
+        r.anchored_lines,
+        Some(2),
+        "the record is outside the anchor"
+    );
+    assert!(
+        r.unverified_seqs.is_empty(),
+        "the signature holds: {}",
+        r.render()
+    );
+    assert_eq!(r.chain_breaks, vec![seq], "{}", r.render());
+    assert_eq!(r.exit_code(), EXIT_DAMAGED);
 }
 
 /// Both classes side by side in one log: the corrupt line is still damage,
-/// the newer-kind line is still only a note.
+/// the valid newer-kind line is still only a note.
 #[test]
 fn newer_kind_and_corrupt_lines_are_told_apart() {
     let f = Fixture::anchored(2);
-    let line = newer_kind_line(&f);
-    push_raw_line(&f, &line);
+    push_raw_line(&f, &future_record(&f).to_string());
     push_raw_line(&f, "{\"truncated\": ");
     let r = f.check();
     assert_eq!(r.newer_kind_lines, vec![3], "{}", r.render());
     assert_eq!(r.unparseable_lines, vec![4], "{}", r.render());
+    assert!(r.unverified_seqs.is_empty(), "{}", r.render());
     assert_eq!(r.exit_code(), EXIT_DAMAGED);
 }
