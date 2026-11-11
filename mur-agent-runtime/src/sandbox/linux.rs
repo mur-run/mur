@@ -45,10 +45,18 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     // the same `mur` CLI carve-out (#2317) — excluding it from `fs_exec` alone
     // would leave a read or write grant above it still executable.
     let deny = policy.landlock_exec_denies();
+    // Strict (#2343): read and write grants carry no `Execute` at all, so
+    // the only exec rules are `exec_grants()` below — otherwise a readable
+    // `/usr` or `/lib`, or a writable project dir, would stay executable.
+    let rw_mask = if policy.landlock_read_write_exec() {
+        AccessFs::from_all(abi)
+    } else {
+        AccessFs::from_all(abi) & !AccessFs::Execute
+    };
     created = add_exec_split_rules(
         created,
         &policy.fs_read,
-        AccessFs::from_read(abi),
+        AccessFs::from_read(abi) & rw_mask,
         &deny,
         "fs_read",
     )?;
@@ -61,13 +69,7 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     // (e.g. the media-state extra grants) and keeps the kernel and the report
     // reading from the same code path.
     let (writable, _dropped) = partition_write_grants(&policy.fs_write, &policy.launch_chain);
-    created = add_exec_split_rules(
-        created,
-        &writable,
-        AccessFs::from_all(abi),
-        &deny,
-        "fs_write",
-    )?;
+    created = add_exec_split_rules(created, &writable, rw_mask, &deny, "fs_write")?;
 
     // FS exec paths (execute + read file + read dir). Under Strict this is
     // the resolved literals and prefixes, not the system exec dirs (#2343).
@@ -110,7 +112,8 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
 /// Install one rule source with `access`, except that a grant above a denied
 /// `mur` CLI file gets `access` minus `Execute`, and `Execute` alone goes to
 /// that grant carved around the denied files. See
-/// [`super::policy::split_exec_grants`].
+/// [`super::policy::split_exec_grants`]. When `access` has no `Execute` there
+/// is nothing to carve and the grants go in unsplit.
 #[cfg(target_os = "linux")]
 fn add_exec_split_rules(
     mut created: landlock::RulesetCreated,
@@ -119,6 +122,17 @@ fn add_exec_split_rules(
     deny: &[PathBuf],
     what: &str,
 ) -> anyhow::Result<landlock::RulesetCreated> {
+    // No `Execute` to carve (a Strict read/write grant, #2343): install the
+    // grants as-is. Splitting would hand `exec_only` an `Execute` the caller
+    // never asked for, reopening every sibling of the denied file.
+    if !access.contains(AccessFs::Execute) {
+        if grants.is_empty() || access.is_empty() {
+            return Ok(created);
+        }
+        return created
+            .add_rules(path_beneath_rules(grants.iter(), access))
+            .with_context(|| format!("add {what} rules"));
+    }
     let split = super::policy::split_exec_grants(grants, deny);
     for (paths, access) in [
         (&split.clean, access),
@@ -209,6 +223,8 @@ pub(crate) fn partition_read_grants(
     chain.partition_read_grants(grants)
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod strict_exec_probe;
 #[cfg(all(test, target_os = "linux"))]
 mod unix_connect_probe;
 

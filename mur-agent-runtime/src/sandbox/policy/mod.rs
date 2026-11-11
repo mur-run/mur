@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 mod build;
 mod deny_carve;
+mod elf_interp;
 mod exec_deny;
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 pub(crate) use exec_deny::split_exec_grants;
@@ -244,7 +245,8 @@ impl SandboxPolicy {
     /// what the SBPL `Strict` arm allows: the resolved literals (the seeded
     /// shell, each allowlisted binary) plus the derived and build-lane
     /// prefixes. Landlock has no `path-literal`; a rule on a file covers just
-    /// that file. Every other mode keeps `fs_exec` alone, as before.
+    /// that file, plus each dynamic literal's ELF interpreter. Every other
+    /// mode keeps `fs_exec` alone, as before.
     pub(crate) fn exec_grants(&self) -> Vec<PathBuf> {
         if self.spawn_mode != SpawnMode::Strict {
             return self.fs_exec.clone();
@@ -259,7 +261,32 @@ impl SandboxPolicy {
                 grants.push(p.clone());
             }
         }
+        // Landlock checks `Execute` on the ELF loader as well, and Strict
+        // read grants no longer carry it (see `landlock_read_write_exec`),
+        // so each allowlisted binary's own interpreter is granted by name.
+        for literal in &self.spawn_allowed_paths {
+            let Some(interp) = elf_interp::elf_interpreter(literal) else {
+                continue;
+            };
+            let canon = std::fs::canonicalize(&interp).ok();
+            for p in std::iter::once(interp).chain(canon) {
+                if !grants.contains(&p) {
+                    grants.push(p);
+                }
+            }
+        }
         grants
+    }
+
+    /// Whether Landlock's `fs_read` / `fs_write` rules may carry `Execute`.
+    /// Not under Strict (#2343): those rights are additive, so a readable
+    /// `/usr` or a writable project dir would reopen every binary in it, and
+    /// strict exec must come from [`Self::exec_grants`] alone — the same
+    /// boundary the SBPL `Strict` arm draws, where read and write grants
+    /// never carry exec.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn landlock_read_write_exec(&self) -> bool {
+        self.spawn_mode != SpawnMode::Strict
     }
 
     pub(crate) fn landlock_exec_denies(&self) -> Vec<PathBuf> {
