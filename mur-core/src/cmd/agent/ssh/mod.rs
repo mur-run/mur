@@ -10,6 +10,7 @@ mod edit;
 mod resolve;
 mod spawn_grant;
 mod stage;
+pub mod status;
 mod view;
 
 use std::io::Write;

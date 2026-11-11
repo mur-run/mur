@@ -6,9 +6,10 @@
 use anyhow::{Context, Result};
 use mur_common::agent::SshEntitlement;
 
-use super::super::load_profile_for_edit;
+use super::super::{load_profile_for_edit, resolve_mur_home};
 use super::edit::Removed;
 use super::spawn_grant::{manual_command, ssh_spawnable};
+use super::status::{PairState, SshStatus};
 
 pub fn cmd_ssh_list(agent: &str, json: bool) -> Result<()> {
     let agent = super::canonical_agent(agent)?;
@@ -22,6 +23,8 @@ pub fn cmd_ssh_list(agent: &str, json: bool) -> Result<()> {
         return Ok(());
     }
     print!("{}", render(&agent, ssh));
+    let st = super::status::status(&resolve_mur_home()?, &agent, ssh);
+    print!("{}", render_status(&st));
     if !ssh.is_empty() && !ssh_spawnable(&profile.entitlements.processes) {
         println!(
             "note: '{agent}' may not exec ssh yet; add it with `{}`",
@@ -60,6 +63,72 @@ pub fn render(agent: &str, ssh: &SshEntitlement) -> String {
         }
     }
     out
+}
+
+/// Where each granted pair stands, and what the agent has asked for. Says
+/// "signed", never "connected": a mark proves the proxy returned a signature
+/// under the approval, not that the login worked.
+pub fn render_status(st: &SshStatus) -> String {
+    let mut out = String::new();
+    if st.pairs.is_empty() && st.requests.is_empty() {
+        return out;
+    }
+    if let Some(why) = &st.decisions_unverified {
+        out.push_str(&format!(
+            "approvals: none trusted ({why}); see `mur channel repair`\n"
+        ));
+    }
+    if !st.pairs.is_empty() {
+        out.push_str("approval state:\n");
+    }
+    for p in &st.pairs {
+        let state = match &p.state {
+            PairState::Signed { at } => format!("signed under your approval ({})", ts(at)),
+            PairState::Approved => "approved, no signing seen yet".into(),
+            PairState::NotApproved => "not approved".into(),
+        };
+        out.push_str(&format!(
+            "  key {} host {}: {state}\n",
+            p.key_fp, p.host_key_fp
+        ));
+        if let Some(at) = &p.last_expired_mark {
+            out.push_str(&format!(
+                "    last signed {}, under an approval that has since expired\n",
+                ts(at)
+            ));
+        }
+    }
+    let open: Vec<_> = st
+        .requests
+        .iter()
+        .filter(|r| !r.cleared(&st.pairs))
+        .collect();
+    if !open.is_empty() {
+        out.push_str("requested by the agent (its own words, unverified):\n");
+    }
+    for r in open {
+        let q = &r.request;
+        let user = q
+            .user
+            .as_deref()
+            .map(|u| format!("{u}@"))
+            .unwrap_or_default();
+        let granted = if r.pairs.is_empty() {
+            "not granted"
+        } else {
+            "granted"
+        };
+        out.push_str(&format!(
+            "  {user}{}  [{granted}]  {}\n",
+            q.target.canonical(),
+            q.reason
+        ));
+    }
+    out
+}
+
+fn ts(at: &chrono::DateTime<chrono::Utc>) -> String {
+    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 fn label(l: &Option<String>) -> String {
