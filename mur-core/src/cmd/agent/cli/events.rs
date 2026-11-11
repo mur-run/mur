@@ -63,6 +63,34 @@ pub(super) fn paint_gated<B: Backend>(
     Ok(())
 }
 
+/// `paint_gated`, after first committing every settled message to scrollback.
+///
+/// A handover clears the viewport and gives its rows to the child, so a notice
+/// left painted there is erased and only comes back below the child's output.
+/// Scrollback is out of the clear's reach. Skipped while a rebuild is owed, for
+/// the same reason `paint_gated` skips: `insert_before` against stale geometry
+/// overwrites rows instead of scrolling them.
+fn paint_for_handover<B: Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+    viewport_h: u16,
+    force_rebuild: &mut bool,
+) -> Result<()> {
+    if !rebuild_pending(app, *force_rebuild)
+        && let Err(e) = ui::flush_settled(terminal, app)
+    {
+        let e = anyhow::Error::new(e).context("flush before handover");
+        match classify_paint_error(&e) {
+            DrawFault::Recover => {
+                *force_rebuild = true;
+                app.needs_full_redraw = true;
+            }
+            DrawFault::Fatal => return Err(e),
+        }
+    }
+    paint_gated(terminal, app, viewport_h, force_rebuild)
+}
+
 pub(super) async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
@@ -188,9 +216,10 @@ pub(super) async fn event_loop(
             if want_h != viewport_h && handover::reanchor(terminal, want_h).is_ok() {
                 viewport_h = want_h;
             }
-            // Paint the "handing over" line before we suspend — otherwise it
-            // only appears after the child exits, alongside the result.
-            paint_gated(terminal, app, viewport_h, &mut force_rebuild)?;
+            // Commit the "handing over" line to scrollback before we suspend:
+            // painted only in the viewport, it is cleared by the suspend and
+            // reappears after the child's own output (#2356).
+            paint_for_handover(terminal, app, viewport_h, &mut force_rebuild)?;
             let outcome = handover::run(terminal, viewport_h, &req);
             events = EventStream::new();
             match outcome {
@@ -225,7 +254,7 @@ pub(super) async fn event_loop(
             if want_h != viewport_h && handover::reanchor(terminal, want_h).is_ok() {
                 viewport_h = want_h;
             }
-            paint_gated(terminal, app, viewport_h, &mut force_rebuild)?;
+            paint_for_handover(terminal, app, viewport_h, &mut force_rebuild)?;
             let read = handover::read_hidden(
                 terminal,
                 viewport_h,

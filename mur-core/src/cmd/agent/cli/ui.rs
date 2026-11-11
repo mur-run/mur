@@ -16,7 +16,7 @@ mod status;
 #[cfg(test)]
 mod theme_paint_tests;
 
-pub use band::flush_finished;
+pub use band::{flush_finished, flush_settled};
 pub(super) use hitl::{HitlChoice, hitl_choices};
 
 use approval::{PanelForm, docked_rows, render_approval};
