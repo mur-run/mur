@@ -10,7 +10,7 @@ use mur_common::agent::{HITL_CHANNEL_FILE, HITL_HEAD_DIR};
 use mur_common::hitl::HitlResponse;
 use mur_common::identity::AgentIdentity;
 
-use super::store::{ChannelDecisionStore, DecisionStore, Listing, Settled};
+use super::store::{ChannelDecisionStore, DecisionStore, Listing, RecordOutcome, Settled};
 
 const AGENT: &str = "qa";
 
@@ -230,6 +230,58 @@ async fn recording_after_tampering_does_not_re_bless_the_surviving_allow() {
         Some(Settled::Allow),
         "h2 is remembered"
     );
+}
+
+// --- record_checked (#2350) -------------------------------------------------
+
+#[test]
+fn record_checked_reports_a_plain_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = store(tmp.path());
+    let out = s.record_checked(&resp("h1", true, "a", 0)).unwrap();
+    assert_eq!(out, RecordOutcome::Recorded);
+    let out = s.record_checked(&resp("h2", true, "b", 0)).unwrap();
+    assert_eq!(out, RecordOutcome::Recorded, "a healthy log is kept");
+}
+
+#[tokio::test]
+async fn record_checked_names_the_damaged_channel_it_replaced() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = store(tmp.path());
+    s.record(resp("h1", true, "a", 5)).await;
+    s.record(resp("h0", false, "z", 4)).await;
+    let damaged = channel_id(tmp.path());
+    drop_last_line(tmp.path());
+
+    let out = s.record_checked(&resp("h2", true, "b", 0)).unwrap();
+
+    assert_eq!(
+        out,
+        RecordOutcome::RecordedOnFreshChannel {
+            damaged_channel: damaged.clone()
+        }
+    );
+    assert_ne!(
+        channel_id(tmp.path()),
+        damaged,
+        "marker moved to the fresh channel"
+    );
+    assert_eq!(s.lookup("h1").await, None, "old memory is gone");
+    assert_eq!(s.lookup("h2").await, Some(Settled::Allow));
+}
+
+#[test]
+fn record_checked_returns_the_error_record_only_logs() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A file where the agent directory must be: the channel marker cannot be
+    // written, so the write fails.
+    std::fs::create_dir_all(tmp.path().join("agents")).unwrap();
+    std::fs::write(agent_home(tmp.path()), b"not a directory").unwrap();
+    let s = store(tmp.path());
+
+    assert!(s.record_checked(&resp("h1", true, "a", 0)).is_err());
+    // The best-effort path still swallows it.
+    block(s.record(resp("h1", true, "a", 0)));
 }
 
 // --- concurrent append + read ------------------------------------------
