@@ -145,10 +145,25 @@ pub(super) async fn run_tui(
     let initial_h = crossterm::terminal::size()
         .map(|(_, rows)| viewport_h_for(rows))
         .unwrap_or(INLINE_VIEWPORT_HEIGHT);
-    // The welcome is terminal output, printed at the cursor like any banner:
-    // mascot at the top of what follows, and the viewport anchored below it.
+    // The welcome is terminal output, printed like any banner — but placed
+    // directly above where the viewport will anchor, not at the cursor
+    // (#2358): printed at the cursor on a freshly cleared window, it sat at
+    // the top with the bottom-anchored composer a screenful below it and
+    // dead space between. `banner_row` keeps the anchor's only-move-down
+    // rule, so it never draws over shell output still on screen.
     if app.welcome_applies() {
-        let _ = welcome::print_banner(&mut io::stdout(), &app.welcome_banner());
+        let banner = app.welcome_banner();
+        if let Ok((_, rows)) = crossterm::terminal::size()
+            && let Some(row) = banner_row(
+                rows,
+                initial_h,
+                banner.len(),
+                cursor::position().ok().map(|(_, r)| r),
+            )
+        {
+            let _ = execute!(io::stdout(), cursor::MoveTo(0, row));
+        }
+        let _ = welcome::print_banner(&mut io::stdout(), &banner);
     }
     // One-time "permanent instructions" notice (memories P1 §10). Generic,
     // non-blocking, and shown at most once: it announces the feature, promises
@@ -331,6 +346,26 @@ pub(super) fn anchor_row(rows: u16, viewport_h: u16, cursor_row: Option<u16>) ->
     }
 }
 
+/// Where to park the cursor before printing a `banner_len`-line welcome so it
+/// ends exactly on the row the viewport of height `viewport_h` anchors at —
+/// the banner sits on top of the composer rather than at the top of the
+/// window (#2358). `None` = print at the cursor.
+///
+/// It is [`anchor_row`] for a block `banner_len` rows taller, so it inherits
+/// the same rules: only ever move DOWN (never over visible shell output), and
+/// an unknown cursor parks on the last row so the screen scrolls to make room.
+/// A banner that does not fit above the viewport prints at the cursor and
+/// scrolls; the viewport anchor that follows still lands on the floor.
+pub(super) fn banner_row(
+    rows: u16,
+    viewport_h: u16,
+    banner_len: usize,
+    cursor_row: Option<u16>,
+) -> Option<u16> {
+    let banner_h = u16::try_from(banner_len).unwrap_or(u16::MAX);
+    anchor_row(rows, viewport_h.saturating_add(banner_h), cursor_row)
+}
+
 /// What a failed paint (`draw` / `flush_finished`) means for the session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DrawFault {
@@ -471,7 +506,13 @@ pub(super) fn purge_and_reanchor(
     // The welcome, when it still applies, goes back at the top as terminal
     // output; the viewport then re-anchors on the floor (#725: anchoring it
     // at the top leaves `insert_before` no headroom and drops replayed rows).
+    // Same placement as at startup (#2358): the banner hugs the viewport
+    // instead of sitting at row 0 with the composer a screenful below. The
+    // screen was just cleared, so the cursor is known to be at row 0.
     if let Some(lines) = banner {
+        if let Some(row) = banner_row(rows, h, lines.len(), Some(0)) {
+            crossterm::execute!(io::stdout(), MoveTo(0, row))?;
+        }
         welcome::print_banner(&mut io::stdout(), lines)?;
     }
     crossterm::execute!(io::stdout(), MoveTo(0, rows.saturating_sub(h)))?;

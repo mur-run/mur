@@ -2,7 +2,9 @@
 //! Pure movement: dedented one level, nothing else.
 
 use super::super::app::App;
-use super::super::{INLINE_VIEWPORT_HEIGHT, anchor_row, prepare_handover, viewport_h_for};
+use super::super::{
+    INLINE_VIEWPORT_HEIGHT, anchor_row, banner_row, prepare_handover, viewport_h_for,
+};
 
 /// One height, welcome or not: the viewport never has to shrink, so the
 /// first message never purges the screen and re-anchors the transcript on
@@ -104,4 +106,36 @@ fn a_handover_cancels_a_pending_screen_wipe() {
     prepare_handover(&mut app, "Anthropic", 60);
 
     assert!(!app.wants_screen_wipe);
+}
+
+/// #2358: on a cleared window the welcome must end on the viewport's anchor
+/// row, so it sits on the composer instead of a screenful above it.
+#[test]
+fn the_welcome_banner_hugs_the_viewport() {
+    // 40 rows, 20-row viewport anchored at 20, 8-line banner: rows 12..20.
+    assert_eq!(banner_row(40, 20, 8, Some(0)), Some(12));
+    // Cursor already past that row (shell output on screen): print in place,
+    // never move up over it.
+    assert_eq!(banner_row(40, 20, 8, Some(15)), None);
+    assert_eq!(banner_row(40, 20, 8, Some(12)), None);
+    // Unknown cursor: same fallback as the viewport anchor.
+    assert_eq!(banner_row(40, 20, 8, None), Some(39));
+    // Banner taller than the room above the viewport: print at the cursor.
+    assert_eq!(banner_row(24, 20, 8, Some(0)), None);
+    // Absurd lengths saturate rather than wrap.
+    assert_eq!(banner_row(40, 20, usize::MAX, Some(0)), None);
+    for rows in [5u16, 24, 40, 200] {
+        for h in [5u16, 20, rows.saturating_sub(1)] {
+            for b in [0usize, 1, 8, 300] {
+                for c in [Some(0), Some(rows / 2), Some(rows - 1)] {
+                    if let Some(row) = banner_row(rows, h, b, c) {
+                        assert!(row < rows);
+                        assert!(Some(row) > c, "moved up: rows={rows} h={h} b={b} c={c:?}");
+                        // The banner ends exactly where the viewport anchors.
+                        assert_eq!(usize::from(row) + b, usize::from(rows - h));
+                    }
+                }
+            }
+        }
+    }
 }
