@@ -67,3 +67,18 @@ fn mur_ssh_routes_to_the_hint_even_with_help() {
         assert!(matches!(cli.command, Commands::Ssh { .. }), "{argv:?}");
     }
 }
+
+#[test]
+fn a_usage_error_renders_as_plain_text_for_the_handover_file() {
+    let e = match Cli::try_parse_from(["mur", "agent", "ssh", "allow"]) {
+        Err(e) => e,
+        Ok(_) => panic!("missing <agent> and --key must not parse"),
+    };
+    assert!(e.use_stderr());
+    let text = e.render().to_string();
+    assert!(text.contains("required"), "{text}");
+    assert!(
+        !text.contains('\u{1b}'),
+        "no ANSI escapes in the file: {text:?}"
+    );
+}

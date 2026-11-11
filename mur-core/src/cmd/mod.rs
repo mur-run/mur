@@ -49,6 +49,7 @@ pub mod fleet;
 pub mod fleet_sync;
 #[cfg(unix)]
 pub mod git_push;
+pub mod handover_error;
 pub(crate) mod hook;
 pub(crate) mod init;
 pub(crate) mod init_daemon;
