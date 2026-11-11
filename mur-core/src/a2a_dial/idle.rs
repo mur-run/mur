@@ -83,3 +83,24 @@ pub(super) fn is_io_timeout(err: &std::io::Error) -> bool {
         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
     )
 }
+
+/// at-mention §3.10 / §7 `TARGET_EXITED`: the peer's socket closed (EOF) or
+/// was reset before it answered — the runtime died mid-turn. A graceful drain
+/// finishes in-flight turns, so only a crash or kill lands here. The turn's
+/// input was already persisted by the caller, so the history is intact.
+pub(super) fn target_exited(agent_name: &str) -> anyhow::Error {
+    anyhow!(
+        "TARGET_EXITED: agent '{agent_name}' exited before the turn completed; \
+         check `mur agent logs {agent_name}`, then `mur agent start {agent_name}` and resend"
+    )
+}
+
+/// True if a socket read failed because the peer went away (reset, broken
+/// pipe, aborted) rather than for a local or timeout reason.
+pub(super) fn is_peer_gone(err: &std::io::Error) -> bool {
+    use std::io::ErrorKind::{BrokenPipe, ConnectionAborted, ConnectionReset, UnexpectedEof};
+    matches!(
+        err.kind(),
+        ConnectionReset | ConnectionAborted | BrokenPipe | UnexpectedEof
+    )
+}

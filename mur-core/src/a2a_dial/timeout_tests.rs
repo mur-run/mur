@@ -451,3 +451,55 @@ fn a_peer_streaming_malformed_frames_is_cut_off_at_the_deadline() {
     assert_dial_stops_at_deadline(tmp.path(), "garbled", Duration::from_millis(800));
     let _ = server.join();
 }
+
+/// at-mention §3.10 / §7: a runtime that dies mid-turn (socket closed before
+/// the answer) reports `TARGET_EXITED`, on the plain dial and the streaming
+/// one alike — not a bare EOF.
+#[test]
+fn a_peer_that_hangs_up_mid_turn_is_target_exited() {
+    use std::io::Write;
+    if !sockets_allowed("a_peer_that_hangs_up_mid_turn_is_target_exited") {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    // Plain dial: the peer reads the request and exits without a word.
+    let plain = tmp.path().join("plain.sock");
+    let server = serve_once(&plain, drop);
+    write_lock(tmp.path(), "crashy", &plain, 2);
+    let err = dial_method(
+        tmp.path(),
+        "crashy",
+        "message/send",
+        serde_json::json!({}),
+        DialMode::RequireRunning,
+    )
+    .expect_err("a peer that hung up must not succeed");
+    assert!(
+        err.to_string().starts_with("TARGET_EXITED:"),
+        "got: {err:#}"
+    );
+    let _ = server.join();
+
+    // Streaming dial: a delta arrives, then the peer dies mid-turn.
+    let streamed = tmp.path().join("stream.sock");
+    let server = serve_once(&streamed, |mut conn| {
+        let _ = conn.write_all(
+            b"{\"jsonrpc\":\"2.0\",\"method\":\"message/delta\",\"params\":{\"text\":\"hal\"}}\n",
+        );
+    });
+    write_lock(tmp.path(), "crashy2", &streamed, 2);
+    let err = dial_message_streaming(
+        tmp.path(),
+        "crashy2",
+        serde_json::json!({}),
+        |_, _, _| {},
+        |_| {},
+        |_| {},
+    )
+    .expect_err("a peer that hung up must not succeed");
+    assert!(
+        err.to_string().starts_with("TARGET_EXITED:"),
+        "got: {err:#}"
+    );
+    let _ = server.join();
+}

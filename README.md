@@ -200,7 +200,9 @@ to its agent, so `@other …` sends nothing and points you at
 non-zero, and never create a channel or add a participant: `RESERVED_NAME`
 (`agent`, `fleet`, `all`), `UNKNOWN_TARGET`, `AMBIGUOUS_TARGET` (use `@agent:`
 or `@fleet:`), `UNKNOWN_CONVERSATION`, `CHANNEL_NOT_CONVERSATION`,
-`NOT_A_PARTICIPANT`, `TARGET_OFFLINE`.
+`NOT_A_PARTICIPANT`, `TARGET_OFFLINE`. If the agent's runtime dies mid-turn,
+the send reports `TARGET_EXITED`; the message is already in the channel, so
+restart the agent and resend to the same `#N`.
 
 The agent refuses a channel turn it cannot trust, and murmur shows the
 refusal instead of retrying it. Checks run in this order; the first failure wins:
