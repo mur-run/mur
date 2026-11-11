@@ -7,25 +7,14 @@
 use std::io::{BufRead, Write};
 
 use anyhow::Result;
-use mur_common::agent::{ProcessesEntitlement, SpawnMode};
 
 use super::super::load_profile_for_edit;
 use super::super::perm::grant_spawn;
 use crate::cmd::consent::literal_yes;
 
-/// Binary the spawn allowlist must hold.
-pub const SSH_SPAWN_BINARY: &str = "ssh";
-
-/// Whether `processes` already lets the agent exec `ssh`.
-pub fn ssh_spawnable(p: &ProcessesEntitlement) -> bool {
-    match p.spawn.mode {
-        SpawnMode::Any => true,
-        SpawnMode::None => false,
-        SpawnMode::Allowlist | SpawnMode::Strict => {
-            p.spawn.allowed.iter().any(|b| b == SSH_SPAWN_BINARY)
-        }
-    }
-}
+/// The binary and the rule live in `mur-common` so the runtime's
+/// `ssh_request` tool answers with the same verdict.
+pub use mur_common::agent::ssh_request::{SSH_BINARY as SSH_SPAWN_BINARY, ssh_spawnable};
 
 /// The manual command, printed whenever the grant is not added here.
 pub fn manual_command(agent: &str) -> String {
