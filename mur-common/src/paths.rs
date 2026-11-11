@@ -173,7 +173,7 @@ pub fn read_unlinked(run_dir: &Path, file: &str) -> std::io::Result<Vec<u8>> {
 }
 
 #[cfg(unix)]
-fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
         .read(true)
@@ -182,7 +182,7 @@ fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 #[cfg(not(unix))]
-fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
     // No O_NOFOLLOW: check, then open. The window is the caller's own tree.
     if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
         return Err(std::io::Error::new(
