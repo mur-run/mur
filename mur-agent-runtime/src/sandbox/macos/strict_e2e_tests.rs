@@ -89,3 +89,14 @@ fn allowlist_mode_keeps_system_exec_dirs() {
     assert!(exec_permitted(&policy, Path::new("/usr/bin/git")));
     assert_eq!(policy.exec_grants(), policy.fs_exec);
 }
+
+/// PR #2347 review: Landlock rights are additive, so under strict the read
+/// and write rule sources must not carry `Execute` — `exec_grants()` is the
+/// only exec source. Other modes keep the old masks.
+#[test]
+fn only_strict_strips_execute_from_landlock_read_and_write_rules() {
+    assert!(!strict_policy(&[]).landlock_read_write_exec());
+    for mode in [SpawnMode::Allowlist, SpawnMode::Any, SpawnMode::None] {
+        assert!(policy_for(mode, &[]).landlock_read_write_exec(), "{mode:?}");
+    }
+}
