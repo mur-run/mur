@@ -288,7 +288,8 @@ fn status_of_reports_a_genuine_channel_fault_instead_of_none() {
     let mur_home = tmp.path();
     let svc = mur_channel::ChannelService::open(mur_home).unwrap();
     let ch = svc.create_for_workflow("faulty-channel").unwrap();
-    let dir = store::runs_dir(mur_home).join("run-x");
+    // The dir the store writes to — `MUR_RUN_OWNER` moves it under the agent.
+    let dir = store::record_dir(mur_home, RunKind::Job, None, "run-x");
     std::fs::create_dir_all(&dir).unwrap();
     store::save_sidecar(
         mur_home,
@@ -345,7 +346,8 @@ fn status_of_rebuilds_from_the_channel_when_the_cache_is_corrupt() {
     .unwrap();
 
     // The run directory with the sidecar but a GARBLED run.json.
-    let dir = store::runs_dir(mur_home).join("run-c");
+    // The dir the store writes to — `MUR_RUN_OWNER` moves it under the agent.
+    let dir = store::record_dir(mur_home, RunKind::Workflow, None, "run-c");
     std::fs::create_dir_all(&dir).unwrap();
     store::save_sidecar(
         mur_home,
@@ -472,7 +474,8 @@ fn status_of_warns_when_the_reconcile_sidecar_read_fails() {
     let mut record = run(State::Running, std::process::id(), Some(1), now);
     record.run_id = "run-s".into();
     store::save(mur_home, &record).unwrap();
-    let dir = store::runs_dir(mur_home).join("run-s");
+    // The dir the store writes to — `MUR_RUN_OWNER` moves it under the agent.
+    let dir = store::record_dir(mur_home, RunKind::Job, None, "run-s");
     std::fs::write(dir.join("sidecar.json"), b"{ not json").unwrap();
     assert!(
         store::load_sidecar(mur_home, "run-s").is_err(),
