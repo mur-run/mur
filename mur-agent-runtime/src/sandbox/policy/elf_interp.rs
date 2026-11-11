@@ -90,8 +90,9 @@ pub(crate) fn elf_interpreter(path: &Path) -> Option<PathBuf> {
         f.read_exact(&mut raw).ok()?;
         let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
         let s = std::str::from_utf8(&raw[..end]).ok()?;
-        let p = PathBuf::from(s);
-        return p.is_absolute().then_some(p);
+        // PT_INTERP is a Unix path whatever the host is: test for a leading
+        // `/` directly, since `Path::is_absolute` needs a drive on Windows.
+        return s.starts_with('/').then(|| PathBuf::from(s));
     }
     None
 }
