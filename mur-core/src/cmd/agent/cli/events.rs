@@ -194,7 +194,7 @@ pub(super) async fn event_loop(
             let outcome = handover::run(terminal, viewport_h, &req);
             events = EventStream::new();
             match outcome {
-                Ok(s) if s.success() => {
+                Ok(o) if o.status.success() => {
                     app.push_system(req.done_note.clone().unwrap_or_else(|| {
                         format!(
                             "{}: logged in ✓ — no restart needed, the gateway re-reads per request",
@@ -202,7 +202,11 @@ pub(super) async fn event_loop(
                         )
                     }))
                 }
-                Ok(s) => app.push_error(format!("{}: exited with {s}", req.label)),
+                Ok(o) => app.push_error(handover::failed_line(
+                    &req.label,
+                    &o.status.to_string(),
+                    o.error_tail.as_deref(),
+                )),
                 Err(e) => app.push_error(format!("{}: handover failed: {e:#}", req.label)),
             }
             app.needs_full_redraw = true;

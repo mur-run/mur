@@ -49,6 +49,7 @@ pub mod fleet;
 pub mod fleet_sync;
 #[cfg(unix)]
 pub mod git_push;
+pub mod handover_error;
 pub(crate) mod hook;
 pub(crate) mod init;
 pub(crate) mod init_daemon;
@@ -89,6 +90,7 @@ pub mod skill_intent;
 pub(crate) mod skill_publish;
 pub mod skill_recombine;
 pub mod skill_registry;
+pub mod ssh_hint;
 // wired by Task A2 CLI (mur skill registry-index)
 #[allow(dead_code)]
 pub mod skill_registry_index;

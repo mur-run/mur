@@ -159,7 +159,11 @@ async fn async_main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
     let cli = parse_cli()?;
-    dispatch::run(cli).await
+    let result = dispatch::run(cli).await;
+    if let Err(e) = &result {
+        cmd::handover_error::record(e);
+    }
+    result
 }
 
 /// Parse argv, honoring the `murmur` symlink: `murmur <names…>` is
@@ -175,7 +179,7 @@ fn parse_cli() -> Result<Cli> {
             .join("profile.yaml")
             .is_file();
         return match cli::murmur::map_args(&args[1..], concierge) {
-            Some(argv) => Ok(Cli::parse_from(argv)),
+            Some(argv) => Ok(parse_or_exit(Cli::try_parse_from(argv))),
             None => {
                 eprintln!("murmur: no agent name given and no concierge agent installed.");
                 eprintln!("Available agents:");
@@ -184,7 +188,19 @@ fn parse_cli() -> Result<Cli> {
             }
         };
     }
-    Ok(Cli::parse())
+    Ok(parse_or_exit(Cli::try_parse()))
+}
+
+/// `Cli::parse` with one addition: a usage error is also written to the file
+/// murmur named (K6), because the agent-composed command that fails to parse
+/// is exactly the case the hand-over used to report as a bare exit status.
+fn parse_or_exit(parsed: Result<Cli, clap::Error>) -> Cli {
+    parsed.unwrap_or_else(|e| {
+        if e.use_stderr() {
+            cmd::handover_error::record_text(&e.render().to_string());
+        }
+        e.exit()
+    })
 }
 
 #[cfg(test)]

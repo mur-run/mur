@@ -167,6 +167,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                 MurmurdAction::Status => cmd::murmurd::cmd_murmurd_status()?,
             }
         }
+        // K5: exit 2 like any other usage error, after saying where to go.
+        Commands::Ssh { args: _ } => {
+            eprintln!("{}", crate::cmd::ssh_hint::hint());
+            std::process::exit(2);
+        }
         // Deprecated: use `mur workflow run`
         Commands::Run {
             query,

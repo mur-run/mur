@@ -174,6 +174,22 @@ impl Drop for Suspended {
 /// Run `req` with the terminal handed over. The caller must have dropped the
 /// `EventStream` and must recreate it afterwards.
 ///
+/// What a hand-over child left behind.
+pub struct Outcome {
+    pub status: ExitStatus,
+    /// The last error lines a failing `mur` child wrote (K6). `None` on
+    /// success, for a non-`mur` child, or when nothing was written.
+    pub error_tail: Option<String>,
+}
+
+/// The line murmur shows for a child that exited non-zero.
+pub fn failed_line(label: &str, status: &str, tail: Option<&str>) -> String {
+    match tail {
+        Some(t) => format!("{label}: exited with {status}\n{t}"),
+        None => format!("{label}: exited with {status}"),
+    }
+}
+
 /// On Unix, Ctrl-C during the child's lifetime is ignored by murmur and reset
 /// to default in the child before exec, so it reaches only the child (see the
 /// module doc comment and `Suspended::begin`). This crate installs no such
@@ -182,8 +198,13 @@ pub fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     viewport_h: u16,
     req: &HandoverRequest,
-) -> Result<ExitStatus> {
+) -> Result<Outcome> {
     let (prog, args) = split_argv(req).context("handover requested with empty argv")?;
+    // K6: a file the child may write its error into. No file, no tail.
+    let error_file = tempfile::Builder::new()
+        .prefix("mur-handover-")
+        .tempfile()
+        .ok();
 
     let status = {
         let _suspended = Suspended::begin(viewport_h)?;
@@ -197,15 +218,21 @@ pub fn run(
                 let _ = spawn_child(prog, args).status();
             }
         }
-        spawn_child(prog, args)
-            .status()
-            .with_context(|| format!("run {prog}"))?
+        let mut child = spawn_child(prog, args);
+        if let Some(f) = &error_file {
+            child.env(crate::cmd::handover_error::ENV, f.path());
+        }
+        child.status().with_context(|| format!("run {prog}"))?
         // `_suspended` drops here — raw mode is back on before we redraw,
         // and stays restored even if `status()` returned Err above.
     };
 
     reanchor(terminal, viewport_h)?;
-    Ok(status)
+    let error_tail = match (&error_file, status.success()) {
+        (Some(f), false) => crate::cmd::handover_error::last_lines(f.path()),
+        _ => None,
+    };
+    Ok(Outcome { status, error_tail })
 }
 
 /// A child configured the way every handover child must be: all three handles
@@ -333,6 +360,18 @@ mod tests {
         let (prog, args) = split_argv(&req).expect("non-empty argv");
         assert_eq!(prog, "claude");
         assert_eq!(args, ["auth", "login"]);
+    }
+
+    #[test]
+    fn a_failed_handover_shows_the_error_tail_under_the_status() {
+        assert_eq!(
+            failed_line("!mur agent ssh allow x", "exit status: 2", None),
+            "!mur agent ssh allow x: exited with exit status: 2"
+        );
+        assert_eq!(
+            failed_line("!mur x", "exit status: 2", Some("error: a\nusage: b")),
+            "!mur x: exited with exit status: 2\nerror: a\nusage: b"
+        );
     }
 
     #[test]
