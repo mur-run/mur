@@ -99,6 +99,7 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
                 done_note: Some(format!("!{cmd}: finished ✓")),
                 _lock: None,
             });
+            super::term::note_handover_deferred(app, &format!("!{cmd}"));
             return;
         }
         let (child, pid) = match shell::spawn(cmd, app.shell_term_size()).await {

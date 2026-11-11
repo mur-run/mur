@@ -13,6 +13,9 @@ use ratatui::widgets::{Block, Padding, Paragraph, Widget, Wrap};
 
 use super::super::app::{App, ChatMsg, Role};
 
+mod handover_flush;
+pub use handover_flush::flush_settled;
+
 #[cfg(test)]
 mod cjk_tail_tests;
 #[cfg(test)]

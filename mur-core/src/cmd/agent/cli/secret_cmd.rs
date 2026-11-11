@@ -100,6 +100,7 @@ pub fn request(app: &mut App, key: Option<String>, delete: bool) {
         app.push_error("/secret needs the inline view — close the overlay (Esc) and try again");
         return;
     }
+    super::term::note_handover_deferred(app, &format!("/secret {key}"));
     app.pending_secret_prompt = Some(key);
 }
 
