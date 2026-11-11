@@ -92,8 +92,12 @@ fn default_max_restarts() -> u32 {
 fn default_window() -> u64 {
     600
 }
+/// Default `stop_timeout_secs`; also the base of the runtime's fixed stop
+/// budget (`supervisor::STOP_BUDGET`).
+pub const DEFAULT_STOP_TIMEOUT_SECS: u64 = 15;
+
 fn default_stop_timeout() -> u64 {
-    15
+    DEFAULT_STOP_TIMEOUT_SECS
 }
 fn default_mcp_required() -> bool {
     true

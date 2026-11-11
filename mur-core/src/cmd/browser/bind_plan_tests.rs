@@ -319,3 +319,14 @@ fn broad_audited_refuses_when_a_retained_profile_is_denied() {
         }
     );
 }
+
+/// The runtime reserves `MCP_STOP_SLICE` for stopping MCP servers so a browser
+/// can export its login at agent stop (#2360); the browser abandons the export
+/// after `EXPORT_TIMEOUT`. A drift either way loses logins or the 19 s budget.
+#[test]
+fn the_runtime_mcp_stop_slice_fits_the_browser_export() {
+    assert_eq!(
+        mur_agent_runtime::mcp::pool::MCP_STOP_SLICE,
+        mur_browser::refresh::EXPORT_TIMEOUT
+    );
+}

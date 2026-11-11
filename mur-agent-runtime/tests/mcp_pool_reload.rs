@@ -61,7 +61,7 @@ fn restricted(mut e: McpServerEntry, host: &str) -> McpServerEntry {
 }
 
 /// A retired generation's proxy token stays valid while a call still holds
-/// that client, and is revoked once the last reference drops, so a hot host
+/// that client, and is revoked once it is released and stopped, so a hot host
 /// edit cannot leave the old allowlist usable forever.
 #[tokio::test]
 async fn a_retired_generation_keeps_its_token_until_its_last_reference_drops() {
@@ -94,11 +94,16 @@ async fn a_retired_generation_keeps_its_token_until_its_last_reference_drops() {
     );
 
     drop(old);
-    assert_eq!(
-        proxy.tokens_for("mock"),
-        1,
-        "old token revoked with its last reference"
-    );
+    // The retired generation is stopped gracefully in the background once
+    // its last holder lets go (#2360), and its token goes with it.
+    let revoked = async {
+        while proxy.tokens_for("mock") != 1 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(mur_agent_runtime::mcp::pool::MCP_STOP_SLICE, revoked)
+        .await
+        .expect("old token revoked once its last holder let go");
 
     drop(new);
     pool.shutdown().await;

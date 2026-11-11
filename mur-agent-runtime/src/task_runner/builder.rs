@@ -171,6 +171,13 @@ impl TaskRunner {
         if self.await_idle(wait).await {
             return DrainOutcome::Idle;
         }
+        self.cancel_inflight(grace).await
+    }
+
+    /// The second half of [`drain`](Self::drain): cancel every in-flight
+    /// turn and wait up to `grace` for them to settle. Split out so the
+    /// supervisor can stop MCP servers concurrently with this grace (#2360).
+    pub async fn cancel_inflight(&self, grace: std::time::Duration) -> DrainOutcome {
         let deadline = tokio::time::Instant::now() + grace;
         let ids = self.signal_inflight();
         let kills = futures::future::join_all(ids.iter().map(|id| self.kill_jobs_of(id)));
