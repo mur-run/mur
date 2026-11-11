@@ -107,3 +107,16 @@ fn an_invalid_agent_dir_name_is_skipped() {
     assert!(run_dirs_of(h, "run-5").is_empty());
     assert!(!list_ids(h).unwrap().contains(&"run-5".to_string()));
 }
+
+/// #2352: an inherited `MUR_RUN_OWNER` (an agent shell running `cargo test`)
+/// must not reroute the records other tests save into `runs/`.
+#[test]
+fn unit_tests_ignore_an_inherited_run_owner() {
+    assert_eq!(process_run_owner(), None);
+    let tmp = tempfile::tempdir().unwrap();
+    let h = tmp.path();
+    assert_eq!(
+        dir_for(h, RunKind::Job, Some("c"), "run-1"),
+        runs_dir(h).join("run-1")
+    );
+}
