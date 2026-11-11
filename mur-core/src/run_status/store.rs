@@ -60,9 +60,22 @@ fn dir_for(mur_home: &Path, kind: RunKind, channel_id: Option<&str>, run_id: &st
         mur_home,
         kind,
         channel_id,
-        mur_common::paths::run_owner_from_env().as_deref(),
+        process_run_owner().as_deref(),
         run_id,
     )
+}
+
+/// The agent this process records runs for: `MUR_RUN_OWNER`, set by the
+/// runtime on its children. Unit tests see no owner (#2352): `cargo test`
+/// run from an agent shell inherits the variable, and the tests that save
+/// through [`dir_for`] expect the operator's `runs/` tree. Owner routing is
+/// covered by `store_owner_tests`, which drives [`dir_for_owner`] directly.
+fn process_run_owner() -> Option<String> {
+    if cfg!(test) {
+        None
+    } else {
+        mur_common::paths::run_owner_from_env()
+    }
 }
 
 /// [`dir_for`] with the owning agent passed in, not read from the env.
