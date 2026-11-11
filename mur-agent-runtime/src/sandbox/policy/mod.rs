@@ -238,12 +238,39 @@ impl SandboxPolicy {
     /// [`Self::mur_cli_exec_denies`] for Landlock, whose read and write
     /// rights include `Execute`: every grant source reaches.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    /// Paths Landlock grants `Execute` (+ read) on, besides `fs_read`/`fs_write`.
+    ///
+    /// Strict (#2343) has an empty `fs_exec`, so its exec reach is exactly
+    /// what the SBPL `Strict` arm allows: the resolved literals (the seeded
+    /// shell, each allowlisted binary) plus the derived and build-lane
+    /// prefixes. Landlock has no `path-literal`; a rule on a file covers just
+    /// that file. Every other mode keeps `fs_exec` alone, as before.
+    pub(crate) fn exec_grants(&self) -> Vec<PathBuf> {
+        if self.spawn_mode != SpawnMode::Strict {
+            return self.fs_exec.clone();
+        }
+        let mut grants = self.fs_exec.clone();
+        for p in self
+            .spawn_allowed_paths
+            .iter()
+            .chain(&self.spawn_allowed_prefixes)
+        {
+            if !grants.contains(p) {
+                grants.push(p.clone());
+            }
+        }
+        grants
+    }
+
     pub(crate) fn landlock_exec_denies(&self) -> Vec<PathBuf> {
-        let reach: Vec<PathBuf> = [&self.fs_exec, &self.fs_read, &self.fs_write]
-            .into_iter()
-            .flatten()
-            .cloned()
-            .collect();
+        let reach: Vec<PathBuf> = [
+            self.exec_grants(),
+            self.fs_read.clone(),
+            self.fs_write.clone(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         self.exec_denies_reached_by(&reach)
     }
 

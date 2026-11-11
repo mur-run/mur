@@ -69,10 +69,11 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
         "fs_write",
     )?;
 
-    // FS exec paths (execute + read file + read dir).
+    // FS exec paths (execute + read file + read dir). Under Strict this is
+    // the resolved literals and prefixes, not the system exec dirs (#2343).
     created = add_exec_split_rules(
         created,
-        &policy.fs_exec,
+        &policy.exec_grants(),
         make_bitflags!(AccessFs::{ Execute | ReadFile | ReadDir }),
         &deny,
         "fs_exec",

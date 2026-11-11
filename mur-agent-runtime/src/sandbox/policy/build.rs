@@ -454,10 +454,18 @@ impl SandboxPolicy {
             }
         }
 
-        // Standard binary exec paths (needed for MCP spawn + shell tools).
-        let fs_exec = system_exec_paths(&home);
-
         let spawn_mode = ent.processes.spawn.mode;
+
+        // Standard binary exec paths (needed for MCP spawn + shell tools).
+        // Strict gets none (#2343): a whole-directory grant here re-opened
+        // every system binary the SBPL `Strict` arm had just fenced, and on
+        // Linux it is the only exec grant Landlock installs. Strict exec is
+        // the literals and prefixes from `resolve_spawn_grants`, nothing else.
+        let fs_exec = if spawn_mode == SpawnMode::Strict {
+            Vec::new()
+        } else {
+            system_exec_paths(&home)
+        };
         let (spawn_allowed_paths, spawn_allowed_prefixes) =
             super::spawn::resolve_spawn_grants(ent, &home, fleet_run_enabled, &mut dropped);
 

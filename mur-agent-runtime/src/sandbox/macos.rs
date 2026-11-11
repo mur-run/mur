@@ -548,6 +548,8 @@ mod exec_deny_tests;
 #[cfg(test)]
 mod own_home_deny_tests;
 #[cfg(test)]
+mod strict_e2e_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod write_deny_tests;

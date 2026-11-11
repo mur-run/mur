@@ -147,9 +147,23 @@ pub(super) fn resolve_spawn_grants(
     // Derive the prefix grants from the resolved literals (Issue 17):
     // see the `spawn_allowed_prefixes` field doc for the parent/
     // grandparent-if-`bin` rule and the guard list.
+    //
+    // Strict (#2343): a prefix that is, or contains, one of the shared
+    // PATH dirs (`/bin`, `/usr/bin`, `/opt/homebrew/bin`, `~/.local/bin`, …) is not one
+    // toolchain but every binary on PATH — the auto-seeded `/bin/bash`
+    // used to widen to all of `/bin`. Strict keeps just the literal there.
+    // A rustup toolchain or the Xcode tools tree is still one toolchain and
+    // keeps its prefix; only the shared PATH dirs are refused.
+    let shared_path_dirs: Vec<PathBuf> = crate::exec_dirs::standard_exec_dirs()
+        .into_iter()
+        .chain(system_exec_paths(home))
+        .collect();
     let mut spawn_allowed_prefixes: Vec<PathBuf> = Vec::new();
     for literal in &spawn_allowed_paths {
         let prefix = compute_spawn_prefix(literal, home);
+        if spawn_mode == SpawnMode::Strict && covers_search_dir(&prefix, &shared_path_dirs) {
+            continue;
+        }
         if prefix.exists() && !spawn_allowed_prefixes.contains(&prefix) {
             spawn_allowed_prefixes.push(prefix);
         }
@@ -199,4 +213,15 @@ pub(super) fn resolve_spawn_grants(
     }
 
     (spawn_allowed_paths, spawn_allowed_prefixes)
+}
+
+/// True when exec on `prefix` would reach a whole shared search dir: the
+/// prefix is one of them or an ancestor of one (`/usr/local` holds
+/// `/usr/local/bin`). Compared both as given and canonicalized, since the
+/// literals are canonical and `/bin` may be a symlink on some hosts.
+fn covers_search_dir(prefix: &Path, search_dirs: &[PathBuf]) -> bool {
+    search_dirs.iter().any(|dir| {
+        dir.starts_with(prefix)
+            || std::fs::canonicalize(dir).is_ok_and(|canon| canon.starts_with(prefix))
+    })
 }
