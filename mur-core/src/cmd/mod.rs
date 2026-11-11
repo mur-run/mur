@@ -89,6 +89,7 @@ pub mod skill_intent;
 pub(crate) mod skill_publish;
 pub mod skill_recombine;
 pub mod skill_registry;
+pub mod ssh_hint;
 // wired by Task A2 CLI (mur skill registry-index)
 #[allow(dead_code)]
 pub mod skill_registry_index;

@@ -50,3 +50,20 @@ fn rollback_hints_parse() {
     };
     assert_hint_commands_parse(&rollback_summary("carol", 1, &out));
 }
+
+#[test]
+fn ssh_hint_commands_parse() {
+    assert_hint_commands_parse(&[crate::cmd::ssh_hint::hint()]);
+}
+
+#[test]
+fn mur_ssh_routes_to_the_hint_even_with_help() {
+    for argv in [
+        vec!["mur", "ssh"],
+        vec!["mur", "ssh", "--help"],
+        vec!["mur", "ssh", "allow", "mur", "--key", "x"],
+    ] {
+        let cli = Cli::try_parse_from(&argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+        assert!(matches!(cli.command, Commands::Ssh { .. }), "{argv:?}");
+    }
+}
