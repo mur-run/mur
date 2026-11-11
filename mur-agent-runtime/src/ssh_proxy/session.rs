@@ -11,6 +11,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 use super::gate::{GateOutcome, SignAsk, SignGate};
 use super::keys::{self, fingerprint};
+use super::mark::MarkSink;
 use super::policy::Policy;
 use super::refusal::{Refusal, RefusalCode, RefusalSink};
 use super::userauth;
@@ -52,6 +53,8 @@ pub(crate) struct Session<'a, U> {
     upstream: &'a U,
     sink: &'a RefusalSink,
     gate: &'a dyn SignGate,
+    /// `None`: no marks (tests that do not look at them).
+    marks: Option<&'a MarkSink>,
     bind: Bind,
     binds_seen: usize,
 }
@@ -68,9 +71,16 @@ impl<'a, U: Upstream> Session<'a, U> {
             upstream,
             sink,
             gate,
+            marks: None,
             bind: Bind::None,
             binds_seen: 0,
         }
+    }
+
+    /// Write a signing mark for each signature returned under a live approval.
+    pub(crate) fn with_marks(mut self, marks: &'a MarkSink) -> Self {
+        self.marks = Some(marks);
+        self
     }
 
     /// Serve until the client closes. An oversize or unparseable length ends
@@ -236,8 +246,8 @@ impl<'a, U: Upstream> Session<'a, U> {
                 .key(ask.key_fp.clone(), ask.key_label.clone())
                 .host(ask.host_key_fp.clone())
         };
-        match self.gate.decide(&ask).await {
-            GateOutcome::Allow => {}
+        let decision = match self.gate.decide(&ask).await {
+            GateOutcome::Allow { decision } => decision,
             GateOutcome::Deny => {
                 self.refuse(refused(RefusalCode::HitlDenied));
                 return Answer::Failure;
@@ -250,7 +260,7 @@ impl<'a, U: Upstream> Session<'a, U> {
                 self.refuse(refused(RefusalCode::HitlDeferred));
                 return Answer::Failure;
             }
-        }
+        };
         let frame = Request::SignRequest {
             key_blob,
             data,
@@ -260,7 +270,12 @@ impl<'a, U: Upstream> Session<'a, U> {
         let why = match self.upstream.roundtrip(frame).await {
             Err(e) => e.to_string(),
             Ok(body) => match wire::decode_answer(&body) {
-                Ok(a @ Answer::SignResponse(_)) => return a,
+                Ok(a @ Answer::SignResponse(_)) => {
+                    if let (Some(marks), Some(d)) = (self.marks, &decision) {
+                        marks.signed(&ask, d);
+                    }
+                    return a;
+                }
                 Ok(Answer::Failure) => "the upstream ssh-agent refused to sign".into(),
                 Ok(_) => "the upstream answered SIGN_REQUEST with something else".into(),
                 Err(e) => e.to_string(),

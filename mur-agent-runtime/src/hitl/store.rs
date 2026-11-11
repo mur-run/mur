@@ -41,6 +41,13 @@ pub enum Settled {
 pub trait DecisionStore: Send + Sync {
     /// Newest verified `HitlResponse` for `action_hash` inside the TTL, if any.
     async fn lookup(&self, action_hash: &str) -> Option<Settled>;
+    /// The live decision for `action_hash`: the same fold [`Self::lookup`]
+    /// reads, with its signed `issued_at`. The ssh gate hands it to the proxy
+    /// so a signing mark can name the approval. `None` by default, which
+    /// only costs a store the mark, never a decision.
+    async fn live(&self, _action_hash: &str) -> Option<LiveDecision> {
+        None
+    }
     /// Append a signed `HitlResponse`. Best-effort: an error is logged, never returned.
     async fn record(&self, resp: HitlResponse);
 }
@@ -94,7 +101,7 @@ impl ChannelDecisionStore {
     }
 
     /// The live decisions — the same fold the gate and `hitl/list` read.
-    fn live(&self) -> Result<std::collections::HashMap<String, LiveDecision>> {
+    fn live_all(&self) -> Result<std::collections::HashMap<String, LiveDecision>> {
         let svc = ChannelService::open(&self.mur_home)?;
         let channel_id = self.channel_id(&svc)?;
         let pubkey = self.identity.verifying_key_bytes();
@@ -115,12 +122,12 @@ impl ChannelDecisionStore {
     }
 
     fn scan(&self, action_hash: &str) -> Result<Option<Settled>> {
-        Ok(self.live()?.get(action_hash).map(LiveDecision::settled))
+        Ok(self.live_all()?.get(action_hash).map(LiveDecision::settled))
     }
 
     /// Live decisions, newest first.
     pub fn list(&self) -> Result<Vec<LiveDecision>> {
-        let mut v: Vec<_> = self.live()?.into_values().collect();
+        let mut v: Vec<_> = self.live_all()?.into_values().collect();
         v.sort_by(|a, b| {
             b.issued_at
                 .cmp(&a.issued_at)
@@ -327,6 +334,16 @@ impl DecisionStore for ChannelDecisionStore {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(error = %e, "chat-gate decision lookup failed; asking");
+                None
+            }
+        }
+    }
+
+    async fn live(&self, action_hash: &str) -> Option<LiveDecision> {
+        match self.live_all() {
+            Ok(mut all) => all.remove(action_hash),
+            Err(e) => {
+                tracing::warn!(error = %e, "ssh-gate decision read-back failed; no signing mark");
                 None
             }
         }

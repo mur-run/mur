@@ -9,6 +9,7 @@ use mur_common::hitl::HitlResponse;
 use tokio::sync::mpsc;
 
 use super::*;
+use crate::hitl::remembered::LiveDecision;
 use crate::hitl::store::{DecisionStore, Settled};
 use crate::hitl::{HitlApprovals, HitlDecision};
 use crate::ssh_proxy::gate::{GateOutcome, SignAsk, SignGate};
@@ -39,8 +40,36 @@ impl DecisionStore for MemStore {
             }
         })
     }
+    async fn live(&self, h: &str) -> Option<LiveDecision> {
+        let r = self.0.lock().unwrap().get(h).cloned()?;
+        let at = r.issued_at?;
+        Some(LiveDecision {
+            action_hash: r.action_hash,
+            allow: r.allow,
+            issued_at: at,
+            expires_at: at,
+            label: r.label,
+            surface: r.surface,
+        })
+    }
     async fn record(&self, r: HitlResponse) {
         self.0.lock().unwrap().insert(r.action_hash.clone(), r);
+    }
+}
+
+/// `Allow`, carrying the recorded allow decision for the test pair.
+#[track_caller]
+fn assert_allowed(out: GateOutcome) -> LiveDecision {
+    match out {
+        GateOutcome::Allow { decision: Some(d) } => {
+            assert!(d.allow);
+            assert_eq!(
+                d.action_hash,
+                ssh_action_hash(AGENT, "SHA256:key", "SHA256:host")
+            );
+            d
+        }
+        other => panic!("expected an allow with its decision, got {other:?}"),
     }
 }
 
@@ -122,7 +151,7 @@ async fn decide_answering(t: &mut T, allow: bool) -> (GateOutcome, serde_json::V
 async fn approve_then_remembered_without_a_second_prompt() {
     let mut t = rig(false);
     let (out, _) = decide_answering(&mut t, true).await;
-    assert_eq!(out, GateOutcome::Allow);
+    assert_allowed(out);
     let rec = t.store.recorded();
     assert_eq!(rec.len(), 1);
     assert_eq!(
@@ -130,7 +159,7 @@ async fn approve_then_remembered_without_a_second_prompt() {
         ssh_action_hash(AGENT, "SHA256:key", "SHA256:host")
     );
     assert!(rec[0].allow);
-    assert_eq!(t.gate.decide(&ask()).await, GateOutcome::Allow);
+    assert_allowed(t.gate.decide(&ask()).await);
     assert!(t.rx.try_recv().is_err(), "remembered: no second prompt");
 }
 
@@ -149,7 +178,7 @@ async fn forgetting_the_decision_prompts_again() {
     decide_answering(&mut t, true).await;
     t.store.forget();
     let (out, _) = decide_answering(&mut t, true).await;
-    assert_eq!(out, GateOutcome::Allow);
+    assert_allowed(out);
 }
 
 #[tokio::test]
@@ -205,7 +234,7 @@ async fn unanswered_defers_and_a_late_answer_settles_the_retry() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert!(t.gate.parking.list().is_empty());
-    assert_eq!(t.gate.decide(&ask()).await, GateOutcome::Allow);
+    assert_allowed(t.gate.decide(&ask()).await);
     assert!(t.rx.try_recv().is_err());
 }
 
@@ -220,8 +249,8 @@ async fn concurrent_asks_for_one_pair_share_one_prompt() {
     tokio::time::sleep(Duration::from_millis(20)).await;
     let id = call_of(&n)["hitl_id"].as_str().unwrap().to_string();
     answer(&t.approvals, &id, true).await;
-    assert_eq!(h1.await.unwrap(), GateOutcome::Allow);
-    assert_eq!(h2.await.unwrap(), GateOutcome::Allow);
+    assert_allowed(h1.await.unwrap());
+    assert_allowed(h2.await.unwrap());
     assert!(t.rx.try_recv().is_err(), "one prompt only");
 }
 
@@ -246,8 +275,8 @@ async fn concurrent_asks_while_delivery_is_blocked_raise_one_prompt() {
     let n = t.rx.recv().await.expect("a prompt");
     let id = call_of(&n)["hitl_id"].as_str().unwrap().to_string();
     answer(&t.approvals, &id, true).await;
-    assert_eq!(h1.await.unwrap(), GateOutcome::Allow);
-    assert_eq!(h2.await.unwrap(), GateOutcome::Allow);
+    assert_allowed(h1.await.unwrap());
+    assert_allowed(h2.await.unwrap());
     assert!(t.rx.try_recv().is_err(), "one prompt only");
     assert!(t.approvals.lock().await.is_empty(), "no second approval");
     assert_eq!(t.store.recorded().len(), 1);
@@ -330,4 +359,45 @@ async fn a_startup_waiver_never_settles_an_unremembered_sign() {
     assert_eq!(out, GateOutcome::Deny);
     assert_eq!(call_of(&n)["tool_name"], SSH_SIGN_TOOL);
     assert_eq!(t.store.recorded().len(), 1, "the human's deny is recorded");
+}
+
+/// Spec "Gate hands the decision to the proxy": a fresh answer and its
+/// remembered replay both carry the one recorded decision, `issued_at` and all.
+#[tokio::test]
+async fn an_allow_carries_the_decision_it_was_given_under() {
+    let mut t = rig(false);
+    let (out, _) = decide_answering(&mut t, true).await;
+    let fresh = assert_allowed(out);
+    assert_eq!(Some(fresh.issued_at), t.store.recorded()[0].issued_at);
+    let remembered = assert_allowed(t.gate.decide(&ask()).await);
+    assert_eq!(remembered, fresh);
+}
+
+/// A store that cannot read the decision back (a failed record, a damaged
+/// log) still allows, with no decision, so no mark is written.
+#[tokio::test]
+async fn an_allow_whose_decision_cannot_be_read_back_carries_none() {
+    struct Forgetful;
+    #[async_trait::async_trait]
+    impl DecisionStore for Forgetful {
+        async fn lookup(&self, _h: &str) -> Option<Settled> {
+            Some(Settled::Allow)
+        }
+        async fn record(&self, _r: HitlResponse) {}
+    }
+    let t = rig(false);
+    let gate = SshSignGate {
+        store: Arc::new(Forgetful),
+        agent: t.gate.agent.clone(),
+        approvals: t.approvals.clone(),
+        notifier: t.gate.notifier.clone(),
+        parking: Default::default(),
+        wait: WAIT,
+        audit_only: false,
+        pending: Default::default(),
+    };
+    assert_eq!(
+        gate.decide(&ask()).await,
+        GateOutcome::Allow { decision: None }
+    );
 }
