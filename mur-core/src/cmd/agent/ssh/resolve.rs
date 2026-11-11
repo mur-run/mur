@@ -25,10 +25,10 @@ pub struct ScannedKey {
 }
 
 /// Reject anything that is not a DNS name or an address. The same rule the
-/// `ssh_request` reader applies (`mur_common::agent::ssh_request`), so a host
+/// `ssh_request` reader applies (`mur_ssh_request`), so a host
 /// the CLI accepts is one a request could name.
 pub fn validate_host(host: &str) -> Result<()> {
-    mur_common::agent::ssh_request::RequestHost::parse(host, None)
+    mur_ssh_request::RequestHost::parse(host, None)
         .map(|_| ())
         .map_err(|e| anyhow::anyhow!("{e}"))
 }

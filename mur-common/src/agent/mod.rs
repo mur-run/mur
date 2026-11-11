@@ -16,7 +16,6 @@ mod reload;
 mod reload_mcp;
 mod ssh_fingerprint;
 mod ssh_paths;
-pub mod ssh_request;
 mod tool_rule_lint;
 mod transport;
 

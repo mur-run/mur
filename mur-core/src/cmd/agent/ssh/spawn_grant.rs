@@ -14,7 +14,7 @@ use crate::cmd::consent::literal_yes;
 
 /// The binary and the rule live in `mur-common` so the runtime's
 /// `ssh_request` tool answers with the same verdict.
-pub use mur_common::agent::ssh_request::{SSH_BINARY as SSH_SPAWN_BINARY, ssh_spawnable};
+pub use mur_ssh_request::{SSH_BINARY as SSH_SPAWN_BINARY, ssh_spawnable};
 
 /// The manual command, printed whenever the grant is not added here.
 pub fn manual_command(agent: &str) -> String {

@@ -43,6 +43,7 @@ mur-mobile-app
 mur-mobile-sdk
 mur-monitor
 mur-open-items
+mur-ssh-request
 mur-research-gateway
 mur-test-log
 mur-track

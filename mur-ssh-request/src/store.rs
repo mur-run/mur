@@ -86,7 +86,7 @@ pub fn read_pending(agent_home: &Path, now: DateTime<Utc>) -> Vec<PendingRequest
 
 fn read_one(dir: &Path, name: &str, now: DateTime<Utc>) -> Option<PendingRequest> {
     let id = id_of(name)?;
-    let f = crate::paths::open_no_follow(&dir.join(name)).ok()?;
+    let f = mur_common::paths::open_no_follow(&dir.join(name)).ok()?;
     let meta = f.metadata().ok()?;
     if !meta.is_file() || meta.len() > MAX_FILE_BYTES {
         return None;

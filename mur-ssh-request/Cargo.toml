@@ -1,0 +1,16 @@
+[package]
+name = "mur-ssh-request"
+version.workspace = true
+edition.workspace = true
+# Internal to the workspace: consumed only via path deps, never from crates.io.
+publish = false
+
+[dependencies]
+mur-common = { path = "../mur-common" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+sha2 = "0.10"
+hex = "0.4.3"
+tempfile = "3"

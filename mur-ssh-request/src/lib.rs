@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{ProcessesEntitlement, SpawnMode};
+use mur_common::agent::{ProcessesEntitlement, SpawnMode};
 
 mod store;
 pub use store::{PendingRequest, Written, read_pending, remove, requests_dir, write};

@@ -302,7 +302,7 @@ fn remove_deletes_exactly_that_request_and_a_second_remove_is_fine() {
 
 #[test]
 fn ssh_is_spawnable_under_any_and_when_listed() {
-    use crate::agent::{ProcessesEntitlement, SpawnEntitlement, SpawnMode};
+    use mur_common::agent::{ProcessesEntitlement, SpawnEntitlement, SpawnMode};
     let mut p = ProcessesEntitlement {
         spawn: SpawnEntitlement {
             mode: SpawnMode::None,
