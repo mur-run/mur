@@ -275,29 +275,11 @@ fn status_of_in(
     fleet: Option<&str>,
     run_id: &str,
 ) -> anyhow::Result<Option<RunStatus>> {
-    let loaded = store::load_scoped(mur_home, fleet, run_id);
-    let record = match loaded {
-        Ok(Some(record)) => Some(record),
+    let record = match load_recorded(mur_home, fleet, run_id)? {
+        Some(record) => Some(record),
         // No record and no channel: the daemon's dispatch verdict is the
         // only thing that can know about this run (#2116).
-        Ok(None) => match rebuild_for(mur_home, fleet, run_id)? {
-            Some(record) => Some(record),
-            None => dispatch::load_in(mur_home, fleet, run_id)?,
-        },
-        // Rebuild first; re-propagate the cache error only when there is no
-        // rebuild candidate — a run that has a channel to rebuild from must
-        // not be hidden by a parse failure. A genuine rebuild I/O error is
-        // also reported (chained onto the cache error), never collapsed into
-        // "no run recorded".
-        Err(e) => match rebuild_for(mur_home, fleet, run_id) {
-            Ok(Some(record)) => Some(record),
-            Ok(None) => return Err(e),
-            Err(rebuild_err) => {
-                return Err(e.context(format!(
-                    "rebuild from the channel also failed: {rebuild_err:#}"
-                )));
-            }
-        },
+        None => unrecorded(mur_home, fleet, run_id, dispatch::load_in)?,
     };
     let Some(mut record) = record else {
         return Ok(None);
@@ -340,6 +322,58 @@ fn status_of_in(
     }
     let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
     Ok(Some(classify(record, Utc::now(), stale_after(&cfg.runs))))
+}
+
+/// The run's own record: `run.json`, else rebuilt from the channel.
+/// `Ok(None)` when neither exists.
+fn load_recorded(
+    mur_home: &std::path::Path,
+    fleet: Option<&str>,
+    run_id: &str,
+) -> anyhow::Result<Option<RunState>> {
+    match store::load_scoped(mur_home, fleet, run_id) {
+        Ok(Some(record)) => Ok(Some(record)),
+        Ok(None) => rebuild_for(mur_home, fleet, run_id),
+        // Rebuild first; re-propagate the cache error only when there is no
+        // rebuild candidate — a run that has a channel to rebuild from must
+        // not be hidden by a parse failure. A genuine rebuild I/O error is
+        // also reported (chained onto the cache error), never collapsed into
+        // "no run recorded".
+        Err(e) => match rebuild_for(mur_home, fleet, run_id) {
+            Ok(Some(record)) => Ok(Some(record)),
+            Ok(None) => Err(e),
+            Err(rebuild_err) => Err(e.context(format!(
+                "rebuild from the channel also failed: {rebuild_err:#}"
+            ))),
+        },
+    }
+}
+
+/// The daemon's verdict for a run with no record of its own. A terminal
+/// verdict is re-checked against the run's record first: the absence check
+/// and the verdict's dead-pid check are not one snapshot, so a child can
+/// record its run, finish, and exit between them. Once its pid is seen dead
+/// any record it wrote is already on disk, so this second look sees it and
+/// a run that succeeded is never reported failed (#2345). `load_dispatch`
+/// is a parameter so a test can publish the record inside that window.
+fn unrecorded<F>(
+    mur_home: &std::path::Path,
+    fleet: Option<&str>,
+    run_id: &str,
+    load_dispatch: F,
+) -> anyhow::Result<Option<RunState>>
+where
+    F: FnOnce(&std::path::Path, Option<&str>, &str) -> anyhow::Result<Option<RunState>>,
+{
+    let Some(verdict) = load_dispatch(mur_home, fleet, run_id)? else {
+        return Ok(None);
+    };
+    if !verdict.state.is_terminal() {
+        return Ok(Some(verdict));
+    }
+    Ok(Some(
+        load_recorded(mur_home, fleet, run_id)?.unwrap_or(verdict),
+    ))
 }
 
 /// Re-derive the record from the channel via the `sidecar.json` index, in

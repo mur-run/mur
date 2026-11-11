@@ -222,6 +222,57 @@ mod tests {
         assert!(err.contains(FLEET_RUN_LOG_FILE), "points at the log: {err}");
     }
 
+    /// #2345 review: the child records its run, completes, and exits
+    /// between the caller's absence check and the dead-pid check. The
+    /// record it wrote must win over the synthetic failure.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_published_after_the_absence_check_beats_the_dead_pid_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_id = "fleet-council-5";
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+        write(
+            tmp.path(),
+            run_id,
+            serde_json::json!({"run_id": run_id, "fleet": "council",
+                "dispatched_by": "mur", "router": "orchestrator", "status": "launched",
+                "pid": dead_pid, "decided_at": "2026-09-27T00:00:00Z"}),
+        );
+        let dir = mur_common::paths::fleet_run_dir(tmp.path(), "council", run_id);
+        assert!(!dir.join("run.json").exists(), "absence is the premise");
+        let now = chrono::Utc::now();
+        let completed = RunState {
+            schema: RUN_SCHEMA,
+            run_id: run_id.to_string(),
+            channel_id: None,
+            kind: RunKind::Fleet,
+            label: "fleet council".to_string(),
+            pid: dead_pid,
+            started_at: now,
+            last_heartbeat_at: Some(now),
+            state: State::Done,
+            steps: vec![],
+            blocked_on: None,
+            binary_version: "0.0.0-test".to_string(),
+            build_sha: "deadbee".to_string(),
+        };
+        // The window: the absence check has already run; the child now
+        // publishes its record, then the verdict sees its pid dead.
+        let record = crate::run_status::unrecorded(tmp.path(), None, run_id, |home, fleet, id| {
+            std::fs::write(
+                dir.join("run.json"),
+                serde_json::to_vec(&completed).unwrap(),
+            )
+            .unwrap();
+            load_in(home, fleet, id)
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(record.state, State::Done);
+    }
+
     /// The same record while the child is alive stays `running`.
     #[test]
     fn a_launched_child_still_alive_is_running() {
