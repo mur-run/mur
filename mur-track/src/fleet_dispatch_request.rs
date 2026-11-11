@@ -26,6 +26,11 @@ pub const FLEET_DISPATCH_REQUEST_DIR: &str = "inbox/fleet-dispatch-requests";
 /// `runs/<run_id>/dispatch.json`. Its existence also marks the run id as spent.
 pub const FLEET_DISPATCH_RECORD_FILE: &str = "dispatch.json";
 
+/// The launched child's stdout+stderr, beside [`FLEET_DISPATCH_RECORD_FILE`]
+/// — the log path `fleet_run` returns with the handle. A child that dies
+/// before recording its run leaves its only error here (#2345).
+pub const FLEET_RUN_LOG_FILE: &str = "fleet_run.log";
+
 /// Domain tag: a signature over one request type must never verify as another.
 const DOMAIN: &str = "mur-fleet-dispatch-request-v1\n";
 
@@ -119,6 +124,11 @@ pub struct FleetDispatchRecord {
     pub status: FleetDispatchStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The launched child's pid. Lets a reader tell "launched, not recorded
+    /// yet" from "launched, then died before recording" (#2345). `None` on
+    /// a rejection and on records from older daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
     pub decided_at: DateTime<Utc>,
 }
 

@@ -12,7 +12,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use mur_track::fleet_dispatch_request::{
-    FLEET_DISPATCH_RECORD_FILE, FleetDispatchRecord, FleetDispatchStatus,
+    FLEET_DISPATCH_RECORD_FILE, FLEET_RUN_LOG_FILE, FleetDispatchRecord, FleetDispatchStatus,
 };
 
 use super::{RUN_SCHEMA, RunKind, RunState, State, StepState};
@@ -43,10 +43,41 @@ pub fn load_in(
     };
     let record: FleetDispatchRecord =
         serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
-    Ok(Some(to_run_state(record)))
+    let log = path.with_file_name(FLEET_RUN_LOG_FILE);
+    Ok(Some(to_run_state(record, &log)))
 }
 
-fn to_run_state(r: FleetDispatchRecord) -> RunState {
+/// How many trailing log lines a dead launch carries as its step error —
+/// enough for an `Error:` line and its `Caused by:` chain.
+const LOG_TAIL_LINES: usize = 12;
+
+/// A launch whose child is gone and never recorded its run: nothing will
+/// record one now (#2345). Only a recorded pid can say so — a record from an
+/// older daemon has none and keeps the old `running` + `unknown` answer.
+fn launched_child_exited(r: &FleetDispatchRecord) -> bool {
+    r.status == FleetDispatchStatus::Launched
+        && r.pid
+            .is_some_and(|pid| pid != 0 && !mur_common::lock_file::pid_alive(pid))
+}
+
+fn log_tail(log: &Path) -> String {
+    let where_ = format!("see {}", log.display());
+    match std::fs::read_to_string(log) {
+        Ok(text) => {
+            let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+            let tail = lines[lines.len().saturating_sub(LOG_TAIL_LINES)..].join("\n");
+            if tail.is_empty() {
+                format!("the run exited before recording itself; its log is empty ({where_})")
+            } else {
+                format!("the run exited before recording itself ({where_}):\n{tail}")
+            }
+        }
+        Err(e) => format!("the run exited before recording itself; log unreadable: {e} ({where_})"),
+    }
+}
+
+fn to_run_state(r: FleetDispatchRecord, log: &Path) -> RunState {
+    let exited = launched_child_exited(&r);
     let (state, label, error) = match r.status {
         FleetDispatchStatus::Rejected => (
             State::Failed,
@@ -58,6 +89,18 @@ fn to_run_state(r: FleetDispatchRecord) -> RunState {
                 r.reason
                     .unwrap_or_else(|| "rejected (no reason recorded)".to_string()),
             ),
+        ),
+        // Launched, and the child is gone without a record: it failed before
+        // it could say so. Its log holds the only error (#2345).
+        FleetDispatchStatus::Launched if exited => (
+            State::Failed,
+            format!(
+                "fleet {} — launched by the MUR daemon as {} (requested by {}); exited before recording its run",
+                r.fleet,
+                r.router.as_deref().unwrap_or("?"),
+                r.dispatched_by
+            ),
+            Some(log_tail(log)),
         ),
         // Launched, but the child has not recorded its run yet. Running with
         // no heartbeat classifies as `unknown` liveness — the honest answer.
@@ -144,6 +187,56 @@ mod tests {
         assert_eq!(status.state, State::Running);
         assert_eq!(status.liveness, crate::run_status::Liveness::Unknown);
         assert!(!status.abandoned);
+    }
+
+    /// #2345: the child died before recording its run (e.g. delegation
+    /// blocked before dispatch). The handle must stop saying `running` and
+    /// surface the log's last lines, where the only real error lives.
+    #[cfg(unix)]
+    #[test]
+    fn a_launched_child_that_exited_without_a_record_is_failed_with_its_log_tail() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+        write(
+            tmp.path(),
+            "fleet-council-3",
+            serde_json::json!({"run_id": "fleet-council-3", "fleet": "council",
+                "dispatched_by": "mur", "router": "orchestrator", "status": "launched",
+                "pid": dead_pid, "decided_at": "2026-09-27T00:00:00Z"}),
+        );
+        let dir = mur_common::paths::fleet_run_dir(tmp.path(), "council", "fleet-council-3");
+        std::fs::write(
+            dir.join(FLEET_RUN_LOG_FILE),
+            "starting\nError: fleet 'council': delegation blocked before dispatch:\n  needs approval, then re-run.\n",
+        )
+        .unwrap();
+        let status = crate::run_status::status_of(tmp.path(), "fleet-council-3")
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.state, State::Failed);
+        let err = status.run.steps[0].error.as_deref().unwrap();
+        assert!(err.contains("delegation blocked before dispatch"), "{err}");
+        assert!(err.contains("then re-run"), "{err}");
+        assert!(err.contains(FLEET_RUN_LOG_FILE), "points at the log: {err}");
+    }
+
+    /// The same record while the child is alive stays `running`.
+    #[test]
+    fn a_launched_child_still_alive_is_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            tmp.path(),
+            "fleet-council-4",
+            serde_json::json!({"run_id": "fleet-council-4", "fleet": "council",
+                "dispatched_by": "mur", "router": "orchestrator", "status": "launched",
+                "pid": std::process::id(), "decided_at": "2026-09-27T00:00:00Z"}),
+        );
+        let status = crate::run_status::status_of(tmp.path(), "fleet-council-4")
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.state, State::Running);
     }
 
     #[test]
