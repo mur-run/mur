@@ -435,6 +435,28 @@ pub(super) fn rebuild_after_resize(
 /// `wants_screen_wipe` is cleared for the same reason the reset is skipped: a
 /// wipe left pending would run `purge_and_reanchor` on the pass after the
 /// child exits and take the transcript with it.
+/// Whether a queued terminal handover may run on this pass (#2357 review).
+///
+/// Not while an agent turn is generating: the live reply is the last message
+/// and still streaming, so `flush_settled` stops in front of it and the
+/// "handing over" notice pushed after it would stay in the viewport the
+/// suspend clears — reappearing below the child's output, the very ordering
+/// #2356 fixed. The request stays queued and runs on the first pass after
+/// the turn settles.
+pub(super) fn handover_ready(app: &App) -> bool {
+    app.render_mode == RenderMode::Inline && !app.streaming
+}
+
+/// Say why a handover queued during a generating turn has not started yet,
+/// so the queued `!command` / `/login` / `/secret` does not look ignored.
+pub(super) fn note_handover_deferred(app: &mut App, label: &str) {
+    if app.streaming {
+        app.push_system(format!(
+            "{label}: needs the terminal — it starts when the current turn finishes"
+        ));
+    }
+}
+
 pub(super) fn prepare_handover(app: &mut App, label: &str, term_rows: u16) -> u16 {
     app.push_system(format!("{label}: handing over the terminal…"));
     app.wants_screen_wipe = false;

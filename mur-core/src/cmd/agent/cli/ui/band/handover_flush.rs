@@ -134,6 +134,47 @@ mod tests {
         assert_eq!(outside_viewport(&mut term), before);
     }
 
+    /// The review's case: a handover requested mid-turn, so the notice would
+    /// land AFTER the live reply. `flush_settled` cannot reach past a
+    /// streaming message, so the handover must wait for the turn to settle —
+    /// and once it has, the notice reaches scrollback ahead of the child.
+    #[test]
+    fn a_handover_during_a_live_turn_waits_and_then_keeps_its_order() {
+        use crate::cmd::agent::cli::term::handover_ready;
+        let (mut app, mut term) = inline_app_and_term();
+        app.messages.push(ChatMsg::for_test(Role::User, "hi"));
+        let mut live = ChatMsg::for_test(Role::Agent, "partial");
+        live.streaming = true;
+        app.messages.push(live);
+        app.streaming = true;
+
+        // Negative control: pushing the notice now strands it in the band.
+        let mut early = App::test_fixture();
+        early.messages = app.messages.clone();
+        early.render_mode = RenderMode::Inline;
+        early.streaming = true;
+        early.push_system(NOTICE);
+        let (_, mut early_term) = inline_app_and_term();
+        flush_settled(&mut early_term, &mut early).unwrap();
+        assert!(!outside_viewport(&mut early_term).contains("handing over"));
+
+        assert!(
+            !handover_ready(&app),
+            "handover must wait out the live turn"
+        );
+
+        // The turn settles; the deferred handover now runs in order.
+        app.messages[1].streaming = false;
+        app.streaming = false;
+        assert!(handover_ready(&app));
+        app.push_system(NOTICE);
+        flush_settled(&mut term, &mut app).unwrap();
+        let out = outside_viewport(&mut term);
+        let (reply, notice) = (out.find("partial"), out.find("handing over"));
+        assert!(notice.is_some(), "notice still only in the viewport");
+        assert!(reply < notice, "notice must follow the settled reply");
+    }
+
     /// A still-streaming reply is not settled and stays in the band.
     #[test]
     fn a_streaming_turn_is_left_in_the_band() {

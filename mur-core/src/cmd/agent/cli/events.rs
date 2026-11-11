@@ -189,8 +189,9 @@ pub(super) async fn event_loop(
         // blocks above it: everything below assumes an Inline viewport, and
         // re-anchoring one while the alt-screen is up would anchor it against
         // the wrong surface. Leaving the request in place is correct — it is
-        // taken on the pass after the overlay closes, not dropped.
-        if app.render_mode == RenderMode::Inline
+        // taken on the pass after the overlay closes, not dropped. Likewise
+        // it waits out a generating turn (`handover_ready`).
+        if handover_ready(app)
             && let Some(req) = app.pending_handover.take()
         {
             let want_h = prepare_handover(app, &req.label, last_size.height);
@@ -246,7 +247,7 @@ pub(super) async fn event_loop(
         // Same shape as the handover above, and for the same reason: the
         // EventStream owns stdin and the child (here, rpassword's tty read)
         // must have it to itself.
-        if app.render_mode == RenderMode::Inline
+        if handover_ready(app)
             && let Some(key) = app.pending_secret_prompt.take()
         {
             let want_h = prepare_handover(app, &format!("/secret {key}"), last_size.height);
