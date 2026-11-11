@@ -8,7 +8,23 @@ use super::*;
 pub struct DamageReport {
     /// 1-based line numbers of lines that failed to parse as a
     /// [`ChannelEvent`] at all (unparseable or truncated), in file order.
+    /// Corruption only: a line written by a newer MUR is in
+    /// [`Self::newer_kind_lines`] instead.
     pub unparseable_lines: Vec<usize>,
+    /// 1-based line numbers of well-formed event envelopes whose `kind` this
+    /// binary does not know — written by a newer MUR (#2287). The kind alone
+    /// is not damage, so these lines are not in [`Self::is_clean`]; their
+    /// signatures and chain links are still checked like any other line
+    /// ([`Self::unverified_newer_kind`], [`Self::chain_breaks`]). The events
+    /// are absent from this binary's folds.
+    pub newer_kind_lines: Vec<usize>,
+    /// The envelope of each line in [`Self::newer_kind_lines`], same order —
+    /// for a caller that verifies per actor rather than under one key.
+    pub newer_kind_events: Vec<super::NewerKindEvent>,
+    /// Newer-kind lines whose signature fails under `writer_pubkey` — the
+    /// same one-key verdict as [`Self::unverified`], for lines that could
+    /// not be read into a [`ChannelEvent`].
+    pub unverified_newer_kind: Vec<super::NewerKindEvent>,
     /// Events that parsed but whose signature failed verification (present
     /// and invalid, or missing while `require_sig` is set), in file order.
     /// Still included in the `events` this call returns — this is a report,
@@ -77,6 +93,7 @@ impl DamageReport {
     pub fn is_clean(&self) -> bool {
         self.unparseable_lines.is_empty()
             && self.unverified.is_empty()
+            && self.unverified_newer_kind.is_empty()
             && self.chain_breaks.is_empty()
             && self.anchor_mismatch.is_none()
             && !self.anchor_dirty
@@ -124,7 +141,7 @@ impl ChannelStore {
             None => return Ok(Vec::new()),
         };
         let mut events = Vec::new();
-        let mut damaged = Vec::new();
+        let (mut newer_kind, mut corrupt) = (Vec::new(), Vec::new());
         for (idx, line) in content.lines().enumerate() {
             if line.trim().is_empty() {
                 continue;
@@ -132,18 +149,12 @@ impl ChannelStore {
             match serde_json::from_str::<ChannelEvent>(line) {
                 Ok(ev) => events.push(ev),
                 // 1-based: matches what an editor or `sed -n` shows.
-                Err(_) => damaged.push(idx + 1),
+                Err(_) => {
+                    super::append::classify_unparsed(line, idx + 1, &mut newer_kind, &mut corrupt)
+                }
             }
         }
-        if !damaged.is_empty() {
-            tracing::warn!(
-                channel_id = %id,
-                path = %path.display(),
-                dropped = damaged.len(),
-                lines = ?damaged,
-                "unparseable event line(s) skipped — the events they carried are missing from every fold of this channel"
-            );
-        }
+        super::append::report_skipped_lines(id, &path, &newer_kind, &corrupt);
         Ok(events)
     }
 
@@ -219,8 +230,8 @@ impl ChannelStore {
             if line.trim().is_empty() {
                 continue;
             }
-            match serde_json::from_str::<ChannelEvent>(line) {
-                Ok(ev) => {
+            match super::newer_kind::parse_line(line) {
+                super::newer_kind::Line::Event(ev) => {
                     if !crate::sign::verify_one(id, &ev, writer_pubkey, require_sig) {
                         report.unverified.push(ev.clone());
                     }
@@ -228,9 +239,18 @@ impl ChannelStore {
                     // 1-based, matching `unparseable_lines` below.
                     report.event_lines.push(idx + 1);
                 }
+                // An unknown kind does not vouch for the rest of the line:
+                // its signature is checked exactly like a known one's.
+                super::newer_kind::Line::NewerKind(ev) => {
+                    if !crate::sign::verify_newer_kind(id, &ev, writer_pubkey, require_sig) {
+                        report.unverified_newer_kind.push(ev.clone());
+                    }
+                    report.newer_kind_lines.push(idx + 1);
+                    report.newer_kind_events.push(ev);
+                }
                 // 1-based: matches what an editor or `sed -n` shows, and
                 // matches `load_events`'s own `lines` field.
-                Err(_) => report.unparseable_lines.push(idx + 1),
+                super::newer_kind::Line::Corrupt => report.unparseable_lines.push(idx + 1),
             }
         }
         report.chain_breaks = super::chain::chain_breaks(&content);

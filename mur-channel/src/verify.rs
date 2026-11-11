@@ -61,17 +61,58 @@ pub fn verify_event(
     ev: &ChannelEvent,
     require_sig: bool,
 ) -> bool {
-    match actor_pubkey(mur_home, &ev.actor, ev.key_version) {
-        Some(pk) => crate::sign::verify_one(channel_id, ev, &pk, require_sig),
+    verify_with_actor_key(
+        mur_home,
+        channel_id,
+        &ev.actor,
+        ev.key_version,
+        ev.sig.is_some(),
+        require_sig,
+        |pk| crate::sign::verify_one(channel_id, ev, pk, require_sig),
+    )
+}
+
+/// [`verify_event`] for a line whose `kind` this binary does not know
+/// (#2287): same key resolution, same fail-closed rules.
+pub fn verify_newer_kind_event(
+    mur_home: &Path,
+    channel_id: &str,
+    ev: &crate::store::NewerKindEvent,
+    require_sig: bool,
+) -> bool {
+    verify_with_actor_key(
+        mur_home,
+        channel_id,
+        &ev.actor,
+        ev.key_version,
+        ev.sig.is_some(),
+        require_sig,
+        |pk| crate::sign::verify_newer_kind(channel_id, ev, pk, require_sig),
+    )
+}
+
+fn verify_with_actor_key(
+    mur_home: &Path,
+    channel_id: &str,
+    actor: &ChannelActor,
+    key_version: Option<u32>,
+    signed: bool,
+    require_sig: bool,
+    verify: impl FnOnce(&[u8; 32]) -> bool,
+) -> bool {
+    match actor_pubkey(mur_home, actor, key_version) {
+        Some(pk) => verify(&pk),
         // Unsigned: the legacy-tolerance rule still applies — there is nothing
         // a key would have checked.
-        None if ev.sig.is_none() => !require_sig,
+        None if !signed => !require_sig,
         None => {
             tracing::warn!(
                 channel_id,
-                actor = ?ev.actor,
-                key_version = ?ev.key_version,
-                "event carries a signature but its actor's public key could not                  be read — treating as UNVERIFIED (an unreadable key must not                  pass as an absent signature)"
+                actor = ?actor,
+                key_version = ?key_version,
+                "event carries a signature but its actor's public key could not \
+                 be read — treating as UNVERIFIED (an unreadable key must not \
+                 pass as an absent signature)"
             );
             false
         }

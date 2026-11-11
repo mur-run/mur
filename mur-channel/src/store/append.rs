@@ -26,6 +26,46 @@ pub(crate) fn line_seq(body: &str) -> Option<u64> {
     serde_json::from_str::<SeqOnly>(body).ok().map(|s| s.seq)
 }
 
+/// Where a line that failed to parse as a [`ChannelEvent`] goes (#2287): a
+/// well-formed envelope whose `kind` this binary does not know was written by
+/// a newer MUR — not damage by itself. Everything else is corrupt. Callers
+/// that judge integrity must still verify a newer-kind line's signature and
+/// chain link (see [`super::newer_kind`]); this only sorts lines for folding.
+pub(crate) fn classify_unparsed(
+    body: &str,
+    line: usize,
+    newer_kind: &mut Vec<usize>,
+    corrupt: &mut Vec<usize>,
+) {
+    match super::newer_kind::parse_line(body) {
+        super::newer_kind::Line::NewerKind(_) => newer_kind.push(line),
+        _ => corrupt.push(line),
+    }
+}
+
+/// One log line per class of skipped line. Only corrupt lines are a warning:
+/// a newer-kind line is a healthy record this binary cannot fold yet.
+pub(crate) fn report_skipped_lines(id: &str, path: &Path, newer_kind: &[usize], corrupt: &[usize]) {
+    if !corrupt.is_empty() {
+        tracing::warn!(
+            channel_id = %id,
+            path = %path.display(),
+            dropped = corrupt.len(),
+            lines = ?corrupt,
+            "unparseable event line(s) skipped — the events they carried are missing from every fold of this channel"
+        );
+    }
+    if !newer_kind.is_empty() {
+        tracing::info!(
+            channel_id = %id,
+            path = %path.display(),
+            skipped = newer_kind.len(),
+            lines = ?newer_kind,
+            "event line(s) written by a newer MUR skipped — this binary does not know their kind; upgrade to fold them"
+        );
+    }
+}
+
 /// The post-write sealing hook type (see [`SealHooks::post_write`]).
 pub type SealHook<'h> = dyn for<'a, 'b> Fn(&'b SealInput<'a>) -> Result<()> + 'h;
 
@@ -220,7 +260,7 @@ impl ChannelStore {
         let content = Self::read_events_file(&path, &dir)?.unwrap_or_default();
         let mut last_seq = None;
         let mut hit: Option<(ChannelEvent, &str)> = None;
-        let mut damaged = Vec::new();
+        let (mut newer_kind, mut corrupt) = (Vec::new(), Vec::new());
         for (idx, segment) in content.split_inclusive('\n').enumerate() {
             let body = segment.trim_end_matches(['\n', '\r']);
             if body.trim().is_empty() {
@@ -244,19 +284,11 @@ impl ChannelStore {
                     if let Some(seq) = line_seq(body) {
                         last_seq = Some(seq);
                     }
-                    damaged.push(idx + 1);
+                    classify_unparsed(body, idx + 1, &mut newer_kind, &mut corrupt);
                 }
             }
         }
-        if !damaged.is_empty() {
-            tracing::warn!(
-                channel_id = %id,
-                path = %path.display(),
-                dropped = damaged.len(),
-                lines = ?damaged,
-                "unparseable event line(s) skipped — the events they carried are missing from every fold of this channel"
-            );
-        }
+        report_skipped_lines(id, &path, &newer_kind, &corrupt);
 
         // Dedup: if this idempotency_key already exists in the log, return the
         // prior event unchanged (exactly-once for crash-reruns; v3c). Done under
