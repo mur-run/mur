@@ -60,8 +60,8 @@ async fn an_allowed_host_answers_with_live_state_and_writes_nothing() {
         .await
         .unwrap();
     assert!(out.text.contains("already allowed"), "{}", out.text);
-    assert!(out.text.contains("deploy (SHA256:key)"));
-    assert!(out.text.contains("SHA256:hostkey"));
+    assert!(out.text.contains("key deploy"), "{}", out.text);
+    assert_no_fingerprint(&out.text);
     assert!(out.text.contains("boundary"));
     assert!(out.text.contains("can be exec'd: yes"));
     assert_eq!(pending(home.path()), 0, "no file for an allowed host");
@@ -116,7 +116,14 @@ async fn an_unknown_host_writes_one_request_and_replaces_it_on_retry() {
 #[tokio::test]
 async fn bad_input_is_refused_before_anything_is_written() {
     let home = tempfile::tempdir().unwrap();
-    let t = tool(home.path(), SshEntitlement::default());
+    for ssh in [SshEntitlement::default(), granted_ssh("h.example")] {
+        bad_input_is_refused(home.path(), ssh).await;
+    }
+}
+
+/// The same contract whether or not `h.example` is already granted.
+async fn bad_input_is_refused(home: &std::path::Path, ssh: SshEntitlement) {
+    let t = tool(home, ssh);
     for input in [
         serde_json::json!({"reason": "x"}),
         serde_json::json!({"host": "a/b", "reason": "x"}),
@@ -124,6 +131,7 @@ async fn bad_input_is_refused_before_anything_is_written() {
         serde_json::json!({"host": "h.example", "port": 0, "reason": "x"}),
         serde_json::json!({"host": "h.example", "user": "root; rm", "reason": "x"}),
         serde_json::json!({"host": "h.example", "reason": "   "}),
+        serde_json::json!({"host": "h.example"}),
     ] {
         let r = t.execute(input.clone()).await;
         assert!(
@@ -132,7 +140,7 @@ async fn bad_input_is_refused_before_anything_is_written() {
             r.map(|o| o.text)
         );
     }
-    assert_eq!(pending(home.path()), 0);
+    assert_eq!(pending(home), 0);
 }
 
 #[test]
@@ -150,10 +158,8 @@ fn prompt_section_names_the_route_and_never_a_cli_command_to_run() {
 
     let some = SshFacts::new(&granted_ssh("[h.example]:2222"), &processes(SpawnMode::Any));
     let s = prompt_section(&some, None);
-    assert!(
-        s.contains("- [h.example]:2222 (key deploy (SHA256:key))"),
-        "{s}"
-    );
+    assert!(s.contains("- [h.example]:2222 (key deploy)"), "{s}");
+    assert_no_fingerprint(&s);
     assert!(s.contains("ssh-agent proxy: not recorded"));
     assert!(s.contains("can be exec'd: yes"));
 }
@@ -174,4 +180,36 @@ fn hints_fire_only_for_ssh() {
             .contains("ssh_request")
     );
     assert!(proxy_refused_hint("Permission denied (publickey).").is_none());
+}
+
+/// Neither fixture fingerprint reaches the agent (plan: S:Goal 5).
+fn assert_no_fingerprint(text: &str) {
+    assert!(
+        !text.contains("SHA256:"),
+        "fingerprint shown to the agent: {text}"
+    );
+}
+
+#[test]
+fn an_unlabeled_key_and_an_unnamed_host_are_never_shown_by_fingerprint() {
+    let mut ssh = granted_ssh("h.example");
+    ssh.keys[0].label = None;
+    ssh.keys[0].allow_hosts.push(SshHostRule {
+        host_key: "SHA256:unnamedhostkey".into(),
+        label: None,
+        known_hosts: vec![],
+    });
+    let facts = SshFacts::new(&ssh, &processes(SpawnMode::Any));
+    let s = prompt_section(&facts, None);
+    assert!(s.contains("- h.example (key (unlabeled))"), "{s}");
+    assert!(
+        s.contains("1 more host rule(s) recorded without a host name"),
+        "{s}"
+    );
+    assert_no_fingerprint(&s);
+
+    let target = RequestHost::parse("h.example", None).unwrap();
+    for line in facts.granted(&target) {
+        assert_no_fingerprint(&line);
+    }
 }

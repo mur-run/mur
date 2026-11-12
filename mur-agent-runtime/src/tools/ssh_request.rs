@@ -39,59 +39,63 @@ impl SshFacts {
         }
     }
 
-    /// Every `(key, host key)` pair granted for `target`, rendered for the
-    /// agent. A host matches on the `known_hosts` name the CLI confirmed it
-    /// under (`name`, or `[name]:port` off port 22), case-insensitively like
-    /// OpenSSH — the CLI stores the name as `ssh-keyscan` echoed it.
-    /// `host_key` stays the only identity the proxy enforces; this is only how
-    /// the agent is told.
+    /// The key granted for `target`, one line per key, for the agent. A host
+    /// matches on the `known_hosts` name the CLI confirmed it under (`name`,
+    /// or `[name]:port` off port 22), case-insensitively like OpenSSH — the
+    /// CLI stores the name as `ssh-keyscan` echoed it. `host_key` stays the
+    /// only identity the proxy enforces; this is only how the agent is told.
+    /// No fingerprint, key or host key, is ever rendered (plan: S:Goal 5).
     pub fn granted(&self, target: &RequestHost) -> Vec<String> {
         let name = target.known_hosts_name();
-        let mut out = Vec::new();
-        for key in &self.ssh.keys {
-            for host in &key.allow_hosts {
-                if host
-                    .known_hosts
-                    .iter()
-                    .any(|kh| kh.host.eq_ignore_ascii_case(&name))
-                {
-                    out.push(format!(
-                        "key {} → host key {}",
-                        key_label(key.label.as_deref(), &key.fingerprint),
-                        host.host_key
-                    ));
-                }
-            }
-        }
-        out
-    }
-
-    /// One line per allowed host, for the prompt.
-    fn allowed_hosts(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        for key in &self.ssh.keys {
-            let k = key_label(key.label.as_deref(), &key.fingerprint);
-            for host in &key.allow_hosts {
-                let names: Vec<&str> = host.known_hosts.iter().map(|kh| kh.host.as_str()).collect();
-                let names = if names.is_empty() {
-                    format!("host key {}", host.host_key)
-                } else {
-                    names.join(", ")
-                };
-                out.push(format!("{names} (key {k})"));
-            }
-        }
+        let mut out: Vec<String> = self
+            .ssh
+            .keys
+            .iter()
+            .filter(|key| {
+                key.allow_hosts.iter().any(|host| {
+                    host.known_hosts
+                        .iter()
+                        .any(|kh| kh.host.eq_ignore_ascii_case(&name))
+                })
+            })
+            .map(|key| format!("key {}", key_label(key.label.as_deref())))
+            .collect();
         out.sort();
         out.dedup();
         out
     }
+
+    /// One line per allowed host, for the prompt. A host rule recorded with
+    /// no `known_hosts` name has nothing the agent could connect to, so it is
+    /// counted rather than named — never shown by its host key.
+    fn allowed_hosts(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut unnamed = 0usize;
+        for key in &self.ssh.keys {
+            let k = key_label(key.label.as_deref());
+            for host in &key.allow_hosts {
+                if host.known_hosts.is_empty() {
+                    unnamed += 1;
+                    continue;
+                }
+                let names: Vec<&str> = host.known_hosts.iter().map(|kh| kh.host.as_str()).collect();
+                out.push(format!("{} (key {k})", names.join(", ")));
+            }
+        }
+        out.sort();
+        out.dedup();
+        if unnamed > 0 {
+            out.push(format!(
+                "{unnamed} more host rule(s) recorded without a host name"
+            ));
+        }
+        out
+    }
 }
 
-fn key_label(label: Option<&str>, fp: &str) -> String {
-    match label {
-        Some(l) => format!("{l} ({fp})"),
-        None => fp.to_string(),
-    }
+/// How a key is named to the agent: its label, never its fingerprint.
+fn key_label(label: Option<&str>) -> &str {
+    label.unwrap_or("(unlabeled)")
 }
 
 fn proxy_line(proxy: Option<&SshProxyStatus>) -> String {
@@ -219,20 +223,22 @@ and handed the request back — run one test connection first."
         };
         let target =
             RequestHost::parse(host, port).map_err(|e| ToolError::InvalidInput(e.to_string()))?;
-
-        let granted = self.facts.granted(&target);
-        if !granted.is_empty() {
-            return Ok(self.allowed_reply(&target, &granted).into());
-        }
-
         let user = input
             .get("user")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty());
         let reason = input.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+        // Validated before the granted branch, so the input contract is the
+        // same whether or not the host is already allowed.
         let req = SshRequest::new(&target, user, reason, chrono::Utc::now())
             .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
+
+        let granted = self.facts.granted(&target);
+        if !granted.is_empty() {
+            return Ok(self.allowed_reply(&target, &granted).into());
+        }
+
         let written = mur_ssh_request::write(&self.agent_home, &req)
             .map_err(|e| ToolError::Execution(format!("record the ssh request: {e}")))?;
         Ok(format!(
