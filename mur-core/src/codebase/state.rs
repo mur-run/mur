@@ -55,7 +55,6 @@ pub enum IndexStatus {
     Error,
 }
 
-/// Lightweight lock file to prevent concurrent indexing of the same project.
 /// An I/O failure on one of the index's own state files, with the path it hit.
 /// `op` keeps the historical wording ("writing index lock <path>").
 #[derive(Debug, thiserror::Error)]
@@ -77,6 +76,7 @@ impl IndexStateIoError {
     }
 }
 
+/// Lightweight lock file to prevent concurrent indexing of the same project.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexLock {
     pub pid: u32,

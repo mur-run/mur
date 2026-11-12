@@ -127,3 +127,15 @@ fn real_lock_denial_is_the_failing_op() {
     assert_eq!(line, "mur: queued auto-index for 'proj' with the daemon");
     assert_eq!(wakeups(home.path()).len(), 1);
 }
+
+/// The writable twin: with a writable index dir the lock is acquired and the
+/// inbox stays empty — the wake-up path only exists on the denial branch.
+#[test]
+fn writable_index_acquires_lock_and_drops_no_wakeup() {
+    let home = tempfile::tempdir().unwrap();
+    let _env = mur_common::test_env::EnvGuard::set([("MUR_HOME", home.path())]);
+    std::fs::create_dir_all(home.path().join(CODEBASE_INDEX_SUBDIR)).unwrap();
+    let idx = crate::codebase::CodebaseIndex::new("proj", &home.path().join("proj"));
+    assert!(idx.try_acquire_lock().expect("writable index must lock"));
+    assert!(wakeups(home.path()).is_empty());
+}

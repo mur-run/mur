@@ -22,8 +22,9 @@ pub const REINDEX_REQUEST_DIR: &str = "inbox/reindex-requests";
 pub const WAKEUP_SOFT_CAP: usize = 8;
 
 /// Prefix of the temp name used for the write-then-rename. Entries starting
-/// with it are in flight and are not counted toward the cap.
-const TMP_PREFIX: &str = ".tmp-";
+/// with it are in flight: they are not counted toward the cap, and a consumer
+/// must neither treat them as wake-ups nor delete them.
+pub const TMP_PREFIX: &str = ".tmp-";
 
 /// What [`drop_wakeup`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
