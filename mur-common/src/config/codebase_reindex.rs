@@ -94,6 +94,51 @@ impl Default for CodebaseReindexConfig {
     }
 }
 
+impl CodebaseReindexConfig {
+    /// Clamp values that are legal YAML but illegal at runtime, called from
+    /// `Config::sanitize` at load. A zero period panics
+    /// `tokio::time::interval`; a zero intake or concurrency leaves the task
+    /// looking enabled while it never works; a zero backoff start never
+    /// grows; a ceiling below the start contradicts itself.
+    pub(crate) fn sanitize(&mut self) {
+        fn nonzero_u64(v: &mut u64, d: u64) {
+            if *v == 0 {
+                *v = d;
+            }
+        }
+        fn nonzero_usize(v: &mut usize, d: usize) {
+            if *v == 0 {
+                *v = d;
+            }
+        }
+        nonzero_u64(&mut self.poll_secs, CODEBASE_REINDEX_DEFAULT_POLL_SECS);
+        nonzero_u64(
+            &mut self.reconcile_secs,
+            CODEBASE_REINDEX_DEFAULT_RECONCILE_SECS,
+        );
+        nonzero_u64(
+            &mut self.min_interval_secs,
+            CODEBASE_REINDEX_DEFAULT_MIN_INTERVAL_SECS,
+        );
+        nonzero_u64(
+            &mut self.max_backoff_secs,
+            CODEBASE_REINDEX_DEFAULT_MAX_BACKOFF_SECS,
+        );
+        nonzero_u64(
+            &mut self.job_timeout_secs,
+            CODEBASE_REINDEX_DEFAULT_JOB_TIMEOUT_SECS,
+        );
+        nonzero_usize(&mut self.max_intake, CODEBASE_REINDEX_DEFAULT_MAX_INTAKE);
+        nonzero_usize(
+            &mut self.max_concurrent,
+            CODEBASE_REINDEX_DEFAULT_MAX_CONCURRENT,
+        );
+        if self.max_backoff_secs < self.min_interval_secs {
+            self.max_backoff_secs = self.min_interval_secs;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +176,39 @@ mod tests {
         c.codebase_reindex.max_intake = 9;
         let back: Config = serde_yaml::from_str(&serde_yaml::to_string(&c).unwrap()).unwrap();
         assert_eq!(back.codebase_reindex, c.codebase_reindex);
+    }
+
+    fn load(yaml: &str) -> CodebaseReindexConfig {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        std::fs::write(&path, yaml).unwrap();
+        Config::load_or_default(&path).codebase_reindex
+    }
+
+    /// Zeroes are legal YAML but illegal at runtime; the loader clamps each
+    /// one to its default.
+    #[test]
+    fn zero_values_clamp_to_defaults_at_load() {
+        let r = load(
+            "codebase_reindex:\n  poll_secs: 0\n  reconcile_secs: 0\n  min_interval_secs: 0\n  max_backoff_secs: 0\n  max_intake: 0\n  max_concurrent: 0\n  job_timeout_secs: 0\n",
+        );
+        assert_eq!(r, CodebaseReindexConfig::default());
+    }
+
+    #[test]
+    fn backoff_ceiling_below_start_is_raised_to_start() {
+        let r = load("codebase_reindex:\n  min_interval_secs: 600\n  max_backoff_secs: 60\n");
+        assert_eq!((r.min_interval_secs, r.max_backoff_secs), (600, 600));
+    }
+
+    /// The clamp must not rewrite legitimate tuning.
+    #[test]
+    fn positive_values_survive_the_load() {
+        let r = load(
+            "codebase_reindex:\n  enabled: false\n  poll_secs: 5\n  min_interval_secs: 10\n  max_backoff_secs: 20\n  max_concurrent: 3\n",
+        );
+        assert!(!r.enabled);
+        assert_eq!((r.poll_secs, r.max_concurrent), (5, 3));
+        assert_eq!((r.min_interval_secs, r.max_backoff_secs), (10, 20));
     }
 }

@@ -421,6 +421,7 @@ impl Config {
         if self.runs.heartbeat_stale_after_intervals == 0 {
             self.runs.heartbeat_stale_after_intervals = default_heartbeat_stale_after_intervals();
         }
+        self.codebase_reindex.sanitize();
     }
 }
 
