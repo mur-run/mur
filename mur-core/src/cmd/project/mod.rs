@@ -18,6 +18,7 @@ use crate::store::embedding::{EmbeddingConfig, embed};
 pub(crate) mod hook_report;
 pub mod status_json;
 use status_json::status_json;
+mod wakeup;
 pub(crate) mod worker;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -321,12 +322,14 @@ pub(crate) async fn cmd_project_index(
     if run_in_background {
         // Check lock. The post-commit hook also fires inside sandboxed
         // agents, whose policy deliberately denies writes to the codebase
-        // lance stores — that is expected, not a failure, so the quiet
-        // (hook) path skips with one line instead of a bare EPERM.
+        // lance stores — that is expected, not a failure. The quiet (hook)
+        // path queues a wake-up so the daemon reindexes outside the sandbox,
+        // or skips with one line; never a bare EPERM.
         let acquired = match index.try_acquire_lock() {
             Ok(a) => a,
             Err(e) if quiet && is_permission_denied(&e) => {
-                eprintln!("mur: skipped auto-index for '{project_name}' — {e:#}");
+                let home = crate::paths::mur_root(None);
+                eprintln!("{}", wakeup::quiet_denied_line(&e, &project_name, &home));
                 return Ok(());
             }
             Err(e) => return Err(e),

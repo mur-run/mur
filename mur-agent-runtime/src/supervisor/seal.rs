@@ -130,6 +130,10 @@ pub(super) async fn prepare_and_seal(
     // not just macOS. (We create the dir first so the Landlock rule sticks.)
     let _ =
         std::fs::create_dir_all(mur_home.join(mur_track::snapshot_request::SNAPSHOT_REQUEST_DIR));
+    // Codebase reindex wake-ups (post-commit hook in a sealed agent). Same
+    // reason: exist before the seal so the inbox rule covers it on Landlock.
+    let _ =
+        std::fs::create_dir_all(mur_home.join(mur_common::reindex_request::REINDEX_REQUEST_DIR));
     let vlc = mur_common::media::load_runtime(mur_home);
     if let Some(vlc) = &vlc {
         let _ = std::fs::create_dir_all(mur_common::media::runtime_dir(mur_home));
@@ -514,10 +518,13 @@ fn o2_client(agent_home: &Path) -> Option<crate::tools::ssh_client_env::SshClien
 /// Pure: it creates nothing. The seal creates the directories first so the Landlock
 /// rule sticks.
 ///
-/// - Memory federation (P0): the sleep cycle drops signed snapshot requests and flushed
-///   outbox signals into `<mur_home>/inbox/…`. The daemon treats the inbox as an
-///   attacker-writable surface and verifies signatures, so this grant widens no trust
-///   boundary.
+/// - `<mur_home>/inbox/…`: the sleep cycle drops signed snapshot requests and flushed
+///   outbox signals there, and the post-commit hook drops codebase reindex wake-ups.
+///   The inbox is an attacker-writable surface. The invariant that keeps this grant
+///   from widening a trust boundary: every inbox consumer either verifies a signature
+///   before acting, or reads no attacker-controlled content at all (reindex wake-ups
+///   are never opened — the daemon only counts and unlinks them, then decides what
+///   is stale on its own). A new inbox consumer must hold to one of the two.
 /// - Co-watching: the whole `<mur_home>/runtime` directory (a per-file grant cannot
 ///   confer the directory-level rights a temp-file + rename needs under Landlock) and the
 ///   VLC snapshot dir, which `vlc.json` may point elsewhere. Gated on `vlc.json` existing.

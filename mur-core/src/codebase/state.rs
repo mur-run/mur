@@ -55,6 +55,27 @@ pub enum IndexStatus {
     Error,
 }
 
+/// An I/O failure on one of the index's own state files, with the path it hit.
+/// `op` keeps the historical wording ("writing index lock <path>").
+#[derive(Debug, thiserror::Error)]
+#[error("{op} {}", path.display())]
+pub struct IndexStateIoError {
+    pub op: &'static str,
+    pub path: PathBuf,
+    #[source]
+    pub source: std::io::Error,
+}
+
+impl IndexStateIoError {
+    pub(crate) fn new(op: &'static str, path: &Path, source: std::io::Error) -> Self {
+        Self {
+            op,
+            path: path.to_path_buf(),
+            source,
+        }
+    }
+}
+
 /// Lightweight lock file to prevent concurrent indexing of the same project.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexLock {
@@ -123,10 +144,15 @@ impl CodebaseIndex {
 
     /// Try to acquire the index lock. Returns Ok(true) if we got it, Ok(false) if another
     /// live process holds it, Err if I/O fails.
+    ///
+    /// Write failures carry an [`IndexStateIoError`] naming the path, so a
+    /// caller can tell a denied index dir apart from any other failure without
+    /// matching message text.
     pub fn try_acquire_lock(&self) -> Result<bool> {
         let path = self.lock_path();
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| IndexStateIoError::new("creating index dir", parent, e))?;
         }
         // Check existing lock
         if path.exists()
@@ -142,9 +168,8 @@ impl CodebaseIndex {
             project_name: self.project_name.clone(),
             started_at: chrono::Utc::now().to_rfc3339(),
         };
-        std::fs::write(&path, serde_json::to_string(&lock)?).map_err(|e| {
-            anyhow::Error::new(e).context(format!("writing index lock {}", path.display()))
-        })?;
+        std::fs::write(&path, serde_json::to_string(&lock)?)
+            .map_err(|e| IndexStateIoError::new("writing index lock", &path, e))?;
         Ok(true)
     }
 
