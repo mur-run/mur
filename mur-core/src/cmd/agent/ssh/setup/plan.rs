@@ -84,12 +84,7 @@ pub fn plan(
         .user_known_hosts()
         .is_some_and(|kh| may_write(ent, &SandboxPolicy::from_entitlements(ent, agent_home), &kh));
     let (verdict, matched) = verdict(&scanned, &stored, writable);
-    let loaded = probe.agent_keys();
-    let unloaded = probe
-        .unloaded_keys()
-        .into_iter()
-        .filter(|k| !loaded.iter().any(|l| l.fingerprint == k.fingerprint))
-        .collect();
+    let (loaded, unloaded) = split_keys(probe);
     let spawn = SpawnChange::needed(&ent.processes);
     let exec_surface = spawn.and_then(|c| {
         let mut after = ent.clone();
@@ -108,6 +103,18 @@ pub fn plan(
         spawn,
         exec_surface,
     })
+}
+
+/// The user's ssh-agent keys, then the `~/.ssh/*.pub` files not among them.
+/// Re-read by the card after an `ssh-add`, so it is its own step.
+pub fn split_keys(probe: &dyn Probe) -> (Vec<AgentKey>, Vec<AgentKey>) {
+    let loaded = probe.agent_keys();
+    let unloaded = probe
+        .unloaded_keys()
+        .into_iter()
+        .filter(|k| !loaded.iter().any(|l| l.fingerprint == k.fingerprint))
+        .collect();
+    (loaded, unloaded)
 }
 
 /// True when the computed write grants cover `known_hosts` and no deny

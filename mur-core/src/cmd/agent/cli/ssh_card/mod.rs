@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 use super::app::{App, HandoverRequest};
 use super::stream::StreamMsg;
 use crate::cmd::agent::ssh::setup::life::AgentLifecycle;
+use crate::cmd::agent::ssh::setup::plan::split_keys;
 use crate::cmd::agent::ssh::setup::probe::System;
 use crate::cmd::agent::ssh::setup::{Applied, Approval, apply_and_restart, plan};
 use crate::cmd::agent::ssh::view;
@@ -209,6 +210,16 @@ fn build(
     )
     .map_err(|e| format!("{e:#}"))?;
     Ok(Box::new(CardState::new(p, origin)))
+}
+
+/// A terminal handover just ended (most often the card's own `ssh-add`, but
+/// a `!ssh-add` typed by hand counts too): re-read which keys the ssh-agent
+/// holds so the card stops calling a loaded key "not loaded".
+pub fn after_handover(app: &mut App) {
+    if let Some(card) = app.ssh_card.as_mut() {
+        let (loaded, unloaded) = split_keys(&System);
+        card.refresh_keys(loaded, unloaded);
+    }
 }
 
 /// A key while the card is open.

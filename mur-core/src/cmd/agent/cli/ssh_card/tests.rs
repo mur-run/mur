@@ -175,6 +175,34 @@ fn choosing_an_unloaded_key_hands_the_terminal_to_ssh_add() {
 }
 
 #[test]
+fn a_key_loaded_by_ssh_add_is_shown_loaded_and_stays_chosen() {
+    let mut c = CardState::new(plan(Verdict::Trusted, None), Origin::Direct);
+    press(&mut c, KeyCode::Down);
+    assert!(matches!(
+        press(&mut c, KeyCode::Enter),
+        KeyAction::LoadKey(_)
+    ));
+    // ssh-add succeeded: the agent now lists U first, and no `.pub` is left over.
+    c.refresh_keys(vec![key('U', None), key('K', None)], vec![]);
+    assert_eq!(
+        c.chosen_key().map(|(k, l)| (k.fingerprint.clone(), l)),
+        Some((fp('U'), true))
+    );
+    assert_eq!(approve(&mut c).unwrap().key_fp, fp('U'));
+}
+
+#[test]
+fn a_refresh_that_drops_the_chosen_key_falls_back_to_the_first() {
+    let mut c = CardState::new(plan(Verdict::Trusted, None), Origin::Direct);
+    c.key_idx = 1;
+    c.refresh_keys(vec![key('K', None)], vec![]);
+    assert_eq!(c.key_idx, 0);
+    c.refresh_keys(vec![], vec![]);
+    assert_eq!(c.key_idx, 0);
+    assert!(c.chosen_key().is_none());
+}
+
+#[test]
 fn steps_walk_forward_and_back_and_esc_closes() {
     let mut c = CardState::new(plan(Verdict::Trusted, None), Origin::Direct);
     press(&mut c, KeyCode::Enter);

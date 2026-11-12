@@ -122,6 +122,20 @@ impl CardState {
         self.keys().get(self.key_idx).copied()
     }
 
+    /// Take a fresh read of the key lists (after `ssh-add`), keeping the
+    /// selection on the same key: a key that just loaded moves from the
+    /// unloaded tail to the loaded head, so its index changes.
+    pub fn refresh_keys(&mut self, loaded: Vec<AgentKey>, unloaded: Vec<AgentKey>) {
+        let chosen = self.chosen_key().map(|(k, _)| k.fingerprint.clone());
+        self.plan.keys_loaded = loaded;
+        self.plan.keys_unloaded = unloaded;
+        let keys = self.keys();
+        self.key_idx = chosen
+            .and_then(|fp| keys.iter().position(|(k, _)| k.fingerprint == fp))
+            .unwrap_or(0)
+            .min(keys.len().saturating_sub(1));
+    }
+
     /// Ticking is offered on `unknown` only (spec verdict table).
     pub fn ticks_offered(&self) -> bool {
         matches!(self.plan.verdict, Verdict::Unknown { .. })

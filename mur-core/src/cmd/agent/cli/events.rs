@@ -239,6 +239,7 @@ pub(super) async fn event_loop(
                 )),
                 Err(e) => app.push_error(format!("{}: handover failed: {e:#}", req.label)),
             }
+            super::ssh_card::after_handover(app);
             app.needs_full_redraw = true;
             // The child owned the terminal for as long as it liked, so the
             // size checked at the top of this pass may be gone. Painting now
