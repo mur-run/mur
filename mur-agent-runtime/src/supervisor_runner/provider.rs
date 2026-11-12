@@ -215,7 +215,7 @@ pub async fn build_provider_runner(
             .collect()
     };
     let edit_file_def = edit_file_exec.def();
-    let tools_policy = profile.inner.entitlements.tools.clone();
+    let mut tools_policy = profile.inner.entitlements.tools.clone();
     let (_defs, mut tool_map) = build_tools(
         Some((bash_def, bash_exec)),
         Some((read_file_def, read_file_exec)),
@@ -260,7 +260,7 @@ pub async fn build_provider_runner(
     let shadowed_mcp = crate::tools::parallel_jobs::register(
         &mut tool_map,
         &boot_cfg.parallel_jobs,
-        &tools_policy,
+        &mut tools_policy,
         &enabled_mcp,
         crate::tools::parallel_jobs::ParallelJobsTool {
             mur_home: mur_home.clone(),

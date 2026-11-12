@@ -136,8 +136,12 @@ pub(crate) fn admit(
 /// exactly what passed admission. Returns the child's pid.
 fn launch(run_dir: &Path, req: &JobsDispatchRequest, mur_bin: &Path) -> anyhow::Result<u32> {
     let kept = run_dir.join(JOBS_DISPATCH_ADMITTED_FILE);
-    std::fs::write(&kept, serde_yaml_ng::to_string(req)?).context("keep the admitted request")?;
-    let log = std::fs::File::create(run_dir.join(JOBS_RUN_LOG_FILE)).context("create run log")?;
+    // `create_new` (O_EXCL): never follows or reuses whatever sits at the
+    // name. `spend_run_id` just made the directory and the sandbox denies
+    // agents this tree, so this is the backstop if a backend fails to.
+    write_new(&kept, serde_yaml_ng::to_string(req)?.as_bytes())
+        .context("keep the admitted request")?;
+    let log = create_new(&run_dir.join(JOBS_RUN_LOG_FILE)).context("create run log")?;
     let log_err = log.try_clone()?;
     // No signing handoff: this process is unsealed, so the child loads the
     // router's key from disk — the whole point of launching it here. The
@@ -179,9 +183,22 @@ fn write_record(
         decided_at: chrono::Utc::now(),
     };
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&record)?)?;
+    write_new(&tmp, &serde_json::to_vec_pretty(&record)?)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+/// Create `path`, refusing anything already there (a symlink included).
+fn create_new(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    create_new(path)?.write_all(bytes)
 }
 
 #[cfg(test)]

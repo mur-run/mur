@@ -20,10 +20,47 @@ use mur_track::jobs_dispatch_request::{
 use crate::a2a_dial::canonicalize_agent_name;
 
 /// Parse a request file without trusting anything in it yet.
+///
+/// The inbox is writable by every sandboxed agent, so the file may be a
+/// symlink (refused: the daemon would parse whatever it points at), a FIFO
+/// (opened non-blocking and refused: a blocking open with no writer would
+/// stall the sweep for every agent), or huge (capped).
 #[allow(dead_code)] // consumed by mur-daemon's jobs sweep; the `mur` bin compiles this module too
 pub fn read_request(path: &Path) -> Result<JobsDispatchRequest> {
-    let text = std::fs::read_to_string(path).context("read request")?;
+    use mur_track::jobs_dispatch_request::MAX_REQUEST_BYTES;
+    use std::io::Read;
+    let file = open_inbox_file(path).context("open request")?;
+    let meta = file.metadata().context("stat request")?;
+    ensure!(meta.is_file(), "request is not a regular file");
+    ensure!(
+        meta.len() <= MAX_REQUEST_BYTES,
+        "request is larger than {MAX_REQUEST_BYTES} bytes"
+    );
+    let mut text = String::new();
+    file.take(MAX_REQUEST_BYTES + 1)
+        .read_to_string(&mut text)
+        .context("read request")?;
+    ensure!(
+        text.len() as u64 <= MAX_REQUEST_BYTES,
+        "request grew past {MAX_REQUEST_BYTES} bytes while being read"
+    );
     serde_yaml_ng::from_str(&text).context("parse request")
+}
+
+/// Open without following a final symlink and without blocking on a FIFO.
+#[cfg(unix)]
+fn open_inbox_file(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+/// No FIFOs to block on here; refuse a symlink, then open.
+#[cfg(not(unix))]
+fn open_inbox_file(path: &Path) -> std::io::Result<std::fs::File> {
+    mur_common::paths::open_no_follow(path)
 }
 
 /// Shape, freshness, and signature. After `Ok`, `requested_by` is a verified

@@ -107,3 +107,37 @@ fn a_link_at_the_run_path_is_never_written_through() {
     std::os::unix::fs::symlink(&victim, &dir).unwrap();
     assert!(spend_run_id(tmp.path(), &r).is_err());
 }
+
+/// Review P3 (#2386): the inbox is agent-writable, so a symlink, a FIFO or an
+/// oversized file is refused instead of read — and a FIFO never blocks.
+#[test]
+fn read_request_refuses_links_fifos_and_oversized_files() {
+    let (tmp, id) = home("");
+    let inbox = tmp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let good = inbox.join("good.yaml");
+    std::fs::write(&good, serde_yaml_ng::to_string(&req(&id, "coder")).unwrap()).unwrap();
+    assert!(read_request(&good).is_ok());
+
+    let big = inbox.join("big.yaml");
+    let f = std::fs::File::create(&big).unwrap();
+    f.set_len(mur_track::jobs_dispatch_request::MAX_REQUEST_BYTES + 1)
+        .unwrap();
+    assert!(read_request(&big).is_err());
+
+    #[cfg(unix)]
+    {
+        let link = inbox.join("link.yaml");
+        std::os::unix::fs::symlink(&good, &link).unwrap();
+        assert!(read_request(&link).is_err(), "symlink must not be followed");
+
+        let fifo = inbox.join("fifo.yaml");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        // No writer: a blocking open would hang this test forever.
+        assert!(read_request(&fifo).is_err(), "FIFO must be refused");
+    }
+}

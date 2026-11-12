@@ -18,7 +18,7 @@
 //!
 //! Writers know which one from the record itself (`kind` + `channel_id`).
 //! A reader holding only a run id resolves it with [`run_dir`]: the fleet
-//! trees, then the agent trees, then `runs/`. Anything that TRUSTS a fleet run's files
+//! trees, then `jobs-dispatch/`, then the agent trees, then `runs/`. Anything that TRUSTS a fleet run's files
 //! (resume, pause, checkpoints) must not use that fallback — it reads
 //! [`fleet_run_dir`] directly, because `runs/` is writable by every sandboxed
 //! agent.
@@ -59,16 +59,30 @@ fn fleet_of(kind: RunKind, channel_id: Option<&str>) -> Option<&str> {
 /// dispatching agent's tree for a run started inside an agent, `runs/`
 /// otherwise.
 fn dir_for(mur_home: &Path, kind: RunKind, channel_id: Option<&str>, run_id: &str) -> PathBuf {
-    if process_is_jobs_dispatch_host() && fleet_of(kind, channel_id).is_none() {
-        return mur_track::jobs_dispatch_request::jobs_dispatch_run_dir(mur_home, run_id);
-    }
-    dir_for_owner(
+    dir_for_host(
         mur_home,
         kind,
         channel_id,
+        process_is_jobs_dispatch_host(),
         process_run_owner().as_deref(),
         run_id,
     )
+}
+
+/// [`dir_for`] with the hosted flag and owner passed in, not read from the
+/// env, so `store_owner_tests` can drive the daemon-hosted route.
+fn dir_for_host(
+    mur_home: &Path,
+    kind: RunKind,
+    channel_id: Option<&str>,
+    hosted: bool,
+    owner: Option<&str>,
+    run_id: &str,
+) -> PathBuf {
+    if hosted && fleet_of(kind, channel_id).is_none() {
+        return mur_track::jobs_dispatch_request::jobs_dispatch_run_dir(mur_home, run_id);
+    }
+    dir_for_owner(mur_home, kind, channel_id, owner, run_id)
 }
 
 /// The agent this process records runs for: `MUR_RUN_OWNER`, set by the
@@ -130,7 +144,7 @@ fn agent_run_roots(mur_home: &Path) -> Vec<PathBuf> {
 }
 
 /// Every directory a run id may be recorded in, in search order: each fleet
-/// tree, each agent tree, then `runs/`. Not filtered for existence.
+/// tree, `jobs-dispatch/`, each agent tree, then `runs/`. Not filtered for existence.
 fn candidate_dirs(mur_home: &Path, run_id: &str) -> Vec<PathBuf> {
     fleet_names(mur_home)
         .into_iter()

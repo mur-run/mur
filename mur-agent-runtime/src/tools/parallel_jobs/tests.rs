@@ -228,7 +228,13 @@ fn register_replaces_the_mcp_tool_and_keeps_its_siblings() {
     let h = home(CFG);
     let cfg: ParallelJobsConfig = serde_yaml_ng::from_str("targets: [coder]").unwrap();
     let mut map = map_with_mcp();
-    let gone = register(&mut map, &cfg, &[], &mur_tools(), tool(h.path(), None));
+    let gone = register(
+        &mut map,
+        &cfg,
+        &mut vec![],
+        &mur_tools(),
+        tool(h.path(), None),
+    );
     assert_eq!(gone, vec!["mcp__mur-tools__parallel_jobs".to_string()]);
     assert!(map.contains_key(PARALLEL_JOBS));
     assert!(!map.contains_key("mcp__mur-tools__parallel_jobs"));
@@ -243,14 +249,23 @@ fn register_is_a_no_op_when_not_offered_or_denied() {
     let h = home(CFG);
     let off: ParallelJobsConfig = serde_yaml_ng::from_str("targets: []").unwrap();
     let mut map = map_with_mcp();
-    assert!(register(&mut map, &off, &[], &mur_tools(), tool(h.path(), None)).is_empty());
+    assert!(
+        register(
+            &mut map,
+            &off,
+            &mut vec![],
+            &mur_tools(),
+            tool(h.path(), None)
+        )
+        .is_empty()
+    );
     assert!(map.contains_key("mcp__mur-tools__parallel_jobs") && !map.contains_key(PARALLEL_JOBS));
 
     let on: ParallelJobsConfig = serde_yaml_ng::from_str("targets: [coder]").unwrap();
-    let deny: Vec<mur_common::agent::ToolRule> =
+    let mut deny: Vec<mur_common::agent::ToolRule> =
         serde_yaml_ng::from_str("- pattern: parallel_jobs\n  policy: deny").unwrap();
     let mut map = map_with_mcp();
-    assert!(register(&mut map, &on, &deny, &mur_tools(), tool(h.path(), None)).is_empty());
+    assert!(register(&mut map, &on, &mut deny, &mur_tools(), tool(h.path(), None)).is_empty());
     assert!(map.contains_key("mcp__mur-tools__parallel_jobs") && !map.contains_key(PARALLEL_JOBS));
 }
 
@@ -266,11 +281,11 @@ fn a_deny_on_the_replaced_mcp_tool_keeps_the_built_in_out() {
         "mcp__mur-tools__*",
         "mcp__*",
     ] {
-        let deny: Vec<mur_common::agent::ToolRule> =
+        let mut deny: Vec<mur_common::agent::ToolRule> =
             serde_yaml_ng::from_str(&format!("- pattern: \"{pattern}\"\n  policy: deny")).unwrap();
         let mut map = map_with_mcp();
         assert!(
-            register(&mut map, &on, &deny, &mur_tools(), tool(h.path(), None)).is_empty(),
+            register(&mut map, &on, &mut deny, &mur_tools(), tool(h.path(), None)).is_empty(),
             "{pattern}"
         );
         assert!(!map.contains_key(PARALLEL_JOBS), "{pattern}");
@@ -280,11 +295,68 @@ fn a_deny_on_the_replaced_mcp_tool_keeps_the_built_in_out() {
         );
     }
     // An allow on the MCP name (or a deny on an unrelated one) changes nothing.
-    let rules: Vec<mur_common::agent::ToolRule> = serde_yaml_ng::from_str(
+    let mut rules: Vec<mur_common::agent::ToolRule> = serde_yaml_ng::from_str(
         "- pattern: mcp__mur-tools__parallel_jobs\n  policy: allow\n- pattern: mcp__other__*\n  policy: deny",
     )
     .unwrap();
     let mut map = map_with_mcp();
-    assert!(!register(&mut map, &on, &rules, &mur_tools(), tool(h.path(), None)).is_empty());
+    assert!(
+        !register(
+            &mut map,
+            &on,
+            &mut rules,
+            &mur_tools(),
+            tool(h.path(), None)
+        )
+        .is_empty()
+    );
     assert!(map.contains_key(PARALLEL_JOBS));
+}
+
+/// Review P3 (#2386): an `ask` written for the MCP tool survives the swap even
+/// under a blanket `allow`, while an explicit rule on the built-in still wins.
+#[test]
+fn an_ask_on_the_replaced_mcp_tool_still_asks() {
+    use mur_common::agent::{ToolPolicy, resolve_tool_policy};
+    let h = home(CFG);
+    let on: ParallelJobsConfig = serde_yaml_ng::from_str("targets: [coder]").unwrap();
+    for pattern in ["mcp__mur-tools__parallel_jobs", "mcp__mur-tools__*"] {
+        let mut rules: Vec<mur_common::agent::ToolRule> = serde_yaml_ng::from_str(&format!(
+            "- pattern: \"*\"\n  policy: allow\n- pattern: \"{pattern}\"\n  policy: ask"
+        ))
+        .unwrap();
+        let mut map = map_with_mcp();
+        assert!(
+            !register(
+                &mut map,
+                &on,
+                &mut rules,
+                &mur_tools(),
+                tool(h.path(), None)
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            resolve_tool_policy(&rules, PARALLEL_JOBS),
+            ToolPolicy::Ask,
+            "{pattern}"
+        );
+    }
+    // An exact rule on the built-in is the user's word for it: left alone.
+    let mut rules: Vec<mur_common::agent::ToolRule> = serde_yaml_ng::from_str(
+        "- pattern: parallel_jobs\n  policy: allow\n- pattern: mcp__mur-tools__parallel_jobs\n  policy: ask",
+    )
+    .unwrap();
+    let mut map = map_with_mcp();
+    register(
+        &mut map,
+        &on,
+        &mut rules,
+        &mur_tools(),
+        tool(h.path(), None),
+    );
+    assert_eq!(
+        resolve_tool_policy(&rules, PARALLEL_JOBS),
+        ToolPolicy::Allow
+    );
 }

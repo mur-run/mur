@@ -53,6 +53,10 @@ pub fn jobs_dispatch_run_dir(mur_home: &std::path::Path, run_id: &str) -> std::p
 /// Most jobs one request may carry. Same guardrail as the MCP tool.
 pub const MAX_JOBS: usize = 32;
 
+/// Largest request file the daemon will read. Far above any real request
+/// (32 job descriptions plus a signature); it only bounds a hostile one.
+pub const MAX_REQUEST_BYTES: u64 = 4 * 1024 * 1024;
+
 /// Domain tag: a signature over one request type must never verify as another.
 const DOMAIN: &str = "mur-jobs-dispatch-request-v1\n";
 

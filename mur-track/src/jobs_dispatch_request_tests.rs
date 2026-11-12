@@ -8,7 +8,8 @@ fn dispatch() -> JobsDispatch {
             agent: "coder".into(),
         }],
         max_concurrency: 4,
-        cwd: Some("/work".into()),
+        // Absolute on every platform: `/work` is not on Windows.
+        cwd: Some(std::env::temp_dir().to_string_lossy().into_owned()),
         cwd_inferred: false,
         run_id: format!("run-{}", uuid::Uuid::now_v7()),
         channel_id: uuid::Uuid::now_v7().to_string(),

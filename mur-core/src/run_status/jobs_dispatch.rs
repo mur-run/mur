@@ -19,7 +19,8 @@ use super::{RUN_SCHEMA, RunKind, RunState, State, StepState};
 
 /// `Ok(None)` when the daemon wrote no jobs verdict for `run_id`. A present
 /// but unreadable verdict is an error, never "no such run". A fleet-scoped
-/// lookup never finds one: these live in agent trees only.
+/// lookup never finds one: these live in the daemon's own
+/// `<mur_home>/jobs-dispatch/<run_id>/` tree only.
 pub fn load_in(
     mur_home: &Path,
     fleet: Option<&str>,

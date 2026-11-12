@@ -64,10 +64,14 @@ pub fn shadowed_mcp_names(servers: &[mur_common::agent::McpServerEntry]) -> Vec<
 /// model sees one tool with one schema. Returns the removed wire names, which
 /// the MCP refresh must keep out too. A no-op (empty) otherwise: the MCP tool
 /// stays, exactly as before.
+///
+/// When the built-in goes in, an `ask` written for the MCP tool it replaces is
+/// carried over: `rules` gains an exact `parallel_jobs: ask` rule, so the
+/// call-time gate still asks before fanning out (review P3, #2386).
 pub fn register(
     tool_map: &mut std::collections::HashMap<String, Arc<dyn ToolExecutor>>,
     cfg: &ParallelJobsConfig,
-    rules: &[mur_common::agent::ToolRule],
+    rules: &mut Vec<mur_common::agent::ToolRule>,
     mcp: &[mur_common::agent::McpServerEntry],
     tool: ParallelJobsTool,
 ) -> Vec<String> {
@@ -77,18 +81,45 @@ pub fn register(
     // wildcard) was written before the built-in existed and means "this
     // agent may not fan out". Honour it: the replacement must not be a way
     // around a rule the user already has.
-    let denied = |name: &str| resolve_tool_policy(rules, name) == ToolPolicy::Deny;
+    let policy = |name: &str| resolve_tool_policy(rules, name);
     if !enabled_in(cfg, &tool.agent_name)
-        || denied(PARALLEL_JOBS)
-        || shadowed.iter().any(|n| denied(n))
+        || policy(PARALLEL_JOBS) == ToolPolicy::Deny
+        || shadowed.iter().any(|n| policy(n) == ToolPolicy::Deny)
     {
         return Vec::new();
+    }
+    if let Some(rule) = inherited_ask(rules, &shadowed) {
+        rules.insert(0, rule);
     }
     for name in &shadowed {
         tool_map.remove(name);
     }
     tool_map.insert(PARALLEL_JOBS.to_string(), Arc::new(tool));
     shadowed
+}
+
+/// An exact `parallel_jobs: ask` rule when a replaced MCP name resolves to
+/// `ask` through an explicit rule but the built-in name resolves to `allow`
+/// only through a glob. An exact rule on `parallel_jobs` is the user's word
+/// on the built-in itself and is left alone; with no rule at all the default
+/// is already `ask`.
+fn inherited_ask(
+    rules: &[mur_common::agent::ToolRule],
+    shadowed: &[String],
+) -> Option<mur_common::agent::ToolRule> {
+    use mur_common::agent::{ToolPolicy, ToolRule, resolve_tool_policy_opt, resolve_tool_rule};
+    let built_in = resolve_tool_rule(rules, PARALLEL_JOBS);
+    let glob_allows =
+        built_in.is_some_and(|r| r.pattern != PARALLEL_JOBS && r.policy == ToolPolicy::Allow);
+    let mcp_asks = shadowed
+        .iter()
+        .any(|n| resolve_tool_policy_opt(rules, n) == Some(ToolPolicy::Ask));
+    (mcp_asks && glob_allows).then(|| ToolRule {
+        pattern: PARALLEL_JOBS.to_string(),
+        policy: ToolPolicy::Ask,
+        risk: None,
+        bypass_builtin_tier_floor: Default::default(),
+    })
 }
 
 pub struct ParallelJobsTool {
