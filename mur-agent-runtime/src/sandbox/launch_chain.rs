@@ -126,6 +126,15 @@ impl LaunchChain {
                  repo a push is built from, so rewriting it redirects a human-approved push",
             );
         }
+        if path.starts_with(
+            self.mur_home
+                .join(mur_track::jobs_dispatch_request::JOBS_DISPATCH_STATE_DIR),
+        ) {
+            return Some(
+                "the daemon's parallel_jobs tree — the unsealed daemon and its child \
+                 write there, so a planted link or a swapped request runs outside the sandbox",
+            );
+        }
         if self.is_launch_artifact(path) {
             return Some(
                 "MUR's runtime binary or a per-agent symlink — exec'd before \
@@ -406,6 +415,12 @@ impl LaunchChain {
             // daemon-written and agent-read-only. In this list, a Landlock write
             // grant overlapping it is dropped whole and SBPL denies it.
             mur_common::git_push::broker_dir(&self.mur_home),
+            // #2379: the daemon's `parallel_jobs` tree. The daemon and the
+            // child it launches are unsealed and write here, so an agent that
+            // could too would plant a link they write through, or swap the
+            // admitted request before the child reads it.
+            self.mur_home
+                .join(mur_track::jobs_dispatch_request::JOBS_DISPATCH_STATE_DIR),
         ];
         out.push(self.bin_dir.join(RUNTIME_BINARY));
         out.extend(self.existing_agent_symlinks());

@@ -10,6 +10,9 @@
 //!   agent's sandbox): `<mur_home>/agents/<agent>/runs/<run_id>/`, inside
 //!   that agent's home, so no other agent can write it (#2320). The agent is
 //!   named by `MUR_RUN_OWNER`, which the runtime sets on its children;
+//! - a sealed agent's `parallel_jobs` run, hosted by `mur-daemon`'s child
+//!   (#2379): `<mur_home>/jobs-dispatch/<run_id>/`, which no sandboxed agent
+//!   may write, because that child is unsealed;
 //! - every other run (the operator's own `mur workflow run`):
 //!   `<mur_home>/runs/<run_id>/`, which no sandboxed agent may write.
 //!
@@ -56,6 +59,9 @@ fn fleet_of(kind: RunKind, channel_id: Option<&str>) -> Option<&str> {
 /// dispatching agent's tree for a run started inside an agent, `runs/`
 /// otherwise.
 fn dir_for(mur_home: &Path, kind: RunKind, channel_id: Option<&str>, run_id: &str) -> PathBuf {
+    if process_is_jobs_dispatch_host() && fleet_of(kind, channel_id).is_none() {
+        return mur_track::jobs_dispatch_request::jobs_dispatch_run_dir(mur_home, run_id);
+    }
     dir_for_owner(
         mur_home,
         kind,
@@ -76,6 +82,17 @@ fn process_run_owner() -> Option<String> {
     } else {
         mur_common::paths::run_owner_from_env()
     }
+}
+
+/// Is this process the daemon-launched host of a sealed agent's
+/// `parallel_jobs` run (#2379)? Then its records go to the daemon's own
+/// tree: this process is unsealed, and the requester can write (and plant
+/// links in) its own home. Unit tests never are, for the same reason as
+/// [`process_run_owner`].
+fn process_is_jobs_dispatch_host() -> bool {
+    !cfg!(test)
+        && std::env::var_os(mur_track::jobs_dispatch_request::JOBS_DISPATCH_HOSTED_ENV)
+            .is_some_and(|v| v == "1")
 }
 
 /// [`dir_for`] with the owning agent passed in, not read from the env.
@@ -118,6 +135,11 @@ fn candidate_dirs(mur_home: &Path, run_id: &str) -> Vec<PathBuf> {
     fleet_names(mur_home)
         .into_iter()
         .map(|f| fleet_run_dir(mur_home, &f, run_id))
+        // Before the agent trees: no agent can write this one, so a copy an
+        // agent planted in its own home never shadows the daemon's run.
+        .chain(std::iter::once(
+            mur_track::jobs_dispatch_request::jobs_dispatch_run_dir(mur_home, run_id),
+        ))
         .chain(
             agent_run_roots(mur_home)
                 .into_iter()
@@ -436,6 +458,10 @@ pub fn list_ids(mur_home: &Path) -> Result<Vec<String>> {
         // Same rule: one unlistable agent tree hides only that agent's runs.
         ids.extend(list_dir_ids(&root).unwrap_or_default());
     }
+    ids.extend(
+        list_dir_ids(&mur_home.join(mur_track::jobs_dispatch_request::JOBS_DISPATCH_STATE_DIR))
+            .unwrap_or_default(),
+    );
     ids.extend(list_dir_ids(&runs_dir(mur_home))?);
     ids.sort();
     ids.dedup();

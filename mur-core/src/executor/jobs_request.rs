@@ -13,11 +13,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use mur_common::config::{Config, ParallelJobsConfig};
 use mur_common::identity::AgentIdentity;
-use mur_track::jobs_dispatch_request::{JOBS_DISPATCH_RECORD_FILE, JobsDispatchRequest};
+use mur_track::jobs_dispatch_request::{
+    JOBS_DISPATCH_STATE_DIR, JobsDispatchRequest, jobs_dispatch_run_dir,
+};
 
 use crate::a2a_dial::canonicalize_agent_name;
 
 /// Parse a request file without trusting anything in it yet.
+#[allow(dead_code)] // consumed by mur-daemon's jobs sweep; the `mur` bin compiles this module too
 pub fn read_request(path: &Path) -> Result<JobsDispatchRequest> {
     let text = std::fs::read_to_string(path).context("read request")?;
     serde_yaml_ng::from_str(&text).context("parse request")
@@ -95,25 +98,30 @@ pub fn authorize(mur_home: &Path, req: &JobsDispatchRequest, cfg: &Config) -> Re
     Ok(())
 }
 
-/// Where the requester's run lives: its own `agents/<agent>/runs/<run_id>/`
-/// (#2320), so `mur_job_status` finds the verdict and the run in one place.
+/// Claim `run_id` in the daemon's own tree: atomically create
+/// `<mur_home>/jobs-dispatch/<run_id>/` and return it. An existing entry
+/// (directory, file or link) means the id was already decided — a replay.
+///
+/// The tree is write-denied to every sandboxed agent, so nothing in it was
+/// planted; `create_dir` (not `_all`) also refuses to follow a final-component
+/// symlink, and the parent is refused if it is itself a link.
 #[allow(dead_code)] // consumed by mur-daemon's jobs sweep; the `mur` bin compiles this module too
-pub fn run_dir(mur_home: &Path, req: &JobsDispatchRequest) -> PathBuf {
-    mur_common::paths::agent_runs_dir(mur_home, &req.dispatch.requested_by)
-        .join(&req.dispatch.run_id)
-}
-
-/// `bail!` unless no verdict was recorded for this run id yet: a record means
-/// the id is spent, and a replay must not overwrite the original verdict.
-#[allow(dead_code)] // consumed by mur-daemon's jobs sweep; the `mur` bin compiles this module too
-pub fn ensure_unspent(mur_home: &Path, req: &JobsDispatchRequest) -> Result<()> {
-    if run_dir(mur_home, req)
-        .join(JOBS_DISPATCH_RECORD_FILE)
-        .exists()
-    {
-        bail!("run id already used (replay)");
+pub fn spend_run_id(mur_home: &Path, req: &JobsDispatchRequest) -> Result<PathBuf> {
+    let root = mur_home.join(JOBS_DISPATCH_STATE_DIR);
+    std::fs::create_dir_all(&root).context("create jobs-dispatch dir")?;
+    ensure!(
+        !std::fs::symlink_metadata(&root)?.file_type().is_symlink(),
+        "{} is a symlink; refusing to write through it",
+        root.display()
+    );
+    let dir = jobs_dispatch_run_dir(mur_home, &req.dispatch.run_id);
+    match std::fs::create_dir(&dir) {
+        Ok(()) => Ok(dir),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            bail!("run id already used (replay)")
+        }
+        Err(e) => Err(e).with_context(|| format!("create {}", dir.display())),
     }
-    Ok(())
 }
 
 #[cfg(test)]

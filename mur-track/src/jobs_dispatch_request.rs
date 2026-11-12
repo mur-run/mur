@@ -21,12 +21,34 @@ use mur_common::identity::{AgentIdentity, verify_bytes};
 /// File-drop directory, relative to the MUR home.
 pub const JOBS_DISPATCH_REQUEST_DIR: &str = "inbox/jobs-dispatch-requests";
 
-/// The daemon's verdict, beside the run's own record in the requester's
-/// `agents/<agent>/runs/<run_id>/`. Its existence also marks the id as spent.
+/// The daemon's own tree, relative to the MUR home:
+/// `<mur_home>/jobs-dispatch/<run_id>/` holds the admitted request, the
+/// verdict, the child's log, and the run's own `run.json`. Write-denied to
+/// every sandboxed agent by the launch chain: the daemon and its child are
+/// unsealed, so a directory an agent could write would let it plant a symlink
+/// they write through, or swap the request between admission and launch.
+pub const JOBS_DISPATCH_STATE_DIR: &str = "jobs-dispatch";
+
+/// The daemon's verdict in [`jobs_dispatch_run_dir`]. Creating that directory
+/// is what spends the run id; this file says how it was decided.
 pub const JOBS_DISPATCH_RECORD_FILE: &str = "jobs-dispatch.json";
+
+/// The request as the daemon admitted it: re-serialized from the verified
+/// value, never copied from the inbox. The child reads only this.
+pub const JOBS_DISPATCH_ADMITTED_FILE: &str = "request.yaml";
 
 /// The launched child's stdout+stderr, beside [`JOBS_DISPATCH_RECORD_FILE`].
 pub const JOBS_RUN_LOG_FILE: &str = "jobs_run.log";
+
+/// Set (to `1`) by the daemon on the child it launches, so that run records
+/// in [`jobs_dispatch_run_dir`] and not in any agent's home.
+pub const JOBS_DISPATCH_HOSTED_ENV: &str = "MUR_JOBS_DISPATCH_HOSTED";
+
+/// `<mur_home>/jobs-dispatch/<run_id>/`. `run_id` must be a single path
+/// segment ([`JobsDispatch::check_shape`]).
+pub fn jobs_dispatch_run_dir(mur_home: &std::path::Path, run_id: &str) -> std::path::PathBuf {
+    mur_home.join(JOBS_DISPATCH_STATE_DIR).join(run_id)
+}
 
 /// Most jobs one request may carry. Same guardrail as the MCP tool.
 pub const MAX_JOBS: usize = 32;

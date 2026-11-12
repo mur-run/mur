@@ -2,7 +2,7 @@
 //!
 //! A sealed agent's `parallel_jobs` returns its handle BEFORE any process
 //! exists: the daemon decides later and writes
-//! `agents/<requester>/runs/<run_id>/jobs-dispatch.json`. A rejected request
+//! `jobs-dispatch/<run_id>/jobs-dispatch.json` in its own tree. A rejected request
 //! never gets a `run.json` or a channel, so without this the handle polls as
 //! "no run recorded" and the reason sits unread. Consulted only when there is
 //! no run record — once the child records one, that record is the truth.
@@ -28,8 +28,14 @@ pub fn load_in(
     if fleet.is_some() {
         return Ok(None);
     }
-    let path = super::store::run_dir(mur_home, run_id).join(JOBS_DISPATCH_RECORD_FILE);
-    let bytes = match std::fs::read(&path) {
+    if !mur_common::paths::is_single_segment(run_id) {
+        return Ok(None);
+    }
+    // Only the daemon's own tree, never the id search: a verdict anywhere an
+    // agent can write would be a forgery.
+    let dir = mur_track::jobs_dispatch_request::jobs_dispatch_run_dir(mur_home, run_id);
+    let path = dir.join(JOBS_DISPATCH_RECORD_FILE);
+    let bytes = match mur_common::paths::read_unlinked(&dir, JOBS_DISPATCH_RECORD_FILE) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
         Ok(b) => b,
@@ -105,7 +111,7 @@ mod tests {
     use super::*;
 
     fn write(home: &Path, run_id: &str, body: serde_json::Value) {
-        let dir = mur_common::paths::agent_runs_dir(home, "pm").join(run_id);
+        let dir = mur_track::jobs_dispatch_request::jobs_dispatch_run_dir(home, run_id);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(JOBS_DISPATCH_RECORD_FILE), body.to_string()).unwrap();
     }

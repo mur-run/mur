@@ -83,12 +83,27 @@ fn self_delegation_is_refused_even_when_allowlisted() {
 }
 
 #[test]
-fn a_recorded_verdict_spends_the_run_id() {
+fn spending_a_run_id_is_once_only() {
     let (tmp, id) = home("");
     let r = req(&id, "coder");
-    ensure_unspent(tmp.path(), &r).unwrap();
-    let dir = run_dir(tmp.path(), &r);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join(JOBS_DISPATCH_RECORD_FILE), "{}").unwrap();
-    assert!(ensure_unspent(tmp.path(), &r).is_err());
+    let dir = spend_run_id(tmp.path(), &r).unwrap();
+    assert_eq!(dir, jobs_dispatch_run_dir(tmp.path(), &r.dispatch.run_id));
+    assert!(dir.is_dir());
+    let err = spend_run_id(tmp.path(), &r).unwrap_err();
+    assert!(err.to_string().contains("replay"), "{err}");
+}
+
+/// Even a planted link at the run's path (the tree is write-denied to agents,
+/// so this is defence in depth) reads as spent, never as a place to write.
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_run_path_is_never_written_through() {
+    let (tmp, id) = home("");
+    let r = req(&id, "coder");
+    let victim = tmp.path().join("victim");
+    std::fs::create_dir_all(&victim).unwrap();
+    let dir = jobs_dispatch_run_dir(tmp.path(), &r.dispatch.run_id);
+    std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&victim, &dir).unwrap();
+    assert!(spend_run_id(tmp.path(), &r).is_err());
 }

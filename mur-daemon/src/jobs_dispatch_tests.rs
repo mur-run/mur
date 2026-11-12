@@ -71,8 +71,9 @@ fn fake_mur(home: &Path) -> Option<PathBuf> {
     std::fs::write(
         &fake,
         format!(
-            "#!/bin/sh\n{{ echo \"$@\"; echo \"owner=${}\"; }} > {o}.tmp && mv {o}.tmp {o}\n",
+            "#!/bin/sh\n{{ echo \"$@\"; echo \"owner=${}\"; echo \"hosted=${}\"; }} > {o}.tmp && mv {o}.tmp {o}\n",
             mur_common::paths::RUN_OWNER_ENV,
+            JOBS_DISPATCH_HOSTED_ENV,
             o = out.display(),
         ),
     )
@@ -102,7 +103,8 @@ fn launched(home: &Path) -> Option<String> {
 }
 
 fn record(home: &Path, req: &JobsDispatchRequest) -> Option<JobsDispatchRecord> {
-    let p = run_dir(home, req).join(JOBS_DISPATCH_RECORD_FILE);
+    let p = mur_track::jobs_dispatch_request::jobs_dispatch_run_dir(home, &req.dispatch.run_id)
+        .join(JOBS_DISPATCH_RECORD_FILE);
     std::fs::read(p)
         .ok()
         .map(|b| serde_json::from_slice(&b).unwrap())
@@ -130,9 +132,16 @@ fn verified_request_launches_once_as_the_requester_and_records_it() {
 
     let out = launched(f.home()).expect("child launched");
     assert!(out.contains("job run-request"), "{out}");
+    let admitted =
+        mur_track::jobs_dispatch_request::jobs_dispatch_run_dir(f.home(), &req.dispatch.run_id)
+            .join(JOBS_DISPATCH_ADMITTED_FILE);
     assert!(
-        out.contains("owner=pm"),
-        "run must be recorded in pm's tree: {out}"
+        out.contains(&admitted.display().to_string()),
+        "the child reads the daemon's admitted copy: {out}"
+    );
+    assert!(
+        out.lines().any(|l| l == "owner=") && out.lines().any(|l| l == "hosted=1"),
+        "the run is hosted in the daemon tree, not an agent home: {out:?}"
     );
     let rec = record(f.home(), &req).expect("verdict written");
     assert_eq!(rec.status, JobsDispatchStatus::Launched);
@@ -261,4 +270,91 @@ async fn a_rejected_dispatch_polls_as_failed_with_its_reason() {
     assert_eq!(status.state, mur_core::run_status::State::Failed);
     let err = status.run.steps[0].error.clone().unwrap();
     assert!(err.contains("parallel_jobs.targets"), "{err}");
+}
+
+/// Review P1 (#2386): the requester can write its own home, so nothing the
+/// unsealed daemon writes may live there. A link the agent planted at its
+/// old run path is never followed: the daemon writes only its own tree.
+#[cfg(unix)]
+#[test]
+fn a_link_planted_in_the_requesters_home_is_never_written_through() {
+    let f = fixture("");
+    let Some(bin) = fake_mur(f.home()) else {
+        eprintln!("skipped: sandbox forbids exec of a temp script");
+        return;
+    };
+    let req = JobsDispatchRequest::create(dispatch("coder"), &f.requester, 0, Utc::now());
+    let victim = f.home().join("victim");
+    std::fs::create_dir_all(&victim).unwrap();
+    std::fs::write(victim.join(JOBS_RUN_LOG_FILE), "precious").unwrap();
+    let runs = mur_common::paths::agent_runs_dir(f.home(), "pm");
+    std::fs::create_dir_all(&runs).unwrap();
+    std::os::unix::fs::symlink(&victim, runs.join(&req.dispatch.run_id)).unwrap();
+
+    drop_request(f.home(), &req);
+    sweep_once(f.home(), &bin);
+    launched(f.home()).expect("launched");
+    assert_eq!(
+        std::fs::read_to_string(victim.join(JOBS_RUN_LOG_FILE)).unwrap(),
+        "precious"
+    );
+    assert_eq!(std::fs::read_dir(&victim).unwrap().count(), 1);
+}
+
+/// A link planted at the daemon's own run path (defence in depth: agents are
+/// write-denied there) reads as a spent id; nothing is written or launched.
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_daemon_run_path_is_refused() {
+    let f = fixture("");
+    let bin = f.home().join("must-not-run");
+    let req = JobsDispatchRequest::create(dispatch("coder"), &f.requester, 0, Utc::now());
+    let victim = f.home().join("victim");
+    std::fs::create_dir_all(&victim).unwrap();
+    let dir =
+        mur_track::jobs_dispatch_request::jobs_dispatch_run_dir(f.home(), &req.dispatch.run_id);
+    std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&victim, &dir).unwrap();
+    drop_request(f.home(), &req);
+    sweep_once(f.home(), &bin);
+    assert_eq!(std::fs::read_dir(&victim).unwrap().count(), 0);
+}
+
+/// Review P2 (#2386): the inbox file is swapped for another signed request
+/// after it was read. The launched child must get the ADMITTED bytes, and
+/// the daemon must never reread the inbox path.
+#[cfg(unix)]
+#[test]
+fn a_request_swapped_after_admission_is_never_executed() {
+    let f = fixture("");
+    let Some(bin) = fake_mur(f.home()) else {
+        eprintln!("skipped: sandbox forbids exec of a temp script");
+        return;
+    };
+    let admitted = JobsDispatchRequest::create(dispatch("coder"), &f.requester, 0, Utc::now());
+    let path = drop_request(f.home(), &admitted);
+    let read = read_request(&path).unwrap();
+    // The swap: same file, a different (stale, so daemon-inadmissible)
+    // request that is still validly signed.
+    let mut stale_dispatch = dispatch("coder");
+    stale_dispatch.run_id = admitted.dispatch.run_id.clone();
+    stale_dispatch.jobs[0].description = "something else".into();
+    let swapped = JobsDispatchRequest::create(
+        stale_dispatch,
+        &f.requester,
+        0,
+        Utc::now() - chrono::Duration::hours(1),
+    );
+    std::fs::write(&path, serde_yaml_ng::to_string(&swapped).unwrap()).unwrap();
+
+    admit(f.home(), &read, &cfg(f.home()), &bin).unwrap();
+    launched(f.home()).expect("launched");
+    let kept = mur_track::jobs_dispatch_request::jobs_dispatch_run_dir(
+        f.home(),
+        &admitted.dispatch.run_id,
+    )
+    .join(JOBS_DISPATCH_ADMITTED_FILE);
+    let child_sees = mur_core::executor::jobs_request::read_request(&kept).unwrap();
+    assert_eq!(child_sees.dispatch, admitted.dispatch);
+    assert_eq!(child_sees.requested_at, admitted.requested_at);
 }

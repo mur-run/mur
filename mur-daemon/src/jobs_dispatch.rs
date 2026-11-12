@@ -17,12 +17,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use mur_common::config::Config;
-use mur_core::executor::jobs_request::{
-    authorize, ensure_unspent, read_request, run_dir, verify_request,
-};
+use mur_core::executor::jobs_request::{authorize, read_request, spend_run_id, verify_request};
 use mur_track::jobs_dispatch_request::{
-    JOBS_DISPATCH_RECORD_FILE, JOBS_DISPATCH_REQUEST_DIR, JOBS_RUN_LOG_FILE, JobsDispatchRecord,
-    JobsDispatchRequest, JobsDispatchStatus,
+    JOBS_DISPATCH_ADMITTED_FILE, JOBS_DISPATCH_HOSTED_ENV, JOBS_DISPATCH_RECORD_FILE,
+    JOBS_DISPATCH_REQUEST_DIR, JOBS_RUN_LOG_FILE, JobsDispatchRecord, JobsDispatchRequest,
+    JobsDispatchStatus,
 };
 
 /// Same loop shape and config knobs as the fleet sweep (spec Q2): both
@@ -68,8 +67,8 @@ pub fn sweep(mur_dir: &Path, dir: &Path, cfg: &Config, mur_bin: &Path) -> anyhow
     paths.sort();
     for path in paths {
         // Single-shot either way: a rejected request must not be retried
-        // forever. A launched one is moved beside its run (the child reads it
-        // there), so it is not in the inbox to remove.
+        // forever. A launched one lives on as the daemon's own serialized
+        // copy, so the inbox file is never needed again.
         let verdict = process_one(mur_dir, &path, cfg, mur_bin);
         let _ = std::fs::remove_file(&path);
         if let Err(e) = verdict {
@@ -80,23 +79,36 @@ pub fn sweep(mur_dir: &Path, dir: &Path, cfg: &Config, mur_bin: &Path) -> anyhow
 }
 
 fn process_one(mur_dir: &Path, path: &Path, cfg: &Config, mur_bin: &Path) -> anyhow::Result<()> {
+    // Read ONCE. Every later step uses this value, never the inbox path: the
+    // inbox is writable by every sandboxed agent, so a reread could execute
+    // bytes other than the ones that passed the gates below.
     let req = read_request(path)?;
+    admit(mur_dir, &req, cfg, mur_bin)
+}
+
+/// Every gate, then the launch, on one already-read request. `pub(crate)`
+/// for the substitution test.
+pub(crate) fn admit(
+    mur_dir: &Path,
+    req: &JobsDispatchRequest,
+    cfg: &Config,
+    mur_bin: &Path,
+) -> anyhow::Result<()> {
     // Shape, freshness, signature. From here on `requested_by` is a verified
     // fact; before it, nothing in the file may be written anywhere.
-    verify_request(mur_dir, &req, Some(cfg.fleet_dispatch.request_max_age_secs))?;
-    // A record means this run id was already decided: a replayed request.
-    // Checked before writing anything, so a replay cannot overwrite the
-    // original verdict either.
-    ensure_unspent(mur_dir, &req)?;
-    let record_path = run_dir(mur_dir, &req).join(JOBS_DISPATCH_RECORD_FILE);
+    verify_request(mur_dir, req, Some(cfg.fleet_dispatch.request_max_age_secs))?;
+    // Atomically creates the run's directory in the daemon's own tree; an
+    // existing one is a replay. Nothing is written before this succeeds, so
+    // a replay cannot overwrite the original verdict either.
+    let run_dir = spend_run_id(mur_dir, req)?;
+    let record_path = run_dir.join(JOBS_DISPATCH_RECORD_FILE);
 
-    let launched =
-        authorize(mur_dir, &req, cfg).and_then(|()| launch(mur_dir, path, &req, mur_bin));
+    let launched = authorize(mur_dir, req, cfg).and_then(|()| launch(&run_dir, req, mur_bin));
     match launched {
         Ok(pid) => {
             write_record(
                 &record_path,
-                &req,
+                req,
                 JobsDispatchStatus::Launched,
                 None,
                 Some(pid),
@@ -109,7 +121,7 @@ fn process_one(mur_dir: &Path, path: &Path, cfg: &Config, mur_bin: &Path) -> any
             // points, so `mur_job_status <run_id>` does not just stay silent.
             let _ = write_record(
                 &record_path,
-                &req,
+                req,
                 JobsDispatchStatus::Rejected,
                 Some(format!("{e:#}")),
                 None,
@@ -119,29 +131,23 @@ fn process_one(mur_dir: &Path, path: &Path, cfg: &Config, mur_bin: &Path) -> any
     }
 }
 
-/// Spawn `mur job run-request` on a copy of the request kept beside the run,
-/// so the child re-verifies the very bytes the daemon admitted. Returns the
-/// child's pid.
-fn launch(
-    mur_dir: &Path,
-    inbox_path: &Path,
-    req: &JobsDispatchRequest,
-    mur_bin: &Path,
-) -> anyhow::Result<u32> {
-    let run_dir = run_dir(mur_dir, req);
-    std::fs::create_dir_all(&run_dir).context("create run dir")?;
-    let kept = run_dir.join("jobs-dispatch-request.yaml");
-    std::fs::copy(inbox_path, &kept).context("keep request beside the run")?;
+/// Spawn `mur job run-request` on the admitted request, serialized from the
+/// verified value into the daemon's own `run_dir`, so the child re-verifies
+/// exactly what passed admission. Returns the child's pid.
+fn launch(run_dir: &Path, req: &JobsDispatchRequest, mur_bin: &Path) -> anyhow::Result<u32> {
+    let kept = run_dir.join(JOBS_DISPATCH_ADMITTED_FILE);
+    std::fs::write(&kept, serde_yaml_ng::to_string(req)?).context("keep the admitted request")?;
     let log = std::fs::File::create(run_dir.join(JOBS_RUN_LOG_FILE)).context("create run log")?;
     let log_err = log.try_clone()?;
     // No signing handoff: this process is unsealed, so the child loads the
-    // router's key from disk — the whole point of launching it here.
-    // `MUR_RUN_OWNER` puts the run's own record in the requester's tree,
-    // beside this verdict, where the agent polls it.
+    // router's key from disk — the whole point of launching it here. The
+    // hosted marker records the run in this daemon-owned tree, never in the
+    // requester's home, which the requester can write (and plant links in).
     let mut child = std::process::Command::new(mur_bin)
         .args(["job", "run-request"])
         .arg(&kept)
-        .env(mur_common::paths::RUN_OWNER_ENV, &req.dispatch.requested_by)
+        .env(JOBS_DISPATCH_HOSTED_ENV, "1")
+        .env_remove(mur_common::paths::RUN_OWNER_ENV)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log))
         .stderr(std::process::Stdio::from(log_err))
@@ -172,9 +178,6 @@ fn write_record(
         pid,
         decided_at: chrono::Utc::now(),
     };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, serde_json::to_vec_pretty(&record)?)?;
     std::fs::rename(&tmp, path)?;

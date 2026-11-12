@@ -685,6 +685,23 @@ fn parallel_jobs_agents_get_the_jobs_inbox_and_heartbeat() {
     assert!(policy.fs_write.contains(&inbox), "{:?}", policy.fs_write);
     assert!(policy.fs_read.contains(&heartbeat), "{:?}", policy.fs_read);
     assert!(inbox.is_dir() && heartbeat.is_dir());
+    // The daemon's run tree: readable for `mur_job_status`, never writable.
+    let state = super::super::jobs_dispatch_state_dir(mur_home);
+    assert!(policy.fs_read.contains(&state), "{:?}", policy.fs_read);
+    assert!(
+        !policy
+            .fs_write
+            .iter()
+            .any(|w| w.starts_with(&state) || state.starts_with(w)),
+        "{:?}",
+        policy.fs_write
+    );
+    assert!(
+        policy
+            .launch_chain
+            .protects_write(&state.join("run-1").join("request.yaml"))
+            .is_some()
+    );
 
     let other = mur_home.join("agents").join("qa");
     std::fs::create_dir_all(&other).unwrap();

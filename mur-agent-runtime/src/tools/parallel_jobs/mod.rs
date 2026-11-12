@@ -60,7 +60,7 @@ pub fn shadowed_mcp_names(servers: &[mur_common::agent::McpServerEntry]) -> Vec<
 }
 
 /// Register the built-in for `tool.agent_name` when the config offers it and
-/// no profile rule denies it, removing MUR's own MCP `parallel_jobs` so the
+/// no profile rule denies it or the MCP tool it replaces, removing MUR's own MCP `parallel_jobs` so the
 /// model sees one tool with one schema. Returns the removed wire names, which
 /// the MCP refresh must keep out too. A no-op (empty) otherwise: the MCP tool
 /// stays, exactly as before.
@@ -72,12 +72,18 @@ pub fn register(
     tool: ParallelJobsTool,
 ) -> Vec<String> {
     use mur_common::agent::{ToolPolicy, resolve_tool_policy};
+    let shadowed = shadowed_mcp_names(mcp);
+    // A deny on the MCP tool this replaces (exact, or a `mcp__mur-tools__*`
+    // wildcard) was written before the built-in existed and means "this
+    // agent may not fan out". Honour it: the replacement must not be a way
+    // around a rule the user already has.
+    let denied = |name: &str| resolve_tool_policy(rules, name) == ToolPolicy::Deny;
     if !enabled_in(cfg, &tool.agent_name)
-        || resolve_tool_policy(rules, PARALLEL_JOBS) == ToolPolicy::Deny
+        || denied(PARALLEL_JOBS)
+        || shadowed.iter().any(|n| denied(n))
     {
         return Vec::new();
     }
-    let shadowed = shadowed_mcp_names(mcp);
     for name in &shadowed {
         tool_map.remove(name);
     }
@@ -324,8 +330,7 @@ pub(crate) fn write_request(mur_home: &Path, req: &JobsDispatchRequest) -> anyho
 
 fn reply(mur_home: &Path, req: &JobsDispatchRequest, dropped_yes: bool) -> serde_json::Value {
     let d = &req.dispatch;
-    let log = mur_common::paths::agent_runs_dir(mur_home, &d.requested_by)
-        .join(&d.run_id)
+    let log = mur_track::jobs_dispatch_request::jobs_dispatch_run_dir(mur_home, &d.run_id)
         .join(JOBS_RUN_LOG_FILE);
     let mut out = serde_json::json!({
         "run_id": d.run_id,

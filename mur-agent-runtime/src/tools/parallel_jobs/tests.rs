@@ -253,3 +253,38 @@ fn register_is_a_no_op_when_not_offered_or_denied() {
     assert!(register(&mut map, &on, &deny, &mur_tools(), tool(h.path(), None)).is_empty());
     assert!(map.contains_key("mcp__mur-tools__parallel_jobs") && !map.contains_key(PARALLEL_JOBS));
 }
+
+/// Review P2 (#2386): a deny written for the MCP tool, exact or server-wide,
+/// keeps the built-in out too — and leaves the (denied) MCP entry where the
+/// policy layer already refuses it.
+#[test]
+fn a_deny_on_the_replaced_mcp_tool_keeps_the_built_in_out() {
+    let h = home(CFG);
+    let on: ParallelJobsConfig = serde_yaml_ng::from_str("targets: [coder]").unwrap();
+    for pattern in [
+        "mcp__mur-tools__parallel_jobs",
+        "mcp__mur-tools__*",
+        "mcp__*",
+    ] {
+        let deny: Vec<mur_common::agent::ToolRule> =
+            serde_yaml_ng::from_str(&format!("- pattern: \"{pattern}\"\n  policy: deny")).unwrap();
+        let mut map = map_with_mcp();
+        assert!(
+            register(&mut map, &on, &deny, &mur_tools(), tool(h.path(), None)).is_empty(),
+            "{pattern}"
+        );
+        assert!(!map.contains_key(PARALLEL_JOBS), "{pattern}");
+        assert!(
+            map.contains_key("mcp__mur-tools__parallel_jobs"),
+            "{pattern}"
+        );
+    }
+    // An allow on the MCP name (or a deny on an unrelated one) changes nothing.
+    let rules: Vec<mur_common::agent::ToolRule> = serde_yaml_ng::from_str(
+        "- pattern: mcp__mur-tools__parallel_jobs\n  policy: allow\n- pattern: mcp__other__*\n  policy: deny",
+    )
+    .unwrap();
+    let mut map = map_with_mcp();
+    assert!(!register(&mut map, &on, &rules, &mur_tools(), tool(h.path(), None)).is_empty());
+    assert!(map.contains_key(PARALLEL_JOBS));
+}

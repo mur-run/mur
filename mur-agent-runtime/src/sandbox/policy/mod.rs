@@ -600,6 +600,11 @@ pub(crate) fn fleet_dispatch_dirs(mur_home: &Path) -> (PathBuf, PathBuf) {
     )
 }
 
+/// `<mur_home>/jobs-dispatch/`: the daemon's `parallel_jobs` run tree.
+pub(crate) fn jobs_dispatch_state_dir(mur_home: &Path) -> PathBuf {
+    mur_home.join(mur_track::jobs_dispatch_request::JOBS_DISPATCH_STATE_DIR)
+}
+
 pub(crate) fn jobs_dispatch_dirs(mur_home: &Path) -> (PathBuf, PathBuf) {
     (
         mur_home.join(mur_track::jobs_dispatch_request::JOBS_DISPATCH_REQUEST_DIR),

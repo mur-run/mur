@@ -383,9 +383,14 @@ impl SandboxPolicy {
             if !fs_write.contains(&inbox) {
                 fs_write.push(inbox);
             }
-            let _ = std::fs::create_dir_all(&heartbeat);
-            if std::fs::metadata(&heartbeat).is_ok() && !fs_read.contains(&heartbeat) {
-                fs_read.push(heartbeat);
+            // The daemon's run tree is READ only (`mur_job_status`, the run
+            // log): the launch chain write-denies it on every backend.
+            let state = jobs_dispatch_state_dir(mur_home);
+            for dir in [heartbeat, state] {
+                let _ = std::fs::create_dir_all(&dir);
+                if std::fs::metadata(&dir).is_ok() && !fs_read.contains(&dir) {
+                    fs_read.push(dir);
+                }
             }
         }
 
