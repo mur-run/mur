@@ -39,5 +39,8 @@ hex = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+# Real repos (worktrees, commits) for the reindex staleness tests; same spec as mur-core.
+git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
+libc = "0.2"
 # Re-exec hook for the sealed-agent half of `tests/cross_router_dispatch_e2e.rs`.
 ctor = "0.2"

@@ -178,6 +178,37 @@ impl CodebaseIndex {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// Hand a lock this process just acquired over to the worker it spawned,
+    /// so a crashed worker reads as a dead holder instead of blocking the
+    /// project for as long as the spawner lives.
+    pub fn hand_lock_to(&self, pid: u32) -> Result<()> {
+        let lock = IndexLock {
+            pid,
+            project_name: self.project_name.clone(),
+            started_at: chrono::Utc::now().to_rfc3339(),
+        };
+        let path = self.lock_path();
+        std::fs::write(&path, serde_json::to_string(&lock)?)
+            .map_err(|e| IndexStateIoError::new("writing index lock", &path, e))?;
+        Ok(())
+    }
+
+    /// Remove the lock only if it still names `pid`. A lock taken over by
+    /// someone else since then is left alone.
+    // Used by mur-daemon through the library; the `mur` bin compiles this
+    // module too and never calls it.
+    #[allow(dead_code)]
+    pub fn release_lock_if_held_by(&self, pid: u32) {
+        let path = self.lock_path();
+        let held = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|d| serde_json::from_str::<IndexLock>(&d).ok())
+            .is_some_and(|l| l.pid == pid);
+        if held {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
     /// Write progress for `mur project status` to read.
     pub fn write_progress(&self, progress: &IndexProgress) -> Result<()> {
         let path = self.progress_path();

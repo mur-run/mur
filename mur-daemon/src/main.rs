@@ -6,6 +6,7 @@ mod inbox;
 mod lock;
 mod mobile_server;
 mod monitor_tick;
+mod reindex_requests;
 mod relay_client;
 mod signal_server;
 mod skill_upgrade_tick;
@@ -66,6 +67,40 @@ fn process_event(event: &NormalizedEvent) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+/// How long a stop signal waits for in-flight reindex workers to be killed
+/// and their locks released before the daemon exits anyway.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Wait for SIGTERM (unix) or Ctrl-C, tell the reindex task to stop, give it
+/// [`SHUTDOWN_GRACE`] to clean up, then exit. Only installed while the
+/// reindex task runs; otherwise the default signal action stays in place.
+async fn exit_on_signal(stop: tokio::sync::watch::Sender<bool>, task: tokio::task::JoinHandle<()>) {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = term.recv() => {}
+                    _ = tokio::signal::ctrl_c() => {}
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "no SIGTERM handler; reindex workers rely on process-group teardown");
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
+
+    let _ = stop.send(true);
+    if tokio::time::timeout(SHUTDOWN_GRACE, task).await.is_err() {
+        tracing::warn!("reindex workers did not stop within the grace period");
+    }
+    std::process::exit(0);
 }
 
 /// git runs this same binary as `GIT_ASKPASS` for a broker push (https design §5). That
@@ -134,6 +169,15 @@ async fn daemon_main() -> Result<()> {
     // Memory-federation P0 — serve signed snapshot requests (best-effort loop;
     // verification + scope assembly happen here, outside every agent sandbox).
     snapshot_requests::spawn(mur_dir.clone());
+
+    // Sandboxed codebase reindex: sealed agents drop payload-free wake-ups,
+    // and stale indexes are rebuilt here, outside every sandbox. On SIGTERM /
+    // Ctrl-C the task kills its workers and releases their index locks
+    // before the process exits.
+    let (reindex_stop, reindex_stop_rx) = tokio::sync::watch::channel(false);
+    if let Some(task) = reindex_requests::spawn(mur_dir.clone(), reindex_stop_rx) {
+        tokio::spawn(exit_on_signal(reindex_stop, task));
+    }
 
     // #2116 — launch fleets a sealed agent requested but cannot sign for
     // (router != requester). Verified + re-authorized here, outside every
