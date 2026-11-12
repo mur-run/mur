@@ -69,6 +69,10 @@ fn a_held_lock_times_out_and_a_dropped_one_frees_the_next_writer() {
     assert!(lock(home.path(), "a", far()).unwrap().is_some());
 }
 
+// Unix-only: the holder takes the lock with Python's `fcntl`, which Windows
+// does not ship. The release-on-death property itself is the OS's on every
+// platform; only this way of exercising it is unix-specific.
+#[cfg(unix)]
 #[test]
 fn a_sigkilled_holder_does_not_block_the_next_writer() {
     // An OS advisory lock dies with its process: a child takes it, is
