@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use chrono::{Duration, Utc};
 use mur_agent_runtime::hitl::store::ChannelDecisionStore;
+use mur_channel::ChannelService;
 use mur_common::agent::{SshHostRule, SshKeyRule, SshKnownHost};
 use mur_common::hitl::HitlResponse;
 use mur_ssh_request::{RequestHost, SshRequest};
@@ -137,6 +138,25 @@ fn nothing_written_reads_not_approved_and_creates_nothing() {
     assert_eq!(state(&f), PairState::NotApproved);
     assert!(!f.agent_home().join(HITL_CHANNEL_FILE).exists());
     assert!(!f.agent_home().join(START_CHANNEL_FILE).exists());
+    // Opening the channel service would create (and migrate) the index.
+    assert!(!f.home.join("index").exists());
+}
+
+#[test]
+fn signed_status_reads_without_a_usable_index() {
+    let f = Fixture::new();
+    let at = Utc::now();
+    f.decide(&hash(), true, at);
+    f.mark(&hash(), at);
+    // Make the index impossible to open: `index` is a file, so nothing can
+    // create `index/channels/` under it. The channel files are untouched.
+    let index = f.home.join("index");
+    std::fs::remove_dir_all(&index).unwrap();
+    std::fs::write(&index, b"not a directory").unwrap();
+    assert!(ChannelService::open(&f.home).is_err());
+
+    assert!(matches!(state(&f), PairState::Signed { .. }));
+    assert!(index.is_file(), "the reader must not touch the index");
 }
 
 #[test]

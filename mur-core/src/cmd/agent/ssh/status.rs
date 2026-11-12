@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use mur_agent_runtime::hitl::integrity;
 use mur_agent_runtime::hitl::remembered::{LiveDecision, live_decisions, signed_allows};
 use mur_agent_runtime::hitl::ssh_action_hash;
-use mur_channel::ChannelService;
+use mur_channel::ChannelStore;
 use mur_common::agent::{HITL_CHANNEL_FILE, START_CHANNEL_FILE, SshEntitlement};
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use mur_common::identity::AgentIdentity;
@@ -152,25 +152,31 @@ struct Folds {
     history: HashSet<(String, DateTime<Utc>)>,
 }
 
-/// The channel a marker file names, if it still loads. Never creates one.
-fn remembered_channel(svc: &ChannelService, agent_home: &Path, file: &str) -> Option<String> {
+/// The channel a marker file names, if its manifest still loads. Never
+/// creates one.
+///
+/// Reads go through `ChannelStore`, never `ChannelService`: opening the
+/// service opens (and may create, migrate or rebuild) the channel index,
+/// which a reader neither needs nor may write. An unwritable index must not
+/// hide channel files that are readable on their own.
+fn remembered_channel(store: &ChannelStore, agent_home: &Path, file: &str) -> Option<String> {
     let raw = std::fs::read_to_string(agent_home.join(file)).ok()?;
     let id = raw.trim();
-    (!id.is_empty() && svc.exists(id)).then(|| id.to_string())
+    (!id.is_empty() && store.load_manifest(id).is_ok()).then(|| id.to_string())
 }
 
 /// Both folds over the decision log, under the same lock and integrity check
 /// the gate uses. A log that fails the check yields nothing.
 fn decisions(mur_home: &Path, agent: &str, agent_home: &Path, now: DateTime<Utc>) -> Result<Folds> {
-    let svc = ChannelService::open(mur_home)?;
-    let Some(channel_id) = remembered_channel(&svc, agent_home, HITL_CHANNEL_FILE) else {
+    let store = ChannelStore::new(mur_home);
+    let Some(channel_id) = remembered_channel(&store, agent_home, HITL_CHANNEL_FILE) else {
         return Ok(Folds::default());
     };
     let pubkey = AgentIdentity::load_pubkey(agent_home)?;
     let _guard = integrity::read_lock(mur_home, &channel_id);
     integrity::verify(mur_home, agent, &channel_id, &pubkey)
         .map_err(|e| anyhow::anyhow!("decision log failed its integrity check: {}", e.reason))?;
-    let events = svc.load_events(&channel_id)?;
+    let events = store.load_events(&channel_id)?;
     Ok(Folds {
         live: live_decisions(&channel_id, &events, &pubkey, now),
         history: signed_allows(&channel_id, &events, &pubkey),
@@ -186,13 +192,11 @@ struct Mark {
 /// Signing marks on the start channel that this agent signed. Matching them
 /// to a decision is the caller's job.
 fn marks(mur_home: &Path, agent: &str, agent_home: &Path) -> Vec<Mark> {
-    let Ok(svc) = ChannelService::open(mur_home) else {
+    let store = ChannelStore::new(mur_home);
+    let Some(channel_id) = remembered_channel(&store, agent_home, START_CHANNEL_FILE) else {
         return Vec::new();
     };
-    let Some(channel_id) = remembered_channel(&svc, agent_home, START_CHANNEL_FILE) else {
-        return Vec::new();
-    };
-    let events = svc.load_events(&channel_id).unwrap_or_default();
+    let events = store.load_events(&channel_id).unwrap_or_default();
     events
         .iter()
         .filter_map(|e| mark_of(mur_home, agent, &channel_id, e))
