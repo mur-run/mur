@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use mur_agent_runtime::sandbox::policy::SandboxPolicy;
+use mur_agent_runtime::sandbox::policy::{ExecBackend, ExecReach, SandboxPolicy};
 use mur_common::agent::{Entitlements, ProcessesEntitlement, SpawnMode};
 use mur_ssh_request::{RequestHost, SSH_BINARY, ssh_spawnable};
 
@@ -43,14 +43,12 @@ impl SpawnChange {
     }
 }
 
-/// The directories whose binaries the agent may run once the change lands,
-/// from the computed policy, never from a fixed string (spec "Spawn mode",
-/// requirements).
+/// What the agent may run once the change lands, from the computed policy
+/// on this platform's backend, never from a fixed string (spec "Spawn
+/// mode", requirements).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecSurface {
-    pub dirs: Vec<PathBuf>,
-    /// Linux grants Execute on every read and write grant too.
-    pub linux_rw_exec: bool,
+    pub reach: ExecReach,
 }
 
 /// The CLI reads the host half; the key and user fields are for the
@@ -85,7 +83,7 @@ pub fn plan(
     let stored = probe.stored_host_keys(&host);
     let writable = probe
         .user_known_hosts()
-        .is_some_and(|kh| agent_can_write(&SandboxPolicy::from_entitlements(ent, agent_home), &kh));
+        .is_some_and(|kh| may_write(ent, &SandboxPolicy::from_entitlements(ent, agent_home), &kh));
     let (verdict, matched) = verdict(&scanned, &stored, writable);
     let loaded = probe.agent_keys();
     let unloaded = probe
@@ -94,7 +92,7 @@ pub fn plan(
         .filter(|k| !loaded.iter().any(|l| l.fingerprint == k.fingerprint))
         .collect();
     let spawn = SpawnChange::needed(&ent.processes);
-    let exec_surface = spawn.map(|c| {
+    let exec_surface = spawn.and_then(|c| {
         let mut after = ent.clone();
         c.apply(&mut after.processes);
         exec_surface(&SandboxPolicy::from_entitlements(&after, agent_home))
@@ -120,40 +118,57 @@ pub fn agent_can_write(policy: &SandboxPolicy, known_hosts: &Path) -> bool {
         && !policy.fs_deny.iter().any(|d| known_hosts.starts_with(d))
 }
 
-pub fn exec_surface(policy: &SandboxPolicy) -> ExecSurface {
-    let linux = cfg!(target_os = "linux");
-    let mut dirs: Vec<PathBuf> = policy.fs_exec.clone();
-    let extra: Vec<&PathBuf> = if linux {
-        policy.fs_read.iter().chain(&policy.fs_write).collect()
-    } else {
-        policy.spawn_allowed_prefixes.iter().collect()
-    };
-    for d in extra {
-        if !dirs.contains(d) {
-            dirs.push(d.clone());
-        }
-    }
-    ExecSurface {
-        dirs,
-        linux_rw_exec: linux,
-    }
+/// Whether the agent may have written `known_hosts`. Policy paths bound it
+/// only when a kernel enforces them every run: with no backend, or with
+/// `fail_closed_on_sandbox_error` off (the runtime may start unsealed), the
+/// file is as writable as the user's own account makes it.
+pub fn may_write(ent: &Entitlements, policy: &SandboxPolicy, known_hosts: &Path) -> bool {
+    !sealed_every_run(ent, ExecBackend::current()) || agent_can_write(policy, known_hosts)
+}
+
+/// A kernel backend exists and the runtime refuses to start without it.
+pub fn sealed_every_run(ent: &Entitlements, backend: Option<ExecBackend>) -> bool {
+    backend.is_some() && ent.fail_closed_on_sandbox_error
+}
+
+pub fn exec_surface(policy: &SandboxPolicy) -> Option<ExecSurface> {
+    ExecBackend::current().map(|b| ExecSurface {
+        reach: policy.exec_reach(b),
+    })
 }
 
 impl ExecSurface {
-    /// The consent wording decided 2026-11-11 (spec "Spawn mode").
+    /// The consent wording (spec "Spawn mode"), listing exactly what the
+    /// backend's rules open.
     pub fn consent_text(&self) -> String {
-        let dirs: Vec<String> = self.dirs.iter().map(|d| d.display().to_string()).collect();
-        let mut s = format!(
-            "This lets the agent run any program in these directories:\n  {}\n",
-            dirs.join("\n  ")
-        );
-        if self.linux_rw_exec {
+        let r = &self.reach;
+        if r.unrestricted {
+            return "This lets the agent run any program.\n".into();
+        }
+        let show = |v: &[PathBuf]| -> String {
+            v.iter()
+                .map(|p| format!("\n  {}", p.display()))
+                .collect::<String>()
+        };
+        let mut s = String::new();
+        if !r.files.is_empty() {
+            s.push_str(&format!(
+                "This lets the agent run these programs:{}\n",
+                show(&r.files)
+            ));
+        }
+        if !r.dirs.is_empty() {
+            s.push_str(&format!(
+                "This lets the agent run any program in these directories:{}\n",
+                show(&r.dirs)
+            ));
+        }
+        if r.rw_exec {
             s.push_str(
                 "On Linux this includes every directory the agent can read or write, so a \
                  program it writes there can also run.\n",
             );
         }
-        s.push_str("This narrows when mur-run/mur#2343 is fixed.\n");
         s
     }
 }

@@ -14,9 +14,10 @@ use super::super::edit::{AllowOutcome, HostGrant};
 use super::super::resolve::ScannedKey;
 use super::super::tests::{fp, on_disk, write_agent};
 use super::apply::{Lifecycle, Restart};
-use super::preapprove::{Pair, Preapproval, allowed_pairs, skip_reason};
+use super::preapprove::{Pair, Preapproval, allowed_pairs, skip_reason_on};
 use super::verdict::{HostChoice, select, verdict};
 use super::*;
+use mur_agent_runtime::sandbox::policy::ExecBackend;
 
 const AGENT: &str = "bot";
 const HOST: &str = "gh.example";
@@ -273,18 +274,94 @@ fn no_restart_writes_the_grant_and_touches_nothing_else() {
     );
 }
 
-fn expect_preapproval(home: &Path, got: &Preapproval) {
-    let ent = on_disk(home, AGENT).entitlements;
-    match skip_reason(&ent) {
-        Some(why) => assert_eq!(got, &Preapproval::Skipped { why }),
-        None => assert_eq!(
+/// Spelled out per platform, not derived from `skip_reason`, so a change
+/// to the predicate cannot pass by changing the expectation with it.
+fn expect_preapproval(_home: &Path, got: &Preapproval) {
+    if cfg!(target_os = "macos") {
+        assert_eq!(
             got,
             &Preapproval::Recorded {
                 pairs: 1,
                 reset_channel: None
             }
-        ),
+        );
+    } else {
+        assert!(
+            matches!(got, Preapproval::Skipped { .. }),
+            "only Seatbelt keeps the signing key from the agent: {got:?}"
+        );
     }
+}
+
+#[test]
+fn a_preapproval_needs_a_seal_that_hides_the_signing_key() {
+    let mut ent = mur_common::agent::AgentProfile::default_for_tests().entitlements;
+    ent.fail_closed_on_sandbox_error = true;
+    assert_eq!(skip_reason_on(&ent, Some(ExecBackend::Seatbelt)), None);
+    let linux = skip_reason_on(&ent, Some(ExecBackend::Landlock)).expect("Landlock is skipped");
+    assert!(linux.contains("signing key"), "{linux}");
+    assert!(skip_reason_on(&ent, None).is_some());
+    ent.fail_closed_on_sandbox_error = false;
+    assert!(
+        skip_reason_on(&ent, Some(ExecBackend::Seatbelt)).is_some(),
+        "an agent that may start unsealed could sign its own decision"
+    );
+}
+
+#[test]
+fn known_hosts_is_writable_unless_sealed_every_run() {
+    let mut ent = mur_common::agent::AgentProfile::default_for_tests().entitlements;
+    ent.fail_closed_on_sandbox_error = true;
+    assert!(plan::sealed_every_run(&ent, Some(ExecBackend::Landlock)));
+    assert!(!plan::sealed_every_run(&ent, None));
+    ent.fail_closed_on_sandbox_error = false;
+    assert!(!plan::sealed_every_run(&ent, Some(ExecBackend::Seatbelt)));
+
+    let (home, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let kh = user.path().join("known_hosts");
+    let policy =
+        mur_agent_runtime::sandbox::policy::SandboxPolicy::from_entitlements(&ent, home.path());
+    assert!(
+        !plan::agent_can_write(&policy, &kh),
+        "the policy alone denies it"
+    );
+    assert!(
+        plan::may_write(&ent, &policy, &kh),
+        "an unsealed run is not bound by the policy"
+    );
+}
+
+#[test]
+fn a_match_an_unsealed_agent_could_have_written_still_needs_verifying() {
+    let (home, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut ent = mur_common::agent::AgentProfile::default_for_tests().entitlements;
+    ent.fail_closed_on_sandbox_error = false;
+    let host = mur_ssh_request::RequestHost::parse(HOST, None).unwrap();
+    let probe = FakeProbe {
+        stored: vec![fp('H')],
+        known_hosts: Some(user.path().join("known_hosts")),
+    };
+    let p = plan(&probe, AGENT, home.path(), &ent, host.clone(), None).unwrap();
+    // Control: the same match with the seal enforced every run is trusted,
+    // so the downgrade below comes from the unsealed posture alone.
+    let mut sealed = ent.clone();
+    sealed.fail_closed_on_sandbox_error = true;
+    let c = plan(&probe, AGENT, home.path(), &sealed, host, None).unwrap();
+    if plan::sealed_every_run(&sealed, ExecBackend::current()) {
+        assert_eq!(c.verdict, Verdict::Trusted);
+    }
+    assert_eq!(p.verdict, Verdict::Unknown { downgraded: true });
+    assert!(
+        select(
+            HOST,
+            &p.scanned,
+            &p.verdict,
+            &p.matched,
+            &HostChoice::default()
+        )
+        .is_err(),
+        "nothing granted without an explicit check"
+    );
 }
 
 #[test]
@@ -347,6 +424,7 @@ fn a_start_failure_is_reported_not_rolled_back() {
 
 struct FakeProbe {
     stored: Vec<String>,
+    known_hosts: Option<std::path::PathBuf>,
 }
 
 impl probe::Probe for FakeProbe {
@@ -363,7 +441,7 @@ impl probe::Probe for FakeProbe {
         self.stored.clone()
     }
     fn user_known_hosts(&self) -> Option<std::path::PathBuf> {
-        None
+        self.known_hosts.clone()
     }
 }
 
@@ -383,6 +461,7 @@ fn plan_reads_keys_scan_and_spawn_without_writing() {
     let host = mur_ssh_request::RequestHost::parse(HOST, None).unwrap();
     let probe = FakeProbe {
         stored: vec![fp('H')],
+        known_hosts: None,
     };
     let p = plan(
         &probe,
@@ -404,8 +483,20 @@ fn plan_reads_keys_scan_and_spawn_without_writing() {
     );
     assert_eq!((p.verdict, p.matched), (Verdict::Trusted, vec![fp('H')]));
     assert_eq!(p.spawn, Some(SpawnChange::NoneToStrict));
-    let surface = p.exec_surface.expect("a spawn change shows what it opens");
-    assert!(surface.consent_text().contains("mur-run/mur#2343"));
+    if let Some(surface) = p.exec_surface {
+        let text = surface.consent_text();
+        assert!(
+            !text.contains("#2343"),
+            "#2343 is fixed; the card says what Strict opens"
+        );
+        assert!(!text.contains("only ssh") && !text.contains("shell only"));
+        if cfg!(target_os = "linux") {
+            assert!(
+                !surface.reach.rw_exec,
+                "Strict read/write grants carry no Execute"
+            );
+        }
+    }
     assert_eq!(
         std::fs::read_dir(tmp.path()).unwrap().count(),
         0,

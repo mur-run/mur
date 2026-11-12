@@ -10,6 +10,7 @@ use chrono::Utc;
 use mur_agent_runtime::hitl::ssh::ssh_decision_label;
 use mur_agent_runtime::hitl::ssh_action_hash;
 use mur_agent_runtime::hitl::store::{ChannelDecisionStore, RecordOutcome};
+use mur_agent_runtime::sandbox::policy::{ExecBackend, SandboxPolicy};
 use mur_common::agent::{Entitlements, SshEntitlement};
 use mur_common::hitl::HitlResponse;
 use mur_common::identity::AgentIdentity;
@@ -71,10 +72,24 @@ impl Preapproval {
     }
 }
 
-/// Why a preapproval would prove nothing, if it would.
+/// Why a preapproval would prove nothing, if it would. It stands in for a
+/// human yes only where the agent's own programs cannot forge one: the
+/// runtime must refuse to start unsealed, and the seal must keep them from
+/// reading the signing key. Landlock cannot carve `identity.key` out of the
+/// own home it force-grants, so Linux is skipped until it can.
 pub fn skip_reason(ent: &Entitlements) -> Option<String> {
-    if !cfg!(any(target_os = "macos", target_os = "linux")) {
+    skip_reason_on(ent, ExecBackend::current())
+}
+
+pub fn skip_reason_on(ent: &Entitlements, backend: Option<ExecBackend>) -> Option<String> {
+    let Some(b) = backend else {
         return Some("this platform has no kernel sandbox".into());
+    };
+    if !SandboxPolicy::signing_key_isolated(Some(b)) {
+        return Some(
+            "this platform's sandbox cannot keep the agent's programs from reading its signing key"
+                .into(),
+        );
     }
     if !ent.fail_closed_on_sandbox_error {
         return Some(
