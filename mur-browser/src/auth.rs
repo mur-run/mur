@@ -59,6 +59,43 @@ pub fn save_profile(
     now: DateTime<Utc>,
     store: &impl StateKeyStore,
 ) -> Result<ProfileMeta> {
+    let deadline = std::time::Instant::now() + crate::abandon::LOCK_WAIT;
+    save_profile_by(
+        handoff,
+        state_path,
+        meta_path,
+        storage_state,
+        url,
+        allow_domains,
+        now,
+        store,
+        deadline,
+    )
+}
+
+/// [`save_profile`] with an explicit lock deadline. State and metadata are
+/// published under the profile lock, so a session's write-back cannot land
+/// between its watermark check and its write over this login (#2360), and
+/// the two files always describe the same login. A lock still held at
+/// `deadline` fails the save and writes nothing.
+#[allow(clippy::too_many_arguments)]
+pub fn save_profile_by(
+    handoff: &mut Handoff,
+    state_path: &Path,
+    meta_path: &Path,
+    storage_state: &[u8],
+    url: &str,
+    allow_domains: &[String],
+    now: DateTime<Utc>,
+    store: &impl StateKeyStore,
+    deadline: std::time::Instant,
+) -> Result<ProfileMeta> {
+    let dir = state_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("profile state path has no parent"))?;
+    let _held = crate::abandon::lock_dir(dir, deadline)?.ok_or_else(|| {
+        anyhow::anyhow!("browser profile is busy: a session is saving its login; retry in a moment")
+    })?;
     handoff.write_state(state_path, storage_state, store)?;
     let meta = ProfileMeta {
         url: url.to_owned(),
@@ -341,6 +378,93 @@ mod tests {
         };
         let yaml = serde_yaml::to_string(&meta).unwrap();
         assert!(!yaml.contains("allow_domains"), "{yaml}");
+    }
+
+    fn ready_handoff() -> Handoff {
+        let mut handoff = Handoff::new();
+        handoff.start().unwrap();
+        handoff.handoff().unwrap();
+        handoff.continue_after_login().unwrap();
+        handoff.verified().unwrap();
+        handoff
+    }
+
+    const LOGIN: &[u8] = br#"{"cookies":[],"origins":[]}"#;
+
+    /// A login must not publish while a session's write-back holds the
+    /// profile lock: the write-back compared its watermark before the login
+    /// landed and would otherwise overwrite it (#2360).
+    #[test]
+    fn a_login_waits_for_a_write_back_holding_the_profile_lock() {
+        let home = tempfile::tempdir().unwrap();
+        let (state_path, meta_path) = (
+            crate::paths::profile_state(home.path(), "ex"),
+            crate::paths::profile_meta(home.path(), "ex"),
+        );
+        let store = MemoryStore::default();
+        let far = std::time::Instant::now() + crate::abandon::LOCK_WAIT;
+        let held = crate::abandon::lock(home.path(), "ex", far)
+            .unwrap()
+            .unwrap();
+
+        std::thread::scope(|s| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (state_path, meta_path, store) = (&state_path, &meta_path, &store);
+            s.spawn(move || {
+                let mut handoff = ready_handoff();
+                let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+                let got = save_profile(
+                    &mut handoff,
+                    state_path,
+                    meta_path,
+                    LOGIN,
+                    "https://example.test/login",
+                    &["example.test".to_owned()],
+                    now,
+                    store,
+                );
+                tx.send(got.map(|_| ())).unwrap();
+            });
+            let waited = rx.recv_timeout(std::time::Duration::from_millis(300));
+            assert!(waited.is_err(), "login published under a held lock");
+            assert!(!state_path.exists() && !meta_path.exists());
+            drop(held);
+            rx.recv().unwrap().unwrap();
+        });
+        assert!(state_path.exists() && meta_path.exists());
+    }
+
+    /// A lock that stays held past the login's deadline fails the save and
+    /// writes nothing; the human can retry.
+    #[test]
+    fn a_login_that_cannot_take_the_lock_writes_nothing() {
+        let home = tempfile::tempdir().unwrap();
+        let (state_path, meta_path) = (
+            crate::paths::profile_state(home.path(), "ex"),
+            crate::paths::profile_meta(home.path(), "ex"),
+        );
+        let far = std::time::Instant::now() + crate::abandon::LOCK_WAIT;
+        let _held = crate::abandon::lock(home.path(), "ex", far)
+            .unwrap()
+            .unwrap();
+        let mut handoff = ready_handoff();
+
+        let got = save_profile_by(
+            &mut handoff,
+            &state_path,
+            &meta_path,
+            LOGIN,
+            "https://example.test/login",
+            &["example.test".to_owned()],
+            DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            &MemoryStore::default(),
+            std::time::Instant::now() + std::time::Duration::from_millis(50),
+        );
+
+        let msg = format!("{:#}", got.unwrap_err());
+        assert!(msg.contains("busy"), "{msg}");
+        assert!(!state_path.exists() && !meta_path.exists());
+        assert_ne!(handoff.phase(), Phase::Done);
     }
 
     #[derive(Default)]

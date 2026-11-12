@@ -94,8 +94,12 @@ impl Drop for ProfileLock {
 
 /// Take `site`'s profile lock, retrying until `deadline`. `None` on timeout.
 pub fn lock(mur_home: &Path, site: &str, deadline: Instant) -> Result<Option<ProfileLock>> {
-    let dir = paths::profile_dir(mur_home, site);
-    std::fs::create_dir_all(&dir)
+    lock_dir(&paths::profile_dir(mur_home, site), deadline)
+}
+
+/// [`lock`] for a profile known by its directory.
+pub fn lock_dir(dir: &Path, deadline: Instant) -> Result<Option<ProfileLock>> {
+    std::fs::create_dir_all(dir)
         .with_context(|| format!("create browser profile dir {}", dir.display()))?;
     let file = std::fs::OpenOptions::new()
         .create(true)

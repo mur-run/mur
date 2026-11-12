@@ -190,7 +190,7 @@ pub async fn record(
     // profile, split per profile by host for several (#2360). Any login
     // dropped on the way is reported on the profile's next use.
     let targets = writeback::targets(&mur_home, profiles);
-    let scratch = match targets.is_empty() {
+    let scratch = match targets.sites.is_empty() {
         false => Some(mur_browser::refresh::scratch_dir(&mur_home)?),
         true => None,
     };
@@ -207,7 +207,8 @@ pub async fn record(
         .unwrap_or_default();
     if let Some(export) = &export {
         let deadline = std::time::Instant::now() + mur_browser::refresh::WRITEBACK_BUDGET;
-        writeback::write_back(&mur_home, &targets, loaded, export, deadline);
+        let store = mur_browser::state::KeychainStateKeyStore;
+        writeback::write_back(&mur_home, &targets, loaded, export, deadline, &store);
     }
     drop(scratch);
     // Removes the token-bearing config directory (no-op for test/automation)
