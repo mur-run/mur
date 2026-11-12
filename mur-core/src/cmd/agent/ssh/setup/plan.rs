@@ -82,14 +82,14 @@ pub fn plan(
     let stored = probe.stored_host_keys(&host);
     let writable = probe
         .user_known_hosts()
-        .is_some_and(|kh| may_write(ent, &SandboxPolicy::from_entitlements(ent, agent_home), &kh));
+        .is_some_and(|kh| may_write(ent, &quiet_policy(ent, agent_home), &kh));
     let (verdict, matched) = verdict(&scanned, &stored, writable);
     let (loaded, unloaded) = split_keys(probe);
     let spawn = SpawnChange::needed(&ent.processes);
     let exec_surface = spawn.and_then(|c| {
         let mut after = ent.clone();
         c.apply(&mut after.processes);
-        exec_surface(&SandboxPolicy::from_entitlements(&after, agent_home))
+        exec_surface(&quiet_policy(&after, agent_home))
     });
     Ok(SetupPlan {
         agent: agent.to_string(),
@@ -177,4 +177,17 @@ impl ExecSurface {
         }
         s
     }
+}
+
+/// Build the sandbox policy for a preview without its start-up warnings.
+///
+/// `from_entitlements` warns once per inactive build-lane grant — meant for
+/// the runtime's `stderr.log` at agent start. The plan is built while
+/// murmur's TUI owns the screen, where a stderr line paints straight over
+/// the `/ssh` card. The dropped grants still land in the policy; only the
+/// log line is muted.
+fn quiet_policy(ent: &Entitlements, agent_home: &Path) -> SandboxPolicy {
+    tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
+        SandboxPolicy::from_entitlements(ent, agent_home)
+    })
 }
