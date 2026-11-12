@@ -37,10 +37,32 @@ impl DirHandle {
     }
 
     /// The root itself is the caller's choice, so it may be reached via a link.
+    /// Opens the scan root by anchored traversal: `/` first, then each
+    /// component `openat`-ed from its parent with `O_NOFOLLOW`. The indexer
+    /// may run with wider access than an agent that can write the root's
+    /// parent (or any ancestor), so a root or ancestor swapped for a symlink
+    /// must not redirect the scan; it fails instead (empty scan).
+    ///
+    /// `path` must be absolute and free of `..`: indexed roots are stored
+    /// canonicalized, so a legitimate root never hits these rejections.
     pub(super) fn open_root(path: &Path) -> Option<Self> {
-        rustix::fs::open(path, Self::dir_flags(), rustix::fs::Mode::empty())
-            .ok()
-            .map(Self)
+        use rustix::fs::OFlags;
+        use std::path::Component;
+        let mut components = path.components();
+        if components.next() != Some(Component::RootDir) {
+            return None;
+        }
+        let root = rustix::fs::open("/", Self::dir_flags(), rustix::fs::Mode::empty()).ok()?;
+        let mut dir = Self(root);
+        for component in components {
+            let Component::Normal(name) = component else {
+                return None;
+            };
+            let flags = Self::dir_flags() | OFlags::NOFOLLOW;
+            let fd = rustix::fs::openat(&dir.0, name, flags, rustix::fs::Mode::empty()).ok()?;
+            dir = Self(fd);
+        }
+        Some(dir)
     }
 
     pub(super) fn entries(&self) -> Vec<(std::ffi::OsString, EntryKind)> {
@@ -103,6 +125,10 @@ pub(super) struct DirHandle(PathBuf);
 
 #[cfg(not(unix))]
 impl DirHandle {
+    /// Unlike the unix version this is not anchored: the root (and its
+    /// ancestors) are resolved by path and may be reached through a link,
+    /// and nothing pins them against a swap before the walk starts. There
+    /// is no portable `openat` here; closing that gap is out of scope.
     pub(super) fn open_root(path: &Path) -> Option<Self> {
         Some(Self(path.to_path_buf()))
     }

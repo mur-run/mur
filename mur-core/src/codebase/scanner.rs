@@ -1,6 +1,5 @@
 mod dir_handle;
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use dir_handle::DirHandle;
@@ -66,10 +65,13 @@ fn language_for_ext(ext: &str) -> Option<&'static str> {
 /// recursion, not a tuning knob: real source trees sit far below it.
 pub(crate) const MAX_WALK_DEPTH: usize = 64;
 
+/// Scans `project_path`, which on unix must be absolute and symlink-free
+/// (indexed roots are stored canonicalized); otherwise the scan is empty.
+/// See [`DirHandle::open_root`].
 pub fn scan_project(project_path: &Path) -> Vec<ScannedFile> {
-    let gitignore = load_gitignore(project_path);
     let mut files = Vec::new();
     if let Some(dir) = DirHandle::open_root(project_path) {
+        let gitignore = load_gitignore_at(&dir);
         walk_dir(
             &dir,
             project_path,
@@ -174,11 +176,28 @@ fn walk_dir(
     }
 }
 
+/// Root `.gitignore` patterns for a caller holding only a path (the code-nav
+/// wizard, which runs as the user). Canonicalizes first, so a root reached
+/// through a link still works there; the file itself is still opened
+/// `O_NOFOLLOW` through the root handle.
 pub(crate) fn load_gitignore(project_path: &Path) -> Vec<String> {
-    let gitignore_path = project_path.join(".gitignore");
-    let content = match fs::read_to_string(gitignore_path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
+    project_path
+        .canonicalize()
+        .ok()
+        .and_then(|p| DirHandle::open_root(&p))
+        .map(|dir| load_gitignore_at(&dir))
+        .unwrap_or_default()
+}
+
+/// Root `.gitignore` patterns, read through the already-open root handle
+/// (`O_NOFOLLOW`, size-capped), so a `.gitignore` symlinked out of the repo
+/// is not read and yields no patterns.
+fn load_gitignore_at(root: &DirHandle) -> Vec<String> {
+    let Some(content) = root
+        .read_file(std::ffi::OsStr::new(".gitignore"))
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    else {
+        return Vec::new();
     };
     content
         .lines()
@@ -308,6 +327,7 @@ pub fn expand_tilde(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_language_detection() {
@@ -332,11 +352,20 @@ mod tests {
         assert_eq!(project_name_from_path(&path), "my-app");
     }
 
+    /// A tempdir and its canonical path. The scanner requires a symlink-free
+    /// root (production stores `project_path` canonicalized), and macOS's
+    /// default temp dir sits under the `/var -> private/var` link.
+    fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        (tmp, base)
+    }
+
     #[cfg(unix)]
     fn symlink_fixture() -> (tempfile::TempDir, PathBuf) {
-        let tmp = tempfile::tempdir().unwrap();
-        let outside = tmp.path().join("outside");
-        let repo = tmp.path().join("repo");
+        let (tmp, base) = canonical_tempdir();
+        let outside = base.join("outside");
+        let repo = base.join("repo");
         fs::create_dir_all(outside.join("secrets")).unwrap();
         fs::write(outside.join("secret.toml"), "token = \"leak\"\n").unwrap();
         fs::write(outside.join("secrets/key.json"), "{\"k\":\"leak\"}\n").unwrap();
@@ -421,17 +450,66 @@ mod tests {
         assert_eq!(paths(&files), ["src/main.rs"]);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn root_that_is_a_symlink_scans_empty() {
+        let (tmp, repo) = symlink_fixture();
+        let link = tmp.path().canonicalize().unwrap().join("repo-link");
+        std::os::unix::fs::symlink(&repo, &link).unwrap();
+        assert!(scan_project(&link).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_below_a_symlinked_ancestor_scans_empty() {
+        let (tmp, _repo) = symlink_fixture();
+        let base = tmp.path().canonicalize().unwrap();
+        // `alias -> .`, so `alias/repo` names the real repo through a link.
+        std::os::unix::fs::symlink(".", base.join("alias")).unwrap();
+        assert!(scan_project(&base.join("alias/repo")).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_canonical_root_paths_scan_empty() {
+        let (_tmp, repo) = symlink_fixture();
+        assert!(scan_project(&repo.join("src/..")).is_empty());
+        assert!(scan_project(Path::new("relative/repo")).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_root_scans_as_before() {
+        let (_tmp, repo) = symlink_fixture();
+        fs::write(repo.join("src/gen.rs"), "fn g() {}\n").unwrap();
+        fs::write(repo.join("lib.py"), "x = 1\n").unwrap();
+        fs::write(repo.join(".gitignore"), "# generated\n/src/gen.rs\n").unwrap();
+        assert_eq!(load_gitignore(&repo), ["src/gen.rs"]);
+        assert_eq!(paths(&scan_project(&repo)), ["lib.py", "src/main.rs"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gitignore_symlinked_out_of_repo_is_not_read() {
+        let (tmp, repo) = symlink_fixture();
+        let outside = tmp.path().canonicalize().unwrap().join("outside/ignore");
+        fs::write(&outside, "src\n").unwrap();
+        std::os::unix::fs::symlink(&outside, repo.join(".gitignore")).unwrap();
+        assert!(load_gitignore(&repo).is_empty());
+        assert_eq!(paths(&scan_project(&repo)), ["src/main.rs"]);
+    }
+
     #[test]
     fn walk_stops_at_max_depth() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut deep = tmp.path().to_path_buf();
+        let (_tmp, base) = canonical_tempdir();
+        let mut deep = base.clone();
         for i in 0..=MAX_WALK_DEPTH {
             deep.push(format!("d{i}"));
         }
         fs::create_dir_all(&deep).unwrap();
         fs::write(deep.join("too_deep.rs"), "fn x() {}\n").unwrap();
-        fs::write(tmp.path().join("d0/shallow.rs"), "fn y() {}\n").unwrap();
-        let files = scan_project(tmp.path());
+        fs::write(base.join("d0/shallow.rs"), "fn y() {}\n").unwrap();
+        let files = scan_project(&base);
         assert_eq!(paths(&files), ["d0/shallow.rs"]);
     }
 
