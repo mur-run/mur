@@ -103,10 +103,62 @@ fn a_marker_older_than_the_last_write_is_removed_silently() {
     assert!(markers(home.path()).is_empty());
 }
 
+/// Set on the re-exec'd lock holder: the marker it must lock, and the file it
+/// creates once it holds the lock.
+const HOLD_MARKER_ENV: &str = "MUR_TEST_HOLD_MARKER";
+const HOLD_READY_ENV: &str = "MUR_TEST_HOLD_READY";
+/// How long the parent waits for the holder to lock, and for the OS to
+/// release the lock after the kill (Windows releases it asynchronously).
+const HOLD_WAIT: Duration = Duration::from_secs(20);
+
+/// Not a test of its own: the lock-holder body the killed-session test
+/// re-execs this binary into. Without the env var it does nothing.
+#[test]
+#[ignore = "re-exec'd as a child by a_killed_session_leaves_a_marker_the_next_use_reports"]
+fn lock_holder_child() {
+    let (Ok(marker), Ok(ready)) = (
+        std::env::var(HOLD_MARKER_ENV),
+        std::env::var(HOLD_READY_ENV),
+    ) else {
+        return;
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&marker)
+        .unwrap();
+    file.try_lock_exclusive().unwrap();
+    std::fs::write(&ready, b"").unwrap();
+    std::thread::sleep(Duration::from_secs(120));
+}
+
+/// Kills the holder even when an assertion panics first, so a failing run
+/// does not leave it sleeping on the marker.
+struct Holder(std::process::Child);
+impl Drop for Holder {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn poll_until<T>(mut f: impl FnMut() -> Option<T>) -> Option<T> {
+    let end = Instant::now() + HOLD_WAIT;
+    loop {
+        if let Some(v) = f() {
+            return Some(v);
+        }
+        if Instant::now() >= end {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// The spec's case: the proxy is killed mid write-back. `Drop` never runs,
 /// the OS releases the marker's lock with the process, and the next use
-/// reports it.
-#[cfg(unix)]
+/// reports it. The holder is this test binary re-exec'd, locking with the
+/// same `fs2` call as [`Marker::create`], so it runs on every platform.
 #[test]
 fn a_killed_session_leaves_a_marker_the_next_use_reports() {
     let home = tempfile::tempdir().unwrap();
@@ -115,21 +167,35 @@ fn a_killed_session_leaves_a_marker_the_next_use_reports() {
     let dir = paths::profile_dir(home.path(), "a");
     let marker = dir.join(format!("{MARKER_PREFIX}999999-1"));
     std::fs::write(&marker, b"").unwrap();
-    let code = format!(
-        "import fcntl,time; f=open({p:?},'a'); fcntl.flock(f, fcntl.LOCK_EX); print(1, flush=True); time.sleep(60)",
-        p = marker.display().to_string()
+    let ready = home.path().join("holder.ready");
+    let mut holder = Holder(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "pending::tests::lock_holder_child",
+                "--include-ignored",
+                "--nocapture",
+            ])
+            .env(HOLD_MARKER_ENV, &marker)
+            .env(HOLD_READY_ENV, &ready)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
     );
-    let mut child = std::process::Command::new("python3")
-        .args(["-c", &code])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut ready = [0u8; 1];
-    std::io::Read::read_exact(child.stdout.as_mut().unwrap(), &mut ready).unwrap();
+    let locked = poll_until(|| {
+        if let Ok(Some(status)) = holder.0.try_wait() {
+            panic!("lock holder exited early: {status}");
+        }
+        ready.exists().then_some(())
+    });
+    assert!(locked.is_some(), "lock holder never took the lock");
     assert_eq!(sweep_now(home.path()), None, "alive while its owner runs");
-    child.kill().unwrap();
-    child.wait().unwrap();
-    assert_eq!(sweep_now(home.path()), Some(Kept::Interrupted));
+    assert!(marker.exists(), "a live marker is left in place");
+    holder.0.kill().unwrap();
+    holder.0.wait().unwrap();
+    let kept = poll_until(|| sweep_now(home.path()));
+    assert_eq!(kept, Some(Kept::Interrupted));
+    assert!(!marker.exists(), "a dead marker is removed once reported");
     let n = notice("a", Kept::Interrupted);
     assert!(n.contains("may not have been saved"), "{n}");
 }
