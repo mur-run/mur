@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 mod attribution;
 mod backend;
+mod codebase_reindex;
 mod consult;
 mod conversations;
 mod ops;
@@ -13,6 +14,7 @@ mod turn_track;
 
 pub use attribution::*;
 pub use backend::*;
+pub use codebase_reindex::*;
 pub use consult::*;
 pub use conversations::*;
 pub use ops::*;
@@ -351,6 +353,10 @@ pub struct Config {
     /// Per-agent scratch dir retention and doctor threshold (`scratch:`).
     #[serde(default)]
     pub scratch: ScratchConfig,
+
+    /// Daemon-side codebase reindex for sandboxed agents (`codebase_reindex:`).
+    #[serde(default)]
+    pub codebase_reindex: CodebaseReindexConfig,
 
     /// Channel consult (`consult:`): how long an `Ask` stays answerable.
     #[serde(default)]
