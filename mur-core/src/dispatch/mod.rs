@@ -604,11 +604,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                 project_name,
                 project_path,
                 rebuild,
+                no_notify,
+                no_hook,
             } => {
                 cmd::project::worker::cmd_project_index_worker(
                     &project_name,
                     &project_path,
                     rebuild,
+                    no_notify,
+                    no_hook,
                 )
                 .await?
             }

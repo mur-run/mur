@@ -544,3 +544,7 @@ mod code_nav_tests;
 #[cfg(test)]
 #[path = "fleet_goal_tests.rs"]
 mod fleet_goal_tests;
+
+#[cfg(test)]
+#[path = "index_worker_flags_tests.rs"]
+mod index_worker_flags_tests;
