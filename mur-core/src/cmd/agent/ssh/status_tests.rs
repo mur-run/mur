@@ -88,7 +88,7 @@ impl Fixture {
     }
 
     fn mark(&self, hash: &str, issued_at: DateTime<Utc>) {
-        let m = SigningMark::new(hash.into(), issued_at, fp('k'), fp('h'));
+        let m = SigningMark::new(hash.into(), issued_at);
         self.append(serde_json::to_value(m).unwrap(), true);
     }
 
@@ -160,7 +160,7 @@ fn unsigned_mark_never_counts() {
     let f = Fixture::new();
     let at = Utc::now();
     f.decide(&hash(), true, at);
-    let m = SigningMark::new(hash(), at, fp('k'), fp('h'));
+    let m = SigningMark::new(hash(), at);
     f.append(serde_json::to_value(m).unwrap(), false);
     assert_eq!(state(&f), PairState::Approved);
 }
@@ -170,7 +170,7 @@ fn wrong_notice_never_counts() {
     let f = Fixture::new();
     let at = Utc::now();
     f.decide(&hash(), true, at);
-    let mut v = serde_json::to_value(SigningMark::new(hash(), at, fp('k'), fp('h'))).unwrap();
+    let mut v = serde_json::to_value(SigningMark::new(hash(), at)).unwrap();
     v["notice"] = "ssh_proxy_refusal".into();
     f.append(v, true);
     assert_eq!(state(&f), PairState::Approved);
