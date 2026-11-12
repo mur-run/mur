@@ -181,8 +181,6 @@ fn a_signing_mark_is_one_signed_note_per_approval() {
     let mark = mur_ssh_request::SigningMark::new(
         "the-action-hash".into(),
         "2026-11-11T10:00:00Z".parse().unwrap(),
-        "SHA256:k".into(),
-        "SHA256:hk".into(),
     );
     let id = append_signing_mark(&signer, &mark).unwrap();
     append_signing_mark(&signer, &mark).unwrap();

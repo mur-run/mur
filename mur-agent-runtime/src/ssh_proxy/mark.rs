@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Utc};
 use mur_ssh_request::SigningMark;
 
-use super::gate::{LiveDecision, SignAsk};
+use super::gate::LiveDecision;
 
 /// Appends one mark to the agent's channel. Blocking; best-effort.
 pub type MarkPost = Arc<dyn Fn(&SigningMark) + Send + Sync>;
@@ -31,10 +31,10 @@ impl MarkSink {
         }
     }
 
-    /// A signature for `ask` left the proxy under `decision`. The write is
-    /// spawned off the reply path, so it never delays the signature, and its
-    /// failure never fails one.
-    pub fn signed(&self, ask: &SignAsk, decision: &LiveDecision) {
+    /// A signature left the proxy under `decision`. The write is spawned off
+    /// the reply path, so it never delays the signature, and its failure
+    /// never fails one. The mark names the pair by `action_hash` only.
+    pub fn signed(&self, decision: &LiveDecision) {
         let Some(post) = &self.post else { return };
         if !decision.allow {
             return;
@@ -47,12 +47,7 @@ impl MarkSink {
         if !first {
             return;
         }
-        let mark = SigningMark::new(
-            decision.action_hash.clone(),
-            decision.issued_at,
-            ask.key_fp.clone(),
-            ask.host_key_fp.clone(),
-        );
+        let mark = SigningMark::new(decision.action_hash.clone(), decision.issued_at);
         let post = post.clone();
         tokio::task::spawn_blocking(move || post(&mark));
     }

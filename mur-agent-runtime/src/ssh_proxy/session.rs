@@ -272,7 +272,7 @@ impl<'a, U: Upstream> Session<'a, U> {
             Ok(body) => match wire::decode_answer(&body) {
                 Ok(a @ Answer::SignResponse(_)) => {
                     if let (Some(marks), Some(d)) = (self.marks, &decision) {
-                        marks.signed(&ask, d);
+                        marks.signed(d);
                     }
                     return a;
                 }
