@@ -62,6 +62,11 @@ written:
 | `NOT_A_PARTICIPANT` | the agent is not a member of channel `#N` |
 | `TARGET_OFFLINE` | the agent is not running; `mur agent start <agent>` |
 
+One more code comes after delivery: `TARGET_EXITED` means the agent's runtime
+died before it answered (a crash or kill; a graceful stop finishes the turn
+first). Your message is already in the channel, so restart the agent and send
+again to the same `#N`.
+
 The agent itself refuses a channel turn with one of these JSON-RPC errors.
 They are checked in this order, and the first failure wins:
 

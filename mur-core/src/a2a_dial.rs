@@ -36,7 +36,9 @@ pub enum DialMode {
 mod idle;
 #[cfg(test)]
 use idle::{HEARTBEAT_DIAL_IO_TIMEOUT, LEGACY_DIAL_IO_TIMEOUT};
-use idle::{dial_io_timeout_for, is_io_timeout, note_frame, timeout_error};
+use idle::{
+    dial_io_timeout_for, is_io_timeout, is_peer_gone, note_frame, target_exited, timeout_error,
+};
 
 /// Resolve a user-typed agent name to the canonical on-disk agent name,
 /// matching case-insensitively. CLI users shouldn't have to remember the
@@ -271,6 +273,8 @@ fn dial_socket(
                         last_frame.as_ref(),
                         "did not respond within",
                     )
+                } else if is_peer_gone(&e) {
+                    target_exited(agent_name)
                 } else {
                     anyhow!(e).context("read response line")
                 }
@@ -291,7 +295,7 @@ fn dial_socket(
                 return Err(deadline::passed(agent_name, request));
             }
         }
-        bail!("EOF before matching response from '{agent_name}'");
+        Err(target_exited(agent_name))
     }
     #[cfg(not(unix))]
     {
@@ -547,6 +551,7 @@ pub fn dial_message_streaming_polled(
                     }
                     continue;
                 }
+                Err(e) if is_peer_gone(&e) => return Err(target_exited(agent_name)),
                 Err(e) => return Err(anyhow!(e).context("read response line")),
             }
             let parsed = serde_json::from_slice::<Value>(&buf);
@@ -639,7 +644,7 @@ pub fn dial_message_streaming_polled(
                 return Ok(v.get("result").cloned().unwrap_or(Value::Null));
             }
         }
-        bail!("EOF before matching response from '{agent_name}'");
+        Err(target_exited(agent_name))
     }
     #[cfg(not(unix))]
     {
