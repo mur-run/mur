@@ -29,7 +29,7 @@ pub(super) struct SshGateSlot {
 }
 
 pub(super) async fn prepare_and_seal(
-    profile: &Profile,
+    profile: &mut Profile,
     agent_home: &Path,
     mur_home: &Path,
     identity: &mur_common::identity::AgentIdentity,
@@ -78,10 +78,11 @@ pub(super) async fn prepare_and_seal(
         // shape that crash-looped.
         match mur_common::mcp_first_party::current_install_dir() {
             Some(runtime_dir) => {
-                if let Err(e) = crate::mcp_repin::repin_first_party(
+                if let Err(e) = crate::mcp_repin::repin_first_party_at_boot(
                     agent_home,
                     bundled_refreshed.as_deref(),
                     &runtime_dir,
+                    &mut profile.inner,
                 ) {
                     warn!(error = %e, "could not re-pin first-party MCP binaries");
                 }

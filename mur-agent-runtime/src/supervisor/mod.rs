@@ -291,7 +291,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         sandbox_record,
         ssh_child,
         ssh_gate,
-    } = seal::prepare_and_seal(&profile, &agent_home, &mur_home, &identity, pin_trust).await?;
+    } = seal::prepare_and_seal(&mut profile, &agent_home, &mur_home, &identity, pin_trust).await?;
     // `Some` on every path that reaches here; `None` would mean no seal was
     // attempted, which must not count as sealed. Every consumer below reads
     // this one value, so they cannot disagree about the boot.
