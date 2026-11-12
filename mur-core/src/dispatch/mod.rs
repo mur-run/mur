@@ -605,8 +605,12 @@ pub async fn run(cli: Cli) -> Result<()> {
                 project_path,
                 rebuild,
             } => {
-                cmd::project::cmd_project_index_worker(&project_name, &project_path, rebuild)
-                    .await?
+                cmd::project::worker::cmd_project_index_worker(
+                    &project_name,
+                    &project_path,
+                    rebuild,
+                )
+                .await?
             }
             ProjectAction::Search {
                 query,
