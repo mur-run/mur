@@ -1,15 +1,18 @@
 pub mod chunker;
+pub mod head;
 pub mod scanner;
 
 mod discover;
 mod git_hook;
 mod hooks_dir;
+mod state;
 #[cfg(test)]
 use discover::orphan_should_prune;
 pub use discover::{discover_all_indexes, prune_orphan_indexes};
 use git_hook::HOOK_MARKER;
 pub use git_hook::ensure_git_hook;
 pub(crate) use hooks_dir::{HookHealth, MANUAL_HOOK_CMD, hook_health};
+pub use state::{IndexLock, IndexMetadata, IndexProgress, IndexStatus};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -65,60 +68,12 @@ pub struct FileMeta {
     size: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct IndexMetadata {
-    #[serde(default)]
-    pub project_path: String,
-    /// Main repo root (== project_path for the primary worktree). Recorded so the
-    /// orphan sweep can tell "linked worktree removed" (repo present, worktree gone
-    /// → prune) from "drive unmounted / repo deleted" (repo gone → keep). Empty on
-    /// legacy metadata, which is therefore never auto-pruned.
-    #[serde(default)]
-    pub repo_root: String,
-    /// Vector width the index was built at. `None` on legacy metadata (built
-    /// before dims were recorded) — stamped on the next save without forcing
-    /// a rebuild. ponytail: legacy None can't detect an old-dims table; a
-    /// lance schema probe would close that, add it if users hit it.
-    #[serde(default)]
-    pub dimensions: Option<usize>,
-    pub files: HashMap<String, FileMeta>,
-    pub last_indexed: String,
-}
-
 pub struct DiscoveredIndex {
     pub name: String,
     pub project_path: Option<String>,
     pub last_indexed: Option<String>,
     #[allow(dead_code)]
     pub file_count: usize,
-}
-
-/// Written during background indexing so `mur project status` can show live progress.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexProgress {
-    pub status: IndexStatus,
-    pub total_chunks: usize,
-    pub done_chunks: usize,
-    pub errors: usize,
-    pub started_at: String,
-    pub finished_at: Option<String>,
-    pub error_message: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum IndexStatus {
-    Running,
-    Done,
-    Error,
-}
-
-/// Lightweight lock file to prevent concurrent indexing of the same project.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexLock {
-    pub pid: u32,
-    pub project_name: String,
-    pub started_at: String,
 }
 
 pub struct CodebaseIndex {
@@ -141,81 +96,6 @@ impl CodebaseIndex {
             db: Arc::new(OnceCell::new()),
         }
     }
-
-    fn meta_path(&self) -> PathBuf {
-        self.lance_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(format!("{}.meta.json", self.project_name))
-    }
-
-    fn load_meta(&self) -> Option<IndexMetadata> {
-        let path = self.meta_path();
-        let data = std::fs::read_to_string(path).ok()?;
-        serde_json::from_str(&data).ok()
-    }
-
-    /// Vector width recorded at build time (`None` for legacy indexes). Used
-    /// by `mur project status` to flag stale-dims indexes (#757).
-    pub fn recorded_dimensions(&self) -> Option<usize> {
-        self.load_meta()?.dimensions
-    }
-
-    fn save_meta(&self, meta: &IndexMetadata) -> Result<()> {
-        let path = self.meta_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let data = serde_json::to_string_pretty(meta)?;
-        std::fs::write(path, data)?;
-        Ok(())
-    }
-
-    pub(crate) fn lock_path(&self) -> PathBuf {
-        self.lance_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(format!("{}.lock", self.project_name))
-    }
-
-    fn progress_path(&self) -> PathBuf {
-        self.lance_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(format!("{}.progress.json", self.project_name))
-    }
-
-    /// Try to acquire the index lock. Returns Ok(true) if we got it, Ok(false) if another
-    /// live process holds it, Err if I/O fails.
-    pub fn try_acquire_lock(&self) -> Result<bool> {
-        let path = self.lock_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        // Check existing lock
-        if path.exists()
-            && let Ok(data) = std::fs::read_to_string(&path)
-            && let Ok(lock) = serde_json::from_str::<IndexLock>(&data)
-            && mur_common::lock_file::pid_alive(lock.pid)
-        {
-            return Ok(false); // Another live process holds the lock
-            // Stale lock — pid is dead, we'll overwrite
-        }
-        let lock = IndexLock {
-            pid: std::process::id(),
-            project_name: self.project_name.clone(),
-            started_at: chrono::Utc::now().to_rfc3339(),
-        };
-        std::fs::write(&path, serde_json::to_string(&lock)?).map_err(|e| {
-            anyhow::Error::new(e).context(format!("writing index lock {}", path.display()))
-        })?;
-        Ok(true)
-    }
-
-    pub fn release_lock(&self) {
-        let path = self.lock_path();
-        let _ = std::fs::remove_file(&path);
-    }
 }
 
 /// Whether a recorded index width forces a full rebuild against the
@@ -226,23 +106,6 @@ fn dims_require_rebuild(recorded: Option<usize>, configured: usize) -> bool {
 }
 
 impl CodebaseIndex {
-    /// Write progress for `mur project status` to read.
-    pub fn write_progress(&self, progress: &IndexProgress) -> Result<()> {
-        let path = self.progress_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, serde_json::to_string(progress)?)?;
-        Ok(())
-    }
-
-    /// Read progress file if it exists.
-    pub fn read_progress(&self) -> Option<IndexProgress> {
-        let path = self.progress_path();
-        let data = std::fs::read_to_string(path).ok()?;
-        serde_json::from_str(&data).ok()
-    }
-
     async fn get_db(&self) -> Result<&lancedb::Connection> {
         self.db
             .get_or_try_init(|| {
@@ -301,6 +164,11 @@ impl CodebaseIndex {
             let _ = std::fs::remove_dir_all(&self.lance_path);
             old_meta = None;
         }
+
+        // HEAD is read before the scan and stamped only on success: a commit
+        // landing mid-scan leaves the recorded head behind, so the index reads
+        // as stale and is rebuilt on the next pass.
+        let indexed_head = head::resolve(&self.project_path);
 
         let files = scan_project(&self.project_path);
         let files_indexed = files.len();
@@ -364,6 +232,7 @@ impl CodebaseIndex {
         if chunks_created == 0 {
             self.save_meta(&IndexMetadata {
                 dimensions: Some(embed_config.dimensions),
+                indexed_head,
                 ..IndexMetadata::default()
             })?;
             return Ok(IndexStats {
@@ -560,6 +429,7 @@ impl CodebaseIndex {
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
             dimensions: Some(embed_config.dimensions),
+            indexed_head,
             files: HashMap::new(),
             last_indexed: chrono::Utc::now().to_rfc3339(),
         };
