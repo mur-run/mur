@@ -4,7 +4,7 @@
 //! would race the sentinel (spec "Open for planning").
 
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use mur_common::lock_file::pid_alive;
@@ -16,6 +16,32 @@ use super::apply::Lifecycle;
 
 /// Lines of a failed quiet start's stderr kept for the card.
 const START_ERR_LINES: usize = 6;
+
+/// How long to wait, after `mur agent start` returns, for a live
+/// `running.lock`. `start` only confirms for a few seconds and treats a
+/// longer start as "not confirmed yet", never "failed"; a heavy start (local
+/// model load) legitimately takes far longer. Same window murmur's autostart
+/// gives a runtime before it falls back to the manual hint.
+const READY_WINDOW: Duration = Duration::from_secs(60);
+const READY_POLL: Duration = Duration::from_millis(250);
+
+/// Poll `ready` until it yields a value or `window` elapses.
+fn wait_ready<T>(
+    window: Duration,
+    poll: Duration,
+    mut ready: impl FnMut() -> Option<T>,
+) -> Option<T> {
+    let deadline = Instant::now() + window;
+    loop {
+        if let Some(v) = ready() {
+            return Some(v);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(poll);
+    }
+}
 
 pub struct AgentLifecycle {
     name: String,
@@ -87,12 +113,40 @@ impl Lifecycle for AgentLifecycle {
             Some(exe) => self.start_child(exe)?,
             None => cmd_start(&self.name)?,
         }
-        if self.running_pid().is_none() {
+        // `start` returning is not the verdict: it gives up confirming after
+        // a short window and calls that a slow start. Wait the full ready
+        // window before telling the card the runtime did not come up.
+        if wait_ready(READY_WINDOW, READY_POLL, || self.running_pid()).is_none() {
             bail!(
-                "it did not report ready in time; `mur agent status {}` shows the current state",
+                "it did not report ready within {}s; `mur agent status {}` shows the current state",
+                READY_WINDOW.as_secs(),
                 self.name
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn wait_ready_sees_a_runtime_that_comes_up_late() {
+        let calls = Cell::new(0);
+        let got = wait_ready(Duration::from_secs(5), Duration::from_millis(1), || {
+            calls.set(calls.get() + 1);
+            (calls.get() >= 3).then_some(42u32)
+        });
+        assert_eq!(got, Some(42));
+        assert_eq!(calls.get(), 3);
+    }
+
+    #[test]
+    fn wait_ready_gives_up_after_the_window() {
+        let got: Option<u32> =
+            wait_ready(Duration::from_millis(20), Duration::from_millis(5), || None);
+        assert_eq!(got, None);
     }
 }
