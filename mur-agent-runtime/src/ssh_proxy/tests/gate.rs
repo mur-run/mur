@@ -70,7 +70,7 @@ async fn sign_through(w: &World, gate: &dyn SignGate, key: usize) -> (Answer, Fa
 #[tokio::test]
 async fn approved_sign_is_forwarded_and_the_signature_returned() {
     let w = World::new();
-    let gate = FakeGate::new(GateOutcome::Allow);
+    let gate = FakeGate::new(GateOutcome::Allow { decision: None });
     let (ans, up) = sign_through(&w, &*gate, 0).await;
     assert_eq!(ans, Answer::SignResponse(b"A REAL SIGNATURE".to_vec()));
     assert_eq!(forwarded_signs(&up), 1);
@@ -80,7 +80,7 @@ async fn approved_sign_is_forwarded_and_the_signature_returned() {
 #[tokio::test]
 async fn the_gate_is_asked_with_policy_labels_and_bind_fingerprints() {
     let w = World::new();
-    let gate = FakeGate::new(GateOutcome::Allow);
+    let gate = FakeGate::new(GateOutcome::Allow { decision: None });
     sign_through(&w, &*gate, 0).await;
     let asked = gate.asked.lock().unwrap();
     assert_eq!(
@@ -115,7 +115,7 @@ async fn each_refusing_outcome_has_its_own_code_and_forwards_nothing() {
 #[tokio::test]
 async fn a_policy_refusal_never_asks() {
     let w = World::new();
-    let gate = FakeGate::new(GateOutcome::Allow);
+    let gate = FakeGate::new(GateOutcome::Allow { decision: None });
     let (ans, up) = sign_through(&w, &*gate, 1).await;
     assert_eq!(ans, Answer::Failure);
     assert_eq!(w.last_code().as_deref(), Some("key_not_allowed"));
@@ -128,7 +128,7 @@ async fn a_policy_refusal_never_asks() {
 #[tokio::test]
 async fn approved_but_upstream_down_is_upstream_unavailable() {
     let w = World::new();
-    let gate = FakeGate::new(GateOutcome::Allow);
+    let gate = FakeGate::new(GateOutcome::Allow { decision: None });
     let (p, up, sink) = (w.policy(), w.upstream().down(), w.sink());
     let mut sess = Session::new(&p, &up, &sink, &*gate);
     sess.handle(&w.good_bind()).await;
@@ -153,7 +153,7 @@ async fn an_empty_gate_slot_is_unavailable_and_fills_once() {
         GateOutcome::Unavailable(GATE_NOT_READY.into())
     );
     assert!(slot.set(FakeGate::new(GateOutcome::Deny)));
-    assert!(!slot.set(FakeGate::new(GateOutcome::Allow)));
+    assert!(!slot.set(FakeGate::new(GateOutcome::Allow { decision: None })));
     assert_eq!(slot.decide(&ask).await, GateOutcome::Deny);
 }
 

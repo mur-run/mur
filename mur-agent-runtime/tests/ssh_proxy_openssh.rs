@@ -426,6 +426,7 @@ async fn login_through_proxy(
         policy: Policy::build(&ent, PinTrust::Pinned, Policy::UNPINNED_IS_UNTRUSTED),
         upstream: Arc::new(upstream),
         sink: RefusalSink::new(Some(home.clone())),
+        marks: Default::default(),
         // The production gate: `ssh` is this test process's child.
         gate: listener::self_only_gate(std::process::id(), rig.dir.join("no-agents")),
         approvals,
@@ -553,7 +554,7 @@ async fn real_openssh_login_is_signed_only_when_approved() {
 
     // The gate is asked about exactly the real key and the server's real
     // host key.
-    let probe = Answering::new(GateOutcome::Allow);
+    let probe = Answering::new(GateOutcome::Allow { decision: None });
     let (out, _) = login_through_proxy(
         &rig,
         rig.entitlement(vec![host_fp.clone()]),
@@ -606,7 +607,7 @@ async fn real_openssh_login_is_signed_only_when_approved() {
     // Same key, server's host key not listed: the bind carried the real
     // server key, so the lookup must miss.
     // The gate must never be asked: a policy refusal is not a prompt.
-    let never = Answering::new(GateOutcome::Allow);
+    let never = Answering::new(GateOutcome::Allow { decision: None });
     let (out, refusals) = login_through_proxy(
         &rig,
         rig.entitlement(Vec::new()),

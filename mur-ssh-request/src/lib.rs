@@ -17,8 +17,10 @@ use sha2::{Digest, Sha256};
 
 use mur_common::agent::{ProcessesEntitlement, SpawnMode};
 
+mod mark;
 mod pinned;
 mod store;
+pub use mark::{SIGNING_MARK_NOTICE, SigningMark};
 pub use store::{PendingRequest, Written, read_pending, remove, requests_dir, write};
 
 /// Version of the request file. A reader drops a file whose schema it does not know.

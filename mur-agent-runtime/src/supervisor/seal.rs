@@ -456,6 +456,9 @@ pub(super) async fn prepare_and_seal(
                 pin_trust,
                 upstream,
                 sink,
+                marks: crate::ssh_proxy::mark::MarkSink::new(super::start_notice::mark_poster(
+                    &signer,
+                )),
                 approvals: slot.clone(),
             })
             .await;

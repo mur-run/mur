@@ -21,7 +21,7 @@ use serde::Serialize;
 use super::store::Settled;
 
 /// One decision gate B would replay right now.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LiveDecision {
     pub action_hash: String,
     pub allow: bool,

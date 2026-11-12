@@ -4,6 +4,7 @@ mod fixtures;
 mod gate;
 #[cfg(unix)]
 mod listener;
+mod mark;
 mod rsa_vector;
 mod session;
 mod sign_binding;

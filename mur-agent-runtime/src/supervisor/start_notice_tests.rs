@@ -164,3 +164,44 @@ fn the_override_banner_is_one_signed_note_per_nonce() {
         true
     ));
 }
+
+/// Spec "Signing mark": a runtime-signed note on the start channel, carrying
+/// the approval it was written under; a second write for the same approval
+/// (a restart that signs again) adds nothing.
+#[test]
+fn a_signing_mark_is_one_signed_note_per_approval() {
+    let tmp = tempfile::tempdir().unwrap();
+    let identity = AgentIdentity::generate();
+    let signer = Signer {
+        mur_home: tmp.path(),
+        agent: "probe",
+        identity: &identity,
+        key_version: 1,
+    };
+    let mark = mur_ssh_request::SigningMark::new(
+        "the-action-hash".into(),
+        "2026-11-11T10:00:00Z".parse().unwrap(),
+        "SHA256:k".into(),
+        "SHA256:hk".into(),
+    );
+    let id = append_signing_mark(&signer, &mark).unwrap();
+    append_signing_mark(&signer, &mark).unwrap();
+    let svc = ChannelService::open(tmp.path()).unwrap();
+    let notes: Vec<_> = svc
+        .load_events(&id)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == EventKind::Note)
+        .collect();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(
+        mur_ssh_request::SigningMark::from_payload(&notes[0].payload),
+        Some(mark)
+    );
+    assert!(mur_channel::sign::verify_one(
+        &id,
+        &notes[0],
+        &identity.verifying_key_bytes(),
+        true
+    ));
+}

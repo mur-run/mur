@@ -3,8 +3,12 @@
 //! The proxy only knows that a signature needs a human's yes; how that yes
 //! is obtained (gate B's store, prompt, `hitl/pending`) lives in
 //! `crate::hitl::ssh`, so this module does not depend on the HITL plumbing.
+//! It names one HITL type, [`LiveDecision`]: plain data, the approval an
+//! `Allow` was given under, which the signing mark is bound to.
 
 use std::sync::{Arc, OnceLock};
+
+pub use crate::hitl::remembered::LiveDecision;
 
 /// What the person approving is asked about. Labels come from the policy,
 /// fingerprints from the verified `session-bind`.
@@ -19,7 +23,11 @@ pub struct SignAsk {
 /// The gate's answer. Only `Allow` lets a sign request reach the upstream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GateOutcome {
-    Allow,
+    /// `decision` is the live allow this signature is approved under: found
+    /// remembered, or just recorded for a fresh answer. `None` when the
+    /// decision could not be read back (a failed record, a damaged log); the
+    /// signature still goes ahead, but no signing mark is written for it.
+    Allow { decision: Option<LiveDecision> },
     /// A person said no, now or earlier (remembered).
     Deny,
     /// Nobody can be asked: the approval channel is not there. Never passes
