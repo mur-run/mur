@@ -90,8 +90,15 @@ async fn a_returned_signature_writes_one_mark_bound_to_the_approval() {
     assert_eq!(m.notice, SIGNING_MARK_NOTICE);
     assert_eq!(m.action_hash, d.action_hash);
     assert_eq!(m.issued_at, d.issued_at);
-    assert_eq!(m.key_fp, fingerprint(&w.keys[0].key_blob()));
-    assert_eq!(m.host_key_fp, fingerprint(&w.host.key_blob()));
+    // Spec Goal 5: the mark goes to a channel the agent can read, so neither
+    // fingerprint of the pair appears anywhere in what is posted.
+    let posted = serde_json::to_string(m).unwrap();
+    for fp in [
+        fingerprint(&w.keys[0].key_blob()),
+        fingerprint(&w.host.key_blob()),
+    ] {
+        assert!(!posted.contains(&fp), "the mark leaks {fp}: {posted}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

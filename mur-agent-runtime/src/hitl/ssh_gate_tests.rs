@@ -401,3 +401,76 @@ async fn an_allow_whose_decision_cannot_be_read_back_carries_none() {
         GateOutcome::Allow { decision: None }
     );
 }
+
+/// Review of #2366: the remembered allow is looked up, then a newer answer
+/// (a forget and re-ask answered no) lands before the read-back. The deny
+/// read back is honored; the sign never reaches the upstream.
+#[tokio::test]
+async fn a_newer_deny_read_back_during_the_handoff_denies() {
+    struct Raced;
+    #[async_trait::async_trait]
+    impl DecisionStore for Raced {
+        async fn lookup(&self, _h: &str) -> Option<Settled> {
+            Some(Settled::Allow)
+        }
+        async fn live(&self, h: &str) -> Option<LiveDecision> {
+            let at = "2026-11-12T10:00:00Z".parse().unwrap();
+            Some(LiveDecision {
+                action_hash: h.into(),
+                allow: false,
+                issued_at: at,
+                expires_at: at,
+                label: None,
+                surface: "test".into(),
+            })
+        }
+        async fn record(&self, _r: HitlResponse) {}
+    }
+    let t = rig(false);
+    let gate = SshSignGate {
+        store: Arc::new(Raced),
+        agent: t.gate.agent.clone(),
+        approvals: t.approvals.clone(),
+        notifier: t.gate.notifier.clone(),
+        parking: Default::default(),
+        wait: WAIT,
+        audit_only: false,
+        pending: Default::default(),
+    };
+    assert_eq!(gate.decide(&ask()).await, GateOutcome::Deny);
+}
+
+/// A fresh yes whose record failed (nothing to read back) still allows,
+/// with no decision: the person did say yes; only the mark is lost.
+#[tokio::test]
+async fn a_fresh_allow_whose_record_failed_allows_without_a_decision() {
+    let mut t = rig(false);
+    let lossy = Arc::new(Lossy);
+    let gate = Arc::new(SshSignGate {
+        store: lossy,
+        agent: t.gate.agent.clone(),
+        approvals: t.approvals.clone(),
+        notifier: t.gate.notifier.clone(),
+        parking: Default::default(),
+        wait: WAIT,
+        audit_only: false,
+        pending: Default::default(),
+    });
+    let g = gate.clone();
+    let task = tokio::spawn(async move { g.decide(&ask()).await });
+    let n = t.rx.recv().await.expect("a prompt");
+    let id = call_of(&n)["hitl_id"].as_str().unwrap().to_string();
+    answer(&t.approvals, &id, true).await;
+    assert_eq!(task.await.unwrap(), GateOutcome::Allow { decision: None });
+}
+
+/// Records nothing and reads back nothing: a store whose writes all fail.
+struct Lossy;
+
+#[async_trait::async_trait]
+impl DecisionStore for Lossy {
+    async fn lookup(&self, _h: &str) -> Option<Settled> {
+        None
+    }
+    async fn record(&self, _r: HitlResponse) {}
+}

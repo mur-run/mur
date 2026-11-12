@@ -97,10 +97,15 @@ impl SignGate for SshSignGate {
 
 impl SshSignGate {
     /// `Allow`, carrying the live allow decision for `hash` if it can be read
-    /// back. A deny read back here (a race with a newer answer) carries none.
+    /// back. A deny read back here is a newer answer that won a race with the
+    /// one being acted on (a forget and re-ask answered no): it is honored,
+    /// never signed past. A read-back that finds nothing (a failed record, a
+    /// damaged log) still allows, with no decision, so no mark is written.
     async fn allow(&self, hash: &str) -> GateOutcome {
-        let decision = self.store.live(hash).await.filter(|d| d.allow);
-        GateOutcome::Allow { decision }
+        match self.store.live(hash).await {
+            Some(d) if !d.allow => GateOutcome::Deny,
+            decision => GateOutcome::Allow { decision },
+        }
     }
 
     /// The answer channel of the ask already out for `hash`, or a new ask.
