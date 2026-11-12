@@ -39,6 +39,7 @@ mur-mcp-proto = { path = "../mur-mcp-proto" }
 mur-compress = { path = "../mur-compress" }
 mur-channel = { path = "../mur-channel" }
 mur-open-items = { path = "../mur-open-items" }
+mur-ssh-request = { path = "../mur-ssh-request" }
 mur-track = { path = "../mur-track" }
 mur-trash = { path = "../mur-trash" }
 tokio = { workspace = true, features = ["net"] }

@@ -21,7 +21,16 @@ fn keyscan_output_parses_skipping_comments_garbage_and_duplicates() {
 
 #[test]
 fn hosts_that_could_be_options_or_lists_are_rejected() {
-    for bad in ["", "-oProxyCommand=x", "a b", "a,b", "a\nb"] {
+    for bad in [
+        "",
+        "-oProxyCommand=x",
+        "a b",
+        "a,b",
+        "a\nb",
+        "a/b",
+        "..",
+        "a..b",
+    ] {
         assert!(validate_host(bad).is_err(), "{bad:?}");
     }
     assert!(validate_host("people.example.edu").is_ok());
