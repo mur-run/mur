@@ -243,6 +243,7 @@ pub async fn auth(
         &allow_domains,
         chrono::Utc::now(),
         &KeychainStateKeyStore,
+        reauth,
     )?;
     println!("saved encrypted browser profile {site:?}");
     let mut out = std::io::stdout();

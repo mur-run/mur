@@ -2,10 +2,9 @@
 //!
 //! One profile: the export goes back whole (`refresh_profile`). Several: it
 //! is split per profile by host (`refresh_profiles`) — even when only one of
-//! them is still a target — and anything two
-//! profiles both cover is dropped from both and reported on next use
-//! (`mur_browser::abandon`), instead of the merged session not being written
-//! back at all.
+//! them is still a target — and anything two profiles both cover is dropped
+//! from both and reported on next use (`mur_browser::abandon`), instead of
+//! the merged session not being written back at all.
 
 use std::path::Path;
 

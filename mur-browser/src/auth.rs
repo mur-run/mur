@@ -48,6 +48,9 @@ pub struct ProfileMeta {
 /// Persist a verified Playwright storage-state document and its non-secret
 /// profile metadata. Metadata is only published after state encryption
 /// succeeds, and the handoff reaches `Done` only after both files exist.
+/// Without `replace`, a state that already exists when the lock is taken
+/// fails the save, so of two concurrent first logins the second cannot
+/// silently overwrite the first.
 #[allow(clippy::too_many_arguments)] // flat args mirror the handoff steps; see Task 2.5
 pub fn save_profile(
     handoff: &mut Handoff,
@@ -58,6 +61,7 @@ pub fn save_profile(
     allow_domains: &[String],
     now: DateTime<Utc>,
     store: &impl StateKeyStore,
+    replace: bool,
 ) -> Result<ProfileMeta> {
     let deadline = std::time::Instant::now() + crate::abandon::LOCK_WAIT;
     save_profile_by(
@@ -69,6 +73,7 @@ pub fn save_profile(
         allow_domains,
         now,
         store,
+        replace,
         deadline,
     )
 }
@@ -88,6 +93,7 @@ pub fn save_profile_by(
     allow_domains: &[String],
     now: DateTime<Utc>,
     store: &impl StateKeyStore,
+    replace: bool,
     deadline: std::time::Instant,
 ) -> Result<ProfileMeta> {
     let dir = state_path
@@ -96,6 +102,10 @@ pub fn save_profile_by(
     let _held = crate::abandon::lock_dir(dir, deadline)?.ok_or_else(|| {
         anyhow::anyhow!("browser profile is busy: a session is saving its login; retry in a moment")
     })?;
+    // Re-checked under the lock: the caller's check ran before the login.
+    if !replace && state_path.exists() {
+        bail!("browser profile already has encrypted state; use --reauth to replace it");
+    }
     handoff.write_state(state_path, storage_state, store)?;
     let meta = ProfileMeta {
         url: url.to_owned(),
@@ -339,6 +349,7 @@ mod tests {
             &["example.test".to_owned()],
             now,
             &store,
+            false,
         )
         .unwrap();
 
@@ -422,6 +433,7 @@ mod tests {
                     &["example.test".to_owned()],
                     now,
                     store,
+                    false,
                 );
                 tx.send(got.map(|_| ())).unwrap();
             });
@@ -432,6 +444,39 @@ mod tests {
             rx.recv().unwrap().unwrap();
         });
         assert!(state_path.exists() && meta_path.exists());
+    }
+
+    /// Two first logins racing: the one that takes the lock second finds the
+    /// state the first published and refuses, rather than overwriting it.
+    #[test]
+    fn a_first_login_does_not_overwrite_one_that_landed_first() {
+        let home = tempfile::tempdir().unwrap();
+        let (state_path, meta_path) = (
+            crate::paths::profile_state(home.path(), "ex"),
+            crate::paths::profile_meta(home.path(), "ex"),
+        );
+        let store = MemoryStore::default();
+        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let save = |replace| {
+            save_profile(
+                &mut ready_handoff(),
+                &state_path,
+                &meta_path,
+                LOGIN,
+                "https://example.test/login",
+                &["example.test".to_owned()],
+                now,
+                &store,
+                replace,
+            )
+        };
+        save(false).unwrap();
+        let before = std::fs::read(&state_path).unwrap();
+
+        let msg = format!("{:#}", save(false).unwrap_err());
+        assert!(msg.contains("--reauth"), "{msg}");
+        assert_eq!(std::fs::read(&state_path).unwrap(), before);
+        save(true).unwrap();
     }
 
     /// A lock that stays held past the login's deadline fails the save and
@@ -458,6 +503,7 @@ mod tests {
             &["example.test".to_owned()],
             DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             &MemoryStore::default(),
+            false,
             std::time::Instant::now() + std::time::Duration::from_millis(50),
         );
 
