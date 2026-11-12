@@ -139,6 +139,16 @@ pub(super) fn docked_rows(
         let options = hitl_choices(app.hitl_origin).len() as u16;
         return (0, form.height(options).min(avail), 0, Some(form));
     }
+    if let Some(card) = app.ssh_card.as_deref() {
+        let h = crate::cmd::agent::cli::ssh_card::render::height(
+            card,
+            app.theme,
+            total_h,
+            avail,
+            PANEL_MAX_PCT,
+        );
+        return (0, h, 0, None);
+    }
     let chooser = super::chooser::chooser_band_height(app, total_h, input_h);
     let chip = u16::from(crate::cmd::agent::cli::proposal::chip_line(app).is_some());
     (chooser, 0, chip, None)

@@ -157,6 +157,7 @@ pub(super) async fn run_tui(
     //
     // The flag is written immediately, before the user can possibly act on it:
     // a crash later in the session must not queue the same announcement again.
+    super::ssh_card::attach_notice(&mut app);
     if !app.migration_notice_seen() {
         app.push_system(mur_compress::memory_block::migration_notice());
         app.mark_migration_notice_seen();

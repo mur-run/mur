@@ -132,6 +132,9 @@ pub enum SlashCmd {
     /// a main/reviewer loop in this pane. The raw rest of the line; the grammar
     /// is `review/args.rs`'s, so the parser here never second-guesses it.
     Review(String),
+    /// `/ssh [host[:port] [user] | N]` — the SSH setup card; bare lists
+    /// grants and pending requests.
+    Ssh(Vec<String>),
     Quit,
     Unknown(String),
 }
@@ -225,6 +228,7 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         "search" => SlashCmd::Search(words.map(str::to_string).collect()),
         "monitor" | "mon" => SlashCmd::Monitor(words.map(str::to_string).collect()),
         "open" | "todo" => SlashCmd::Open,
+        "ssh" => SlashCmd::Ssh(words.map(str::to_string).collect()),
         // Raw rest of the line, inner spacing intact: the task text after `--`
         // is the user's, and `review/args.rs` owns the grammar.
         "review" => SlashCmd::Review(

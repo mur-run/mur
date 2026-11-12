@@ -483,6 +483,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
             },
         },
         SlashCmd::Secret { key, delete } => secret_cmd::request(app, key, delete),
+        SlashCmd::Ssh(args) => super::ssh_card::command(app, &args, tx),
         // `add` pins and probes (spawns the server, waits up to the probe
         // timeout) — run it off the loop so the screen keeps repainting.
         SlashCmd::Mcp(args) if args.first().map(String::as_str) == Some("add") => {

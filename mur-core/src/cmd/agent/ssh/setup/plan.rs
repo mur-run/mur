@@ -51,10 +51,9 @@ pub struct ExecSurface {
     pub reach: ExecReach,
 }
 
-/// The CLI reads the host half; the key and user fields are for the
-/// murmur and Hub cards (slices 4 and 5).
+/// The CLI reads the host half; murmur's `/ssh` card (and Hub's, slice 5)
+/// reads all of it.
 #[derive(Debug, Clone)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub struct SetupPlan {
     pub agent: String,
     pub host: RequestHost,

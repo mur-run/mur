@@ -25,6 +25,13 @@ use chooser::render_chooser_band;
 use rail::{fleet_rail_height, render_fleet_rail};
 use status::render_status;
 
+/// The docked rows, for tests outside `ui`.
+#[cfg(test)]
+pub(super) fn docked_rows_for_test(app: &App, total_h: u16, input_h: u16) -> (u16, u16, u16, bool) {
+    let (c, p, h, form) = approval::docked_rows(app, total_h, input_h);
+    (c, p, h, form.is_some())
+}
+
 /// The status bar alone, for tests outside `ui` that assert on the footer.
 #[cfg(test)]
 pub(super) fn render_status_for_test(f: &mut Frame, app: &App, area: Rect) {
@@ -116,11 +123,13 @@ fn render_frame(f: &mut Frame, app: &mut App) {
     }
     if chooser_h > 0 {
         render_chooser_band(f, app, chunks[2]);
-    } else if !gated {
+    } else if !gated && app.ssh_card.is_none() {
         render_completion(f, app, chunks[5]);
     }
     if let Some(form) = form {
         render_approval(f, app, chunks[3], form, std::time::Instant::now());
+    } else if let Some(card) = app.ssh_card.as_deref() {
+        super::ssh_card::render::draw(f, card, app.theme, chunks[3]);
     }
     if let Some((what, hint)) = chip {
         render_chip(f, app, chunks[4], &what, &hint);

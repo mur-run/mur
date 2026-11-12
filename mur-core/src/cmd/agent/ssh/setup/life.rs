@@ -14,9 +14,16 @@ use super::super::super::service::stop_service;
 use super::super::super::start::cmd_start;
 use super::apply::Lifecycle;
 
+/// Lines of a failed quiet start's stderr kept for the card.
+const START_ERR_LINES: usize = 6;
+
 pub struct AgentLifecycle {
     name: String,
     home: PathBuf,
+    /// Set for a caller that owns the terminal (murmur): start through a
+    /// `mur agent start` child with its output captured, because
+    /// `cmd_start` prints and would tear a TUI's screen.
+    quiet_exe: Option<PathBuf>,
 }
 
 impl AgentLifecycle {
@@ -24,7 +31,32 @@ impl AgentLifecycle {
         Self {
             name: name.to_owned(),
             home: home.to_owned(),
+            quiet_exe: None,
         }
+    }
+
+    /// Start through `mur_exe agent start <name>` with output captured.
+    pub fn quiet(name: &str, home: &std::path::Path, mur_exe: PathBuf) -> Self {
+        Self {
+            quiet_exe: Some(mur_exe),
+            ..Self::new(name, home)
+        }
+    }
+
+    fn start_child(&self, exe: &std::path::Path) -> Result<()> {
+        let out = std::process::Command::new(exe)
+            .args(["agent", "start", &self.name])
+            .stdin(std::process::Stdio::null())
+            .output()?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            let tail: Vec<&str> = err.lines().rev().take(START_ERR_LINES).collect();
+            bail!(
+                "{}",
+                tail.into_iter().rev().collect::<Vec<_>>().join("\n").trim()
+            );
+        }
+        Ok(())
     }
 
     fn agent_home(&self) -> PathBuf {
@@ -51,7 +83,10 @@ impl Lifecycle for AgentLifecycle {
     }
 
     fn start(&mut self) -> Result<()> {
-        cmd_start(&self.name)?;
+        match &self.quiet_exe {
+            Some(exe) => self.start_child(exe)?,
+            None => cmd_start(&self.name)?,
+        }
         if self.running_pid().is_none() {
             bail!(
                 "it did not report ready in time; `mur agent status {}` shows the current state",
