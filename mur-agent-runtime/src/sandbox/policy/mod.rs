@@ -600,6 +600,13 @@ pub(crate) fn fleet_dispatch_dirs(mur_home: &Path) -> (PathBuf, PathBuf) {
     )
 }
 
+pub(crate) fn jobs_dispatch_dirs(mur_home: &Path) -> (PathBuf, PathBuf) {
+    (
+        mur_home.join(mur_track::jobs_dispatch_request::JOBS_DISPATCH_REQUEST_DIR),
+        mur_home.join(mur_common::paths::DAEMON_HEARTBEAT_DIR),
+    )
+}
+
 fn system_read_paths() -> Vec<PathBuf> {
     // `mut` is only used inside the #[cfg(target_os = "macos")] block below;
     // allow the lint rather than restructure the initialization.

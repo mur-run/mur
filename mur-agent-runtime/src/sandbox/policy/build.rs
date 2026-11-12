@@ -365,6 +365,30 @@ impl SandboxPolicy {
             }
         }
 
+        // parallel_jobs (#2379): the built-in tool hands the run to the daemon
+        // as a signed request in its own inbox, after checking the daemon's
+        // heartbeat. Same gate the tool registers on, same reasoning as the
+        // cross-router fleet inbox above: writing a request authorizes
+        // nothing, the daemon re-verifies everything from config.
+        if let (Some(mur_home), Some(agent_name)) = (
+            agent_home.parent().and_then(|p| p.parent()),
+            agent_home.file_name().and_then(|n| n.to_str()),
+        ) && crate::tools::parallel_jobs::enabled_in(
+            &mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"))
+                .parallel_jobs,
+            agent_name,
+        ) {
+            let (inbox, heartbeat) = jobs_dispatch_dirs(mur_home);
+            let _ = std::fs::create_dir_all(&inbox);
+            if !fs_write.contains(&inbox) {
+                fs_write.push(inbox);
+            }
+            let _ = std::fs::create_dir_all(&heartbeat);
+            if std::fs::metadata(&heartbeat).is_ok() && !fs_read.contains(&heartbeat) {
+                fs_read.push(heartbeat);
+            }
+        }
+
         // The runtime's OWN central-store reads. macOS is allow-default so this
         // is a no-op there; on Linux Landlock is deny-by-default and WITHOUT
         // these the runtime cannot read its own configuration —

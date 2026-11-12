@@ -76,7 +76,7 @@ pub(super) fn write_request(mur_home: &Path, req: &FleetDispatchRequest) -> anyh
 /// the sandbox grants a read on the heartbeat DIRECTORY (Landlock pins a file
 /// grant to one inode), and only a daemon that sweeps the request inbox
 /// writes it — an older daemon correctly reads as down.
-pub(super) fn daemon_alive(
+pub(crate) fn daemon_alive(
     mur_home: &Path,
     stale_secs: u64,
     now: chrono::DateTime<chrono::Utc>,
