@@ -27,8 +27,8 @@ permissions:
 env:
   # Pinned, not @stable: rustc 1.100 moved build scripts to build/<pkg>/<hash>/out,
   # which breaks ort-sys and tauri-build (path walks from OUT_DIR) and test
-  # binaries that look for `mur` beside themselves. Bump deliberately.
-  RUST_TOOLCHAIN: 1.99.1
+  # binaries that look for `mur` beside themselves. Unpin via #2390.
+  RUST_TOOLCHAIN: "1.99.1"
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 # Required secrets:

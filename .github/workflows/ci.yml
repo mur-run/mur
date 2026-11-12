@@ -43,8 +43,8 @@ concurrency:
 env:
   # Pinned, not @stable: rustc 1.100 moved build scripts to build/<pkg>/<hash>/out,
   # which breaks ort-sys and tauri-build (path walks from OUT_DIR) and test
-  # binaries that look for `mur` beside themselves. Bump deliberately.
-  RUST_TOOLCHAIN: 1.99.1
+  # binaries that look for `mur` beside themselves. Unpin via #2390.
+  RUST_TOOLCHAIN: "1.99.1"
   CARGO_TERM_COLOR: always
   # Disable incremental compilation across all CI jobs. Incremental adds a
   # dependency-graph metadata layer that defeats Swatinem/rust-cache and
@@ -589,8 +589,6 @@ jobs:
     if: github.event_name != 'pull_request' || needs.changes.outputs.e2e == 'true'
     runs-on: macos-latest
     timeout-minutes: 45
-    env:
-      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
