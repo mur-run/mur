@@ -48,16 +48,50 @@ fn handed_key() -> Option<&'static str> {
     .as_deref()
 }
 
+/// The handed key wins over the Keychain; only without one is `keychain`
+/// asked. Split out so the order is testable without a Keychain.
+fn handed_or(
+    handed: Option<&str>,
+    keychain: impl FnOnce() -> Result<Option<String>>,
+) -> Result<Option<String>> {
+    match handed {
+        Some(key) => Ok(Some(key.to_owned())),
+        None => keychain(),
+    }
+}
+
+/// Read the key from the fd named by [`STATE_KEY_FD_ENV`] — the reader half
+/// of the runtime's handover (`mur_common::browser_state_key`).
+///
+/// The env value is not trusted to name our pipe: a stale or inherited value
+/// could point at any fd this process holds. So stdio is refused, and the fd
+/// is inspected through a duplicate before anything is taken — only a pipe is
+/// consumed (and closed); anything else is left exactly as it was.
 #[cfg(unix)]
-fn read_handed_fd(raw: &str) -> Result<String> {
-    use std::os::fd::FromRawFd;
+pub fn read_handed_fd(raw: &str) -> Result<String> {
+    use std::os::fd::{BorrowedFd, FromRawFd};
+    use std::os::unix::fs::FileTypeExt;
     let fd: i32 = raw.trim().parse().context("not an fd number")?;
     // 0-2 are stdio, which the MCP transport owns; never take one of them.
     if fd <= 2 {
         bail!("fd {fd} is a stdio stream");
     }
-    // SAFETY: the runtime opened this fd for us alone and nothing else in this
-    // process refers to it; the OnceLock makes this the only take.
+    // SAFETY: borrowed only for the duration of the dup; `try_clone_to_owned`
+    // fails cleanly (EBADF) when the fd is not open.
+    let probe = unsafe { BorrowedFd::borrow_raw(fd) }
+        .try_clone_to_owned()
+        .with_context(|| format!("fd {fd} is not open"))?;
+    let is_pipe = std::fs::File::from(probe)
+        .metadata()
+        .with_context(|| format!("stat fd {fd}"))?
+        .file_type()
+        .is_fifo();
+    if !is_pipe {
+        bail!("fd {fd} is not a pipe; leaving it alone");
+    }
+    // SAFETY: the runtime opened this pipe for us alone and nothing else in
+    // this process refers to it; the OnceLock in `handed_key` makes this the
+    // only take.
     let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
     let mut key = String::new();
     file.read_to_string(&mut key).context("read handed key")?;
@@ -69,32 +103,33 @@ fn read_handed_fd(raw: &str) -> Result<String> {
 }
 
 #[cfg(not(unix))]
-fn read_handed_fd(_raw: &str) -> Result<String> {
+pub fn read_handed_fd(_raw: &str) -> Result<String> {
     bail!("fd handover is unix-only")
 }
 
 impl StateKeyStore for KeychainStateKeyStore {
     fn get(&self, account: &str) -> Result<Option<String>> {
-        if account == STATE_KEY_ACCOUNT
-            && let Some(key) = handed_key()
-        {
-            return Ok(Some(key.to_owned()));
-        }
-        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account)
-            .with_context(|| format!("open Keychain entry {KEYCHAIN_SERVICE}:{account}"))?;
-        match entry.get_password() {
-            Ok(value) if !value.is_empty() => Ok(Some(value)),
-            Ok(_) => bail!("Keychain entry {KEYCHAIN_SERVICE}:{account} is empty"),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(error)
-                .with_context(|| format!("read Keychain entry {KEYCHAIN_SERVICE}:{account}")),
-        }
+        let handed = (account == STATE_KEY_ACCOUNT).then(handed_key).flatten();
+        handed_or(handed, || keychain_get(account))
     }
 
     fn set(&self, account: &str, value: &str) -> Result<()> {
         keyring::Entry::new(KEYCHAIN_SERVICE, account)?
             .set_password(value)
             .with_context(|| format!("write Keychain entry {KEYCHAIN_SERVICE}:{account}"))
+    }
+}
+
+fn keychain_get(account: &str) -> Result<Option<String>> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account)
+        .with_context(|| format!("open Keychain entry {KEYCHAIN_SERVICE}:{account}"))?;
+    match entry.get_password() {
+        Ok(value) if !value.is_empty() => Ok(Some(value)),
+        Ok(_) => bail!("Keychain entry {KEYCHAIN_SERVICE}:{account} is empty"),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => {
+            Err(error).with_context(|| format!("read Keychain entry {KEYCHAIN_SERVICE}:{account}"))
+        }
     }
 }
 
@@ -186,6 +221,66 @@ mod tests {
         fn set(&self, account: &str, value: &str) -> Result<()> {
             self.0.lock().unwrap().insert(account.into(), value.into());
             Ok(())
+        }
+    }
+
+    #[test]
+    fn a_handed_key_wins_over_the_keychain() {
+        let got = handed_or(Some("handed"), || panic!("keychain must not be asked")).unwrap();
+        assert_eq!(got.as_deref(), Some("handed"));
+        let got = handed_or(None, || Ok(Some("keychain".into()))).unwrap();
+        assert_eq!(got.as_deref(), Some("keychain"));
+    }
+
+    #[cfg(unix)]
+    mod handover {
+        use super::super::*;
+        use std::io::Write;
+        use std::os::fd::{AsRawFd, IntoRawFd};
+
+        #[test]
+        fn stdio_and_garbage_are_refused() {
+            for raw in ["0", "1", "2", "-1", "x", ""] {
+                assert!(read_handed_fd(raw).is_err(), "{raw:?} accepted");
+            }
+        }
+
+        #[test]
+        fn a_closed_fd_is_refused() {
+            let (r, _w) = std::io::pipe().unwrap();
+            let fd = r.as_raw_fd();
+            drop(r);
+            assert!(read_handed_fd(&fd.to_string()).is_err());
+        }
+
+        /// A stale env value naming some unrelated fd must not close it.
+        #[test]
+        fn a_non_pipe_fd_is_left_open() {
+            let file = tempfile::tempfile().unwrap();
+            let fd = file.as_raw_fd();
+            let err = read_handed_fd(&fd.to_string()).unwrap_err();
+            assert!(err.to_string().contains("not a pipe"), "{err:#}");
+            // Still ours and still open.
+            assert!(file.metadata().is_ok());
+        }
+
+        #[test]
+        fn a_pipe_is_read_to_eof_and_trimmed() {
+            let (r, mut w) = std::io::pipe().unwrap();
+            w.write_all(b"AGE-SECRET-KEY-1TEST\n").unwrap();
+            drop(w);
+            let fd = r.into_raw_fd();
+            assert_eq!(
+                read_handed_fd(&fd.to_string()).unwrap(),
+                "AGE-SECRET-KEY-1TEST"
+            );
+        }
+
+        #[test]
+        fn an_empty_pipe_falls_back() {
+            let (r, w) = std::io::pipe().unwrap();
+            drop(w);
+            assert!(read_handed_fd(&r.into_raw_fd().to_string()).is_err());
         }
     }
 

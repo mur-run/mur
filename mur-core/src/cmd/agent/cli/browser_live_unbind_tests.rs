@@ -108,3 +108,20 @@ fn profile_and_no_profile_together_are_refused() {
     let err = split_profile(&s(&["a.example.com", "--profile", "x", "--no-profile"])).unwrap_err();
     assert!(err.contains("contradict"), "{err}");
 }
+
+/// The runtime decides which MCP child gets the profile key from the argv
+/// alone (`mur_common::browser_state_key`); pin it to the argv actually
+/// written here, not a hand-copied one (#2369).
+#[test]
+fn the_runtime_recognises_the_written_live_argv() {
+    use mur_common::browser_state_key::{is_live_browser, wants_state_key};
+    let bare = live_argv("bob", &[]);
+    assert!(
+        is_live_browser(&bare),
+        "pre-seal read must cover a bare entry"
+    );
+    assert!(!wants_state_key(&bare));
+    let bound = live_argv("bob", &s(&["one", "two"]));
+    assert!(is_live_browser(&bound));
+    assert!(wants_state_key(&bound));
+}

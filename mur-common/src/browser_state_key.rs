@@ -34,20 +34,31 @@ pub fn keychain_ref() -> SecretRef {
     }
 }
 
-/// Whether an MCP entry with these args is a live browser session bound to at
-/// least one saved profile — the only kind that needs the key. Matches the
-/// argv `mur agent browser live` writes (`browser record … --mode live
-/// --profile <site>`), in any order after `browser record`.
-pub fn wants_state_key(args: &[String]) -> bool {
+/// Whether an MCP entry with these args is an agent-spawned live browser
+/// session (`browser record … --mode live`), with or without a profile.
+///
+/// This, not [`wants_state_key`], decides whether the runtime reads the key
+/// before sealing: adding `--profile` to an existing live entry is a hot edit
+/// (`mur-core` `live_effect`), so the next browser may need a key the agent
+/// did not need when it started — and after the seal it can no longer read it.
+pub fn is_live_browser(args: &[String]) -> bool {
     let is_record = args
         .windows(2)
         .any(|w| w[0] == "browser" && w[1] == "record");
     let is_live = args.windows(2).any(|w| w[0] == "--mode" && w[1] == "live")
         || args.iter().any(|a| a == "--mode=live");
-    let has_profile = args
-        .iter()
-        .any(|a| a == "--profile" || a.starts_with("--profile="));
-    is_record && is_live && has_profile
+    is_record && is_live
+}
+
+/// Whether an MCP entry with these args is a live browser session bound to at
+/// least one saved profile — the only kind handed the key at spawn. Matches
+/// the argv `mur agent browser live` writes (`browser record … --mode live
+/// --profile <site>`), in any order after `browser record`.
+pub fn wants_state_key(args: &[String]) -> bool {
+    is_live_browser(args)
+        && args
+            .iter()
+            .any(|a| a == "--profile" || a.starts_with("--profile="))
 }
 
 #[cfg(test)]
@@ -77,8 +88,13 @@ mod tests {
             "--mode=live",
             "--profile=gitea"
         ])));
-        // Public-pages live session: nothing to decrypt.
+        // Public-pages live session: nothing to decrypt at spawn — but still a
+        // live browser, so the key is read before the seal in case a profile
+        // is added later without a restart.
         assert!(!wants_state_key(&v(&[
+            "browser", "record", "--mode", "live"
+        ])));
+        assert!(is_live_browser(&v(&[
             "browser", "record", "--mode", "live"
         ])));
         // Recording modes are not agent-spawned live sessions.
@@ -89,6 +105,9 @@ mod tests {
             "test",
             "--profile",
             "gitea"
+        ])));
+        assert!(!is_live_browser(&v(&[
+            "browser", "record", "--mode", "test"
         ])));
         // Any other server that happens to take a --profile flag.
         assert!(!wants_state_key(&v(&[

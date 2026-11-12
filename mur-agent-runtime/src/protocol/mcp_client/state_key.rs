@@ -30,6 +30,7 @@ pub(super) fn spawn(
     #[cfg(not(unix))]
     {
         let _ = entry;
+        cmd.env_remove(mur_common::browser_state_key::FD_ENV);
         crate::sandbox::child::spawn_sandboxed(cmd, policy)
     }
 }
@@ -50,7 +51,10 @@ mod unix {
     /// Arm `cmd` with the key when `entry` needs it and it was cached pre-seal.
     /// `None` otherwise — the child then falls back to the Keychain, which is
     /// what an unsandboxed child (or a key that was never cached) did before.
+    /// Every child loses an inherited [`FD_ENV`] first: only the fd armed
+    /// here may be named, never one from whoever launched the runtime.
     pub(super) fn arm(cmd: &mut Command, entry: &McpServerEntry) -> Option<PendingKey> {
+        cmd.env_remove(FD_ENV);
         if !wants_state_key(&entry.args) {
             return None;
         }
@@ -126,7 +130,7 @@ mod unix {
                 ..Default::default()
             };
             assert!(arm(&mut cmd, &entry).is_none());
-            assert!(cmd.get_envs().all(|(k, _)| k != FD_ENV));
+            assert!(cmd.get_envs().all(|(k, v)| k != FD_ENV || v.is_none()));
         }
 
         #[test]
@@ -141,7 +145,7 @@ mod unix {
                 ..Default::default()
             };
             assert!(arm_with(&mut cmd, &entry, None).is_none());
-            assert!(cmd.get_envs().all(|(k, _)| k != FD_ENV));
+            assert!(cmd.get_envs().all(|(k, v)| k != FD_ENV || v.is_none()));
         }
 
         /// The real handover: a child reads the key from the fd named in its env.
@@ -172,6 +176,61 @@ mod unix {
                 .unwrap();
             assert!(child.wait().unwrap().success());
             assert_eq!(out, "AGE-SECRET-KEY-1TESTVALUE");
+        }
+
+        /// Both ends of the contract: the fd this side arms is one the
+        /// browser's own reader accepts and reads the key from. The reader is
+        /// called in-process on the read end, standing in for the child.
+        #[test]
+        fn the_browser_reader_accepts_what_the_runtime_arms() {
+            use std::os::fd::IntoRawFd;
+            let entry = McpServerEntry {
+                name: "browser".into(),
+                command: "mur".into(),
+                args: ["browser", "record", "--mode", "live", "--profile", "g"]
+                    .map(String::from)
+                    .to_vec(),
+                ..Default::default()
+            };
+            let mut cmd = Command::new("true");
+            let value = secrecy::SecretString::from("AGE-SECRET-KEY-1CONTRACT");
+            let pending = arm_with(&mut cmd, &entry, Some(value)).expect("armed");
+            let named = cmd
+                .get_envs()
+                .find(|(k, _)| *k == FD_ENV)
+                .and_then(|(_, v)| v)
+                .map(|v| v.to_string_lossy().into_owned())
+                .expect("fd env set");
+            assert_eq!(FD_ENV, mur_browser::state::STATE_KEY_FD_ENV);
+            // Take the read end out of `pending` the way the child would hold
+            // it; `deliver` then writes the key and closes the write end.
+            let PendingKey { write, read, value } = pending;
+            let read_fd = read.into_raw_fd();
+            assert_eq!(named, read_fd.to_string());
+            PendingKey {
+                write,
+                read: std::fs::File::open("/dev/null").unwrap().into(),
+                value,
+            }
+            .deliver();
+            assert_eq!(
+                mur_browser::state::read_handed_fd(&named).unwrap(),
+                "AGE-SECRET-KEY-1CONTRACT"
+            );
+        }
+
+        #[test]
+        fn an_inherited_fd_env_is_never_passed_on() {
+            let mut cmd = Command::new("true");
+            cmd.env(FD_ENV, "7");
+            let entry = McpServerEntry {
+                name: "x".into(),
+                command: "x".into(),
+                args: vec!["serve".into()],
+                ..Default::default()
+            };
+            assert!(arm(&mut cmd, &entry).is_none());
+            assert!(cmd.get_envs().all(|(k, v)| k != FD_ENV || v.is_none()));
         }
     }
 }

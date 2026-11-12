@@ -6479,6 +6479,7 @@ dependencies = [
  "landlock",
  "libc",
  "mime_guess",
+ "mur-browser",
  "mur-channel",
  "mur-common",
  "mur-compress",

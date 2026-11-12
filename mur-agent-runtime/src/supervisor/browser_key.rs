@@ -14,16 +14,24 @@
 
 use super::bootstrap::USER_SECRET_RESOLVE_TIMEOUT;
 use mur_common::agent::McpServerEntry;
-use mur_common::browser_state_key::{PENDING_NAME, keychain_ref, wants_state_key};
+use mur_common::browser_state_key::{PENDING_NAME, is_live_browser, keychain_ref};
 use mur_common::secret::keychain_pending;
 use std::path::Path;
 use tracing::{info, warn};
 
-/// Cache the key before the seal when any enabled server is a live browser
-/// bound to a profile. Never fails startup: a miss leaves the child to try the
-/// Keychain itself, which is exactly the behaviour before this existed.
+/// Whether the key must be read before the seal: any enabled live browser,
+/// bound to a profile or not. A profile added to an existing live entry takes
+/// effect on the next turn without a restart (`mur-core` `live_effect`), and
+/// by then the Keychain is out of reach (#2369 review).
+fn needs_key(entries: &[McpServerEntry]) -> bool {
+    entries.iter().any(|e| is_live_browser(&e.args))
+}
+
+/// Cache the key before the seal when [`needs_key`]. Never fails startup: a
+/// miss leaves the child to try the Keychain itself, which is exactly the
+/// behaviour before this existed.
 pub(super) fn cache_before_seal(entries: &[McpServerEntry], agent_home: &Path, agent: &str) {
-    if !entries.iter().any(|e| wants_state_key(&e.args)) {
+    if !needs_key(entries) {
         return;
     }
     if keychain_pending::is_pending(agent_home, PENDING_NAME) {
@@ -59,5 +67,38 @@ pub(super) fn cache_before_seal(entries: &[McpServerEntry], agent_home: &Path, a
                 warn!(error = %e, "could not record the pending keychain prompt");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(args: &[&str]) -> McpServerEntry {
+        McpServerEntry {
+            name: "browser".into(),
+            command: "mur".into(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// A live browser with no profile yet still gets the key read pre-seal:
+    /// `--profile` can be added to it hot, after the Keychain is gone.
+    #[test]
+    fn a_live_browser_without_a_profile_still_needs_the_key() {
+        assert!(needs_key(&[entry(&[
+            "browser", "record", "--run", "live-a", "--mode", "live"
+        ])]));
+        assert!(needs_key(&[entry(&[
+            "browser",
+            "record",
+            "--mode",
+            "live",
+            "--profile",
+            "g"
+        ])]));
+        assert!(!needs_key(&[entry(&["serve"])]));
+        assert!(!needs_key(&[]));
     }
 }

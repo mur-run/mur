@@ -157,6 +157,8 @@ windows-sys = { version = "0.59", features = [
 
 [dev-dependencies]
 mur-test-log = { path = "../mur-test-log" }
+# The state-key handover test reads with the browser's own reader (#2369).
+mur-browser = { path = "../mur-browser" }
 tempfile = "3"
 shell-words = "1"
 # `tokio::time::pause` / `#[tokio::test(start_paused = true)]` for the

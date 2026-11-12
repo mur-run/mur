@@ -64,6 +64,7 @@ pub fn chrome_user_agent(platform: &str, major: u32) -> String {
 pub fn binary_major(exe: &Path) -> Option<u32> {
     let out = Command::new(exe)
         .arg("--version")
+        .env_remove(crate::state::STATE_KEY_FD_ENV)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
