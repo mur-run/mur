@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{CodebaseIndex, FileMeta};
@@ -77,13 +77,27 @@ impl CodebaseIndex {
         self.load_meta()?.dimensions
     }
 
+    /// Atomically replace the metadata: write a sibling `.tmp-<pid>` file in
+    /// the same directory, then `rename` it over the target. A reader (or a
+    /// crash mid-write) therefore only ever sees the old or the new document,
+    /// never a torn one.
     pub(super) fn save_meta(&self, meta: &IndexMetadata) -> Result<()> {
         let path = self.meta_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let data = serde_json::to_string_pretty(meta)?;
-        std::fs::write(path, data)?;
+        let mut tmp = path.clone().into_os_string();
+        tmp.push(format!(".tmp-{}", std::process::id()));
+        let tmp = PathBuf::from(tmp);
+        std::fs::write(&tmp, data)
+            .with_context(|| format!("writing index meta temp {}", tmp.display()))?;
+        if let Err(e) = std::fs::rename(&tmp, &path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(
+                anyhow::Error::new(e).context(format!("replacing index meta {}", path.display()))
+            );
+        }
         Ok(())
     }
 
@@ -150,3 +164,7 @@ impl CodebaseIndex {
         serde_json::from_str(&data).ok()
     }
 }
+
+#[cfg(test)]
+#[path = "state_tests.rs"]
+mod tests;
