@@ -177,8 +177,8 @@ pub(super) async fn event_loop(
         if app.render_mode == RenderMode::Inline && std::mem::take(&mut app.wants_screen_wipe) {
             drop(events);
             let want_h = viewport_h_for(last_size.height);
-            let banner = app.welcome_applies().then(|| app.welcome_banner());
-            if purge_and_reanchor(terminal, want_h, banner.as_deref()).is_ok() {
+            app.reset_welcome_head();
+            if purge_and_reanchor(terminal, want_h).is_ok() {
                 viewport_h = want_h;
             }
             events = EventStream::new();

@@ -308,6 +308,17 @@ impl App {
         self.messages.iter().all(|m| m.role == Role::System) && self.follow.is_none()
     }
 
+    /// Put the welcome back at the head of the band if it applies — the
+    /// screen is being (re)built: startup, `/clear`, a resize.
+    pub fn reset_welcome_head(&mut self) {
+        use super::super::welcome::WelcomeHead;
+        self.welcome_head = if self.welcome_applies() {
+            WelcomeHead::Live
+        } else {
+            WelcomeHead::Off
+        };
+    }
+
     /// The welcome banner lines for this pane, in this skin.
     pub fn welcome_banner(&self) -> Vec<ratatui::text::Line<'static>> {
         super::super::welcome::welcome_lines(
