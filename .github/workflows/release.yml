@@ -25,6 +25,10 @@ permissions:
 # (never $GITHUB_REF_NAME) and checks out that ref, so a dispatch from main
 # with `tag=` builds and publishes exactly what the tag points at.
 env:
+  # Pinned, not @stable: rustc 1.100 moved build scripts to build/<pkg>/<hash>/out,
+  # which breaks ort-sys and tauri-build (path walks from OUT_DIR) and test
+  # binaries that look for `mur` beside themselves. Bump deliberately.
+  RUST_TOOLCHAIN: 1.99.1
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 # Required secrets:
@@ -112,8 +116,9 @@ jobs:
           npm ci
           npm run build
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - name: Run sccache
@@ -457,8 +462,9 @@ jobs:
           cache: 'npm'
           cache-dependency-path: mur-hub-gui/ui/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: aarch64-apple-darwin
 
       # rust-cache handles registry + git source + target dir layout.
@@ -775,7 +781,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ env.RELEASE_TAG }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Install protobuf
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libdbus-1-dev libasound2-dev

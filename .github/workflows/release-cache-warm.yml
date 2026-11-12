@@ -33,6 +33,12 @@ concurrency:
   group: release-cache-warm
   cancel-in-progress: false
 
+env:
+  # Pinned, not @stable: rustc 1.100 moved build scripts to build/<pkg>/<hash>/out,
+  # which breaks ort-sys and tauri-build (path walks from OUT_DIR) and test
+  # binaries that look for `mur` beside themselves. Bump deliberately.
+  RUST_TOOLCHAIN: 1.99.1
+
 jobs:
   hub-macos-warm:
     name: Warm sccache for MUR Hub (macOS arm64)
@@ -64,8 +70,9 @@ jobs:
           cache: 'npm'
           cache-dependency-path: mur-hub-gui/ui/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: aarch64-apple-darwin
 
       - name: Run sccache

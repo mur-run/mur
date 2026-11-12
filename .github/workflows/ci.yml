@@ -41,6 +41,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && !github.event.changes.base) }}
 
 env:
+  # Pinned, not @stable: rustc 1.100 moved build scripts to build/<pkg>/<hash>/out,
+  # which breaks ort-sys and tauri-build (path walks from OUT_DIR) and test
+  # binaries that look for `mur` beside themselves. Bump deliberately.
+  RUST_TOOLCHAIN: 1.99.1
   CARGO_TERM_COLOR: always
   # Disable incremental compilation across all CI jobs. Incremental adds a
   # dependency-graph metadata layer that defeats Swatinem/rust-cache and
@@ -165,7 +169,9 @@ jobs:
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
           sudo docker image prune --all --force > /dev/null || true
           df -h /
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: Expose runner image for cache key
         # ImageOS/ImageVersion are runner env vars, not part of the `env`
         # context, so `${{ env.ImageOS }}` expands to "" in a `with:` field.
@@ -358,8 +364,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - name: Expose runner image for cache key
         # ImageOS/ImageVersion are runner env vars, not part of the `env`
@@ -406,8 +413,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt
       - name: Repo-root allowlist (#1607)
         # Stray top-level files are how agent scratch output leaked into
@@ -427,8 +435,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - name: Expose runner image for cache key
         # ImageOS/ImageVersion are runner env vars, not part of the `env`
@@ -508,8 +517,9 @@ jobs:
         os: [ubuntu-22.04, macos-15, windows-latest]
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - name: Expose runner image for cache key
         # ImageOS/ImageVersion are runner env vars, not part of the `env`
@@ -583,7 +593,9 @@ jobs:
       RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: Expose runner image for cache key
         # ImageOS/ImageVersion are runner env vars, not part of the `env`
         # context, so `${{ env.ImageOS }}` expands to "" in a `with:` field.

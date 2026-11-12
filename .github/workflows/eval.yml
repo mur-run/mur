@@ -103,6 +103,12 @@ on:
         required: false
         default: 'stub'
 
+env:
+  # Pinned, not @stable: rustc 1.100 moved build scripts to build/<pkg>/<hash>/out,
+  # which breaks ort-sys and tauri-build (path walks from OUT_DIR) and test
+  # binaries that look for `mur` beside themselves. Bump deliberately.
+  RUST_TOOLCHAIN: 1.99.1
+
 jobs:
   # ── B2 Promptfoo smoke gate ───────────────────────────────────────
   # 15 OWASP LLM Top-10 cases against the B0 mock hook chain.
@@ -122,7 +128,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux system deps
         # mur-core's transitive deps (lance-encoding via lancedb) need
@@ -196,7 +204,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux system deps
         # Same as the stub job — mur-core needs `protoc` at build time.
