@@ -24,6 +24,32 @@ use crate::cmd::agent::ssh::setup::{Applied, Approval, apply_and_restart, plan};
 use crate::cmd::agent::ssh::view;
 use state::{CardState, KeyAction, Origin};
 
+/// Keys arriving this soon after a card opens are dropped: the card can open
+/// by itself when a streamed `ssh_request` completes, and a user still typing
+/// in the composer must not tick its consent or start an edit by accident.
+pub const SETTLE: std::time::Duration = std::time::Duration::from_millis(800);
+
+/// Everything `/ssh` keeps on the App.
+#[derive(Debug, Default)]
+pub struct SshSlot {
+    /// The open card. Shares the approval panel's slot; an open HITL gate
+    /// outranks it.
+    pub card: Option<Box<CardState>>,
+    /// When `card` was opened, for [`SETTLE`].
+    pub opened_at: Option<std::time::Instant>,
+    /// A plan or apply is running off the UI thread.
+    pub busy: bool,
+    /// The streamed `ssh_request` call, `(step_id, args)`, until it completes.
+    pub tool_step: Option<(String, serde_json::Value)>,
+}
+
+impl SshSlot {
+    /// Whether a key should reach the card now, rather than be dropped.
+    pub fn settled(&self) -> bool {
+        self.opened_at.is_none_or(|t| t.elapsed() >= SETTLE)
+    }
+}
+
 pub const USAGE: &str =
     "usage: /ssh [host[:port]] [user] — set up SSH access; bare /ssh lists pending requests";
 
@@ -138,7 +164,7 @@ pub fn open(app: &mut App, origin: Origin, tx: &mpsc::Sender<StreamMsg>) {
 /// The streamed `ssh_request` call finished: if it left a pending request,
 /// open its card with the triggering user text as the resend.
 pub fn on_tool_result(app: &mut App, args: &serde_json::Value, tx: &mpsc::Sender<StreamMsg>) {
-    if app.ssh_card.is_some() || app.ssh_busy {
+    if app.ssh.card.is_some() || app.ssh.busy {
         return;
     }
     let Some(host) = args.get("host").and_then(|v| v.as_str()) else {
@@ -170,10 +196,10 @@ fn spawn_plan(
     origin: Origin,
     tx: &mpsc::Sender<StreamMsg>,
 ) {
-    if app.ssh_busy {
+    if app.ssh.busy {
         return app.push_system("/ssh: still working on the last step");
     }
-    app.ssh_busy = true;
+    app.ssh.busy = true;
     app.push_system(format!(
         "scanning {} for its host keys…",
         target.canonical()
@@ -212,11 +238,11 @@ fn build(
     Ok(Box::new(CardState::new(p, origin)))
 }
 
-/// A terminal handover just ended (most often the card's own `ssh-add`, but
-/// a `!ssh-add` typed by hand counts too): re-read which keys the ssh-agent
-/// holds so the card stops calling a loaded key "not loaded".
+/// A terminal handover just ended (the card's own `ssh-add`): re-read which
+/// keys the ssh-agent holds. The card moves on to the host step only if the
+/// chosen key is now loaded; a failed `ssh-add` leaves it on the key step.
 pub fn after_handover(app: &mut App) {
-    if let Some(card) = app.ssh_card.as_mut() {
+    if let Some(card) = app.ssh.card.as_mut() {
         let (loaded, unloaded) = split_keys(&System);
         card.refresh_keys(loaded, unloaded);
     }
@@ -224,13 +250,13 @@ pub fn after_handover(app: &mut App) {
 
 /// A key while the card is open.
 pub fn on_key(app: &mut App, key: crossterm::event::KeyEvent, tx: &mpsc::Sender<StreamMsg>) {
-    let Some(card) = app.ssh_card.as_mut() else {
+    let Some(card) = app.ssh.card.as_mut() else {
         return;
     };
     match card.on_key(key) {
         KeyAction::Nothing => {}
         KeyAction::Close => {
-            app.ssh_card = None;
+            app.ssh.card = None;
             app.push_system("/ssh: cancelled — nothing was changed");
         }
         KeyAction::LoadKey(path) => {
@@ -250,10 +276,10 @@ pub fn on_key(app: &mut App, key: crossterm::event::KeyEvent, tx: &mpsc::Sender<
 }
 
 fn approve(app: &mut App, a: Approval, tx: &mpsc::Sender<StreamMsg>) {
-    let Some(card) = app.ssh_card.take() else {
+    let Some(card) = app.ssh.card.take() else {
         return;
     };
-    app.ssh_busy = true;
+    app.ssh.busy = true;
     app.push_system(format!(
         "/ssh: writing the grant for {} and restarting '{}'…",
         card.plan.host.canonical(),
@@ -284,9 +310,12 @@ fn run_apply(home: &Path, agent: &str, a: &Approval) -> Result<Applied, String> 
 
 /// A `CardMsg` arrived.
 pub fn on_msg(app: &mut App, msg: CardMsg, tx: &mpsc::Sender<StreamMsg>) {
-    app.ssh_busy = false;
+    app.ssh.busy = false;
     match msg {
-        CardMsg::Planned(Ok(card)) => app.ssh_card = Some(card),
+        CardMsg::Planned(Ok(card)) => {
+            app.ssh.card = Some(card);
+            app.ssh.opened_at = Some(std::time::Instant::now());
+        }
         CardMsg::Planned(Err(e)) => app.push_error(format!("/ssh: {e}")),
         CardMsg::Applied { result: Err(e), .. } => app.push_error(format!("/ssh: {e}")),
         CardMsg::Applied {

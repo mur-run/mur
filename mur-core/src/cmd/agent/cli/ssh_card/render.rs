@@ -97,8 +97,8 @@ fn verdict_text(v: &Verdict) -> &'static str {
             "not in your ~/.ssh/known_hosts — compare with the operator's published fingerprint"
         }
         Verdict::Unknown { downgraded: true } => {
-            "matches your ~/.ssh/known_hosts, but this agent can write that file, so the match \
-             proves nothing — compare it"
+            "matches your ~/.ssh/known_hosts, but this agent can write that file (or may run \
+             without its sandbox), so the match proves nothing — compare it"
         }
         Verdict::Differs => {
             "your ~/.ssh/known_hosts stores a DIFFERENT key: the host was rebuilt, or the \

@@ -81,6 +81,9 @@ pub struct CardState {
     /// The login user; only used for the test connection and key install.
     pub user: String,
     pub editing_user: bool,
+    /// `ssh-add` was handed the terminal for the chosen key; the next
+    /// `refresh_keys` decides whether the card moves on.
+    pub loading: bool,
     /// A one-line hint from the last key press.
     pub note: Option<String>,
 }
@@ -108,6 +111,7 @@ impl CardState {
             spawn_consented: false,
             user,
             editing_user: false,
+            loading: false,
             note: None,
         }
     }
@@ -135,6 +139,12 @@ impl CardState {
             .and_then(|fp| keys.iter().position(|(k, _)| k.fingerprint == fp))
             .unwrap_or(0)
             .min(keys.len().saturating_sub(1));
+        if std::mem::take(&mut self.loading) && self.step == Step::Key {
+            match self.chosen_key() {
+                Some((_, true)) => self.step = Step::Host,
+                _ => self.note = Some("ssh-add did not load the key; nothing was changed".into()),
+            }
+        }
     }
 
     /// Ticking is offered on `unknown` only (spec verdict table).
@@ -155,9 +165,12 @@ impl CardState {
 
     /// The approval the user built, or why Approve is unavailable.
     pub fn approval(&self) -> Result<Approval, String> {
-        let Some((key, _)) = self.chosen_key() else {
+        let Some((key, loaded)) = self.chosen_key() else {
             return Err("no key to grant: load one with ssh-add, then reopen /ssh".into());
         };
+        if !loaded {
+            return Err("the chosen key is not loaded in ssh-agent; go back and load it".into());
+        }
         let host = self.plan.host.host();
         let choice = HostChoice {
             pasted: self.pasted.clone(),
@@ -278,13 +291,17 @@ impl CardState {
                     self.note = Some("no key to choose".into());
                     return KeyAction::Nothing;
                 };
-                let load = (!loaded)
-                    .then(|| key.path.as_deref().map(private_key_of))
-                    .flatten();
-                self.step = Step::Host;
-                if let Some(p) = load {
-                    return KeyAction::LoadKey(p);
+                if loaded {
+                    self.step = Step::Host;
+                    return KeyAction::Nothing;
                 }
+                // Stay here until `refresh_keys` sees the key in ssh-agent.
+                let Some(p) = key.path.as_deref().map(private_key_of) else {
+                    self.note = Some("no private key file for this key".into());
+                    return KeyAction::Nothing;
+                };
+                self.loading = true;
+                return KeyAction::LoadKey(p);
             }
             Step::Host => self.step = Step::Summary,
             Step::Summary if enter => match self.approval() {

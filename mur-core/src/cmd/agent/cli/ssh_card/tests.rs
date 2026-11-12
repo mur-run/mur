@@ -170,8 +170,11 @@ fn choosing_an_unloaded_key_hands_the_terminal_to_ssh_add() {
         KeyAction::LoadKey(p) => assert_eq!(p, std::path::Path::new("/home/u/.ssh/id_u")),
         _ => panic!("expected ssh-add"),
     }
-    assert_eq!(c.step, Step::Host);
-    assert_eq!(approve(&mut c).unwrap().key_fp, fp('U'));
+    assert_eq!(
+        c.step,
+        Step::Key,
+        "stays on the key step until ssh-add proves it"
+    );
 }
 
 #[test]
@@ -188,7 +191,57 @@ fn a_key_loaded_by_ssh_add_is_shown_loaded_and_stays_chosen() {
         c.chosen_key().map(|(k, l)| (k.fingerprint.clone(), l)),
         Some((fp('U'), true))
     );
+    assert_eq!(c.step, Step::Host, "a loaded key moves the card on");
     assert_eq!(approve(&mut c).unwrap().key_fp, fp('U'));
+}
+
+/// Spec "Error handling": a wrong passphrase or failed ssh-add keeps the
+/// card on the key step, and nothing grants a key ssh-agent does not hold.
+#[test]
+fn a_failed_ssh_add_stays_on_the_key_step_and_grants_nothing() {
+    let mut c = CardState::new(plan(Verdict::Trusted, None), Origin::Direct);
+    press(&mut c, KeyCode::Down);
+    assert!(matches!(
+        press(&mut c, KeyCode::Enter),
+        KeyAction::LoadKey(_)
+    ));
+    c.refresh_keys(
+        vec![key('K', None)],
+        vec![key('U', Some("/home/u/.ssh/id_u.pub"))],
+    );
+    assert_eq!(c.step, Step::Key);
+    assert!(c.note.as_deref().unwrap_or("").contains("did not load"));
+    let e = approve(&mut c).unwrap_err();
+    assert!(e.contains("not loaded"), "{e}");
+}
+
+#[test]
+fn keys_right_after_an_auto_open_are_dropped() {
+    let mut app = App::test_fixture();
+    app.ssh.card = Some(Box::new(CardState::new(
+        plan(Verdict::Trusted, Some(SpawnChange::NoneToStrict)),
+        Origin::Direct,
+    )));
+    app.ssh.opened_at = Some(std::time::Instant::now());
+    assert!(
+        !app.ssh.settled(),
+        "a stray key inside the window is not the card's"
+    );
+    app.ssh.opened_at = Some(std::time::Instant::now() - SETTLE);
+    assert!(app.ssh.settled());
+    app.ssh.opened_at = None;
+    assert!(app.ssh.settled());
+}
+
+#[test]
+fn consent_toggle_is_inert_without_none_to_strict() {
+    let mut c = CardState::new(
+        plan(Verdict::Trusted, Some(SpawnChange::AddSsh)),
+        Origin::Direct,
+    );
+    c.step = Step::Summary;
+    press(&mut c, KeyCode::Char('c'));
+    assert!(!c.spawn_consented);
 }
 
 #[test]
@@ -284,7 +337,7 @@ fn host_port_split() {
 #[test]
 fn the_card_takes_the_panel_slot_and_a_gate_outranks_it() {
     let mut app = App::test_fixture();
-    app.ssh_card = Some(Box::new(CardState::new(
+    app.ssh.card = Some(Box::new(CardState::new(
         plan(Verdict::Trusted, None),
         Origin::Direct,
     )));

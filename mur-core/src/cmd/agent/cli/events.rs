@@ -459,8 +459,10 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
             }
             // The `/ssh` card owns the keys while open; Ctrl combos (cancel,
             // quit) still reach the composer's handlers below.
-            if app.ssh_card.is_some() && !ctrl {
-                ssh_card::on_key(app, key, tx);
+            if app.ssh.card.is_some() && !ctrl {
+                if app.ssh.settled() {
+                    ssh_card::on_key(app, key, tx);
+                }
                 return;
             }
             // Stale-decision swallow: a gate that auto-resolves (read lane,
@@ -732,7 +734,7 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
             //   empty/whitespace → try the clipboard image (covers raw paste)
             //   otherwise        → ordinary text paste
             let trimmed = text.trim();
-            if let Some(card) = app.ssh_card.as_mut()
+            if let Some(card) = app.ssh.card.as_mut()
                 && card.step == ssh_card::state::Step::Host
             {
                 card.paste(trimmed);

@@ -139,7 +139,7 @@ pub(super) fn docked_rows(
         let options = hitl_choices(app.hitl_origin).len() as u16;
         return (0, form.height(options).min(avail), 0, Some(form));
     }
-    if let Some(card) = app.ssh_card.as_deref() {
+    if let Some(card) = app.ssh.card.as_deref() {
         let h = crate::cmd::agent::cli::ssh_card::render::height(
             card,
             app.theme,

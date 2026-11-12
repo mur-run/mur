@@ -237,7 +237,7 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
                 }
             } else {
                 if name == mur_agent_runtime::tools::ssh_request::SSH_REQUEST {
-                    app.ssh_tool_step = Some((step_id.clone(), args.clone()));
+                    app.ssh.tool_step = Some((step_id.clone(), args.clone()));
                 }
                 app.saw_step_this_turn = true;
                 // A delegated fleet run is a long, otherwise-opaque step:
@@ -277,10 +277,11 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             );
             app.finish_auto_fleet(&step_id, ok, duration_ms);
             if app
-                .ssh_tool_step
+                .ssh
+                .tool_step
                 .as_ref()
                 .is_some_and(|(id, _)| *id == step_id)
-                && let Some((_, args)) = app.ssh_tool_step.take()
+                && let Some((_, args)) = app.ssh.tool_step.take()
                 && ok
             {
                 super::ssh_card::on_tool_result(app, &args, tx);

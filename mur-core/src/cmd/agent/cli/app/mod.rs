@@ -434,13 +434,8 @@ pub struct App {
     pub pending_secret_prompt: Option<String>,
     /// A `/secret KEY --delete` waiting to be carried out.
     pub pending_secret_delete: Option<String>,
-    /// The open `/ssh` card. Shares the approval panel's slot; an open HITL
-    /// gate outranks it.
-    pub ssh_card: Option<Box<super::ssh_card::state::CardState>>,
-    /// A `/ssh` plan or apply is running off the UI thread.
-    pub ssh_busy: bool,
-    /// The streamed `ssh_request` call, `(step_id, args)`, until it completes.
-    pub ssh_tool_step: Option<(String, serde_json::Value)>,
+    /// The `/ssh` card, its background work, and the streamed call.
+    pub ssh: super::ssh_card::SshSlot,
     /// A destructive memory operation waiting for a typed yes/no.
     ///
     /// Delete and demote of a **permanent instruction**, and an edit that
@@ -574,9 +569,7 @@ impl App {
             pending_handover: None,
             pending_secret_prompt: None,
             pending_secret_delete: None,
-            ssh_card: None,
-            ssh_busy: false,
-            ssh_tool_step: None,
+            ssh: Default::default(),
             pending_memory_confirm: None,
             monitor_total: 0,
             monitor_conditions: 0,
