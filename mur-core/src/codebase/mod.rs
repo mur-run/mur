@@ -1,4 +1,5 @@
 pub mod chunker;
+pub mod head;
 pub mod scanner;
 
 mod discover;
@@ -164,6 +165,11 @@ impl CodebaseIndex {
             old_meta = None;
         }
 
+        // HEAD is read before the scan and stamped only on success: a commit
+        // landing mid-scan leaves the recorded head behind, so the index reads
+        // as stale and is rebuilt on the next pass.
+        let indexed_head = head::resolve(&self.project_path);
+
         let files = scan_project(&self.project_path);
         let files_indexed = files.len();
 
@@ -226,6 +232,7 @@ impl CodebaseIndex {
         if chunks_created == 0 {
             self.save_meta(&IndexMetadata {
                 dimensions: Some(embed_config.dimensions),
+                indexed_head,
                 ..IndexMetadata::default()
             })?;
             return Ok(IndexStats {
@@ -422,7 +429,7 @@ impl CodebaseIndex {
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
             dimensions: Some(embed_config.dimensions),
-            indexed_head: None,
+            indexed_head,
             files: HashMap::new(),
             last_indexed: chrono::Utc::now().to_rfc3339(),
         };
