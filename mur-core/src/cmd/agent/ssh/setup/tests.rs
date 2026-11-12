@@ -1,0 +1,414 @@
+//! The setup steps over fakes: the verdict table, host selection, the spawn
+//! change, and `apply_and_restart` against a temp `MUR_HOME` with an
+//! injected lifecycle, so no service manager or process is touched.
+
+use std::path::Path;
+
+use anyhow::{Result, anyhow};
+use mur_common::agent::{
+    ProcessesEntitlement, SpawnMode, SshEntitlement, SshHostRule, SshKeyRule, SshKnownHost,
+};
+use mur_common::identity::AgentIdentity;
+
+use super::super::edit::{AllowOutcome, HostGrant};
+use super::super::resolve::ScannedKey;
+use super::super::tests::{fp, on_disk, write_agent};
+use super::apply::{Lifecycle, Restart};
+use super::preapprove::{Pair, Preapproval, allowed_pairs, skip_reason};
+use super::verdict::{HostChoice, select, verdict};
+use super::*;
+
+const AGENT: &str = "bot";
+const HOST: &str = "gh.example";
+
+fn scanned(c: char) -> ScannedKey {
+    ScannedKey {
+        fingerprint: fp(c),
+        entry: SshKnownHost {
+            host: HOST.into(),
+            key_type: "ssh-ed25519".into(),
+            key_base64: format!("AAAA{c}"),
+        },
+    }
+}
+
+#[test]
+fn verdict_follows_the_table() {
+    let scan = [scanned('A'), scanned('B')];
+    assert_eq!(
+        verdict(&scan, &[], false),
+        (Verdict::Unknown { downgraded: false }, vec![])
+    );
+    assert_eq!(
+        verdict(&scan, &[fp('B')], false),
+        (Verdict::Trusted, vec![fp('B')])
+    );
+    assert_eq!(
+        verdict(&scan, &[fp('B')], true),
+        (Verdict::Unknown { downgraded: true }, vec![]),
+        "a match the agent could have written proves nothing"
+    );
+    assert_eq!(
+        verdict(&scan, &[fp('Z')], false),
+        (Verdict::Differs, vec![])
+    );
+}
+
+#[test]
+fn select_never_grants_more_than_the_table_allows() {
+    let scan = [scanned('A'), scanned('B')];
+    let none = HostChoice::default();
+    let unknown = Verdict::Unknown { downgraded: false };
+
+    let got = select(HOST, &scan, &Verdict::Trusted, &[fp('A')], &none).unwrap();
+    assert_eq!(got, vec![scanned('A')]);
+
+    assert!(
+        select(HOST, &scan, &unknown, &[], &none).is_err(),
+        "nothing vouched"
+    );
+    let tick = HostChoice {
+        pasted: None,
+        ticked: vec![fp('B'), fp('Q')],
+    };
+    assert_eq!(
+        select(HOST, &scan, &unknown, &[], &tick).unwrap(),
+        vec![scanned('B')],
+        "a ticked fingerprint the host never offered is ignored"
+    );
+
+    let paste_missing = HostChoice {
+        pasted: Some(fp('Q')),
+        ticked: vec![],
+    };
+    let e = select(HOST, &scan, &unknown, &[], &paste_missing).unwrap_err();
+    assert!(e.to_string().contains("did not offer"), "{e}");
+
+    // Differs: only the operator's fingerprint gets through.
+    let e = select(HOST, &scan, &Verdict::Differs, &[], &tick).unwrap_err();
+    assert!(e.to_string().contains("ssh-keygen -R"), "{e}");
+    let paste = HostChoice {
+        pasted: Some(fp('A')),
+        ticked: vec![],
+    };
+    assert_eq!(
+        select(HOST, &scan, &Verdict::Differs, &[], &paste).unwrap(),
+        vec![scanned('A')]
+    );
+}
+
+fn procs(mode: SpawnMode, allowed: &[&str]) -> ProcessesEntitlement {
+    let mut p = mur_common::agent::AgentProfile::default_for_tests()
+        .entitlements
+        .processes;
+    p.spawn.mode = mode;
+    p.spawn.allowed = allowed.iter().map(|s| s.to_string()).collect();
+    p
+}
+
+#[test]
+fn spawn_change_adds_ssh_and_none_needs_strict() {
+    let mut p = procs(SpawnMode::None, &[]);
+    assert_eq!(SpawnChange::needed(&p), Some(SpawnChange::NoneToStrict));
+    SpawnChange::NoneToStrict.apply(&mut p);
+    assert_eq!(p.spawn.mode, SpawnMode::Strict);
+    assert_eq!(SpawnChange::needed(&p), None);
+
+    let mut p = procs(SpawnMode::Strict, &["git"]);
+    assert_eq!(SpawnChange::needed(&p), Some(SpawnChange::AddSsh));
+    SpawnChange::AddSsh.apply(&mut p);
+    SpawnChange::AddSsh.apply(&mut p);
+    assert_eq!(p.spawn.allowed, vec!["git", "ssh"], "added once");
+}
+
+fn pair(key: char, host: char) -> Pair {
+    Pair {
+        key_fp: fp(key),
+        key_label: None,
+        host_key_fp: fp(host),
+        host_label: None,
+    }
+}
+
+#[test]
+fn a_preapproval_never_widens_the_grant() {
+    let ssh = SshEntitlement {
+        keys: vec![SshKeyRule {
+            fingerprint: fp('A'),
+            label: None,
+            allow_hosts: vec![SshHostRule {
+                host_key: fp('H'),
+                label: None,
+                known_hosts: vec![],
+            }],
+        }],
+    };
+    let asked = [pair('A', 'H'), pair('A', 'X'), pair('B', 'H')];
+    assert_eq!(allowed_pairs(&ssh, &asked), vec![pair('A', 'H')]);
+}
+
+#[derive(Default)]
+struct FakeLife {
+    pid: Option<u32>,
+    fail_stop: bool,
+    fail_start: bool,
+    calls: Vec<&'static str>,
+}
+
+impl Lifecycle for FakeLife {
+    fn running_pid(&self) -> Option<u32> {
+        self.pid
+    }
+    fn stop(&mut self, _pid: u32) -> Result<()> {
+        self.calls.push("stop");
+        if self.fail_stop {
+            return Err(anyhow!("still alive"));
+        }
+        self.pid = None;
+        Ok(())
+    }
+    fn start(&mut self) -> Result<()> {
+        self.calls.push("start");
+        if self.fail_start {
+            return Err(anyhow!("not ready"));
+        }
+        Ok(())
+    }
+}
+
+fn approval(spawn: Option<SpawnChange>, consented: bool, restart: bool) -> Approval {
+    Approval {
+        key_fp: fp('A'),
+        key_label: Some("laptop".into()),
+        hosts: vec![HostGrant {
+            host_key_fp: fp('H'),
+            label: Some(HOST.into()),
+            known_host: Some(scanned('H').entry),
+        }],
+        spawn,
+        spawn_consented: consented,
+        restart,
+    }
+}
+
+struct Home {
+    _tmp: tempfile::TempDir,
+    _env: mur_common::test_env::EnvGuard,
+}
+
+impl Home {
+    fn new() -> (Self, std::path::PathBuf) {
+        let mut env = mur_common::test_env::EnvGuard::hold();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_path_buf();
+        env.set_var("MUR_HOME", &home);
+        write_agent(&home, AGENT);
+        AgentIdentity::generate()
+            .save(&home.join("agents").join(AGENT))
+            .unwrap();
+        (
+            Self {
+                _tmp: tmp,
+                _env: env,
+            },
+            home,
+        )
+    }
+}
+
+fn granted(home: &Path) -> bool {
+    let p = on_disk(home, AGENT);
+    p.entitlements
+        .ssh
+        .keys
+        .iter()
+        .any(|k| k.fingerprint == fp('A') && k.allow_hosts.iter().any(|h| h.host_key == fp('H')))
+}
+
+#[test]
+fn none_to_strict_without_its_consent_writes_nothing() {
+    let (_h, home) = Home::new();
+    let mut life = FakeLife::default();
+    let e = apply_and_restart(
+        &home,
+        AGENT,
+        0,
+        &approval(Some(SpawnChange::NoneToStrict), false, true),
+        &mut life,
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("own consent"), "{e}");
+    assert!(!granted(&home));
+    assert!(life.calls.is_empty());
+}
+
+#[test]
+fn no_restart_writes_the_grant_and_touches_nothing_else() {
+    let (_h, home) = Home::new();
+    let mut life = FakeLife {
+        pid: Some(42),
+        ..Default::default()
+    };
+    let a = apply_and_restart(
+        &home,
+        AGENT,
+        0,
+        &approval(Some(SpawnChange::AddSsh), false, false),
+        &mut life,
+    )
+    .unwrap();
+    assert_eq!(a.outcome, AllowOutcome::Added);
+    assert_eq!(a.restart, Restart::Skipped);
+    assert_eq!(a.preapproval, Preapproval::NotAttempted);
+    assert!(life.calls.is_empty());
+    assert!(granted(&home));
+    let p = on_disk(&home, AGENT);
+    assert!(
+        p.entitlements
+            .processes
+            .spawn
+            .allowed
+            .iter()
+            .any(|b| b == "ssh")
+    );
+}
+
+fn expect_preapproval(home: &Path, got: &Preapproval) {
+    let ent = on_disk(home, AGENT).entitlements;
+    match skip_reason(&ent) {
+        Some(why) => assert_eq!(got, &Preapproval::Skipped { why }),
+        None => assert_eq!(
+            got,
+            &Preapproval::Recorded {
+                pairs: 1,
+                reset_channel: None
+            }
+        ),
+    }
+}
+
+#[test]
+fn a_running_agent_is_stopped_preapproved_and_started() {
+    let (_h, home) = Home::new();
+    let mut life = FakeLife {
+        pid: Some(42),
+        ..Default::default()
+    };
+    let a = apply_and_restart(&home, AGENT, 0, &approval(None, false, true), &mut life).unwrap();
+    assert_eq!(life.calls, vec!["stop", "start"]);
+    assert_eq!(a.restart, Restart::Restarted);
+    assert!(a.restart.line(AGENT).is_none());
+    expect_preapproval(&home, &a.preapproval);
+}
+
+#[test]
+fn a_stopped_agent_is_preapproved_and_left_stopped() {
+    let (_h, home) = Home::new();
+    let mut life = FakeLife::default();
+    let a = apply_and_restart(&home, AGENT, 0, &approval(None, false, true), &mut life).unwrap();
+    assert!(life.calls.is_empty());
+    assert_eq!(a.restart, Restart::WasStopped);
+    expect_preapproval(&home, &a.preapproval);
+}
+
+#[test]
+fn a_stop_failure_keeps_the_grant_and_records_nothing() {
+    let (_h, home) = Home::new();
+    let mut life = FakeLife {
+        pid: Some(42),
+        fail_stop: true,
+        ..Default::default()
+    };
+    let a = apply_and_restart(&home, AGENT, 0, &approval(None, false, true), &mut life).unwrap();
+    assert!(matches!(a.restart, Restart::StopFailed(_)));
+    assert_eq!(a.preapproval, Preapproval::NotAttempted);
+    assert_eq!(life.calls, vec!["stop"]);
+    assert!(granted(&home), "the write is never undone after it lands");
+}
+
+#[test]
+fn a_start_failure_is_reported_not_rolled_back() {
+    let (_h, home) = Home::new();
+    let mut life = FakeLife {
+        pid: Some(42),
+        fail_start: true,
+        ..Default::default()
+    };
+    let a = apply_and_restart(&home, AGENT, 0, &approval(None, false, true), &mut life).unwrap();
+    assert!(matches!(a.restart, Restart::StartFailed(_)));
+    assert!(
+        a.restart
+            .line(AGENT)
+            .unwrap()
+            .contains("mur agent start bot")
+    );
+    assert!(granted(&home));
+}
+
+struct FakeProbe {
+    stored: Vec<String>,
+}
+
+impl probe::Probe for FakeProbe {
+    fn agent_keys(&self) -> Vec<probe::AgentKey> {
+        vec![key('A'), key('B')]
+    }
+    fn unloaded_keys(&self) -> Vec<probe::AgentKey> {
+        vec![key('B'), key('C')]
+    }
+    fn scan(&self, _host: &mur_ssh_request::RequestHost) -> Result<Vec<ScannedKey>> {
+        Ok(vec![scanned('H')])
+    }
+    fn stored_host_keys(&self, _host: &mur_ssh_request::RequestHost) -> Vec<String> {
+        self.stored.clone()
+    }
+    fn user_known_hosts(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+}
+
+fn key(c: char) -> probe::AgentKey {
+    probe::AgentKey {
+        fingerprint: fp(c),
+        comment: format!("key-{c}"),
+        path: None,
+    }
+}
+
+#[test]
+fn plan_reads_keys_scan_and_spawn_without_writing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut ent = mur_common::agent::AgentProfile::default_for_tests().entitlements;
+    ent.processes = procs(SpawnMode::None, &[]);
+    let host = mur_ssh_request::RequestHost::parse(HOST, None).unwrap();
+    let probe = FakeProbe {
+        stored: vec![fp('H')],
+    };
+    let p = plan(
+        &probe,
+        AGENT,
+        tmp.path(),
+        &ent,
+        host.clone(),
+        Some("git".into()),
+    )
+    .unwrap();
+    assert_eq!(p.agent, AGENT);
+    assert_eq!(p.host, host);
+    assert_eq!(p.user.as_deref(), Some("git"));
+    assert_eq!(p.keys_loaded, vec![key('A'), key('B')]);
+    assert_eq!(
+        p.keys_unloaded,
+        vec![key('C')],
+        "a loaded key is not listed twice"
+    );
+    assert_eq!((p.verdict, p.matched), (Verdict::Trusted, vec![fp('H')]));
+    assert_eq!(p.spawn, Some(SpawnChange::NoneToStrict));
+    let surface = p.exec_surface.expect("a spawn change shows what it opens");
+    assert!(surface.consent_text().contains("mur-run/mur#2343"));
+    assert_eq!(
+        std::fs::read_dir(tmp.path()).unwrap().count(),
+        0,
+        "plan never writes"
+    );
+}

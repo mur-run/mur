@@ -20,6 +20,22 @@ pub fn ssh_action_hash(agent: &str, key_fp: &str, host_key_fp: &str) -> String {
     mur_common::hitl::pin::action_hash(SSH_SIGN_TOOL, &input, "", SSH_GATE_STEP, agent)
 }
 
+/// The decision-log label for a pair: names and fingerprints only, never
+/// session data. Shared by the gate and the setup preapproval, so both
+/// read the same in `mur agent hitl list`.
+pub fn ssh_decision_label(
+    key_fp: &str,
+    key_label: Option<&str>,
+    host_key_fp: &str,
+    host_label: Option<&str>,
+) -> String {
+    format!(
+        "{SSH_SIGN_TOOL}: {} -> {}",
+        key_label.unwrap_or(key_fp),
+        host_label.unwrap_or(host_key_fp),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
