@@ -163,6 +163,12 @@ pub struct ParallelJobsConfig {
     /// Empty = deny all.
     #[serde(default)]
     pub targets: Vec<String>,
+    /// Agents allowed to REQUEST a run through the daemon (#2379). Empty =
+    /// any agent that has the tool, which is how it worked before the daemon
+    /// launched runs on an agent's behalf. Re-checked by the daemon and by
+    /// its child; an agent cannot widen it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requesters: Vec<String>,
 }
 
 // --- memory-federation snapshot (spec 2026-08-04-unified-memory-federation) ---

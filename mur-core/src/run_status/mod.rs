@@ -22,6 +22,7 @@
 pub mod abandon;
 pub mod dispatch;
 pub mod heartbeat;
+pub mod jobs_dispatch;
 pub mod rebuild;
 pub mod store;
 
@@ -279,7 +280,11 @@ fn status_of_in(
         Some(record) => Some(record),
         // No record and no channel: the daemon's dispatch verdict is the
         // only thing that can know about this run (#2116).
-        None => unrecorded(mur_home, fleet, run_id, dispatch::load_in)?,
+        None => match unrecorded(mur_home, fleet, run_id, dispatch::load_in)? {
+            Some(r) => Some(r),
+            // A sealed agent's `parallel_jobs` request (#2379).
+            None => unrecorded(mur_home, fleet, run_id, jobs_dispatch::load_in)?,
+        },
     };
     let Some(mut record) = record else {
         return Ok(None);

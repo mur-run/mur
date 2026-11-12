@@ -57,6 +57,7 @@ pub(crate) mod init_local;
 pub(crate) mod inject_cmd;
 pub(crate) mod internals;
 pub mod job;
+pub mod job_run_request;
 pub(crate) mod learn;
 pub mod limits;
 pub mod limits_write;

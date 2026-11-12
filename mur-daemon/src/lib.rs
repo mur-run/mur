@@ -9,3 +9,4 @@ pub mod git_push_broker;
 /// #2116 cross-router fleet dispatch. In the library so the #2139
 /// end-to-end test can drive one real sweep against a sealed agent's request.
 pub mod fleet_dispatch;
+pub mod jobs_dispatch;

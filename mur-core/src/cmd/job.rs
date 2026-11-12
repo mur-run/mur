@@ -35,6 +35,13 @@ pub enum JobAction {
         /// Run id (from `mur job list`).
         run_id: String,
     },
+    /// Host a `parallel_jobs` run a sealed agent asked `mur-daemon` for
+    /// (#2379). Launched by the daemon only; re-verifies the request itself.
+    #[command(name = "run-request", hide = true)]
+    RunRequest {
+        /// The signed request file the daemon admitted.
+        path: std::path::PathBuf,
+    },
 }
 
 /// Whether a run appears in `mur job list` without `--all`.
@@ -232,8 +239,9 @@ pub fn print_paused(w: &mut dyn std::io::Write, mur_home: &Path, s: &RunStatus) 
     }
 }
 
-pub fn run(mur_home: &Path, action: JobAction) -> Result<()> {
+pub async fn run(mur_home: &Path, action: JobAction) -> Result<()> {
     match action {
+        JobAction::RunRequest { path } => super::job_run_request::run(mur_home, &path).await,
         JobAction::List { all } => {
             let (rows, unreadable) = collect_list_rows(mur_home, all)?;
             // Named on stderr, never swallowed: the operator who wonders why a

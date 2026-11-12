@@ -81,7 +81,7 @@ pub fn write_heartbeat(mur_dir: &Path, now: chrono::DateTime<chrono::Utc>) -> an
 
 /// The `mur` CLI to launch: `MUR_BIN` if set, else the `mur` beside this
 /// binary (they ship together), else a PATH lookup as the last resort.
-fn mur_bin() -> PathBuf {
+pub(crate) fn mur_bin() -> PathBuf {
     if let Some(v) = std::env::var_os("MUR_BIN") {
         return PathBuf::from(v);
     }
