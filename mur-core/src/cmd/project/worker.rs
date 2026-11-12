@@ -155,6 +155,18 @@ mod tests {
         repo
     }
 
+    /// Hide the developer's global/system git config from both `git init`
+    /// and the worker's own `git rev-parse`: a global `core.hooksPath`
+    /// (lefthook, husky-global, company hooks) would otherwise redirect the
+    /// hook into the real global hooks dir. An empty temp file, not
+    /// `/dev/null`, so the same isolation holds on Windows.
+    fn isolate_git_config(envg: &mut mur_common::test_env::EnvGuard, root: &Path) {
+        let empty = root.join("empty.gitconfig");
+        std::fs::write(&empty, "").unwrap();
+        envg.set_var("GIT_CONFIG_GLOBAL", &empty);
+        envg.set_var("GIT_CONFIG_NOSYSTEM", "1");
+    }
+
     fn hooks_entries(repo: &Path) -> Vec<String> {
         std::fs::read_dir(repo.join(".git").join("hooks"))
             .unwrap()
@@ -170,6 +182,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut envg = mur_common::test_env::EnvGuard::hold();
         envg.set_var("MUR_HOME", tmp.path().join("mur-home"));
+        isolate_git_config(&mut envg, tmp.path());
         let repo = empty_repo(tmp.path());
 
         cmd_project_index_worker("w-no-hook", &repo.display().to_string(), false, true, true)
@@ -186,6 +199,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut envg = mur_common::test_env::EnvGuard::hold();
         envg.set_var("MUR_HOME", tmp.path().join("mur-home"));
+        isolate_git_config(&mut envg, tmp.path());
         let repo = empty_repo(tmp.path());
 
         cmd_project_index_worker("w-hook", &repo.display().to_string(), false, true, false)
