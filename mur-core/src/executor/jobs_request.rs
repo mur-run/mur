@@ -97,6 +97,7 @@ pub fn authorize(mur_home: &Path, req: &JobsDispatchRequest, cfg: &Config) -> Re
 
 /// Where the requester's run lives: its own `agents/<agent>/runs/<run_id>/`
 /// (#2320), so `mur_job_status` finds the verdict and the run in one place.
+#[allow(dead_code)] // consumed by mur-daemon's jobs sweep; the `mur` bin compiles this module too
 pub fn run_dir(mur_home: &Path, req: &JobsDispatchRequest) -> PathBuf {
     mur_common::paths::agent_runs_dir(mur_home, &req.dispatch.requested_by)
         .join(&req.dispatch.run_id)
@@ -104,6 +105,7 @@ pub fn run_dir(mur_home: &Path, req: &JobsDispatchRequest) -> PathBuf {
 
 /// `bail!` unless no verdict was recorded for this run id yet: a record means
 /// the id is spent, and a replay must not overwrite the original verdict.
+#[allow(dead_code)] // consumed by mur-daemon's jobs sweep; the `mur` bin compiles this module too
 pub fn ensure_unspent(mur_home: &Path, req: &JobsDispatchRequest) -> Result<()> {
     if run_dir(mur_home, req)
         .join(JOBS_DISPATCH_RECORD_FILE)
