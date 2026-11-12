@@ -68,3 +68,7 @@ pub async fn run(mur_home: &Path, path: &Path) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("parallel_jobs task panicked: {e}"))??;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "job_run_request_tests.rs"]
+mod tests;
