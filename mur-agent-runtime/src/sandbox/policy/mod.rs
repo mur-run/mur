@@ -7,8 +7,10 @@ mod build;
 mod deny_carve;
 mod elf_interp;
 mod exec_deny;
+pub mod exec_reach;
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 pub(crate) use exec_deny::split_exec_grants;
+pub use exec_reach::{ExecBackend, ExecReach};
 mod spawn;
 mod widen;
 

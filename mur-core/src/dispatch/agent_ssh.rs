@@ -14,6 +14,7 @@ pub(super) fn dispatch(action: crate::cli::AgentSshAction) -> anyhow::Result<()>
             host_key,
             host_label,
             yes,
+            no_restart,
         } => cmd::agent::cmd_ssh_allow(&cmd::agent::SshAllowArgs {
             agent: &agent,
             key: &key,
@@ -23,6 +24,7 @@ pub(super) fn dispatch(action: crate::cli::AgentSshAction) -> anyhow::Result<()>
             host_key: host_key.as_deref(),
             host_label: host_label.as_deref(),
             yes,
+            no_restart,
         }),
         A::Revoke {
             agent,
