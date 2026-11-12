@@ -206,15 +206,15 @@ pub async fn gate(
             // might retry into the same wall, never a release.
             let asked = (|| -> Result<()> {
                 let svc = ChannelService::open(mur_home)?;
-                crate::channel_writer::append_as_writer(
+                // Refused, not written unsigned, when a human must answer and
+                // the router key is unreadable here: nobody could (#2379).
+                crate::channel_writer::append_hitl_request(
                     &svc,
                     mur_home,
                     channel_id,
                     ROUTER_AGENT,
-                    ChannelActor::System,
-                    EventKind::HitlRequest,
                     serde_json::to_value(&request)?,
-                    None,
+                    !(policy.yes || granted),
                 )?;
                 // Attributed to the run that paused, like every other executor
                 // event: a rebuild filters BY `run_id`, so an unstamped
