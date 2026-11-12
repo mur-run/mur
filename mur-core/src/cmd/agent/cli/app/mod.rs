@@ -16,7 +16,7 @@ use super::persist::{ChannelMeta, Session, TurnRecord};
 use super::step::StepState;
 use super::stream::HitlRequest;
 use super::theme::Theme;
-use super::welcome::{MascotMode, resolve_mascot_mode};
+use super::welcome::{MascotMode, WelcomeHead, resolve_mascot_mode};
 
 /// Spinner frames shown while the agent is generating.
 pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -294,6 +294,9 @@ pub struct App {
     /// Mascot color/animation mode, resolved once at startup from the theme
     /// and terminal capabilities (NO_COLOR / non-TTY / TERM=dumb → static).
     pub mascot_mode: MascotMode,
+    /// Where the welcome banner is: the head of the live band, on the
+    /// composer, until the band overflows (#2358). See `WelcomeHead`.
+    pub welcome_head: WelcomeHead,
     /// True while the terminal is focused. Driven by crossterm focus events;
     /// used to suppress notifications while the user is watching.
     pub focused: bool,
@@ -516,6 +519,7 @@ impl App {
             pending_image: None,
             // Resolve color/animation once: env + TTY don't change mid-session.
             mascot_mode: resolve_mascot_mode(theme, std::io::stdout().is_terminal()),
+            welcome_head: WelcomeHead::Off,
             // Assume focused at startup; crossterm corrects it on the first
             // FocusLost. (Terminals that don't report focus stay `true` → no
             // notifications, which is the safe default.)

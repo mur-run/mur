@@ -4,24 +4,16 @@
 //! at startup, we show the mascot, a one-line identity, ONE example, and a single
 //! `/help` hint. The full reference stays reachable via the `/help` command.
 //!
-//! The welcome is *printed* — plain terminal output at the cursor, like any
-//! command's banner — not painted inside the live viewport. The viewport is a
-//! fixed height anchored at the bottom of the window, so the mascot sits at
-//! the top, the composer on the floor, and the first message changes neither:
-//! the transcript grows upward from the composer and the banner scrolls away
-//! only when the conversation is longer than the window. (Painting it in the
-//! viewport meant a full-window viewport that had to shrink on the first
-//! message, and the re-anchor that shrink needs dropped the whole screen to
-//! the floor of a tall terminal.) Color is resolved once at startup into
+//! The welcome is the head of the live band (`ui::band::welcome_head`):
+//! painted bottom-aligned on the composer with the blank rows above it, and
+//! the first thing flushed to scrollback once the conversation outgrows the
+//! band (#2358). The viewport keeps one fixed height, so the first message
+//! re-anchors nothing. Color is resolved once at startup into
 //! [`MascotMode`]: the theme accent when color is available, plain when
 //! `NO_COLOR` is set, stdout isn't a TTY, or `TERM=dumb`.
 
-use std::io::{self, Write};
 use std::path::Path;
 
-use crossterm::style::{
-    Attribute, Color as CColor, Print, ResetColor, SetAttribute, SetForegroundColor,
-};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -101,35 +93,20 @@ fn dirs_home() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME").map(std::path::PathBuf::from)
 }
 
-/// Print `lines` as plain terminal output at the cursor, styled with the
-/// theme's colours, one row per line. Raw mode is on by the time this runs,
-/// so rows end in `\r\n`.
-pub fn print_banner(out: &mut impl Write, lines: &[Line<'static>]) -> io::Result<()> {
-    for line in lines {
-        for span in &line.spans {
-            if let Some(fg) = span.style.fg {
-                crossterm::queue!(out, SetForegroundColor(CColor::from(fg)))?;
-            }
-            let m = span.style.add_modifier;
-            if m.contains(Modifier::BOLD) {
-                crossterm::queue!(out, SetAttribute(Attribute::Bold))?;
-            }
-            if m.contains(Modifier::ITALIC) {
-                crossterm::queue!(out, SetAttribute(Attribute::Italic))?;
-            }
-            if m.contains(Modifier::DIM) {
-                crossterm::queue!(out, SetAttribute(Attribute::Dim))?;
-            }
-            crossterm::queue!(
-                out,
-                Print(span.content.as_ref()),
-                SetAttribute(Attribute::Reset),
-                ResetColor
-            )?;
-        }
-        crossterm::queue!(out, Print("\r\n"))?;
-    }
-    out.flush()
+/// Where the welcome banner lives (#2358). It is painted as the head of the
+/// live band — directly on the composer, the blank rows above it — rather
+/// than printed above the viewport, where the empty transcript band sat
+/// between it and the composer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WelcomeHead {
+    /// Not on screen, or already committed to scrollback.
+    Off,
+    /// Painted at the head of the band; the first thing flushed to
+    /// scrollback once the band overflows.
+    Live,
+    /// Flush it to scrollback on the next paint whatever the band holds: a
+    /// terminal handover is about to clear the viewport rows.
+    Commit,
 }
 
 /// Build the welcome lines: mascot + identity + one example + hint. When
@@ -237,32 +214,6 @@ mod tests {
         assert!(
             text.contains("shell"),
             "the path must be labelled, not left to read as the agent's cwd: {text}"
-        );
-    }
-
-    /// The banner is terminal output, not a viewport paint: every row ends in
-    /// CRLF (raw mode), the mascot is there, and the accent colour is carried
-    /// as an SGR sequence rather than dropped.
-    #[test]
-    fn the_banner_prints_one_crlf_row_per_line_with_colour() {
-        let lines = welcome_lines(
-            &super::super::theme::MUR,
-            MascotMode::Accent(Color::Rgb(0xfb, 0xbf, 0x24)),
-            "mur",
-            None,
-        );
-        let mut out: Vec<u8> = Vec::new();
-        print_banner(&mut out, &lines).unwrap();
-        let text = String::from_utf8(out).unwrap();
-        assert_eq!(
-            text.matches("\r\n").count(),
-            lines.len(),
-            "one row per line"
-        );
-        assert!(text.contains(MASCOT_REST[1]), "mascot missing:\n{text}");
-        assert!(
-            text.contains("\x1b[38;2;251;191;36m"),
-            "accent colour dropped:\n{text}"
         );
     }
 }
