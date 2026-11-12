@@ -11,7 +11,7 @@ use mur_ssh_request::PendingRequest;
 use mur_ssh_request::validate_user;
 
 use crate::cmd::agent::ssh::edit::HostGrant;
-use crate::cmd::agent::ssh::setup::probe::AgentKey;
+use crate::cmd::agent::ssh::setup::probe::{AgentKey, private_key_of};
 use crate::cmd::agent::ssh::setup::verdict::{self, HostChoice};
 use crate::cmd::agent::ssh::setup::{Approval, SetupPlan, SpawnChange, Verdict};
 
@@ -88,7 +88,8 @@ pub struct CardState {
 pub enum KeyAction {
     Nothing,
     Close,
-    /// Run `ssh-add <path>` with the terminal handed over.
+    /// Run `ssh-add <path>` with the terminal handed over; `path` is the
+    /// private key, never the `.pub` the card lists.
     LoadKey(PathBuf),
     Approve(Approval),
 }
@@ -277,7 +278,9 @@ impl CardState {
                     self.note = Some("no key to choose".into());
                     return KeyAction::Nothing;
                 };
-                let load = (!loaded).then(|| key.path.clone()).flatten();
+                let load = (!loaded)
+                    .then(|| key.path.as_deref().map(private_key_of))
+                    .flatten();
                 self.step = Step::Host;
                 if let Some(p) = load {
                     return KeyAction::LoadKey(p);

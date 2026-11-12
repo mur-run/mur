@@ -27,6 +27,17 @@ pub struct AgentKey {
     pub path: Option<PathBuf>,
 }
 
+/// The private key `ssh-add` must be given for a `.pub` file: `ssh-add`
+/// reads its argument as a private key, so handing it the `.pub` itself fails
+/// ("UNPROTECTED PRIVATE KEY FILE") and nothing is loaded.
+pub fn private_key_of(pub_path: &std::path::Path) -> PathBuf {
+    let s = pub_path.to_string_lossy();
+    match s.strip_suffix(PUB_SUFFIX) {
+        Some(stem) => PathBuf::from(stem),
+        None => pub_path.to_path_buf(),
+    }
+}
+
 pub trait Probe {
     /// Keys loaded in the user's ssh-agent; empty when there is none.
     fn agent_keys(&self) -> Vec<AgentKey>;

@@ -167,7 +167,7 @@ fn choosing_an_unloaded_key_hands_the_terminal_to_ssh_add() {
     let mut c = CardState::new(plan(Verdict::Trusted, None), Origin::Direct);
     press(&mut c, KeyCode::Down);
     match press(&mut c, KeyCode::Enter) {
-        KeyAction::LoadKey(p) => assert!(p.ends_with("id_u.pub")),
+        KeyAction::LoadKey(p) => assert_eq!(p, std::path::Path::new("/home/u/.ssh/id_u")),
         _ => panic!("expected ssh-add"),
     }
     assert_eq!(c.step, Step::Host);
