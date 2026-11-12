@@ -88,16 +88,34 @@ pub fn write_state(path: &Path, plaintext: &[u8], store: &impl StateKeyStore) ->
     Ok(())
 }
 
+/// A profile state's version: the SHA-256 of its encrypted file (#2360,
+/// spec "Newer-state guard"). `age` draws a fresh file key on every
+/// encryption, so every write by any writer changes it.
+pub type Version = [u8; 32];
+
 /// Decrypt a profile state document wholly in memory.
 pub fn read_state(path: &Path, store: &impl StateKeyStore) -> Result<Vec<u8>> {
+    read_versioned(path, store).map(|(plain, _)| plain)
+}
+
+/// [`read_state`], plus the [`Version`] of exactly the bytes decrypted: the
+/// file is read once and that one buffer is both hashed and decrypted, so a
+/// write landing in between cannot make the two disagree.
+pub fn read_versioned(path: &Path, store: &impl StateKeyStore) -> Result<(Vec<u8>, Version)> {
     let identity = identity(store)?;
     let encrypted = std::fs::read(path)
         .with_context(|| format!("read encrypted browser state {}", path.display()))?;
+    let version = version_of(&encrypted);
     let decryptor = age::Decryptor::new(Cursor::new(encrypted))?;
     let mut reader = decryptor.decrypt(std::iter::once(&identity as &dyn age::Identity))?;
     let mut plaintext = Vec::new();
     reader.read_to_end(&mut plaintext)?;
-    Ok(plaintext)
+    Ok((plaintext, version))
+}
+
+fn version_of(encrypted: &[u8]) -> Version {
+    use sha2::Digest;
+    sha2::Sha256::digest(encrypted).into()
 }
 
 #[cfg(test)]
@@ -131,6 +149,18 @@ mod tests {
                 .any(|window| window == b"secret-cookie")
         );
         assert_eq!(read_state(&path, &store).unwrap(), plain);
+        let (_, first) = read_versioned(&path, &store).unwrap();
+        assert_eq!(
+            read_versioned(&path, &store).unwrap().1,
+            first,
+            "a read is stable"
+        );
+        write_state(&path, plain, &store).unwrap();
+        assert_ne!(
+            read_versioned(&path, &store).unwrap().1,
+            first,
+            "re-encrypting the same plaintext is a new version"
+        );
         #[cfg(unix)]
         assert_eq!(
             std::os::unix::fs::PermissionsExt::mode(

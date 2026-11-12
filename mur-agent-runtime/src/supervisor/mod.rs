@@ -18,7 +18,7 @@ use crate::protocol::methods::{
 use crate::scheduler::CronScheduler;
 #[cfg(unix)]
 use crate::socket_path::resolve_bind_target;
-use crate::task_runner::{DrainOutcome, TaskRunner};
+use crate::task_runner::TaskRunner;
 use crate::telemetry_writer::{Event, TelemetryWriter};
 use crate::transport::stdio::serve_stdio;
 use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
@@ -35,11 +35,11 @@ use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
-/// Extra time after `stop_timeout_secs` for cancelled turns to settle their
-/// tracks. The whole stop is `stop_timeout_secs` (default 15s) + this +
-/// `2 x SHUTDOWN_JOB_KILL_GRACE` for the final job sweep = 19s, which leaves
-/// ~1s of teardown under launchd's default 20s `ExitTimeOut`, after which
-/// the process is SIGKILLed mid-write.
+/// Time for cancelled turns to settle their tracks. With the default
+/// `stop_timeout_secs` and `2 x SHUTDOWN_JOB_KILL_GRACE` it sizes the fixed
+/// 19 s stop budget (`stop_budget::STOP_BUDGET`), which leaves ~1s of
+/// teardown under launchd's default 20s `ExitTimeOut`; inside it the MCP
+/// stop has a reserved slice and the drain gets what is left (#2360).
 const SHUTDOWN_CANCEL_GRACE_SECS: u64 = 3;
 /// SIGTERM-to-SIGKILL grace for the bash jobs still alive after the drain.
 /// Turn-owned jobs already had their SIGTERM and the drain's grace; this is
@@ -58,6 +58,7 @@ mod ssh_proxy_boot;
 mod ssh_proxy_class;
 mod start_notice;
 mod startup_override;
+mod stop_budget;
 pub use seal::extra_write_paths;
 mod test_bridge;
 
@@ -760,33 +761,13 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     hook_chain
         .on_shutdown(&hook_ctx, ShutdownReason::Sigterm, &hook_cancel)
         .await;
-    // Stop accepting new turns, then cooperatively wait for any in-flight turn
-    // to finish before tearing down transports. Never SIGKILL mid-flight work.
+    // One deadline for the whole stop; the MCP stop gets a reserved slice so
+    // a browser can export its login even with a turn in flight (#2360).
     let stop_secs = profile.inner.lifecycle.stop_timeout_secs;
-    let wait = std::time::Duration::from_secs(stop_secs);
-    let grace = std::time::Duration::from_secs(SHUTDOWN_CANCEL_GRACE_SECS);
-    match runner.drain(wait, grace).await {
-        DrainOutcome::Idle => info!("task runner drained cleanly"),
-        DrainOutcome::Cancelled(n) => warn!(
-            turns = n,
-            "task runner did not drain within {stop_secs}s; cancelled in-flight turns, all settled"
-        ),
-        DrainOutcome::Abandoned(n) => warn!(
-            turns = n,
-            "task runner did not drain within {stop_secs}s; cancelled in-flight turns but some did not settle within {SHUTDOWN_CANCEL_GRACE_SECS}s; tearing down anyway"
-        ),
-    }
-    // Every bash job is a process group this runtime started; nothing else
-    // will end them once we are gone (spec D3/D9).
-    let killed = runner.kill_all_jobs(SHUTDOWN_JOB_KILL_GRACE).await;
-    if killed > 0 {
-        info!(jobs = killed, "ended running bash jobs");
-    }
+    let plan = stop_budget::StopPlan::new(tokio::time::Instant::now(), stop_secs);
+    stop_budget::run(plan, stop_secs, &runner, mcp_pool.as_deref()).await;
     for t in transport_tasks {
         t.abort();
-    }
-    if let Some(pool) = mcp_pool {
-        pool.shutdown().await;
     }
     writer
         .emit(Event::Warning {

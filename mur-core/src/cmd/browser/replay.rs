@@ -64,9 +64,13 @@ pub async fn replay(
     } else {
         match &profile {
             Some(site) => {
-                let state = mur_browser::state::read_state(
-                    &paths::profile_state(&home, site),
+                // Loaded under the profile lock: the watermark keeps a newer
+                // login from being overwritten by this run's write-back.
+                let (loaded, state) = mur_browser::pending::load(
+                    &home,
+                    site,
                     &KeychainStateKeyStore,
+                    std::time::Instant::now() + mur_browser::abandon::LOCK_WAIT,
                 )?;
                 // NamedTempFile is created 0600 and unlinked on drop.
                 let mut file = tempfile::Builder::new()
@@ -93,9 +97,11 @@ pub async fn replay(
                         mur_browser::refresh::refresh_profile(
                             &home,
                             site,
+                            Some(loaded),
                             &export,
                             chrono::Utc::now(),
                             &KeychainStateKeyStore,
+                            std::time::Instant::now() + mur_browser::refresh::WRITEBACK_LOCK_WAIT,
                         ),
                     );
                 }
