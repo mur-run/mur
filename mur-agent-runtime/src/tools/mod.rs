@@ -29,6 +29,7 @@ pub mod remind;
 pub mod ssh_client_env;
 #[cfg(all(test, unix))]
 mod ssh_client_env_tests;
+pub mod ssh_request;
 pub(crate) mod suggest;
 pub mod write_file;
 
@@ -244,6 +245,7 @@ fn builtin_tool_names_cover_every_builtin() {
         remember::REMEMBER,
         remind::REMIND,
         open_item::OPEN_ITEM,
+        ssh_request::SSH_REQUEST,
         fleet_run::FLEET_RUN,
         ask::ASK,
         git_push::GIT_PUSH_REQUEST,

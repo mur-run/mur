@@ -359,6 +359,7 @@ mod tests {
             jobs: crate::tools::bash_jobs::JobTable::new(),
             trash: None,
             ssh: None,
+            ssh_request: false,
         });
         let bash_def = bash_exec.def();
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
@@ -399,6 +400,7 @@ mod tests {
             jobs: crate::tools::bash_jobs::JobTable::new(),
             trash: None,
             ssh: None,
+            ssh_request: false,
         });
         let bash_def = bash_exec.def();
         let rules = vec![ToolRule {

@@ -2,7 +2,7 @@ use super::*;
 use crate::tools::{
     ask::ASK, bash::BASH, bash_control, edit_file::EDIT_FILE, fleet_run::FLEET_RUN, git_push,
     open_item::OPEN_ITEM, read_file::READ_FILE, recall::RECALL, remember::REMEMBER, remind::REMIND,
-    suggest::SUGGEST_REPLIES, write_file::WRITE_FILE,
+    ssh_request::SSH_REQUEST, suggest::SUGGEST_REPLIES, write_file::WRITE_FILE,
 };
 use mur_common::agent::FilesystemEntitlement;
 use mur_common::proposal::PROPOSE_TOOL;
@@ -23,6 +23,7 @@ const BUILTINS: &[(&str, &str)] = &[
     ("RECALL", RECALL),
     ("REMIND", REMIND),
     ("OPEN_ITEM", OPEN_ITEM),
+    ("SSH_REQUEST", SSH_REQUEST),
     ("FLEET_RUN", FLEET_RUN),
     ("ASK", ASK),
     ("GIT_PUSH_REQUEST", git_push::GIT_PUSH_REQUEST),

@@ -84,6 +84,9 @@ pub struct BashTool {
     /// child then gets the socket as `SSH_AUTH_SOCK` (the runtime's own value
     /// is never passed on) and the O2 client env (see `bash_env`).
     pub ssh: Option<super::bash_env::SshChild>,
+    /// Whether `ssh_request` is registered, so a denied `ssh` or a refused
+    /// login can point at it (#2344). `false` keeps the generic hints.
+    pub ssh_request: bool,
 }
 
 /// `timeout_secs` (alias `wait_secs`): missing/invalid → default; negative →
@@ -107,7 +110,14 @@ impl BashTool {
             jobs: crate::tools::bash_jobs::JobTable::new(),
             trash: None,
             ssh: None,
+            ssh_request: false,
         }
+    }
+
+    /// Name the `ssh_request` route in ssh denials.
+    pub fn with_ssh_request(mut self, on: bool) -> Self {
+        self.ssh_request = on;
+        self
     }
 
     /// Attach the ssh-agent proxy socket and O2 client env.
@@ -431,8 +441,18 @@ impl BashTool {
             if let Some(bin) = spawn_denied_path(exit.code, &poll.new_stderr, &cwd)
                 && let Some((mur_home, agent)) = &self.agent
             {
-                let routes = who_can_exec(mur_home, agent, &bin, Some(&cwd));
-                let hint = spawn_denied_hint(&bin, agent, &routes);
+                // A new SSH host is never a fleet's job: route it to the card.
+                let hint = match self
+                    .ssh_request
+                    .then(|| super::ssh_request::spawn_denied_hint(&bin))
+                    .flatten()
+                {
+                    Some(h) => h,
+                    None => {
+                        let routes = who_can_exec(mur_home, agent, &bin, Some(&cwd));
+                        spawn_denied_hint(&bin, agent, &routes)
+                    }
+                };
                 combined.push_str(&hint);
                 status = ToolStatus::Denied {
                     detail: hint,
@@ -451,6 +471,11 @@ impl BashTool {
                     scope: DenialScope::Action,
                 };
             } else {
+                if self.ssh_request
+                    && let Some(h) = super::ssh_request::proxy_refused_hint(&poll.new_stderr)
+                {
+                    combined.push_str(&h);
+                }
                 status = ToolStatus::Failed { exit_code: code };
             }
         }
