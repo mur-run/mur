@@ -499,7 +499,7 @@ where
     run_io_inner(agent_in, agent_out, server_in, server_out, hook, None).await
 }
 
-async fn run_io_inner<H, AI, AO, SI, SO>(
+pub(crate) async fn run_io_inner<H, AI, AO, SI, SO>(
     agent_in: AI,
     mut agent_out: AO,
     mut server_in: SI,

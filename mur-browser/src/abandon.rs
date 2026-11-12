@@ -164,10 +164,19 @@ pub fn clear_shown(mur_home: &Path, site: &str, shown: &Abandoned) -> Result<boo
     Ok(true)
 }
 
-/// Show-once: every pending notice for `sites`, cleared as it is taken.
+/// Show-once: every pending notice for `sites`, cleared as it is taken —
+/// recorded abandons, and dead write-back markers
+/// ([`crate::pending::sweep`]) of sessions that never finished.
 pub fn take_notices(mur_home: &Path, sites: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for site in sites {
+        match sweep_markers(mur_home, site) {
+            Ok(Some(kept)) => out.push(crate::pending::notice(site, kept)),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(site, error = %format!("{error:#}"), "could not check a browser profile's unfinished write-backs")
+            }
+        }
         match pending(mur_home, site) {
             Ok(Some(entry)) => {
                 out.push(entry.notice(site));
@@ -182,6 +191,18 @@ pub fn take_notices(mur_home: &Path, sites: &[String]) -> Vec<String> {
         }
     }
     out
+}
+
+/// [`crate::pending::sweep`] under `site`'s lock. A profile that was never
+/// saved has no markers and is not created here.
+fn sweep_markers(mur_home: &Path, site: &str) -> Result<Option<crate::pending::Kept>> {
+    if !paths::profile_dir(mur_home, site).is_dir() {
+        return Ok(None);
+    }
+    let Some(held) = lock(mur_home, site, Instant::now() + LOCK_WAIT)? else {
+        return Ok(None);
+    };
+    crate::pending::sweep(mur_home, site, &held)
 }
 
 fn read_meta(path: &Path) -> Result<auth::ProfileMeta> {

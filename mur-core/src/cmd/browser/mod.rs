@@ -115,7 +115,7 @@ pub async fn record(
     // admin area is exactly the case that needs a session, and asking the
     // person to log in by hand inside each recording defeats `browser auth`.
     writeback::startup_notices(&mur_home()?, profiles);
-    let injected = live_state::prepare(&mur_home()?, profiles)?;
+    let mut injected = live_state::prepare(&mur_home()?, profiles)?;
     let state_args = live_state::args(injected.as_ref(), &args);
     args.extend(state_args);
     // Without this, test/automation recording fell through to
@@ -197,9 +197,17 @@ pub async fn record(
     let export = scratch
         .as_ref()
         .map(|dir| mur_browser::refresh::export_path(dir.path()));
+    // The export and the write-back share one stop window: the export is
+    // bounded by `EXPORT_TIMEOUT` inside the proxy, the write-back by
+    // `WRITEBACK_BUDGET` from when it starts (#2360).
     let result = run_stdio_exporting(server, hook, export.clone()).await;
+    let loaded = injected
+        .as_mut()
+        .map(live_state::InjectedState::take_loaded)
+        .unwrap_or_default();
     if let Some(export) = &export {
-        writeback::write_back(&mur_home, &targets, export);
+        let deadline = std::time::Instant::now() + mur_browser::refresh::WRITEBACK_BUDGET;
+        writeback::write_back(&mur_home, &targets, loaded, export, deadline);
     }
     drop(scratch);
     // Removes the token-bearing config directory (no-op for test/automation)

@@ -16,9 +16,12 @@ use tokio::time::Instant;
 
 use crate::protocol::mcp_client::McpClient;
 
-/// Bound on one retired client's graceful stop outside an agent stop: the
-/// time a browser server needs to export its login (`mur-browser`'s
-/// `EXPORT_TIMEOUT`; `mur-core` asserts the two stay equal).
+/// Bound on one retired client's graceful stop (and the slice an agent stop
+/// reserves for MCP servers). A browser server spends it, after stdin EOF,
+/// on its login export and write-back; SIGTERM comes `TERM_GRACE` before the
+/// end. `mur-core` asserts that `mur-browser`'s `EXPORT_TIMEOUT` plus
+/// `WRITEBACK_BUDGET` plus `TERM_GRACE` fits inside it, so an export that
+/// finishes in time is always written back before the signal.
 pub const MCP_STOP_SLICE: Duration = Duration::from_secs(10);
 
 /// How often a retiring task checks whether the other holders let go.

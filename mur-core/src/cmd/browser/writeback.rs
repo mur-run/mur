@@ -9,7 +9,8 @@
 use std::path::Path;
 
 use anyhow::Result;
-use mur_browser::{abandon, paths, refresh, split, state::KeychainStateKeyStore};
+use mur_browser::{abandon, paths, pending, refresh, split, state::KeychainStateKeyStore};
+use std::time::Instant;
 
 use super::bind_plan::profile_domains;
 use super::read_profile_meta;
@@ -35,25 +36,50 @@ pub(super) fn targets(mur_home: &Path, profiles: &[String]) -> Vec<(String, Vec<
         .collect()
 }
 
-/// Write `export` back to every target, logging each result.
-pub(super) fn write_back(mur_home: &Path, targets: &[(String, Vec<String>)], export: &Path) {
+/// Write `export` back to every target, logging each result. `loaded` is
+/// what the session loaded (watermarks and pending markers); every lock wait
+/// ends at `deadline`.
+pub(super) fn write_back(
+    mur_home: &Path,
+    targets: &[(String, Vec<String>)],
+    loaded: Vec<pending::Loaded>,
+    export: &Path,
+    deadline: Instant,
+) {
     let now = chrono::Utc::now();
     match targets {
         [] => {
             let _ = std::fs::remove_file(export);
         }
-        [(site, _)] => refresh::report(
-            site,
-            refresh::refresh_profile(mur_home, site, export, now, &KeychainStateKeyStore),
-        ),
+        [(site, _)] => {
+            let mine = loaded.into_iter().find(|l| &l.site == site);
+            refresh::report(
+                site,
+                refresh::refresh_profile(
+                    mur_home,
+                    site,
+                    mine,
+                    export,
+                    now,
+                    &KeychainStateKeyStore,
+                    deadline,
+                ),
+            )
+        }
         many => {
             let t: Vec<split::Target<'_>> = many
                 .iter()
                 .map(|(site, domains)| split::Target { site, domains })
                 .collect();
-            for (site, result) in
-                refresh::refresh_profiles(mur_home, &t, export, now, &KeychainStateKeyStore)
-            {
+            for (site, result) in refresh::refresh_profiles(
+                mur_home,
+                &t,
+                loaded,
+                export,
+                now,
+                &KeychainStateKeyStore,
+                deadline,
+            ) {
                 refresh::report(&site, result);
             }
         }

@@ -31,6 +31,7 @@ pub mod merge;
 pub mod nav_confirm;
 pub mod nav_stall;
 pub mod paths;
+pub mod pending;
 pub mod proxy;
 pub mod recorder;
 pub mod refresh;

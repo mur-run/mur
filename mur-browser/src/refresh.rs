@@ -16,22 +16,31 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use std::time::Instant;
 
-use crate::{abandon, auth, paths, session, split, state::StateKeyStore};
+use crate::state::{StateKeyStore, Version};
+use crate::{abandon, auth, paths, pending, session, split};
 
 /// File name the browser writes its exported state to inside a scratch dir.
 pub const EXPORT_FILE: &str = "storage-state.json";
 
-/// How long a session-end export may take before it is abandoned; the
-/// browser is about to be killed either way.
-pub const EXPORT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a session-end export may take before it is abandoned. Together
+/// with [`WRITEBACK_BUDGET`] it fits the runtime's MCP stop slice
+/// (`mur-agent-runtime`'s `MCP_STOP_SLICE`, minus its `TERM_GRACE`), so an
+/// export that finishes in time is never cut off by SIGTERM before it is
+/// written back; `mur-core` asserts the sum.
+pub const EXPORT_TIMEOUT: Duration = Duration::from_secs(6);
 
-/// How long a session-end write-back waits for a profile lock. Short: the
-/// agent is stopping, and a busy profile is reported, not waited out.
+/// The whole write-back after the export — every profile's lock wait,
+/// encryption and metadata write — shares this one budget; a profile whose
+/// lock is not free before it runs out is abandoned, never waited out.
+pub const WRITEBACK_BUDGET: Duration = Duration::from_secs(3);
+
+/// How long a write-back outside an agent stop (replay) waits for a lock.
 pub const WRITEBACK_LOCK_WAIT: Duration = Duration::from_secs(2);
 
 /// What happened to a profile after a session.
@@ -95,47 +104,91 @@ pub fn export_path(dir: &Path) -> PathBuf {
 /// usable logged-in state. `last_auth` (the human login) is kept; the session
 /// expiry and `last_refresh` are updated. The plaintext export is removed
 /// whatever the outcome.
+///
+/// `loaded` is what the session loaded (its watermark and pending marker),
+/// when it loaded through [`crate::pending::load`]: the write-back is then
+/// refused if the profile changed since, and the marker is resolved. The
+/// lock wait ends at `deadline`.
 pub fn refresh_profile(
     mur_home: &Path,
     site: &str,
+    loaded: Option<pending::Loaded>,
     export: &Path,
     now: DateTime<Utc>,
     store: &impl StateKeyStore,
+    deadline: Instant,
 ) -> Result<Outcome> {
-    let result = refresh_inner(mur_home, site, export, now, store);
+    let result = refresh_inner(mur_home, site, loaded, export, now, store, deadline);
     let _ = std::fs::remove_file(export);
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn refresh_inner(
     mur_home: &Path,
     site: &str,
+    loaded: Option<pending::Loaded>,
     export: &Path,
     now: DateTime<Utc>,
     store: &impl StateKeyStore,
+    deadline: Instant,
 ) -> Result<Outcome> {
     if !export.is_file() {
         return Ok(Outcome::Skipped("the browser exported no state".into()));
     }
     let state = std::fs::read(export)
         .with_context(|| format!("read exported browser state {}", export.display()))?;
-    let Some(held) = abandon::lock(mur_home, site, Instant::now() + WRITEBACK_LOCK_WAIT)? else {
+    locked_write_back(mur_home, site, loaded, &state, now, store, deadline)
+}
+
+/// Take `site`'s lock by `deadline` and write `state` back under it. A lock
+/// timeout keeps the session's marker, tagged, for the next use to report.
+#[allow(clippy::too_many_arguments)]
+fn locked_write_back(
+    mur_home: &Path,
+    site: &str,
+    loaded: Option<pending::Loaded>,
+    state: &[u8],
+    now: DateTime<Utc>,
+    store: &impl StateKeyStore,
+    deadline: Instant,
+) -> Result<Outcome> {
+    let Some(held) = abandon::lock(mur_home, site, deadline)? else {
+        if let Some(l) = loaded {
+            l.marker.keep(pending::Kept::LockTimeout);
+        }
         return Ok(Outcome::Skipped(
             "the profile was locked by another writer".into(),
         ));
     };
-    write_back(mur_home, site, &state, now, store, &held)
+    let result = write_back(
+        mur_home,
+        site,
+        loaded.as_ref().map(|l| &l.version),
+        state,
+        now,
+        store,
+        &held,
+    );
+    // Resolved while the lock is still held (spec "Scope").
+    match (&result, loaded) {
+        (Err(_), Some(l)) => l.marker.keep(pending::Kept::Interrupted),
+        (_, l) => drop(l),
+    }
+    drop(held);
+    result
 }
 
 /// Write `state` back to `site` under its held lock, if it still holds the
-/// saved login.
+/// saved login and the profile is still the `watermark` the session loaded.
 fn write_back(
     mur_home: &Path,
     site: &str,
+    watermark: Option<&Version>,
     state: &[u8],
     now: DateTime<Utc>,
     store: &impl StateKeyStore,
-    _held: &abandon::ProfileLock,
+    held: &abandon::ProfileLock,
 ) -> Result<Outcome> {
     let meta_path = paths::profile_meta(mur_home, site);
     let yaml = std::fs::read_to_string(&meta_path)
@@ -144,8 +197,20 @@ fn write_back(
         .with_context(|| format!("parse browser profile metadata {}", meta_path.display()))?;
     auth::validate_storage_state(state)?;
     let state_path = paths::profile_state(mur_home, site);
-    let saved = crate::state::read_state(&state_path, store)
+    let (saved, current) = crate::state::read_versioned(&state_path, store)
         .context("read the saved profile state to compare logins")?;
+    if watermark.is_some_and(|w| *w != current) {
+        let entry = abandon::Abandoned {
+            at: now,
+            reason: abandon::Reason::NewerCopy,
+            host: None,
+            other: None,
+        };
+        abandon::record_locked(mur_home, site, held, entry)?;
+        return Ok(Outcome::Skipped(
+            "the profile changed since the session loaded it; the newer copy was kept".into(),
+        ));
+    }
     let saved_at = meta.last_refresh.unwrap_or(meta.last_auth);
     if !session::retains_login(&saved, saved_at, state, &meta.allow_domains, now) {
         return Ok(Outcome::Skipped(
@@ -169,18 +234,31 @@ fn write_back(
 /// profile — whether or not the rest of its write-back succeeded — so the
 /// lost login is reported on next use. The plaintext export is removed
 /// whatever the outcome.
+///
+/// `loaded` holds what the session loaded per profile (see
+/// [`refresh_profile`]); every lock wait ends at `deadline`, so a busy
+/// first profile cannot eat the time of the next.
 pub fn refresh_profiles(
     mur_home: &Path,
     targets: &[split::Target<'_>],
+    loaded: Vec<pending::Loaded>,
     export: &Path,
     now: DateTime<Utc>,
     store: &impl StateKeyStore,
+    deadline: Instant,
 ) -> Vec<(String, Result<Outcome>)> {
-    let result = refresh_profiles_inner(mur_home, targets, export, now, store);
+    let mut loaded: BTreeMap<String, pending::Loaded> =
+        loaded.into_iter().map(|l| (l.site.clone(), l)).collect();
+    let result =
+        refresh_profiles_inner(mur_home, targets, &mut loaded, export, now, store, deadline);
     let _ = std::fs::remove_file(export);
     match result {
         Ok(each) => each,
         Err(error) => {
+            // Nothing was written back: the next use must hear about it.
+            for (_, l) in loaded {
+                l.marker.keep(pending::Kept::Interrupted);
+            }
             let msg = format!("{error:#}");
             targets
                 .iter()
@@ -190,12 +268,15 @@ pub fn refresh_profiles(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn refresh_profiles_inner(
     mur_home: &Path,
     targets: &[split::Target<'_>],
+    loaded: &mut BTreeMap<String, pending::Loaded>,
     export: &Path,
     now: DateTime<Utc>,
     store: &impl StateKeyStore,
+    deadline: Instant,
 ) -> Result<Vec<(String, Result<Outcome>)>> {
     if !export.is_file() {
         return Ok(targets
@@ -228,8 +309,11 @@ fn refresh_profiles_inner(
     let mut out = Vec::with_capacity(targets.len());
     for t in targets {
         let site = t.site;
-        let Some(held) = abandon::lock(mur_home, site, Instant::now() + WRITEBACK_LOCK_WAIT)?
-        else {
+        let mine = loaded.remove(site);
+        let Some(held) = abandon::lock(mur_home, site, deadline)? else {
+            if let Some(l) = mine {
+                l.marker.keep(pending::Kept::LockTimeout);
+            }
             out.push((
                 site.to_owned(),
                 Ok(Outcome::Skipped(
@@ -238,7 +322,16 @@ fn refresh_profiles_inner(
             ));
             continue;
         };
-        let outcome = write_back(mur_home, site, &split.parts[site], now, store, &held);
+        let watermark = mine.as_ref().map(|l| &l.version);
+        let outcome = write_back(
+            mur_home,
+            site,
+            watermark,
+            &split.parts[site],
+            now,
+            store,
+            &held,
+        );
         if let Some(o) = split.overlaps_for(site).next() {
             let entry = abandon::Abandoned {
                 at: now,
@@ -249,6 +342,10 @@ fn refresh_profiles_inner(
             if let Err(error) = abandon::record_locked(mur_home, site, &held, entry) {
                 tracing::warn!(site, error = %format!("{error:#}"), "could not record a dropped browser login");
             }
+        }
+        match (&outcome, mine) {
+            (Err(_), Some(l)) => l.marker.keep(pending::Kept::Interrupted),
+            (_, l) => drop(l),
         }
         drop(held);
         out.push((site.to_owned(), outcome));
@@ -270,232 +367,5 @@ pub fn report(site: &str, result: Result<Outcome>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::state::{read_state, write_state};
-
-    #[derive(Default)]
-    struct MemoryStore(std::sync::Mutex<std::collections::HashMap<String, String>>);
-    impl StateKeyStore for MemoryStore {
-        fn get(&self, account: &str) -> Result<Option<String>> {
-            Ok(self.0.lock().unwrap().get(account).cloned())
-        }
-        fn set(&self, account: &str, value: &str) -> Result<()> {
-            self.0.lock().unwrap().insert(account.into(), value.into());
-            Ok(())
-        }
-    }
-
-    const OLD: &[u8] = br#"{"cookies":[],"origins":[{"origin":"https://chat.example.com","localStorage":[{"name":"userToken","value":"old"}]}]}"#;
-
-    fn setup(home: &Path, store: &MemoryStore) {
-        std::fs::create_dir_all(paths::profile_dir(home, "ex")).unwrap();
-        write_state(&paths::profile_state(home, "ex"), OLD, store).unwrap();
-        let meta = auth::ProfileMeta {
-            url: "https://chat.example.com/sign_in".into(),
-            last_auth: DateTime::from_timestamp(1_600_000_000, 0).unwrap(),
-            earliest_cookie_expires: DateTime::from_timestamp(1_600_001_800, 0),
-            allow_domains: vec!["example.com".into()],
-            last_refresh: None,
-            writeback_abandoned: None,
-        };
-        auth::write_meta(&paths::profile_meta(home, "ex"), &meta).unwrap();
-    }
-
-    fn meta(home: &Path) -> auth::ProfileMeta {
-        serde_yaml::from_str(&std::fs::read_to_string(paths::profile_meta(home, "ex")).unwrap())
-            .unwrap()
-    }
-
-    #[test]
-    fn logged_in_export_replaces_the_profile_and_keeps_last_auth() {
-        let home = tempfile::tempdir().unwrap();
-        let store = MemoryStore::default();
-        setup(home.path(), &store);
-        let dir = scratch_dir(home.path()).unwrap();
-        let export = export_path(dir.path());
-        let new = br#"{"cookies":[],"origins":[{"origin":"https://chat.example.com","localStorage":[{"name":"userToken","value":"new"}]}]}"#;
-        std::fs::write(&export, new).unwrap();
-        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-
-        let got = refresh_profile(home.path(), "ex", &export, now, &store).unwrap();
-
-        assert_eq!(got, Outcome::Refreshed);
-        assert_eq!(
-            read_state(&paths::profile_state(home.path(), "ex"), &store).unwrap(),
-            new
-        );
-        let m = meta(home.path());
-        assert_eq!(
-            m.last_auth,
-            DateTime::from_timestamp(1_600_000_000, 0).unwrap()
-        );
-        assert_eq!(m.last_refresh, Some(now));
-        // The stale 30-minute anti-bot expiry is gone: no session cookie.
-        assert_eq!(m.earliest_cookie_expires, None);
-        assert!(!export.exists(), "plaintext export must be removed");
-    }
-
-    #[test]
-    fn logged_out_or_missing_export_never_overwrites_the_profile() {
-        let home = tempfile::tempdir().unwrap();
-        let store = MemoryStore::default();
-        setup(home.path(), &store);
-        let dir = scratch_dir(home.path()).unwrap();
-        let export = export_path(dir.path());
-        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-
-        let missing = refresh_profile(home.path(), "ex", &export, now, &store).unwrap();
-        assert!(matches!(missing, Outcome::Skipped(_)));
-
-        std::fs::write(
-            &export,
-            br#"{"cookies":[{"name":"__cf_bm","domain":".example.com"}],"origins":[]}"#,
-        )
-        .unwrap();
-        let blank = refresh_profile(home.path(), "ex", &export, now, &store).unwrap();
-        assert!(matches!(blank, Outcome::Skipped(_)));
-
-        assert_eq!(
-            read_state(&paths::profile_state(home.path(), "ex"), &store).unwrap(),
-            OLD
-        );
-        assert_eq!(meta(home.path()).last_refresh, None);
-        assert!(!export.exists());
-    }
-
-    #[test]
-    fn logout_that_keeps_preferences_leaves_the_encrypted_profile_unchanged() {
-        let home = tempfile::tempdir().unwrap();
-        let store = MemoryStore::default();
-        setup(home.path(), &store);
-        let before = std::fs::read(paths::profile_state(home.path(), "ex")).unwrap();
-        let dir = scratch_dir(home.path()).unwrap();
-        let export = export_path(dir.path());
-        std::fs::write(
-            &export,
-            br#"{"cookies":[],"origins":[{"origin":"https://chat.example.com","localStorage":[{"name":"theme","value":"dark"}]}]}"#,
-        )
-        .unwrap();
-        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-
-        let got = refresh_profile(home.path(), "ex", &export, now, &store).unwrap();
-
-        assert!(matches!(got, Outcome::Skipped(_)));
-        assert_eq!(
-            std::fs::read(paths::profile_state(home.path(), "ex")).unwrap(),
-            before,
-            "encrypted profile must be byte-for-byte unchanged"
-        );
-        assert_eq!(meta(home.path()).last_refresh, None);
-        assert!(!export.exists());
-    }
-
-    #[test]
-    fn logout_that_clears_the_token_value_leaves_the_encrypted_profile_unchanged() {
-        let home = tempfile::tempdir().unwrap();
-        let store = MemoryStore::default();
-        setup(home.path(), &store);
-        let before = std::fs::read(paths::profile_state(home.path(), "ex")).unwrap();
-        let dir = scratch_dir(home.path()).unwrap();
-        let export = export_path(dir.path());
-        // `localStorage.setItem("userToken", "")`: the key stays, the token is gone.
-        std::fs::write(
-            &export,
-            br#"{"cookies":[],"origins":[{"origin":"https://chat.example.com","localStorage":[{"name":"userToken","value":""},{"name":"theme","value":"dark"}]}]}"#,
-        )
-        .unwrap();
-        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-
-        let got = refresh_profile(home.path(), "ex", &export, now, &store).unwrap();
-
-        assert!(matches!(got, Outcome::Skipped(_)));
-        assert_eq!(
-            std::fs::read(paths::profile_state(home.path(), "ex")).unwrap(),
-            before,
-            "encrypted profile must be byte-for-byte unchanged"
-        );
-        assert_eq!(meta(home.path()).last_refresh, None);
-        assert!(!export.exists());
-    }
-
-    #[test]
-    fn export_code_quotes_hostile_paths() {
-        let code = export_code(Path::new("/private/a\"b\\c/storage-state.json")).unwrap();
-        assert!(
-            code.contains("storageState({ path: \"/private/a\\\"b\\\\c/storage-state.json\" })")
-        );
-    }
-
-    /// Blocker 1 (#2360): a merged session whose export holds a cookie for a
-    /// host both profiles cover writes the rest back, drops that cookie from
-    /// both, and leaves each profile one notice naming the host, the other
-    /// profile and the recovery — even though its own write-back succeeded.
-    #[test]
-    fn an_overlap_drop_is_reported_on_each_profile_even_when_the_rest_is_saved() {
-        let home = tempfile::tempdir().unwrap();
-        let store = MemoryStore::default();
-        for (site, host) in [("a", "a.example.com"), ("b", "b.example.com")] {
-            let dir = paths::profile_dir(home.path(), site);
-            std::fs::create_dir_all(&dir).unwrap();
-            let old = format!(
-                r#"{{"cookies":[],"origins":[{{"origin":"https://{host}","localStorage":[{{"name":"userToken","value":"old"}}]}}]}}"#
-            );
-            write_state(
-                &paths::profile_state(home.path(), site),
-                old.as_bytes(),
-                &store,
-            )
-            .unwrap();
-            auth::write_meta(
-                &paths::profile_meta(home.path(), site),
-                &auth::ProfileMeta {
-                    url: format!("https://{host}/login"),
-                    last_auth: DateTime::from_timestamp(1_600_000_000, 0).unwrap(),
-                    earliest_cookie_expires: None,
-                    allow_domains: vec![host.into(), "idp.example".into()],
-                    last_refresh: None,
-                    writeback_abandoned: None,
-                },
-            )
-            .unwrap();
-        }
-        let dir = scratch_dir(home.path()).unwrap();
-        let export = export_path(dir.path());
-        std::fs::write(
-            &export,
-            br#"{"cookies":[{"name":"sso","value":"SENTINEL","domain":".idp.example","path":"/"}],"origins":[{"origin":"https://a.example.com","localStorage":[{"name":"userToken","value":"newA"}]},{"origin":"https://b.example.com","localStorage":[{"name":"userToken","value":"newB"}]}]}"#,
-        )
-        .unwrap();
-        let (da, db) = (
-            vec!["a.example.com".to_string(), "idp.example".to_string()],
-            vec!["b.example.com".to_string(), "idp.example".to_string()],
-        );
-        let targets = [
-            split::Target {
-                site: "a",
-                domains: &da,
-            },
-            split::Target {
-                site: "b",
-                domains: &db,
-            },
-        ];
-        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-
-        let got = refresh_profiles(home.path(), &targets, &export, now, &store);
-
-        for (site, outcome) in &got {
-            assert_eq!(outcome.as_ref().unwrap(), &Outcome::Refreshed, "{site}");
-        }
-        let saved_a = read_state(&paths::profile_state(home.path(), "a"), &store).unwrap();
-        let saved_a = String::from_utf8(saved_a).unwrap();
-        assert!(saved_a.contains("newA") && !saved_a.contains("newB") && !saved_a.contains("sso"));
-        let notices = crate::abandon::take_notices(home.path(), &["a".into(), "b".into()]);
-        assert_eq!(notices.len(), 2, "{notices:?}");
-        assert!(notices[0].contains("idp.example") && notices[0].contains("\"b\""));
-        assert!(notices[1].contains("idp.example") && notices[1].contains("\"a\""));
-        assert!(notices.iter().all(|n| !n.contains("SENTINEL")));
-        assert!(!export.exists(), "plaintext export must be removed");
-    }
-}
+#[path = "refresh_tests.rs"]
+mod tests;
