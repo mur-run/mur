@@ -131,6 +131,17 @@ pub fn args(state: Option<&InjectedState>, args_so_far: &[String]) -> Vec<String
 mod tests {
     use super::*;
 
+    /// The runtime (via `mur_common`) and the browser child (via `mur_browser`)
+    /// name the same Keychain item and the same handover env var; neither
+    /// crate depends on the other, so this is where a drift is caught (#2369).
+    #[test]
+    fn state_key_handover_constants_agree_across_crates() {
+        use mur_common::browser_state_key as rt;
+        assert_eq!(rt::KEYCHAIN_SERVICE, mur_browser::broker::KEYCHAIN_SERVICE);
+        assert_eq!(rt::KEYCHAIN_ACCOUNT, mur_browser::state::STATE_KEY_ACCOUNT);
+        assert_eq!(rt::FD_ENV, mur_browser::state::STATE_KEY_FD_ENV);
+    }
+
     #[test]
     fn no_profile_injects_nothing() {
         let home = tempfile::tempdir().unwrap();

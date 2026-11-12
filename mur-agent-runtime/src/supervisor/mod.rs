@@ -48,6 +48,7 @@ const SHUTDOWN_CANCEL_GRACE_SECS: u64 = 3;
 const SHUTDOWN_JOB_KILL_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
 mod bootstrap;
+mod browser_key;
 mod dispatch;
 mod identity;
 mod pin;

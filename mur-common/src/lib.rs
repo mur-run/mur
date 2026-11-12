@@ -8,6 +8,7 @@ pub mod agent_name;
 pub mod authz;
 pub mod binary_attestation;
 pub mod bridge;
+pub mod browser_state_key;
 pub mod build;
 pub mod bundle;
 pub mod canonical;

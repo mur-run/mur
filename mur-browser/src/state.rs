@@ -24,8 +24,62 @@ pub trait StateKeyStore {
 /// OS-native storage for the browser state encryption identity.
 pub struct KeychainStateKeyStore;
 
+/// Env var naming an inherited fd that carries the state key (#2369). Set by
+/// the agent runtime, which reads the key before its sandbox seals, for a
+/// live-browser child that could not reach the Keychain itself. Mirrors
+/// `mur_common::browser_state_key::FD_ENV`; a `mur-core` test pins them equal.
+pub const STATE_KEY_FD_ENV: &str = "MUR_BROWSER_STATE_KEY_FD";
+
+/// The key handed over on [`STATE_KEY_FD_ENV`], read to EOF once and kept for
+/// the process: startup decrypts with it and the exit write-back re-encrypts
+/// with it, long after the fd is gone.
+fn handed_key() -> Option<&'static str> {
+    static KEY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| {
+        let raw = std::env::var(STATE_KEY_FD_ENV).ok()?;
+        match read_handed_fd(&raw) {
+            Ok(key) => Some(key),
+            Err(error) => {
+                tracing::warn!(%error, "ignoring {STATE_KEY_FD_ENV}; falling back to the Keychain");
+                None
+            }
+        }
+    })
+    .as_deref()
+}
+
+#[cfg(unix)]
+fn read_handed_fd(raw: &str) -> Result<String> {
+    use std::os::fd::FromRawFd;
+    let fd: i32 = raw.trim().parse().context("not an fd number")?;
+    // 0-2 are stdio, which the MCP transport owns; never take one of them.
+    if fd <= 2 {
+        bail!("fd {fd} is a stdio stream");
+    }
+    // SAFETY: the runtime opened this fd for us alone and nothing else in this
+    // process refers to it; the OnceLock makes this the only take.
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut key = String::new();
+    file.read_to_string(&mut key).context("read handed key")?;
+    let key = key.trim().to_owned();
+    if key.is_empty() {
+        bail!("handed key is empty");
+    }
+    Ok(key)
+}
+
+#[cfg(not(unix))]
+fn read_handed_fd(_raw: &str) -> Result<String> {
+    bail!("fd handover is unix-only")
+}
+
 impl StateKeyStore for KeychainStateKeyStore {
     fn get(&self, account: &str) -> Result<Option<String>> {
+        if account == STATE_KEY_ACCOUNT
+            && let Some(key) = handed_key()
+        {
+            return Ok(Some(key.to_owned()));
+        }
         let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account)
             .with_context(|| format!("open Keychain entry {KEYCHAIN_SERVICE}:{account}"))?;
         match entry.get_password() {
