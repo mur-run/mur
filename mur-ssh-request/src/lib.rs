@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 
 use mur_common::agent::{ProcessesEntitlement, SpawnMode};
 
+mod pinned;
 mod store;
 pub use store::{PendingRequest, Written, read_pending, remove, requests_dir, write};
 

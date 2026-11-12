@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 
+use super::pinned::PinnedDir;
 use super::{
     EXPIRY_SECS, MAX_FILE_BYTES, MAX_PENDING, REQUESTS_DIR, RequestHost, SCHEMA, SshRequest,
     sanitize_reason, validate_user,
@@ -63,17 +64,16 @@ pub fn write(agent_home: &Path, req: &SshRequest) -> io::Result<Written> {
 /// Anything that fails a check is skipped silently: the files are the
 /// agent's, and a bad one must not hide the good ones.
 pub fn read_pending(agent_home: &Path, now: DateTime<Utc>) -> Vec<PendingRequest> {
-    let dir = requests_dir(agent_home);
-    // A symlinked directory would make this read, and `remove` delete, elsewhere.
-    if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
-        return Vec::new();
-    }
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    // Pinned without following a link at it: see `pinned` for the swap race.
+    let Ok(dir) = PinnedDir::open(&requests_dir(agent_home)) else {
         return Vec::new();
     };
-    let mut out: Vec<PendingRequest> = entries
-        .flatten()
-        .filter_map(|e| read_one(&dir, e.file_name().to_str()?, now))
+    let Ok(names) = dir.names() else {
+        return Vec::new();
+    };
+    let mut out: Vec<PendingRequest> = names
+        .iter()
+        .filter_map(|name| read_one(&dir, name, now))
         .collect();
     out.sort_by(|a, b| {
         b.requested_at
@@ -84,9 +84,9 @@ pub fn read_pending(agent_home: &Path, now: DateTime<Utc>) -> Vec<PendingRequest
     out
 }
 
-fn read_one(dir: &Path, name: &str, now: DateTime<Utc>) -> Option<PendingRequest> {
+fn read_one(dir: &PinnedDir, name: &str, now: DateTime<Utc>) -> Option<PendingRequest> {
     let id = id_of(name)?;
-    let f = mur_common::paths::open_no_follow(&dir.join(name)).ok()?;
+    let f = dir.open_regular(name).ok()??;
     let meta = f.metadata().ok()?;
     if !meta.is_file() || meta.len() > MAX_FILE_BYTES {
         return None;
@@ -132,14 +132,8 @@ fn id_of(name: &str) -> Option<&str> {
 /// Delete the file of a request [`read_pending`] returned. Unlinks the entry
 /// itself (never what a link points to); already gone is success.
 pub fn remove(agent_home: &Path, p: &PendingRequest) -> io::Result<()> {
-    let dir = requests_dir(agent_home);
-    if !std::fs::symlink_metadata(&dir)?.is_dir() {
-        return Err(io::Error::other(format!(
-            "{} is not a directory",
-            dir.display()
-        )));
-    }
-    match std::fs::remove_file(dir.join(file_name(&p.target.id()))) {
+    let dir = PinnedDir::open(&requests_dir(agent_home))?;
+    match dir.unlink(&file_name(&p.target.id())) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         other => other,
     }

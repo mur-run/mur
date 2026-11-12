@@ -326,3 +326,60 @@ fn ssh_is_spawnable_under_any_and_when_listed() {
         assert_eq!(ssh_spawnable(&p), want, "{mode:?} listed={listed}");
     }
 }
+
+#[cfg(unix)]
+fn mkfifo(path: &Path) {
+    let st = std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(st.success(), "mkfifo {}", path.display());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_named_like_a_request_is_skipped_without_blocking() {
+    let home = tempfile::tempdir().unwrap();
+    let w = write(home.path(), &req("a.example", now())).unwrap();
+    // A correctly named FIFO with no writer: a blocking open would hang here.
+    mkfifo(&dir(home.path()).join(format!("{}.json", "f".repeat(64))));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let h = home.path().to_path_buf();
+    std::thread::spawn(move || tx.send(read_pending(&h, now())).unwrap());
+    let got = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("read_pending blocked on a FIFO");
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].target, w.target);
+}
+
+#[cfg(unix)]
+#[test]
+fn swapping_the_dir_for_a_link_after_it_is_pinned_reaches_nothing_outside() {
+    let home = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let w = write(home.path(), &req("a.example", now())).unwrap();
+    let name = format!("{}.json", w.target.id());
+    let victim = outside.path().join(&name);
+    std::fs::write(&victim, b"not yours").unwrap();
+
+    let pinned = pinned::PinnedDir::open(&dir(home.path())).unwrap();
+    // The agent swaps the checked directory for a link to elsewhere.
+    std::fs::rename(dir(home.path()), home.path().join("moved")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir(home.path())).unwrap();
+
+    let mut body = String::new();
+    std::io::Read::read_to_string(&mut pinned.open_regular(&name).unwrap().unwrap(), &mut body)
+        .unwrap();
+    assert!(
+        body.contains("a.example"),
+        "read the pinned dir, not the link"
+    );
+    pinned.unlink(&name).unwrap();
+    assert!(victim.is_file(), "the file outside was not deleted");
+    assert!(!home.path().join("moved").join(&name).exists());
+
+    // A fresh read or remove refuses the link outright.
+    assert!(read_pending(home.path(), now()).is_empty());
+    assert!(pinned::PinnedDir::open(&dir(home.path())).is_err());
+}
