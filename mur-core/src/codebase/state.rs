@@ -25,6 +25,12 @@ pub struct IndexMetadata {
     /// lance schema probe would close that, add it if users hit it.
     #[serde(default)]
     pub dimensions: Option<usize>,
+    /// Commit HEAD pointed at when this index was built, read *before* the
+    /// scan and stamped only on success — so a commit landing mid-scan leaves
+    /// the index stale and it is rebuilt on the next pass. `None` on legacy
+    /// metadata and for projects that are not git repositories.
+    #[serde(default)]
+    pub indexed_head: Option<String>,
     pub files: HashMap<String, FileMeta>,
     pub last_indexed: String,
 }

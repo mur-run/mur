@@ -24,6 +24,20 @@ fn tagged(tag: &str) -> IndexMetadata {
 }
 
 #[test]
+fn legacy_meta_without_indexed_head_deserializes_to_none() {
+    let legacy = r#"{"project_path":"/p","files":{},"last_indexed":"2026-01-01T00:00:00Z"}"#;
+    let meta: IndexMetadata = serde_json::from_str(legacy).unwrap();
+    assert_eq!(meta.indexed_head, None);
+    let stamped = IndexMetadata {
+        indexed_head: Some("abc123".into()),
+        ..IndexMetadata::default()
+    };
+    let back: IndexMetadata =
+        serde_json::from_str(&serde_json::to_string(&stamped).unwrap()).unwrap();
+    assert_eq!(back.indexed_head.as_deref(), Some("abc123"));
+}
+
+#[test]
 fn save_meta_roundtrips_and_leaves_no_temp_file() {
     let t = tempfile::tempdir().unwrap();
     let (_env, idx) = index_in(t.path());

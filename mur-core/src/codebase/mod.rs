@@ -422,6 +422,7 @@ impl CodebaseIndex {
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
             dimensions: Some(embed_config.dimensions),
+            indexed_head: None,
             files: HashMap::new(),
             last_indexed: chrono::Utc::now().to_rfc3339(),
         };
