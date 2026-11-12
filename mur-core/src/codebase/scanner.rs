@@ -58,14 +58,34 @@ fn language_for_ext(ext: &str) -> Option<&'static str> {
     }
 }
 
+/// Directory nesting the walk descends into before it stops. A bound on
+/// recursion, not a tuning knob: real source trees sit far below it.
+pub(crate) const MAX_WALK_DEPTH: usize = 64;
+
 pub fn scan_project(project_path: &Path) -> Vec<ScannedFile> {
     let gitignore = load_gitignore(project_path);
     let mut files = Vec::new();
-    walk_dir(project_path, project_path, &gitignore, &mut files);
+    walk_dir(project_path, project_path, 0, &gitignore, &mut files);
     files
 }
 
-fn walk_dir(root: &Path, dir: &Path, gitignore_patterns: &[String], out: &mut Vec<ScannedFile>) {
+/// Largest file the scanner indexes, in bytes.
+const MAX_FILE_BYTES: u64 = 512 * 1024;
+
+/// Walks `dir` without ever following a symlink. The index can be built by a
+/// process with wider filesystem access than whoever planted the tree (a
+/// sandboxed agent's commit triggers it), so a link pointing out of the repo
+/// would read files the planter could not, and `a -> .` would recurse forever.
+fn walk_dir(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    gitignore_patterns: &[String],
+    out: &mut Vec<ScannedFile>,
+) {
+    if depth >= MAX_WALK_DEPTH {
+        return;
+    }
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -82,8 +102,12 @@ fn walk_dir(root: &Path, dir: &Path, gitignore_patterns: &[String], out: &mut Ve
         if name.starts_with('.') {
             continue;
         }
+        // `DirEntry::file_type` reports the link itself, never its target.
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
 
-        if path.is_dir() {
+        if file_type.is_dir() {
             if SKIP_DIRS.iter().any(|&s| name == s) {
                 continue;
             }
@@ -91,8 +115,8 @@ fn walk_dir(root: &Path, dir: &Path, gitignore_patterns: &[String], out: &mut Ve
             if is_gitignored(&rel, gitignore_patterns, true) {
                 continue;
             }
-            walk_dir(root, &path, gitignore_patterns, out);
-        } else if path.is_file() {
+            walk_dir(root, &path, depth + 1, gitignore_patterns, out);
+        } else if file_type.is_file() {
             let rel = relative_path(root, &path);
             if is_gitignored(&rel, gitignore_patterns, false) {
                 continue;
@@ -104,25 +128,15 @@ fn walk_dir(root: &Path, dir: &Path, gitignore_patterns: &[String], out: &mut Ve
                 None => continue,
             };
 
-            let metadata = match fs::metadata(&path) {
-                Ok(m) => m,
-                Err(_) => continue,
+            let Some(bytes) = read_regular_file(&path) else {
+                continue;
             };
-            if metadata.len() > 512 * 1024 {
+            let check_len = bytes.len().min(512);
+            if bytes[..check_len].contains(&0) {
                 continue;
             }
-
-            let content = match fs::read(&path) {
-                Ok(bytes) => {
-                    let check_len = bytes.len().min(512);
-                    if bytes[..check_len].contains(&0) {
-                        continue;
-                    }
-                    match String::from_utf8(bytes) {
-                        Ok(s) => s,
-                        Err(_) => continue,
-                    }
-                }
+            let content = match String::from_utf8(bytes) {
+                Ok(s) => s,
                 Err(_) => continue,
             };
 
@@ -133,6 +147,29 @@ fn walk_dir(root: &Path, dir: &Path, gitignore_patterns: &[String], out: &mut Ve
             });
         }
     }
+}
+
+/// Reads `path` only if it is still a regular file within the size cap when
+/// opened. `O_NOFOLLOW` closes the gap between the walk's type check and the
+/// read, where the file could be swapped for a symlink.
+fn read_regular_file(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = opts.open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() > MAX_FILE_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    // The cap applies to what is read, not just what was stat'ed.
+    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= MAX_FILE_BYTES).then_some(bytes)
 }
 
 pub(crate) fn load_gitignore(project_path: &Path) -> Vec<String> {
@@ -291,6 +328,70 @@ mod tests {
         // Non-git path falls back to its own basename.
         let path = PathBuf::from("/home/user/Projects/my-app");
         assert_eq!(project_name_from_path(&path), "my-app");
+    }
+
+    #[cfg(unix)]
+    fn symlink_fixture() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(outside.join("secrets")).unwrap();
+        fs::write(outside.join("secret.toml"), "token = \"leak\"\n").unwrap();
+        fs::write(outside.join("secrets/key.json"), "{\"k\":\"leak\"}\n").unwrap();
+        fs::create_dir_all(repo.join("src")).unwrap();
+        fs::write(repo.join("src/main.rs"), "fn main() {}\n").unwrap();
+        (tmp, repo)
+    }
+
+    fn paths(files: &[ScannedFile]) -> Vec<&str> {
+        files.iter().map(|f| f.relative_path.as_str()).collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_file_outside_root_is_not_indexed() {
+        let (tmp, repo) = symlink_fixture();
+        std::os::unix::fs::symlink(
+            tmp.path().join("outside/secret.toml"),
+            repo.join("cfg.toml"),
+        )
+        .unwrap();
+        let files = scan_project(&repo);
+        assert_eq!(paths(&files), ["src/main.rs"]);
+        assert!(files.iter().all(|f| !f.content.contains("leak")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_dir_outside_root_is_not_followed() {
+        let (tmp, repo) = symlink_fixture();
+        std::os::unix::fs::symlink(tmp.path().join("outside/secrets"), repo.join("vault")).unwrap();
+        let files = scan_project(&repo);
+        assert_eq!(paths(&files), ["src/main.rs"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn self_referencing_symlink_loop_terminates_without_duplicates() {
+        let (_tmp, repo) = symlink_fixture();
+        std::os::unix::fs::symlink(".", repo.join("a")).unwrap();
+        std::os::unix::fs::symlink("..", repo.join("src/up")).unwrap();
+        let files = scan_project(&repo);
+        assert_eq!(paths(&files), ["src/main.rs"]);
+    }
+
+    #[test]
+    fn walk_stops_at_max_depth() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut deep = tmp.path().to_path_buf();
+        for i in 0..=MAX_WALK_DEPTH {
+            deep.push(format!("d{i}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("too_deep.rs"), "fn x() {}\n").unwrap();
+        fs::write(tmp.path().join("d0/shallow.rs"), "fn y() {}\n").unwrap();
+        let files = scan_project(tmp.path());
+        assert_eq!(paths(&files), ["d0/shallow.rs"]);
     }
 
     #[test]
