@@ -65,9 +65,9 @@ pub fn shadowed_mcp_names(servers: &[mur_common::agent::McpServerEntry]) -> Vec<
 /// the MCP refresh must keep out too. A no-op (empty) otherwise: the MCP tool
 /// stays, exactly as before.
 ///
-/// When the built-in goes in, an `ask` written for the MCP tool it replaces is
-/// carried over: `rules` gains an exact `parallel_jobs: ask` rule, so the
-/// call-time gate still asks before fanning out (review P3, #2386).
+/// When the built-in goes in and the MCP tool it replaces would have asked at
+/// call time, `rules` gains an exact `parallel_jobs: ask` rule, so the gate
+/// still asks before fanning out (review P3/F1/F2, #2386).
 pub fn register(
     tool_map: &mut std::collections::HashMap<String, Arc<dyn ToolExecutor>>,
     cfg: &ParallelJobsConfig,
@@ -98,26 +98,36 @@ pub fn register(
     shadowed
 }
 
-/// An exact `parallel_jobs: ask` rule when a replaced MCP name resolves to
-/// `ask` through an explicit rule but the built-in name resolves to `allow`
-/// only through a glob. An exact rule on `parallel_jobs` is the user's word
-/// on the built-in itself and is left alone; with no rule at all the default
-/// is already `ask`.
+/// An exact `parallel_jobs: ask` rule when a replaced MCP name would ask at
+/// call time but the built-in would not (review F1/F2, #2386). Both sides go
+/// through the call-time gate's own [`effective_tool_policy`], so every way
+/// the MCP name asks counts: an explicit `ask`, no rule at all (the default),
+/// or an `allow` lifted to `ask` by a declared `risk:`. The carried rule keeps
+/// the strictest `risk:` declared on the replaced names, so the approval is
+/// filed at the same tier. An exact rule on `parallel_jobs` is the user's word
+/// on the built-in itself and is left alone.
 fn inherited_ask(
     rules: &[mur_common::agent::ToolRule],
     shadowed: &[String],
 ) -> Option<mur_common::agent::ToolRule> {
-    use mur_common::agent::{ToolPolicy, ToolRule, resolve_tool_policy_opt, resolve_tool_rule};
-    let built_in = resolve_tool_rule(rules, PARALLEL_JOBS);
-    let glob_allows =
-        built_in.is_some_and(|r| r.pattern != PARALLEL_JOBS && r.policy == ToolPolicy::Allow);
-    let mcp_asks = shadowed
+    use crate::task_runner::effective_tool_policy;
+    use mur_common::agent::{ToolPolicy, ToolRule, resolve_tool_risk};
+    if rules.iter().any(|r| r.pattern == PARALLEL_JOBS)
+        || effective_tool_policy(rules, PARALLEL_JOBS) != ToolPolicy::Allow
+    {
+        return None;
+    }
+    let asking: Vec<&String> = shadowed
         .iter()
-        .any(|n| resolve_tool_policy_opt(rules, n) == Some(ToolPolicy::Ask));
-    (mcp_asks && glob_allows).then(|| ToolRule {
+        .filter(|n| effective_tool_policy(rules, n) == ToolPolicy::Ask)
+        .collect();
+    (!asking.is_empty()).then(|| ToolRule {
         pattern: PARALLEL_JOBS.to_string(),
         policy: ToolPolicy::Ask,
-        risk: None,
+        risk: asking
+            .iter()
+            .filter_map(|n| resolve_tool_risk(rules, n))
+            .max(),
         bypass_builtin_tier_floor: Default::default(),
     })
 }

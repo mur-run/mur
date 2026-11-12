@@ -360,3 +360,63 @@ fn an_ask_on_the_replaced_mcp_tool_still_asks() {
         ToolPolicy::Allow
     );
 }
+
+/// Review F1/F2 (#2386): the MCP name asks without an `ask` written on it —
+/// by default (no rule), or through an `allow` lifted by a declared `risk:` —
+/// and a glob `allow` on the built-in must not wave the fan-out through.
+#[test]
+fn an_implicit_ask_on_the_replaced_mcp_tool_still_asks() {
+    use crate::task_runner::effective_tool_policy;
+    use mur_common::agent::{ToolPolicy, resolve_tool_rule};
+    use mur_common::hitl::RiskTier;
+    let h = home(CFG);
+    let on: ParallelJobsConfig = serde_yaml_ng::from_str("targets: [coder]").unwrap();
+    let cases = [
+        // F1: nothing on the MCP name (default ask), `p*` written for `propose`.
+        ("- pattern: \"p*\"\n  policy: allow", None),
+        // F2: MCP allow carrying `risk: spend`, blanket allow on the rest.
+        (
+            "- pattern: \"*\"\n  policy: allow\n- pattern: mcp__mur-tools__parallel_jobs\n  policy: allow\n  risk: spend",
+            Some(RiskTier::Spend),
+        ),
+    ];
+    for (yaml, risk) in cases {
+        let mut rules: Vec<mur_common::agent::ToolRule> = serde_yaml_ng::from_str(yaml).unwrap();
+        let mut map = map_with_mcp();
+        assert!(
+            !register(
+                &mut map,
+                &on,
+                &mut rules,
+                &mur_tools(),
+                tool(h.path(), None)
+            )
+            .is_empty(),
+            "{yaml}"
+        );
+        assert_eq!(
+            effective_tool_policy(&rules, PARALLEL_JOBS),
+            ToolPolicy::Ask,
+            "{yaml}"
+        );
+        assert_eq!(
+            resolve_tool_rule(&rules, PARALLEL_JOBS).and_then(|r| r.risk),
+            risk,
+            "{yaml}"
+        );
+    }
+    // The MCP name is explicitly allowed with no risk: nothing is carried.
+    let mut rules: Vec<mur_common::agent::ToolRule> = serde_yaml_ng::from_str(
+        "- pattern: \"*\"\n  policy: allow\n- pattern: mcp__mur-tools__parallel_jobs\n  policy: allow",
+    )
+    .unwrap();
+    let mut map = map_with_mcp();
+    register(
+        &mut map,
+        &on,
+        &mut rules,
+        &mur_tools(),
+        tool(h.path(), None),
+    );
+    assert!(!rules.iter().any(|r| r.pattern == PARALLEL_JOBS));
+}

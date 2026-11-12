@@ -254,8 +254,8 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
     let places = store::run_dirs_of(mur_home, run_id).len();
     anyhow::ensure!(
         places < 2,
-        "run id {run_id} is recorded in {places} places (another fleet's tree or runs/); \
-         ask by fleet: `mur fleet status <fleet>`"
+        "run id {run_id} is recorded in {places} places (jobs-dispatch/, a fleet's tree, \
+         an agent's tree or runs/); for a fleet run, ask by fleet: `mur fleet status <fleet>`"
     );
     status_of_in(mur_home, None, run_id)
 }
