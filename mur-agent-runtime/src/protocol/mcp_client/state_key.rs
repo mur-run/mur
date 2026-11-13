@@ -3,9 +3,13 @@
 //!
 //! The key is read once, before the seal (`supervisor::seal`), into the
 //! pre-seal secret cache. At spawn, a matching child gets the read end of a
-//! fresh pipe as an inherited fd; the key is written and the write end closed
-//! right after the spawn, so the child reads it to EOF. Every other fd this
-//! process opens is close-on-exec, so no other child ever holds the pipe.
+//! fresh pipe as an inherited fd. The key — newline-terminated, far below
+//! the pipe buffer — is written and the write end closed BEFORE the spawn,
+//! so this process never holds a write end while a child starts: a reader
+//! has the whole key the moment it looks and stops at the newline, never
+//! waiting for an EOF a stray write-end holder could withhold (macOS has no
+//! `pipe2`, so `std::io::pipe` sets close-on-exec a step after creating it).
+//! Only the `mur` CLI in MUR's own install dir is ever handed the key.
 
 use crate::sandbox::policy::SandboxPolicy;
 use mur_common::agent::McpServerEntry;
@@ -20,12 +24,10 @@ pub(super) fn spawn(
 ) -> std::io::Result<Child> {
     #[cfg(unix)]
     {
-        let key = unix::arm(&mut cmd, entry);
-        let child = crate::sandbox::child::spawn_sandboxed(cmd, policy)?;
-        if let Some(k) = key {
-            k.deliver();
-        }
-        Ok(child)
+        // Held across the spawn so the fd number named in the env stays ours;
+        // dropped (closing the parent's read end) once the child has it.
+        let _armed = unix::arm(&mut cmd, entry);
+        crate::sandbox::child::spawn_sandboxed(cmd, policy)
     }
     #[cfg(not(unix))]
     {
@@ -38,14 +40,15 @@ pub(super) fn spawn(
 #[cfg(unix)]
 mod unix {
     use mur_common::agent::McpServerEntry;
-    use mur_common::browser_state_key::{FD_ENV, keychain_ref, wants_state_key};
+    use mur_common::browser_state_key::{FD_ENV, is_installed_cli, keychain_ref, wants_state_key};
+    use std::path::Path;
     use std::process::Command;
 
-    /// The write end, kept by the parent until the child has been spawned.
-    pub(super) struct PendingKey {
-        write: std::os::fd::OwnedFd,
+    /// The read end, already loaded with the key, kept open by the parent
+    /// until the child has been spawned. There is no write end left to hold.
+    pub(super) struct ArmedKey {
+        #[cfg_attr(not(test), allow(dead_code))]
         read: std::os::fd::OwnedFd,
-        value: secrecy::SecretString,
     }
 
     /// Arm `cmd` with the key when `entry` needs it and it was cached pre-seal.
@@ -53,12 +56,29 @@ mod unix {
     /// what an unsandboxed child (or a key that was never cached) did before.
     /// Every child loses an inherited [`FD_ENV`] first: only the fd armed
     /// here may be named, never one from whoever launched the runtime.
-    pub(super) fn arm(cmd: &mut Command, entry: &McpServerEntry) -> Option<PendingKey> {
+    pub(super) fn arm(cmd: &mut Command, entry: &McpServerEntry) -> Option<ArmedKey> {
         cmd.env_remove(FD_ENV);
         if !wants_state_key(&entry.args) {
             return None;
         }
+        let install_dir = mur_common::mcp_first_party::current_install_dir();
+        if !trusted(Path::new(cmd.get_program()), install_dir.as_deref()) {
+            tracing::warn!(
+                server = %entry.name,
+                program = %Path::new(cmd.get_program()).display(),
+                install_dir = ?install_dir,
+                "not handing the browser state key: this live-browser entry does not run \
+                 the mur CLI from MUR's install dir"
+            );
+            return None;
+        }
         arm_with(cmd, entry, keychain_ref().resolve_preseal_cached())
+    }
+
+    /// The file the spawn execs (already resolved by the caller) must be the
+    /// installed `mur` CLI. An argv shaped like a live browser is not proof.
+    fn trusted(program: &Path, install_dir: Option<&Path>) -> bool {
+        install_dir.is_some_and(|dir| is_installed_cli(program, dir))
     }
 
     /// [`arm`] with the cached value passed in, so tests need not touch the
@@ -67,7 +87,9 @@ mod unix {
         cmd: &mut Command,
         entry: &McpServerEntry,
         value: Option<secrecy::SecretString>,
-    ) -> Option<PendingKey> {
+    ) -> Option<ArmedKey> {
+        use secrecy::ExposeSecret;
+        use std::io::Write;
         use std::os::fd::{AsRawFd, OwnedFd};
         let Some(value) = value else {
             tracing::warn!(
@@ -84,6 +106,17 @@ mod unix {
                 return None;
             }
         };
+        // Write and close before the spawn (see the module doc). Newline-
+        // terminated so the reader stops without waiting for EOF.
+        let mut w = std::fs::File::from(write);
+        let wrote = w
+            .write_all(value.expose_secret().as_bytes())
+            .and_then(|()| w.write_all(b"\n"));
+        drop(w);
+        if let Err(e) = wrote {
+            tracing::warn!(server = %entry.name, error = %e, "could not load the state-key pipe");
+            return None;
+        }
         let fd = read.as_raw_fd();
         cmd.env(FD_ENV, fd.to_string());
         // SAFETY: async-signal-safe libc calls only, on an fd this process owns
@@ -98,21 +131,7 @@ mod unix {
                 Ok(())
             });
         }
-        Some(PendingKey { write, read, value })
-    }
-
-    impl PendingKey {
-        /// After the spawn: drop our read end and write the key. The key is far
-        /// below the pipe buffer, so the write never blocks on the child.
-        pub(super) fn deliver(self) {
-            use secrecy::ExposeSecret;
-            use std::io::Write;
-            drop(self.read);
-            let mut w = std::fs::File::from(self.write);
-            if let Err(e) = w.write_all(self.value.expose_secret().as_bytes()) {
-                tracing::warn!(error = %e, "could not hand the browser state key to its MCP child");
-            }
-        }
+        Some(ArmedKey { read })
     }
 
     #[cfg(test)]
@@ -164,9 +183,9 @@ mod unix {
                 .arg(format!("cat <&${FD_ENV}"))
                 .stdout(std::process::Stdio::piped());
             let value = secrecy::SecretString::from("AGE-SECRET-KEY-1TESTVALUE");
-            let pending = arm_with(&mut cmd, &entry, Some(value)).expect("armed");
+            let armed = arm_with(&mut cmd, &entry, Some(value)).expect("armed");
             let mut child = cmd.spawn().unwrap();
-            pending.deliver();
+            drop(armed);
             let mut out = String::new();
             child
                 .stdout
@@ -175,7 +194,7 @@ mod unix {
                 .read_to_string(&mut out)
                 .unwrap();
             assert!(child.wait().unwrap().success());
-            assert_eq!(out, "AGE-SECRET-KEY-1TESTVALUE");
+            assert_eq!(out, "AGE-SECRET-KEY-1TESTVALUE\n");
         }
 
         /// Both ends of the contract: the fd this side arms is one the
@@ -194,7 +213,7 @@ mod unix {
             };
             let mut cmd = Command::new("true");
             let value = secrecy::SecretString::from("AGE-SECRET-KEY-1CONTRACT");
-            let pending = arm_with(&mut cmd, &entry, Some(value)).expect("armed");
+            let armed = arm_with(&mut cmd, &entry, Some(value)).expect("armed");
             let named = cmd
                 .get_envs()
                 .find(|(k, _)| *k == FD_ENV)
@@ -202,21 +221,30 @@ mod unix {
                 .map(|v| v.to_string_lossy().into_owned())
                 .expect("fd env set");
             assert_eq!(FD_ENV, mur_browser::state::STATE_KEY_FD_ENV);
-            // Take the read end out of `pending` the way the child would hold
-            // it; `deliver` then writes the key and closes the write end.
-            let PendingKey { write, read, value } = pending;
-            let read_fd = read.into_raw_fd();
+            // Hand the read end over the way the child would hold it. The key
+            // is already in the pipe and no write end remains anywhere.
+            let read_fd = armed.read.into_raw_fd();
             assert_eq!(named, read_fd.to_string());
-            PendingKey {
-                write,
-                read: std::fs::File::open("/dev/null").unwrap().into(),
-                value,
-            }
-            .deliver();
             assert_eq!(
                 mur_browser::state::read_handed_fd(&named).unwrap(),
                 "AGE-SECRET-KEY-1CONTRACT"
             );
+        }
+
+        /// Item 1 of the #2369 review: a matching argv run by anything but
+        /// the installed `mur` CLI is never handed the key.
+        #[test]
+        fn only_the_installed_cli_is_trusted() {
+            let dir = tempfile::tempdir().unwrap();
+            let install = dir.path().canonicalize().unwrap();
+            let mur = install.join("mur");
+            std::fs::write(&mur, "").unwrap();
+            assert!(trusted(&mur, Some(&install)));
+            let addon = install.join("some-addon");
+            std::fs::write(&addon, "").unwrap();
+            assert!(!trusted(&addon, Some(&install)));
+            // No install dir resolved: refuse rather than guess.
+            assert!(!trusted(&mur, None));
         }
 
         #[test]

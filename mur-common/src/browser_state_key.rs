@@ -14,7 +14,9 @@
 //! The Keychain coordinates and the env name are duplicated in `mur-browser`
 //! (which does not depend on this crate); a `mur-core` test pins them equal.
 
+use crate::mcp_first_party::MUR_CLI_NAMES;
 use crate::secret::SecretRef;
+use std::path::Path;
 
 /// Keychain service holding the key. Same service as every agent secret.
 pub const KEYCHAIN_SERVICE: &str = "mur-agent";
@@ -41,10 +43,14 @@ pub fn keychain_ref() -> SecretRef {
 /// before sealing: adding `--profile` to an existing live entry is a hot edit
 /// (`mur-core` `live_effect`), so the next browser may need a key the agent
 /// did not need when it started — and after the seal it can no longer read it.
+///
+/// `browser record` must be the first two args, exactly as
+/// `mur agent browser live` writes them — not merely appear somewhere, where
+/// any server's argv could carry it as a value. The argv alone is still not
+/// enough to be handed the key: see [`is_installed_cli`].
 pub fn is_live_browser(args: &[String]) -> bool {
-    let is_record = args
-        .windows(2)
-        .any(|w| w[0] == "browser" && w[1] == "record");
+    let is_record =
+        args.first().is_some_and(|a| a == "browser") && args.get(1).is_some_and(|a| a == "record");
     let is_live = args.windows(2).any(|w| w[0] == "--mode" && w[1] == "live")
         || args.iter().any(|a| a == "--mode=live");
     is_record && is_live
@@ -59,6 +65,22 @@ pub fn wants_state_key(args: &[String]) -> bool {
         && args
             .iter()
             .any(|a| a == "--profile" || a.starts_with("--profile="))
+}
+
+/// Whether `program` — the file the spawn will exec, already resolved — is
+/// the `mur` CLI installed in `install_dir`, the directory MUR's own binaries
+/// live in. Only then is the key handed over (#2369 review): an argv shaped
+/// like a live browser proves nothing about the binary that receives it.
+/// Same trust anchor as the first-party re-pin (`mcp_first_party`): the exact
+/// CLI name, judged on the canonical file, in the canonical install dir.
+pub fn is_installed_cli(program: &Path, install_dir: &Path) -> bool {
+    let Ok(file) = program.canonicalize() else {
+        return false;
+    };
+    file.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| MUR_CLI_NAMES.contains(&n))
+        && file.parent() == Some(install_dir)
 }
 
 #[cfg(test)]
@@ -109,6 +131,19 @@ mod tests {
         assert!(!is_live_browser(&v(&[
             "browser", "record", "--mode", "test"
         ])));
+        // `browser record` buried in another server's argv is not a browser.
+        assert!(!is_live_browser(&v(&[
+            "serve", "--note", "browser", "record", "--mode", "live"
+        ])));
+        assert!(!wants_state_key(&v(&[
+            "x",
+            "browser",
+            "record",
+            "--mode",
+            "live",
+            "--profile",
+            "g"
+        ])));
         // Any other server that happens to take a --profile flag.
         assert!(!wants_state_key(&v(&[
             "serve",
@@ -117,5 +152,33 @@ mod tests {
             "--profile",
             "x"
         ])));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_the_mur_cli_in_the_install_dir_is_trusted() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().canonicalize().unwrap();
+        let mur = install.join("mur");
+        std::fs::write(&mur, "").unwrap();
+        assert!(is_installed_cli(&mur, &install));
+        // Right name, wrong directory.
+        let other = tempfile::tempdir().unwrap();
+        let stray = other.path().join("mur");
+        std::fs::write(&stray, "").unwrap();
+        assert!(!is_installed_cli(&stray, &install));
+        // Right directory, a sibling that is not the CLI.
+        let sib = install.join("mur-mcp-server");
+        std::fs::write(&sib, "").unwrap();
+        assert!(!is_installed_cli(&sib, &install));
+        // A `mur` symlink to a stranger is judged by the file it names.
+        let evil = install.join("evil");
+        std::fs::write(&evil, "").unwrap();
+        let link_dir = tempfile::tempdir().unwrap();
+        let link = link_dir.path().join("mur");
+        std::os::unix::fs::symlink(&evil, &link).unwrap();
+        assert!(!is_installed_cli(&link, &install));
+        // An unresolved bare name never passes.
+        assert!(!is_installed_cli(Path::new("mur"), &install));
     }
 }

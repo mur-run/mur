@@ -60,6 +60,16 @@ fn handed_or(
     }
 }
 
+/// Take the handed key now, closing its fd, before this process spawns
+/// anything (#2369 review). The runtime clears close-on-exec on that fd so
+/// this process can inherit it, which also means every child spawned while
+/// it is still open inherits it too — `record` runs `<shell> --version`
+/// before it ever needs the key. Idempotent: the same `OnceLock` as the
+/// lazy path, so there is never a second reader or a second close.
+pub fn prime_handed_key() {
+    let _ = handed_key();
+}
+
 /// Read the key from the fd named by [`STATE_KEY_FD_ENV`] — the reader half
 /// of the runtime's handover (`mur_common::browser_state_key`).
 ///
@@ -67,8 +77,14 @@ fn handed_or(
 /// could point at any fd this process holds. So stdio is refused, and the fd
 /// is inspected through a duplicate before anything is taken — only a pipe is
 /// consumed (and closed); anything else is left exactly as it was.
+/// Upper bound on a handed key. An age identity is ~74 bytes; anything this
+/// long is not one, and the bound keeps a misbehaving writer from growing us.
+#[cfg(unix)]
+const MAX_HANDED_KEY: u64 = 4096;
+
 #[cfg(unix)]
 pub fn read_handed_fd(raw: &str) -> Result<String> {
+    use std::io::BufRead;
     use std::os::fd::{BorrowedFd, FromRawFd};
     use std::os::unix::fs::FileTypeExt;
     let fd: i32 = raw.trim().parse().context("not an fd number")?;
@@ -92,9 +108,16 @@ pub fn read_handed_fd(raw: &str) -> Result<String> {
     // SAFETY: the runtime opened this pipe for us alone and nothing else in
     // this process refers to it; the OnceLock in `handed_key` makes this the
     // only take.
-    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    // Up to the newline the runtime ends the key with, not to EOF: a write
+    // end held by some other process must not be able to stall startup.
     let mut key = String::new();
-    file.read_to_string(&mut key).context("read handed key")?;
+    std::io::BufReader::new(file.take(MAX_HANDED_KEY))
+        .read_line(&mut key)
+        .context("read handed key")?;
+    if !key.ends_with('\n') && key.len() as u64 >= MAX_HANDED_KEY {
+        bail!("handed key exceeds {MAX_HANDED_KEY} bytes");
+    }
     let key = key.trim().to_owned();
     if key.is_empty() {
         bail!("handed key is empty");
@@ -247,10 +270,59 @@ mod tests {
 
         #[test]
         fn a_closed_fd_is_refused() {
-            let (r, _w) = std::io::pipe().unwrap();
-            let fd = r.as_raw_fd();
-            drop(r);
+            // An fd at the soft limit can never be open, so no other test
+            // thread's pipe can be sitting on this number (#2369 review).
+            let mut lim = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) }, 0);
+            let fd = i32::try_from(lim.rlim_cur).unwrap_or(i32::MAX);
             assert!(read_handed_fd(&fd.to_string()).is_err());
+        }
+
+        /// The key arrives newline-terminated while some write end is still
+        /// open elsewhere: the read must not wait for an EOF that never comes.
+        #[test]
+        fn the_read_stops_at_the_newline() {
+            let (r, mut w) = std::io::pipe().unwrap();
+            w.write_all(b"AGE-SECRET-KEY-1TEST\n").unwrap();
+            let fd = r.into_raw_fd();
+            assert_eq!(
+                read_handed_fd(&fd.to_string()).unwrap(),
+                "AGE-SECRET-KEY-1TEST"
+            );
+            drop(w);
+        }
+
+        /// Item 2 of the #2369 review: the handed fd arrives without
+        /// close-on-exec, so until it is read every child inherits it. After
+        /// the read it is closed, and a child spawned then sees nothing.
+        #[test]
+        fn a_child_spawned_after_the_read_does_not_inherit_the_fd() {
+            let (r, mut w) = std::io::pipe().unwrap();
+            w.write_all(b"AGE-SECRET-KEY-1TEST\n").unwrap();
+            drop(w);
+            let fd = r.into_raw_fd();
+            // As the runtime hands it over: inheritable.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            assert!(flags >= 0);
+            assert_eq!(
+                unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) },
+                0
+            );
+            let probe = format!("test -e /dev/fd/{fd}");
+            let sees = || {
+                std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&probe)
+                    .status()
+                    .unwrap()
+                    .success()
+            };
+            assert!(sees(), "control: an unread handed fd is inherited");
+            read_handed_fd(&fd.to_string()).unwrap();
+            assert!(!sees(), "the fd outlived the read");
         }
 
         /// A stale env value naming some unrelated fd must not close it.
