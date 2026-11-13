@@ -143,6 +143,7 @@ pub(super) fn docked_rows(
         let h = crate::cmd::agent::cli::ssh_card::render::height(
             card,
             app.theme,
+            app.width,
             total_h,
             avail,
             PANEL_MAX_PCT,

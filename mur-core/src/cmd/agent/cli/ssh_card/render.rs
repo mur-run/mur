@@ -198,11 +198,51 @@ fn summary_lines(c: &CardState, t: &'static Theme, out: &mut Vec<Line<'static>>)
     }
 }
 
-/// Rows the card takes: its lines, two borders, one hint row, capped at the
-/// approval panel's share of the screen and at what is available.
-pub fn height(c: &CardState, theme: &'static Theme, total_h: u16, avail: u16, pct: u16) -> u16 {
-    let want = lines(c, theme).len() as u16 + 3;
-    want.min(total_h * pct / 100).min(avail)
+/// Columns inside the card's borders on a `width`-column screen.
+pub fn inner_width(width: u16) -> u16 {
+    width.saturating_sub(2).max(1)
+}
+
+/// Rows `line` takes once wrapped at `width` columns, exactly as `draw`
+/// paints it.
+fn rows(line: &Line<'static>, width: u16) -> u16 {
+    use ratatui::widgets::{Paragraph, Wrap};
+    let n = Paragraph::new(line.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(width.max(1));
+    u16::try_from(n).unwrap_or(u16::MAX).max(1)
+}
+
+/// The lines that fit in `body_h` wrapped rows at `width`, dropping from the
+/// top: the newest step content, the consent box and the note saying why
+/// Approve is unavailable, sit at the bottom and must stay visible.
+pub fn fit(mut body: Vec<Line<'static>>, width: u16, body_h: u16) -> Vec<Line<'static>> {
+    let mut used: u32 = body.iter().map(|l| u32::from(rows(l, width))).sum();
+    let mut drop = 0;
+    while used > u32::from(body_h) && drop < body.len() {
+        used -= u32::from(rows(&body[drop], width));
+        drop += 1;
+    }
+    body.drain(..drop);
+    body
+}
+
+/// Rows the card takes: its wrapped lines at `width` screen columns, two
+/// borders, one hint row, capped at the approval panel's share of the screen
+/// and at what is available.
+pub fn height(
+    c: &CardState,
+    theme: &'static Theme,
+    width: u16,
+    total_h: u16,
+    avail: u16,
+    pct: u16,
+) -> u16 {
+    let w = inner_width(width);
+    let body: u16 = lines(c, theme)
+        .iter()
+        .fold(0u16, |acc, l| acc.saturating_add(rows(l, w)));
+    body.saturating_add(3).min(total_h * pct / 100).min(avail)
 }
 
 /// Draw the card into `area`.
@@ -223,11 +263,7 @@ pub fn draw(
     let inner = block.inner(area);
     f.render_widget(block, area);
     let body_h = inner.height.saturating_sub(1);
-    let mut body = lines(c, theme);
-    // Keep the newest step content visible when the screen is short.
-    if body.len() as u16 > body_h {
-        body.drain(..body.len() - usize::from(body_h));
-    }
+    let body = fit(lines(c, theme), inner.width, body_h);
     f.render_widget(
         Paragraph::new(body).wrap(Wrap { trim: false }),
         ratatui::layout::Rect {

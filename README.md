@@ -637,6 +637,12 @@ Agent** wizard offers the same catalog as a source.
   detection covers only the socket the proxy uses. Commit signing (SSHSIG),
   `ssh -A`, and `ssh-add -h` keys are not supported. For git, HTTPS via
   `gh auth setup-git` is still the simpler path.
+  In `mur agent cli`, `/ssh <host[:port]> [user]` does the same in a card:
+  pick (or `ssh-add`) a key, compare the scanned host key against your own
+  `known_hosts` — a changed key is refused until you paste the fingerprint —
+  and Approve writes the grant and restarts the agent once. When the agent
+  calls `ssh_request` the card opens by itself and resumes its work after;
+  bare `/ssh` lists the grants and the requests still waiting.
 - **Grant a host when it is blocked** — when the browser is refused a host, the
   chat shows *this time* / *always* / *no* choices after the turn. *This time*
   lets it through until the agent restarts and writes nothing; *always* shows

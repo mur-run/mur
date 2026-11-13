@@ -734,10 +734,12 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
             //   empty/whitespace → try the clipboard image (covers raw paste)
             //   otherwise        → ordinary text paste
             let trimmed = text.trim();
-            if let Some(card) = app.ssh.card.as_mut()
-                && card.step == ssh_card::state::Step::Host
-            {
-                card.paste(trimmed);
+            if let Some(card) = app.ssh.card.as_mut() {
+                // The composer is hidden behind an open card: a paste on any
+                // other step must not land there unseen.
+                if card.step == ssh_card::state::Step::Host {
+                    card.paste(trimmed);
+                }
                 return;
             }
             if let Some((mime, b64)) = paste::image_from_paste(trimmed) {

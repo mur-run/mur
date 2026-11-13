@@ -13,6 +13,8 @@ use std::path::Path;
 use chrono::Utc;
 use mur_ssh_request::RequestHost;
 use mur_ssh_request::{PendingRequest, read_pending};
+
+use crate::cmd::agent::ssh::status::{PairState, RequestStatus};
 use tokio::sync::mpsc;
 
 use super::app::{App, HandoverRequest};
@@ -72,7 +74,7 @@ pub fn command(app: &mut App, args: &[String], tx: &mpsc::Sender<StreamMsg>) {
     match args {
         [] => list(app, tx),
         [n] if n.parse::<usize>().is_ok() => {
-            let pending = read_pending(&agent_home(app), Utc::now());
+            let pending: Vec<_> = open_requests(app).into_iter().map(|o| o.request).collect();
             match n
                 .parse::<usize>()
                 .ok()
@@ -96,6 +98,15 @@ pub fn command(app: &mut App, args: &[String], tx: &mpsc::Sender<StreamMsg>) {
 }
 
 fn split_port(s: &str) -> (&str, Option<u16>) {
+    // `[v6]:port`: the brackets are what make the port unambiguous.
+    if s.starts_with('[')
+        && let Some((h, p)) = s.rsplit_once("]:")
+    {
+        return match p.parse() {
+            Ok(n) => (&s[..=h.len()], Some(n)),
+            Err(_) => (s, None),
+        };
+    }
     match s.rsplit_once(':') {
         Some((h, p)) if !h.contains(':') => match p.parse() {
             Ok(n) => (h, Some(n)),
@@ -105,13 +116,67 @@ fn split_port(s: &str) -> (&str, Option<u16>) {
     }
 }
 
-/// Bare `/ssh`: the grants, their status, and numbered pending requests. A
-/// single pending request opens straight away.
-fn list(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
-    let pending = read_pending(&agent_home(app), Utc::now());
-    if pending.len() == 1 {
-        return open(app, Origin::Pending(pending[0].clone()), tx);
+/// A pending request that is still open, and whether its host already has a
+/// live grant (approved or signed) so the card has nothing left to do.
+#[derive(Debug, Clone)]
+pub struct OpenRequest {
+    pub request: PendingRequest,
+    pub granted: bool,
+}
+
+/// The pending requests a signing mark has not cleared yet. A cleared one is
+/// removed on the way (spec: "a signing mark ... remove[s] through it"). With
+/// no readable profile there are no grants, so every request stays open.
+fn open_requests(app: &App) -> Vec<OpenRequest> {
+    let home = agent_home(app);
+    let Ok((_, p)) = crate::cmd::agent::load_profile_for_edit(&app.agent) else {
+        return read_pending(&home, Utc::now())
+            .into_iter()
+            .map(|request| OpenRequest {
+                request,
+                granted: false,
+            })
+            .collect();
+    };
+    let st = crate::cmd::agent::ssh::status::status(&app.home, &app.agent, &p.entitlements.ssh);
+    still_open(&home, &st.pairs, st.requests)
+}
+
+fn still_open(
+    agent_home: &Path,
+    pairs: &[crate::cmd::agent::ssh::status::PairStatus],
+    requests: Vec<RequestStatus>,
+) -> Vec<OpenRequest> {
+    let mut out = Vec::new();
+    for r in requests {
+        if r.cleared(pairs) {
+            if let Err(e) = mur_ssh_request::remove(agent_home, &r.request) {
+                tracing::debug!("ssh request cleanup: {e}");
+            }
+            continue;
+        }
+        let granted = r
+            .pairs
+            .iter()
+            .any(|&i| !matches!(pairs[i].state, PairState::NotApproved));
+        out.push(OpenRequest {
+            request: r.request,
+            granted,
+        });
     }
+    out
+}
+
+/// Bare `/ssh`: the grants, their status, and numbered pending requests. A
+/// single open request for a host with no live grant opens straight away.
+fn list(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
+    let open_reqs = open_requests(app);
+    if let [only] = open_reqs.as_slice()
+        && !only.granted
+    {
+        return open(app, Origin::Pending(only.request.clone()), tx);
+    }
+    let pending: Vec<_> = open_reqs.into_iter().map(|o| o.request).collect();
     let mut out = match crate::cmd::agent::load_profile_for_edit(&app.agent) {
         Ok((_, p)) => {
             let ssh = &p.entitlements.ssh;
@@ -135,7 +200,11 @@ fn list(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 /// On attach: say there are pending requests, without opening a card or
 /// scanning anything (the scan runs only when a card opens).
 pub fn attach_notice(app: &mut App) {
-    let pending = read_pending(&agent_home(app), Utc::now());
+    let pending: Vec<_> = open_requests(app)
+        .into_iter()
+        .filter(|o| !o.granted)
+        .map(|o| o.request)
+        .collect();
     if !pending.is_empty() {
         app.push_system(pending_list(&pending).trim_end().to_string());
     }
@@ -177,9 +246,12 @@ pub fn on_tool_result(app: &mut App, args: &serde_json::Value, tx: &mpsc::Sender
     let Ok(target) = RequestHost::parse(host, port) else {
         return;
     };
-    let pending = read_pending(&agent_home(app), Utc::now());
-    let Some(r) = pending.into_iter().find(|r| r.target == target) else {
-        // Already allowed: the tool answered with the live state.
+    let Some(r) = open_requests(app)
+        .into_iter()
+        .find(|o| o.request.target == target && !o.granted)
+        .map(|o| o.request)
+    else {
+        // Already allowed (or cleared): the tool answered with the live state.
         return;
     };
     let origin = Origin::Tool {
@@ -242,7 +314,9 @@ fn build(
 /// keys the ssh-agent holds. The card moves on to the host step only if the
 /// chosen key is now loaded; a failed `ssh-add` leaves it on the key step.
 pub fn after_handover(app: &mut App) {
-    if let Some(card) = app.ssh.card.as_mut() {
+    // Only the card's own `ssh-add` changes what the ssh-agent holds; any
+    // other handover would re-run `ssh-add -L` on the UI thread for nothing.
+    if let Some(card) = app.ssh.card.as_mut().filter(|c| c.loading) {
         let (loaded, unloaded) = split_keys(&System);
         card.refresh_keys(loaded, unloaded);
     }
