@@ -75,7 +75,7 @@ tempfile = "3"
 # defaults; it is now explicit because mur-agent-runtime gates `ort` behind its
 # off-by-default `tts` feature. `load-dynamic` keeps onnxruntime out of the
 # link (no static lib → no glibc-2.38 dependency).
-ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "copy-dylibs", "load-dynamic", "api-24"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "copy-dylibs", "load-dynamic", "api-24"] }
 whisper-rs = { version = "0.16", default-features = false }
 cpal = "0.16"
 hound = "3"
