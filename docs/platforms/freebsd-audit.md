@@ -284,6 +284,7 @@ The checker recomputes the same matches and fails for either missing or stale ro
 | `mur-core/src/cmd/agent/cli/notify.rs` | `` /// machines, in which case we fall back to `osascript`. `` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/agent/cli/panel.rs` | `#[cfg(target_os = "macos")]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/agent/cli/panel.rs` | `#[cfg(not(target_os = "macos"))]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
+| `mur-core/src/cmd/agent/cli/tests/browser_slash_live_tests.rs` | `if cfg!(not(unix)) {` | test-only | `portable` | Skips the live runtime test off Unix (readiness waits for a Unix socket); FreeBSD is Unix, so it runs there. | #2397 |
 | `mur-core/src/cmd/agent/hub.rs` | `#[cfg(target_os = "macos")]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/agent/hub.rs` | `#[cfg(not(target_os = "macos"))]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/agent/lifecycle/create.rs` | `let canonical = bin_dir.join(if cfg!(windows) {` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
