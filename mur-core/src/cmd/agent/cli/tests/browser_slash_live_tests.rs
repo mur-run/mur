@@ -42,13 +42,16 @@ use super::super::stream::STREAM_CHANNEL_CAP;
 use super::super::*;
 
 fn locate_runtime_binary() -> Option<PathBuf> {
-    // `current_exe()` for a lib-unit-test binary is
-    // `target/debug/deps/mur_core-<hash>`; the runtime binary is a sibling
-    // one level up, at `target/debug/mur-agent-runtime`.
+    // The runtime binary is at `target/debug/mur-agent-runtime`. The test
+    // binary sits at `target/debug/deps/mur_core-<hash>` before Cargo 1.100
+    // and `target/debug/build/mur-core/<hash>/out/...` since, so walk up
+    // rather than assume a fixed depth.
     let exe = std::env::current_exe().ok()?;
-    let debug_dir = exe.parent()?.parent()?; // deps/ -> debug/
-    let candidate = debug_dir.join("mur-agent-runtime");
-    candidate.exists().then_some(candidate)
+    let name = format!("mur-agent-runtime{}", std::env::consts::EXE_SUFFIX);
+    exe.ancestors()
+        .skip(1)
+        .map(|dir| dir.join(&name))
+        .find(|p| p.is_file())
 }
 
 struct RuntimeGuard {
@@ -219,6 +222,14 @@ fn drain_turn(rx: &mut mpsc::Receiver<StreamMsg>, timeout: Duration) -> Result<S
 
 #[test]
 fn browser_add_then_mode_arg_reaches_a_live_agent_as_a_turn() {
+    // The readiness probe waits for `agent.sock` to appear as a file, which is
+    // the Unix-socket transport. Before `locate_runtime_binary` learned the
+    // `.exe` suffix this test silently skipped on Windows; keep it that way
+    // explicitly rather than run a Unix-only probe there.
+    if cfg!(not(unix)) {
+        eprintln!("(skipping — live runtime probe is Unix-socket only)");
+        return;
+    }
     let Some(runtime_bin) = locate_runtime_binary() else {
         eprintln!("(skipping — mur-agent-runtime binary not present in target dir)");
         return;
