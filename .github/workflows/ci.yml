@@ -580,7 +580,9 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     env:
-      RUSTUP_TOOLCHAIN: stable
+      # Pinned until #2392. Must match the dtolnay/rust-toolchain pin: this env var overrides
+      # `rustup default`, so leaving it at `stable` silently un-pins this job.
+      RUSTUP_TOOLCHAIN: 1.99.1
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.99.1
