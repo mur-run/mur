@@ -134,10 +134,13 @@ jobs:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
-    # hung build ≠ 6h default. Warm-cache runs are well under 60; 75 leaves
-    # room for a cold cache (new runner image / cache-key change), where the
-    # macOS nextest step alone takes ~51 min.
-    timeout-minutes: 75
+    # hung build ≠ 6h default. Warm-cache runs take 40-55 min. A cold cache
+    # (new runner image, or a rustc bump, since rustc is in the rust-cache
+    # key) took 74 min in the macOS nextest step alone on the 1.99.1 → 1.100
+    # bump. A timed-out job skips rust-cache's post step, so the cache is never
+    # saved and every later run is cold again. 120 lets one cold run finish
+    # and save the cache.
+    timeout-minutes: 120
     env:
       # Must match AST_GREP_PINNED_VERSION (checked in the install step). Job
       # level so the zip cache key and the install step read one value.
