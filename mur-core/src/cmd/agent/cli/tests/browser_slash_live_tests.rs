@@ -28,11 +28,11 @@
 //! documented no-op env var below anyway, since it is harmless.
 //!
 //! The runtime binary must be present alongside the `mur` lib's test binary
-//! (built by the same `cargo build -p mur-agent-runtime`, checked via
-//! `current_exe()`'s `target/debug` ancestor); if absent, the test skips
+//! (built by the same `cargo build -p mur-agent-runtime`, found by a bounded
+//! walk up from `current_exe()` to `target/<profile>/`); if absent, the test skips
 //! rather than failing CI environments that only build the CLI.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
@@ -41,17 +41,107 @@ use mur_common::agent::AgentProfile;
 use super::super::stream::STREAM_CHANNEL_CAP;
 use super::super::*;
 
+const RUNTIME_BIN_NAME: &str = "mur-agent-runtime";
+/// How far above the test executable `target/<profile>/` can sit. Two levels
+/// before Cargo 1.100 (`<profile>/deps/<test>`); the build-dir layout nests
+/// the test deeper (`<profile>/build/<pkg>/<hash>/deps/<test>`). Same bound as
+/// `mur-daemon/tests/cross_router_dispatch_e2e.rs`'s `find_profile_bin`.
+const PROFILE_DIR_MAX_DEPTH: usize = 6;
+
 fn locate_runtime_binary() -> Option<PathBuf> {
-    // The runtime binary is at `target/debug/mur-agent-runtime`. The test
-    // binary sits at `target/debug/deps/mur_core-<hash>` before Cargo 1.100
-    // and `target/debug/build/mur-core/<hash>/out/...` since, so walk up
-    // rather than assume a fixed depth.
-    let exe = std::env::current_exe().ok()?;
-    let name = format!("mur-agent-runtime{}", std::env::consts::EXE_SUFFIX);
-    exe.ancestors()
+    find_profile_bin(&std::env::current_exe().ok()?, RUNTIME_BIN_NAME)
+}
+
+/// Walk up from the test executable to the first ancestor holding `name`,
+/// rather than assume a fixed depth (which broke on Cargo 1.100's build-dir
+/// layout). Bounded so a stray `mur-agent-runtime` high above the target dir
+/// — `~/`, `/usr/local/` — is never picked up as the one this build produced.
+fn find_profile_bin(test_exe: &Path, name: &str) -> Option<PathBuf> {
+    let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    test_exe
+        .ancestors()
         .skip(1)
-        .map(|dir| dir.join(&name))
+        .take(PROFILE_DIR_MAX_DEPTH)
+        .map(|dir| dir.join(&file))
         .find(|p| p.is_file())
+}
+
+mod find_profile_bin_tests {
+    use super::*;
+
+    fn layout(test_rel: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let profile = root.path().join("target").join("debug");
+        let bin = profile.join(format!(
+            "{RUNTIME_BIN_NAME}{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(&bin, b"").unwrap();
+        let exe = profile.join(test_rel);
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        (root, exe, bin)
+    }
+
+    #[test]
+    fn finds_runtime_from_the_pre_1_100_deps_layout() {
+        let (_root, exe, bin) = layout("deps/mur_core-0123456789abcdef");
+        assert_eq!(find_profile_bin(&exe, RUNTIME_BIN_NAME), Some(bin));
+    }
+
+    #[test]
+    fn finds_runtime_from_the_1_100_build_dir_layout() {
+        let (_root, exe, bin) = layout("build/mur-core/0123456789abcdef/deps/mur_core-0123");
+        assert_eq!(find_profile_bin(&exe, RUNTIME_BIN_NAME), Some(bin));
+    }
+
+    /// Put the runtime in `dir` and the test executable `levels` directories
+    /// below it, so the runtime is the `levels + 1`th ancestor the walk visits.
+    fn runtime_above(dir: &Path, levels: usize) -> (PathBuf, PathBuf) {
+        let bin = dir.join(format!(
+            "{RUNTIME_BIN_NAME}{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        std::fs::write(&bin, b"").unwrap();
+        let mut exe = dir.to_path_buf();
+        for i in 0..levels {
+            exe.push(format!("d{i}"));
+        }
+        std::fs::create_dir_all(&exe).unwrap();
+        exe.push("test");
+        std::fs::write(&exe, b"").unwrap();
+        (exe, bin)
+    }
+
+    #[test]
+    fn a_runtime_exactly_at_the_depth_bound_is_found() {
+        let root = tempfile::tempdir().unwrap();
+        let (exe, bin) = runtime_above(root.path(), PROFILE_DIR_MAX_DEPTH - 1);
+        assert_eq!(find_profile_bin(&exe, RUNTIME_BIN_NAME), Some(bin));
+    }
+
+    #[test]
+    fn a_runtime_one_past_the_depth_bound_is_ignored() {
+        // Every directory the bounded walk visits sits inside `root`, so a
+        // stray runtime in the system temp dir cannot satisfy it.
+        let root = tempfile::tempdir().unwrap();
+        let (exe, _bin) = runtime_above(root.path(), PROFILE_DIR_MAX_DEPTH);
+        assert_eq!(find_profile_bin(&exe, RUNTIME_BIN_NAME), None);
+    }
+
+    #[test]
+    fn a_directory_named_like_the_runtime_is_not_the_runtime() {
+        // The `pad` level keeps all six visited ancestors inside `root`,
+        // never the shared system temp dir above it.
+        let root = tempfile::tempdir().unwrap();
+        let exe = root
+            .path()
+            .join("pad/build/mur-agent-runtime/0123456789abcdef/deps/t");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        assert_eq!(find_profile_bin(&exe, RUNTIME_BIN_NAME), None);
+    }
 }
 
 struct RuntimeGuard {
