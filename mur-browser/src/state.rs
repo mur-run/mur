@@ -30,9 +30,9 @@ pub struct KeychainStateKeyStore;
 /// `mur_common::browser_state_key::FD_ENV`; a `mur-core` test pins them equal.
 pub const STATE_KEY_FD_ENV: &str = "MUR_BROWSER_STATE_KEY_FD";
 
-/// The key handed over on [`STATE_KEY_FD_ENV`], read to EOF once and kept for
-/// the process: startup decrypts with it and the exit write-back re-encrypts
-/// with it, long after the fd is gone.
+/// The key handed over on [`STATE_KEY_FD_ENV`], read once (up to its newline)
+/// and kept for the process: startup decrypts with it and the exit write-back
+/// re-encrypts with it, long after the fd is gone.
 fn handed_key() -> Option<&'static str> {
     static KEY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     KEY.get_or_init(|| {
@@ -60,6 +60,11 @@ fn handed_or(
     }
 }
 
+/// Upper bound on a handed key. An age identity is ~74 bytes; anything this
+/// long is not one, and the bound keeps a misbehaving writer from growing us.
+#[cfg(unix)]
+const MAX_HANDED_KEY: u64 = 4096;
+
 /// Take the handed key now, closing its fd, before this process spawns
 /// anything (#2369 review). The runtime clears close-on-exec on that fd so
 /// this process can inherit it, which also means every child spawned while
@@ -76,12 +81,9 @@ pub fn prime_handed_key() {
 /// The env value is not trusted to name our pipe: a stale or inherited value
 /// could point at any fd this process holds. So stdio is refused, and the fd
 /// is inspected through a duplicate before anything is taken — only a pipe is
-/// consumed (and closed); anything else is left exactly as it was.
-/// Upper bound on a handed key. An age identity is ~74 bytes; anything this
-/// long is not one, and the bound keeps a misbehaving writer from growing us.
-#[cfg(unix)]
-const MAX_HANDED_KEY: u64 = 4096;
-
+/// consumed (and closed); anything else is left exactly as it was. The key
+/// is read up to its terminating newline, never to EOF, so a stray holder of
+/// the write end cannot stall startup.
 #[cfg(unix)]
 pub fn read_handed_fd(raw: &str) -> Result<String> {
     use std::io::BufRead;
@@ -337,7 +339,7 @@ mod tests {
         }
 
         #[test]
-        fn a_pipe_is_read_to_eof_and_trimmed() {
+        fn a_pipe_key_is_trimmed() {
             let (r, mut w) = std::io::pipe().unwrap();
             w.write_all(b"AGE-SECRET-KEY-1TEST\n").unwrap();
             drop(w);
