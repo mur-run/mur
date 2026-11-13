@@ -589,16 +589,17 @@ jobs:
     if: github.event_name != 'pull_request' || needs.changes.outputs.e2e == 'true'
     runs-on: macos-latest
     timeout-minutes: 45
-    env:
-      # p1-export-gui.sh runs `rustup which cargo`, so rustc goes through the
-      # proxy and honours dependency rust-toolchain.toml files (atoi pins
-      # 1.57, quote/proc-macro2 want rust-src). Force the pinned toolchain.
-      RUSTUP_TOOLCHAIN: ${{ env.RUST_TOOLCHAIN }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Force pinned toolchain over dependency rust-toolchain.toml
+        # p1-export-gui.sh runs `rustup which cargo`, so rustc goes through the
+        # proxy and honours dependency rust-toolchain.toml files (atoi pins
+        # 1.57, quote/proc-macro2 want rust-src). Job-level `env:` cannot read
+        # the `env` context, hence GITHUB_ENV.
+        run: echo "RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN" >> "$GITHUB_ENV"
       - name: Expose runner image for cache key
         # ImageOS/ImageVersion are runner env vars, not part of the `env`
         # context, so `${{ env.ImageOS }}` expands to "" in a `with:` field.
