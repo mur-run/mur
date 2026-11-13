@@ -57,14 +57,19 @@ const POLL: Duration = Duration::from_millis(100);
 
 /// The fleet binary the daemon launches. `MUR_BIN` (what the daemon itself
 /// honours) wins; else the workspace's `target/<profile>/mur`, which
-/// `cargo nextest run --workspace` builds beside this test's `deps/`.
+/// `cargo nextest run --workspace` builds. The test binary's depth below the
+/// profile dir is Cargo-version specific (`deps/` before 1.100,
+/// `build/<pkg>/<hash>/out/` since), so walk up instead of counting levels.
 fn mur_bin() -> Option<PathBuf> {
     if let Some(v) = std::env::var_os("MUR_BIN") {
         return Some(PathBuf::from(v));
     }
     let exe = std::env::current_exe().ok()?;
-    let profile_dir = exe.parent()?.parent()?;
-    Some(profile_dir.join("mur")).filter(|p| p.is_file())
+    let name = format!("mur{}", std::env::consts::EXE_SUFFIX);
+    exe.ancestors()
+        .skip(1)
+        .map(|dir| dir.join(&name))
+        .find(|p| p.is_file())
 }
 
 fn require_sandbox() -> bool {
