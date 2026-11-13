@@ -217,6 +217,10 @@ async fn above_the_ceiling_asks_and_is_recorded_as_enforced() {
     assert_eq!(h["tier"], "network-egress");
     assert_eq!(h["ceiling"], "write");
     assert_eq!(h["rule"], "bash");
+    assert_eq!(
+        h["matched_head"], "git push",
+        "#2362: the record names what set the tier"
+    );
     assert_eq!(h["enforced"], true);
     assert_eq!(
         h[mur_common::telemetry::MUR_EVENT_TYPE],

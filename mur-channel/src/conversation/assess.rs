@@ -31,6 +31,10 @@ pub fn assess_locked(
     report
         .unverified
         .retain(|ev| !verifies_under_rotated_key(channel_id, keys, ev));
+    report.unverified_newer_kind.retain(|ev| {
+        !rotated_key(keys, ev.key_version)
+            .is_some_and(|pk| crate::sign::verify_newer_kind(channel_id, ev, &pk, true))
+    });
 
     // §7: REPAIRING before anything else under the lock.
     if report.repair_pending {
@@ -81,7 +85,7 @@ fn damage_table(report: DamageReport) -> Option<D> {
             lines: report.unparseable_lines,
         });
     }
-    if !report.unverified.is_empty() {
+    if !report.unverified.is_empty() || !report.unverified_newer_kind.is_empty() {
         return Some(D::Signature);
     }
     if !report.chain_breaks.is_empty() {

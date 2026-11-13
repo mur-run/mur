@@ -16,17 +16,28 @@
 //! accepts; a cookie collision between them refuses the launch.
 
 use anyhow::{Context, Result};
-use mur_browser::{paths, state::KeychainStateKeyStore, state::read_state};
+use mur_browser::{abandon, paths, pending, state::KeychainStateKeyStore};
 use std::path::Path;
+use std::time::Instant;
 
-/// A decrypted storage-state file, removed on drop.
+/// A decrypted storage-state file, removed on drop, and what the session
+/// loaded from each profile (its write-back watermark and pending marker,
+/// [`mur_browser::pending`]).
 #[derive(Debug)]
-pub struct InjectedState(tempfile::NamedTempFile);
+pub struct InjectedState {
+    file: tempfile::NamedTempFile,
+    loaded: Vec<pending::Loaded>,
+}
 
 impl InjectedState {
     /// `--storage-state=<path>` for the launch.
     pub fn arg(&self) -> String {
-        format!("--storage-state={}", self.0.path().display())
+        format!("--storage-state={}", self.file.path().display())
+    }
+
+    /// Hand the loaded profiles to the write-back.
+    pub fn take_loaded(&mut self) -> Vec<pending::Loaded> {
+        std::mem::take(&mut self.loaded)
     }
 }
 
@@ -40,6 +51,7 @@ pub fn prepare(mur_home: &Path, sites: &[String]) -> Result<Option<InjectedState
         return Ok(None);
     }
     let mut states: Vec<Vec<u8>> = Vec::with_capacity(sites.len());
+    let mut loaded = Vec::with_capacity(sites.len());
     for site in sites {
         let path = paths::profile_state(mur_home, site);
         // Check for the file before touching the Keychain: a profile that was
@@ -52,12 +64,16 @@ pub fn prepare(mur_home: &Path, sites: &[String]) -> Result<Option<InjectedState
                 path.display()
             );
         }
-        states.push(read_state(&path, &KeychainStateKeyStore).with_context(|| {
-            format!(
-                "decrypt browser profile {site:?} for live mode ({}) — run `mur browser auth {site} --url <login url>` first",
-                path.display()
-            )
-        })?);
+        let deadline = Instant::now() + abandon::LOCK_WAIT;
+        let (one, state) = pending::load(mur_home, site, &KeychainStateKeyStore, deadline)
+            .with_context(|| {
+                format!(
+                    "decrypt browser profile {site:?} for live mode ({}) — run `mur browser auth {site} --url <login url>` first",
+                    path.display()
+                )
+            })?;
+        loaded.push(one);
+        states.push(state);
     }
     let parts: Vec<mur_browser::merge::Part<'_>> = sites
         .iter()
@@ -78,7 +94,7 @@ pub fn prepare(mur_home: &Path, sites: &[String]) -> Result<Option<InjectedState
         .tempfile()?;
     std::io::Write::write_all(&mut file, &merged)?;
     drop(merged);
-    Ok(Some(InjectedState(file)))
+    Ok(Some(InjectedState { file, loaded }))
 }
 
 /// Flags that already decide where the profile lives, so MUR must not add
@@ -115,6 +131,17 @@ pub fn args(state: Option<&InjectedState>, args_so_far: &[String]) -> Vec<String
 mod tests {
     use super::*;
 
+    /// The runtime (via `mur_common`) and the browser child (via `mur_browser`)
+    /// name the same Keychain item and the same handover env var; neither
+    /// crate depends on the other, so this is where a drift is caught (#2369).
+    #[test]
+    fn state_key_handover_constants_agree_across_crates() {
+        use mur_common::browser_state_key as rt;
+        assert_eq!(rt::KEYCHAIN_SERVICE, mur_browser::broker::KEYCHAIN_SERVICE);
+        assert_eq!(rt::KEYCHAIN_ACCOUNT, mur_browser::state::STATE_KEY_ACCOUNT);
+        assert_eq!(rt::FD_ENV, mur_browser::state::STATE_KEY_FD_ENV);
+    }
+
     #[test]
     fn no_profile_injects_nothing() {
         let home = tempfile::tempdir().unwrap();
@@ -134,7 +161,10 @@ mod tests {
     }
 
     fn fake_state() -> InjectedState {
-        InjectedState(tempfile::NamedTempFile::new().unwrap())
+        InjectedState {
+            file: tempfile::NamedTempFile::new().unwrap(),
+            loaded: Vec::new(),
+        }
     }
 
     fn s(v: &[&str]) -> Vec<String> {

@@ -13,6 +13,9 @@ use ratatui::widgets::{Block, Padding, Paragraph, Widget, Wrap};
 
 use super::super::app::{App, ChatMsg, Role};
 
+mod handover_flush;
+pub use handover_flush::flush_settled;
+
 #[cfg(test)]
 mod cjk_tail_tests;
 #[cfg(test)]
@@ -31,6 +34,9 @@ mod stack_tests;
 mod table_tail_tests;
 #[cfg(test)]
 mod tests;
+mod welcome_head;
+#[cfg(test)]
+mod welcome_head_tests;
 
 /// Rows left for the live transcript band inside `viewport_h` once the
 /// composer, status line, chooser band and fleet rail have taken theirs. The
@@ -514,6 +520,7 @@ pub fn flush_finished<B: Backend>(
         .map(|(n, m)| live_rows(app, start + n, m, if n == 0 { skip } else { 0 }, width))
         .collect();
     let mut total: u32 = rows.iter().map(|r| u32::from(*r)).sum();
+    welcome_head::flush(terminal, app, total, cap, width)?;
     let settled = settle_end(app);
     let mut end = start;
     // Flush until what remains fits, even when that leaves the band short. The
@@ -759,7 +766,7 @@ pub(super) fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     // The head message may be partially committed to scrollback already (a
     // streaming reply spills complete blocks); paint only what follows.
     let skip = effective_skip(app);
-    let mut lines: Vec<Line> = Vec::new();
+    let mut lines: Vec<Line> = welcome_head::lines(app, start < app.messages.len());
     for (n, m) in app.messages[start..].iter().enumerate() {
         lines.extend(message_block(
             app,
@@ -785,6 +792,7 @@ pub(super) fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let max_scroll = (win.total.min(u32::from(u16::MAX)) as u16).saturating_sub(visible);
     let output = Paragraph::new(Text::from(win.lines)).wrap(Wrap { trim: false });
 
+    let area = welcome_head::content_area(app, area, win.total);
     f.render_widget(output.block(block).scroll((win.scroll, 0)), area);
     if let Some(marker) = scroll_marker(max_scroll, app.scroll_back) {
         let row = Rect { height: 1, ..inner };

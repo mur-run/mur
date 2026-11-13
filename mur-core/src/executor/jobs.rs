@@ -163,21 +163,72 @@ pub async fn dispatch_parallel_jobs(
     yes: bool,
     cwd: &RunCwd,
 ) -> Result<Dispatched> {
+    dispatch_parallel_jobs_as(
+        mur_home,
+        jobs,
+        max_concurrency,
+        yes,
+        cwd,
+        DispatchAs::default(),
+    )
+    .await
+}
+
+/// Ids a caller minted before the run exists: a sealed agent hands them back
+/// as its handle, then the daemon's child runs under them (#2379).
+pub struct PresetIds {
+    pub run_id: String,
+    pub channel_id: String,
+}
+
+/// How [`dispatch_parallel_jobs_as`] differs from the plain dispatch.
+#[derive(Default)]
+pub struct DispatchAs {
+    /// `None` mints both ids, as [`dispatch_parallel_jobs`] always has.
+    pub ids: Option<PresetIds>,
+    /// What the write-grant gate does with an unanswered approval. The
+    /// default `Defer` suits a tool call (nobody can wait on it); the
+    /// daemon's child exists only to host the run, so it waits instead and
+    /// the run carries on under the handle the agent already has.
+    pub unanswered: Unanswered,
+}
+
+/// [`dispatch_parallel_jobs`] with [`DispatchAs`] options.
+pub async fn dispatch_parallel_jobs_as(
+    mur_home: &Path,
+    jobs: &[Job],
+    max_concurrency: Option<usize>,
+    yes: bool,
+    cwd: &RunCwd,
+    opts: DispatchAs,
+) -> Result<Dispatched> {
     authorize_targets(mur_home, jobs)?;
     let dir = cwd.resolve()?;
     let routing = routing_note(&dir, cwd.inferred);
     let proc = build_jobs_procedure(jobs, Some(&routing));
-    let channel_id = ChannelService::open(mur_home)?
-        .create_for_workflow("parallel-jobs")?
-        .id;
-    let run_id = format!("run-{}", uuid::Uuid::now_v7());
+    let svc = ChannelService::open(mur_home)?;
+    let (run_id, channel_id) = match opts.ids {
+        Some(p) => {
+            anyhow::ensure!(
+                crate::run_status::valid_run_id(&p.run_id),
+                "invalid run id {:?}",
+                p.run_id
+            );
+            let ch = svc.create_for_workflow_with_id("parallel-jobs", &p.channel_id)?;
+            (p.run_id, ch.id)
+        }
+        None => (
+            format!("run-{}", uuid::Uuid::now_v7()),
+            svc.create_for_workflow("parallel-jobs")?.id,
+        ),
+    };
     let ctx = GrantContext {
         mur_home,
         channel_id: &channel_id,
         run_id: &run_id,
         policy: GatePolicy {
             yes,
-            unanswered: Unanswered::Defer,
+            unanswered: opts.unanswered,
             auto_approve_tiers: vec![],
         },
         job_count: jobs.len(),

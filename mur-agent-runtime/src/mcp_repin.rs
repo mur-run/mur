@@ -102,6 +102,30 @@ pub fn repin_first_party(
     Ok(true)
 }
 
+/// The supervisor's boot-time re-pin: rewrites `profile.yaml` via
+/// [`repin_first_party`] and brings `live` — the profile the supervisor
+/// already loaded, which B0 rule 6 verifies — to the same pins.
+pub fn repin_first_party_at_boot(
+    agent_home: &Path,
+    bundled: Option<&Path>,
+    runtime_dir: &Path,
+    live: &mut mur_common::agent::AgentProfile,
+) -> anyhow::Result<bool> {
+    if !repin_first_party(agent_home, bundled, runtime_dir)? {
+        return Ok(false);
+    }
+    // Copy only the pins: `live` may carry in-memory overrides (`--model`,
+    // startup override) that the file does not, so it is not replaced whole.
+    let on_disk: mur_common::agent::AgentProfile =
+        serde_yaml_ng::from_str(&std::fs::read_to_string(agent_home.join("profile.yaml"))?)?;
+    for entry in &mut live.mcp_servers {
+        if let Some(fresh) = on_disk.mcp_servers.iter().find(|e| e.name == entry.name) {
+            entry.binary_sha256.clone_from(&fresh.binary_sha256);
+        }
+    }
+    Ok(true)
+}
+
 /// [`repin_first_party`] across every agent under `agents_dir`, for
 /// `mur update` (#1944): agents not restarted soon after an upgrade, and
 /// `mur agent status` / `mur doctor` in the meantime, should not see drift the
@@ -352,6 +376,40 @@ mod tests {
         assert_eq!(
             reload(dir.path()).mcp_servers[0].binary_sha256.as_deref(),
             Some(expected.as_str()),
+        );
+    }
+
+    /// The boot regression: the supervisor loads the profile, then re-pins on
+    /// disk, then rule 6 verifies the profile it loaded. If only the file
+    /// moved, the first start after every upgrade died with "changed since
+    /// install" and only the service manager's respawn recovered it.
+    ///
+    /// Uses a sibling, not the bundled shape: rule 6 resolves any command named
+    /// `mur-mcp-server` to the real `~/.mur/mcp-servers` copy, so a fixture by
+    /// that name would hash whatever this machine has installed.
+    #[test]
+    fn boot_repin_updates_the_profile_rule_6_verifies() {
+        use crate::hooks::b0::entry::{PinOutcome, verify_entry_pin};
+        let (dir, runtime_dir) = one_entry(|rt| {
+            sibling(rt, "mur-research-gateway", b"gateway v2")
+                .display()
+                .to_string()
+        });
+        let mut live = reload(dir.path());
+        assert!(
+            matches!(
+                verify_entry_pin(&live.mcp_servers[0], &live),
+                PinOutcome::HardFail(_)
+            ),
+            "fixture must start stale",
+        );
+
+        assert!(repin_first_party_at_boot(dir.path(), None, &runtime_dir, &mut live).unwrap());
+
+        let outcome = verify_entry_pin(&live.mcp_servers[0], &live);
+        assert!(
+            matches!(outcome, PinOutcome::Verified),
+            "rule 6 must pass on the in-memory profile after a boot re-pin, got {outcome:?}",
         );
     }
 

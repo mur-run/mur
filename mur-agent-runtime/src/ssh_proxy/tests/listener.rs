@@ -93,6 +93,7 @@ async fn rig_with(gate: PeerGate, approvals: Arc<dyn SignGate>) -> Rig {
         ),
         upstream: upstream.clone(),
         sink: RefusalSink::new(Some(home.path().to_path_buf())),
+        marks: Default::default(),
         gate,
         approvals,
     });
@@ -138,7 +139,11 @@ async fn listing_through_the_socket_shows_only_the_policy_key() {
 
 #[tokio::test]
 async fn an_approved_sign_returns_the_upstream_signature() {
-    let r = rig_with(admit_all(), FakeGate::new(GateOutcome::Allow)).await;
+    let r = rig_with(
+        admit_all(),
+        FakeGate::new(GateOutcome::Allow { decision: None }),
+    )
+    .await;
     let mut c = UnixStream::connect(&r.sock).await.unwrap();
     let bind = bind_body(&r.host.key_blob(), b"sid", &r.host.sign_blob(b"sid"));
     assert_eq!(ask(&mut c, &bind).await, Answer::Success);
@@ -201,6 +206,7 @@ async fn upstream_that_was_never_reached_refuses_upstream_unavailable() {
         ),
         upstream: Arc::new(HeldUpstream::disconnected()),
         sink: RefusalSink::new(Some(home.path().to_path_buf())),
+        marks: Default::default(),
         gate: admit_all(),
         approvals: Arc::new(NeverAsked),
     });

@@ -5,9 +5,12 @@ use std::path::{Path, PathBuf};
 
 mod build;
 mod deny_carve;
+mod elf_interp;
 mod exec_deny;
+pub mod exec_reach;
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 pub(crate) use exec_deny::split_exec_grants;
+pub use exec_reach::{ExecBackend, ExecReach};
 mod spawn;
 mod widen;
 
@@ -238,12 +241,65 @@ impl SandboxPolicy {
     /// [`Self::mur_cli_exec_denies`] for Landlock, whose read and write
     /// rights include `Execute`: every grant source reaches.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    /// Paths Landlock grants `Execute` (+ read) on, besides `fs_read`/`fs_write`.
+    ///
+    /// Strict (#2343) has an empty `fs_exec`, so its exec reach is exactly
+    /// what the SBPL `Strict` arm allows: the resolved literals (the seeded
+    /// shell, each allowlisted binary) plus the derived and build-lane
+    /// prefixes. Landlock has no `path-literal`; a rule on a file covers just
+    /// that file, plus each dynamic literal's ELF interpreter. Every other
+    /// mode keeps `fs_exec` alone, as before.
+    pub(crate) fn exec_grants(&self) -> Vec<PathBuf> {
+        if self.spawn_mode != SpawnMode::Strict {
+            return self.fs_exec.clone();
+        }
+        let mut grants = self.fs_exec.clone();
+        for p in self
+            .spawn_allowed_paths
+            .iter()
+            .chain(&self.spawn_allowed_prefixes)
+        {
+            if !grants.contains(p) {
+                grants.push(p.clone());
+            }
+        }
+        // Landlock checks `Execute` on the ELF loader as well, and Strict
+        // read grants no longer carry it (see `landlock_read_write_exec`),
+        // so each allowlisted binary's own interpreter is granted by name.
+        for literal in &self.spawn_allowed_paths {
+            let Some(interp) = elf_interp::elf_interpreter(literal) else {
+                continue;
+            };
+            let canon = std::fs::canonicalize(&interp).ok();
+            for p in std::iter::once(interp).chain(canon) {
+                if !grants.contains(&p) {
+                    grants.push(p);
+                }
+            }
+        }
+        grants
+    }
+
+    /// Whether Landlock's `fs_read` / `fs_write` rules may carry `Execute`.
+    /// Not under Strict (#2343): those rights are additive, so a readable
+    /// `/usr` or a writable project dir would reopen every binary in it, and
+    /// strict exec must come from [`Self::exec_grants`] alone — the same
+    /// boundary the SBPL `Strict` arm draws, where read and write grants
+    /// never carry exec.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn landlock_read_write_exec(&self) -> bool {
+        self.spawn_mode != SpawnMode::Strict
+    }
+
     pub(crate) fn landlock_exec_denies(&self) -> Vec<PathBuf> {
-        let reach: Vec<PathBuf> = [&self.fs_exec, &self.fs_read, &self.fs_write]
-            .into_iter()
-            .flatten()
-            .cloned()
-            .collect();
+        let reach: Vec<PathBuf> = [
+            self.exec_grants(),
+            self.fs_read.clone(),
+            self.fs_write.clone(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         self.exec_denies_reached_by(&reach)
     }
 
@@ -542,6 +598,18 @@ fn fleet_run_write_dirs(mur_home: &Path) -> Vec<PathBuf> {
 pub(crate) fn fleet_dispatch_dirs(mur_home: &Path) -> (PathBuf, PathBuf) {
     (
         mur_home.join(mur_track::fleet_dispatch_request::FLEET_DISPATCH_REQUEST_DIR),
+        mur_home.join(mur_common::paths::DAEMON_HEARTBEAT_DIR),
+    )
+}
+
+/// `<mur_home>/jobs-dispatch/`: the daemon's `parallel_jobs` run tree.
+pub(crate) fn jobs_dispatch_state_dir(mur_home: &Path) -> PathBuf {
+    mur_home.join(mur_track::jobs_dispatch_request::JOBS_DISPATCH_STATE_DIR)
+}
+
+pub(crate) fn jobs_dispatch_dirs(mur_home: &Path) -> (PathBuf, PathBuf) {
+    (
+        mur_home.join(mur_track::jobs_dispatch_request::JOBS_DISPATCH_REQUEST_DIR),
         mur_home.join(mur_common::paths::DAEMON_HEARTBEAT_DIR),
     )
 }

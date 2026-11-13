@@ -14,6 +14,9 @@ pub mod perms;
 mod replay;
 pub mod server_install;
 pub mod setup;
+// `record` (the only writer) is unix-only; `status` reads it everywhere.
+#[cfg_attr(not(unix), allow(dead_code))]
+mod writeback;
 
 pub use auth::*;
 pub use replay::{parse_heal_ratio, replay};
@@ -53,6 +56,9 @@ pub async fn record(
     trace: bool,
     extra: &[String],
 ) -> Result<()> {
+    // Before anything here spawns a child (`<shell> --version` below): the
+    // handed key's fd is inheritable until read (#2369 review).
+    mur_browser::state::prime_handed_key();
     mur_browser::paths::validate_name(run)?;
     for profile in profiles {
         mur_browser::paths::validate_name(profile)?;
@@ -111,7 +117,8 @@ pub async fn record(
     // This is not live-only: recording a test or automation run against an
     // admin area is exactly the case that needs a session, and asking the
     // person to log in by hand inside each recording defeats `browser auth`.
-    let injected = live_state::prepare(&mur_home()?, profiles)?;
+    writeback::startup_notices(&mur_home()?, profiles);
+    let mut injected = live_state::prepare(&mur_home()?, profiles)?;
     let state_args = live_state::args(injected.as_ref(), &args);
     args.extend(state_args);
     // Without this, test/automation recording fell through to
@@ -182,34 +189,29 @@ pub async fn record(
         actions = %paths::run_actions(&mur_home, run).display(),
         "browser record started"
     );
-    // A single-profile session hands its rotated state back on exit
-    // (`refresh`). A merged session is not written back: the export holds
-    // every profile's cookies and `refresh_profile` would store them all
-    // under each one (#2263, "re-auth of one profile must not touch the
-    // others"). Splitting the export per profile is future work.
-    let refresh_site = match profiles {
-        [one] => Some(one.as_str()),
-        _ => None,
-    };
-    let scratch = match refresh_site {
-        Some(_) => Some(mur_browser::refresh::scratch_dir(&mur_home)?),
-        None => None,
+    // The session hands its rotated state back on exit: whole for one
+    // profile, split per profile by host for several (#2360). Any login
+    // dropped on the way is reported on the profile's next use.
+    let targets = writeback::targets(&mur_home, profiles);
+    let scratch = match targets.sites.is_empty() {
+        false => Some(mur_browser::refresh::scratch_dir(&mur_home)?),
+        true => None,
     };
     let export = scratch
         .as_ref()
         .map(|dir| mur_browser::refresh::export_path(dir.path()));
+    // The export and the write-back share one stop window: the export is
+    // bounded by `EXPORT_TIMEOUT` inside the proxy, the write-back by
+    // `WRITEBACK_BUDGET` from when it starts (#2360).
     let result = run_stdio_exporting(server, hook, export.clone()).await;
-    if let (Some(site), Some(export)) = (refresh_site, &export) {
-        mur_browser::refresh::report(
-            site,
-            mur_browser::refresh::refresh_profile(
-                &mur_home,
-                site,
-                export,
-                chrono::Utc::now(),
-                &mur_browser::state::KeychainStateKeyStore,
-            ),
-        );
+    let loaded = injected
+        .as_mut()
+        .map(live_state::InjectedState::take_loaded)
+        .unwrap_or_default();
+    if let Some(export) = &export {
+        let deadline = std::time::Instant::now() + mur_browser::refresh::WRITEBACK_BUDGET;
+        let store = mur_browser::state::KeychainStateKeyStore;
+        writeback::write_back(&mur_home, &targets, loaded, export, deadline, &store);
     }
     drop(scratch);
     // Removes the token-bearing config directory (no-op for test/automation)
@@ -514,7 +516,13 @@ fn profile_statuses(home: &std::path::Path) -> Result<Vec<String>> {
             } else {
                 // One bad file labels its own row; it never fails `status`.
                 match read_profile_meta(&meta_path) {
-                    Ok(meta) => profile_label(&site, &meta),
+                    Ok(meta) => {
+                        let lost = writeback::status_suffix(home, &site)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                        format!("{}{lost}", profile_label(&site, &meta))
+                    }
                     Err(error) => format!("{site} (metadata unreadable: {error})"),
                 }
             }
@@ -590,6 +598,7 @@ fn profile_statuses_reports_cookie_expiry_from_metadata() {
             earliest_cookie_expires: chrono::DateTime::from_timestamp(1_700_100_000, 0),
             allow_domains: Vec::new(),
             last_refresh: None,
+            writeback_abandoned: None,
         },
     )
     .unwrap();
@@ -615,6 +624,7 @@ fn one_unreadable_profile_labels_its_row_and_keeps_the_others() {
             earliest_cookie_expires: None,
             allow_domains: Vec::new(),
             last_refresh: None,
+            writeback_abandoned: None,
         },
     )
     .unwrap();
@@ -637,6 +647,7 @@ fn legacy_rotating_cookie_expiry_is_not_shown_as_the_session_end() {
         earliest_cookie_expires: chrono::DateTime::from_timestamp(1_700_001_740, 0),
         allow_domains: vec!["example.test".into()],
         last_refresh: None,
+        writeback_abandoned: None,
     };
     assert_eq!(
         profile_label("ex", &meta),
@@ -644,6 +655,7 @@ fn legacy_rotating_cookie_expiry_is_not_shown_as_the_session_end() {
     );
     let refreshed = ProfileMeta {
         last_refresh: chrono::DateTime::from_timestamp(1_700_050_000, 0),
+        writeback_abandoned: None,
         earliest_cookie_expires: chrono::DateTime::from_timestamp(1_700_100_000, 0),
         ..meta
     };

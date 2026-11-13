@@ -11,6 +11,8 @@ use crate::protocol::mcp_client::{McpClient, McpError, ToolInfo};
 use crate::sandbox::SandboxPolicy;
 use crate::sandbox::egress_proxy::EgressProxyHandle;
 
+pub use super::retire::MCP_STOP_SLICE;
+
 /// Where the pool reads a server's current entry: the hot-reloaded profile.
 /// Returns `None` for a server it does not know, and the boot entry is used.
 pub type EntrySource = Box<dyn Fn(&str) -> Option<McpServerEntry> + Send + Sync>;
@@ -33,6 +35,9 @@ pub struct McpPool {
     ssh: Option<crate::tools::bash_env::SshChild>,
     /// Warm clients, each with the entry it was started from.
     clients: Mutex<HashMap<String, Warm>>,
+    /// Retired clients still being stopped in the background (eviction or
+    /// agent stop), and the stop deadline they must all meet once set.
+    retiring: super::retire::Retiring,
 }
 
 impl McpPool {
@@ -50,6 +55,7 @@ impl McpPool {
             proxy,
             ssh,
             clients: Mutex::new(HashMap::new()),
+            retiring: super::retire::Retiring::default(),
         })
     }
 
@@ -95,8 +101,8 @@ impl McpPool {
     ///
     /// A warm client started from an entry that has since been hot-reloaded is
     /// retired and a new generation started from the current entry. A call
-    /// still holding the old client finishes on it; the child is reaped when
-    /// the last reference drops (`StdioMcpClient`'s `Drop`).
+    /// still holding the old client finishes on it; the old one is then
+    /// stopped gracefully in the background (`retire`).
     pub async fn client(&self, server: &str) -> Result<Arc<Mutex<McpClient>>, McpError> {
         let entry = self.current_entry(server).ok_or_else(|| {
             McpError::Server(format!("no MCP server named `{server}` on this agent"))
@@ -106,7 +112,11 @@ impl McpPool {
             Some((started, c)) if *started == entry => return Ok(c.clone()),
             Some(_) => {
                 tracing::info!(server = %server, "MCP entry changed; starting a new client generation");
-                guard.remove(server);
+                if let Some((_, old)) = guard.remove(server) {
+                    // Stopped in the background once its in-flight calls let
+                    // go; the turn does not wait (spec "Mid-run eviction").
+                    self.retiring.retire(server.to_string(), old);
+                }
             }
             None => {}
         }
@@ -149,22 +159,23 @@ impl McpPool {
         c.lock().await.list_tools().await
     }
 
-    /// Shut down all warm clients gracefully.
+    /// Stop every warm client and every retiring one within
+    /// `MCP_STOP_SLICE`: each
+    /// stdio server gets its stdin closed at once, so all of them stop (and
+    /// a browser exports) concurrently inside the caller's slice.
     pub async fn shutdown(&self) {
-        let mut guard = self.clients.lock().await;
-        let clients: Vec<_> = guard.drain().map(|(_, (_, c))| c).collect();
-        drop(guard);
-        for arc in clients {
-            // Only shut down if we hold the last Arc reference. When another
-            // holder (e.g. an in-flight tool call) still has a clone, we
-            // can't kill+wait the child here without racing that call; the
-            // eventual last drop is still reap-safe because
-            // `StdioMcpClient`'s `Drop` impl kills and waits synchronously,
-            // so no zombie survives regardless of which reference is last.
-            if let Ok(mutex) = Arc::try_unwrap(arc) {
-                mutex.into_inner().shutdown().await;
-            }
+        self.shutdown_by(tokio::time::Instant::now() + MCP_STOP_SLICE)
+            .await;
+    }
+
+    /// [`shutdown`](Self::shutdown) inside the caller's slice of a stop.
+    pub async fn shutdown_by(&self, deadline: tokio::time::Instant) {
+        let warm: Vec<_> = self.clients.lock().await.drain().collect();
+        self.retiring.begin_stop(deadline);
+        for (name, (_, c)) in warm {
+            self.retiring.retire(name, c);
         }
+        self.retiring.join(deadline).await;
     }
 }
 

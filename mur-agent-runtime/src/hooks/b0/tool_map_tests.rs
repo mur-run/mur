@@ -1,8 +1,9 @@
 use super::*;
 use crate::tools::{
     ask::ASK, bash::BASH, bash_control, edit_file::EDIT_FILE, fleet_run::FLEET_RUN, git_push,
-    open_item::OPEN_ITEM, read_file::READ_FILE, recall::RECALL, remember::REMEMBER, remind::REMIND,
-    suggest::SUGGEST_REPLIES, write_file::WRITE_FILE,
+    open_item::OPEN_ITEM, parallel_jobs::PARALLEL_JOBS, read_file::READ_FILE, recall::RECALL,
+    remember::REMEMBER, remind::REMIND, ssh_request::SSH_REQUEST, suggest::SUGGEST_REPLIES,
+    write_file::WRITE_FILE,
 };
 use mur_common::agent::FilesystemEntitlement;
 use mur_common::proposal::PROPOSE_TOOL;
@@ -23,7 +24,9 @@ const BUILTINS: &[(&str, &str)] = &[
     ("RECALL", RECALL),
     ("REMIND", REMIND),
     ("OPEN_ITEM", OPEN_ITEM),
+    ("SSH_REQUEST", SSH_REQUEST),
     ("FLEET_RUN", FLEET_RUN),
+    ("PARALLEL_JOBS", PARALLEL_JOBS),
     ("ASK", ASK),
     ("GIT_PUSH_REQUEST", git_push::GIT_PUSH_REQUEST),
     ("GIT_PUSH_STATUS", git_push::GIT_PUSH_STATUS),
@@ -93,6 +96,7 @@ fn side_effect_builtins_are_gated_by_rule_4() {
         REMIND,
         OPEN_ITEM,
         FLEET_RUN,
+        PARALLEL_JOBS,
         ASK,
         git_push::GIT_PUSH_REQUEST,
         git_push::GIT_PUSH_CANCEL,

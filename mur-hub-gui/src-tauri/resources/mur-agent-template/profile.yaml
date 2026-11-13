@@ -77,7 +77,9 @@ entitlements:
       - "~/.gnupg"
   processes:
     spawn:
-      mode: "none"
+      # `allowlist`, not `none`: murmur's `bash` tool is refused outright under
+      # `none`. Every exec is still gated by the OS sandbox against `allowed`.
+      mode: "allowlist"
       allowed: []
 notifications:
   enabled: false

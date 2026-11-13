@@ -122,6 +122,17 @@ pub async fn build_provider_runner(
         agent_home.join(crate::tools::bash_jobs::SPOOL_DIR),
         bash_jobs.clone(),
     );
+    // #2344: SSH facts at boot (entitlements are cold), and whether the
+    // `ssh_request` route is open — the prompt and the bash hints name it only
+    // when the tool is actually registered.
+    let ssh_facts = crate::tools::ssh_request::SshFacts::new(
+        &profile.inner.entitlements.ssh,
+        &profile.inner.entitlements.processes,
+    );
+    let ssh_route = mur_common::agent::resolve_tool_policy(
+        &profile.inner.entitlements.tools,
+        crate::tools::ssh_request::SSH_REQUEST,
+    ) != mur_common::agent::ToolPolicy::Deny;
     let bash = Arc::new(
         BashTool::new(agent_home.to_path_buf(), session_cwd.clone())
             .with_agent(mur_home.clone(), profile.inner.name.clone())
@@ -141,6 +152,7 @@ pub async fn build_provider_runner(
             .with_secrets(secrets.clone())
             .with_jobs(bash_jobs.clone())
             .with_ssh(ssh)
+            .with_ssh_request(ssh_route)
             // Same helper as the kernel grant; Err already logged there.
             .with_scratch_dir(crate::agent_paths::agent_scratch_dir(agent_home).ok())
             // D10: `hooks.trash_guard` is the switch for `rm` → trash.
@@ -203,7 +215,7 @@ pub async fn build_provider_runner(
             .collect()
     };
     let edit_file_def = edit_file_exec.def();
-    let tools_policy = profile.inner.entitlements.tools.clone();
+    let mut tools_policy = profile.inner.entitlements.tools.clone();
     let (_defs, mut tool_map) = build_tools(
         Some((bash_def, bash_exec)),
         Some((read_file_def, read_file_exec)),
@@ -244,6 +256,20 @@ pub async fn build_provider_runner(
             );
         }
     }
+    // Built-in parallel_jobs (#2379); see `tools::parallel_jobs::register`.
+    let shadowed_mcp = crate::tools::parallel_jobs::register(
+        &mut tool_map,
+        &boot_cfg.parallel_jobs,
+        &mut tools_policy,
+        &enabled_mcp,
+        crate::tools::parallel_jobs::ParallelJobsTool {
+            mur_home: mur_home.clone(),
+            agent_name: profile.inner.name.clone(),
+            signing: Some(identity.clone()),
+            key_version: profile.inner.identity.key_version,
+            session_cwd: Some(session_cwd.clone()),
+        },
+    );
     // Channel consult, asker side. Off until release N+1 (D3/E7): readers of
     // the `Ask` kind ship one release before any writer (§D7). An explicit
     // Deny in the profile still wins once it is on.
@@ -342,6 +368,22 @@ pub async fn build_provider_runner(
             );
         }
     }
+    // Built-in ssh_request (#2344): the one route to a new SSH host. For every
+    // agent, SSH grant or not — an agent that does not know the route exists
+    // is the failure it fixes. It writes a request file nothing acts on until
+    // the user approves the card. An explicit Deny still wins.
+    {
+        use crate::tools::ssh_request::{SSH_REQUEST, SshRequestTool};
+        if ssh_route {
+            tool_map.insert(
+                SSH_REQUEST.to_string(),
+                Arc::new(SshRequestTool {
+                    agent_home: agent_home.to_path_buf(),
+                    facts: ssh_facts.clone(),
+                }),
+            );
+        }
+    }
     // Built-in remember (memory federation P2a): proactive capture of durable
     // user preferences/facts as agent-local Draft notes. Gated on the global
     // `memory.capture` config; an explicit Deny in the profile still wins.
@@ -387,12 +429,15 @@ pub async fn build_provider_runner(
     // Hot reload re-lists an edited MCP server at turn start; nothing to
     // refresh on an agent with none.
     let mcp_refresh = (!enabled_mcp.is_empty()).then(|| {
-        Arc::new(crate::tools::refresh::McpRefresh::new(
-            pool.clone(),
-            Some(session_cwd.clone()),
-            profile.inner.name.clone(),
-            &tools,
-        ))
+        Arc::new(
+            crate::tools::refresh::McpRefresh::new(
+                pool.clone(),
+                Some(session_cwd.clone()),
+                profile.inner.name.clone(),
+                &tools,
+            )
+            .with_shadowed(shadowed_mcp),
+        )
     });
 
     // Memory-capture directive (P2a): appended to the system prompt whenever
@@ -431,6 +476,19 @@ pub async fn build_provider_runner(
                 Some(p)
             }
         }
+    };
+
+    // #2344: the SSH section, read after the seal recorded the proxy state.
+    let system_prompt_with_memory = if ssh_route {
+        let proxy = mur_common::ssh_proxy_status::read(agent_home);
+        let mut p = system_prompt_with_memory.unwrap_or_default();
+        p.push_str(&crate::tools::ssh_request::prompt_section(
+            &ssh_facts,
+            proxy.as_ref(),
+        ));
+        Some(p)
+    } else {
+        system_prompt_with_memory
     };
 
     // P3: gate B's memory — settled chat-gate decisions, signed by this agent.

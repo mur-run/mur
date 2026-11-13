@@ -26,6 +26,11 @@ pub const FLEET_DISPATCH_REQUEST_DIR: &str = "inbox/fleet-dispatch-requests";
 /// `runs/<run_id>/dispatch.json`. Its existence also marks the run id as spent.
 pub const FLEET_DISPATCH_RECORD_FILE: &str = "dispatch.json";
 
+/// The launched child's stdout+stderr, beside [`FLEET_DISPATCH_RECORD_FILE`]
+/// — the log path `fleet_run` returns with the handle. A child that dies
+/// before recording its run leaves its only error here (#2345).
+pub const FLEET_RUN_LOG_FILE: &str = "fleet_run.log";
+
 /// Domain tag: a signature over one request type must never verify as another.
 const DOMAIN: &str = "mur-fleet-dispatch-request-v1\n";
 
@@ -62,17 +67,7 @@ pub struct FleetDispatchRequest {
 }
 
 fn sign_input(d: &FleetDispatch, requested_at: &DateTime<Utc>, key_version: u32) -> Vec<u8> {
-    let mut body = serde_json::to_value(d).unwrap_or(serde_json::Value::Null);
-    if let Some(obj) = body.as_object_mut() {
-        obj.insert(
-            "requested_at".into(),
-            serde_json::Value::String(requested_at.to_rfc3339()),
-        );
-        obj.insert("key_version".into(), serde_json::Value::from(key_version));
-    }
-    let mut out = DOMAIN.as_bytes().to_vec();
-    out.extend(mur_common::jcs::to_jcs(&body));
-    out
+    crate::signed_request::sign_input(DOMAIN, d, requested_at, key_version)
 }
 
 impl FleetDispatchRequest {
@@ -100,8 +95,7 @@ impl FleetDispatchRequest {
     /// Inside the acceptance window? Blunts replay together with the spent
     /// run id ([`FLEET_DISPATCH_RECORD_FILE`]) and consuming the file.
     pub fn is_fresh(&self, now: DateTime<Utc>, max_age_secs: u64) -> bool {
-        let age = now.signed_duration_since(self.requested_at);
-        age >= chrono::Duration::zero() && age <= chrono::Duration::seconds(max_age_secs as i64)
+        crate::signed_request::is_fresh(self.requested_at, now, max_age_secs)
     }
 }
 
@@ -119,6 +113,11 @@ pub struct FleetDispatchRecord {
     pub status: FleetDispatchStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The launched child's pid. Lets a reader tell "launched, not recorded
+    /// yet" from "launched, then died before recording" (#2345). `None` on
+    /// a rejection and on records from older daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
     pub decided_at: DateTime<Utc>,
 }
 

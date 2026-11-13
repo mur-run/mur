@@ -86,15 +86,22 @@ pub(super) fn tail_hash(content: &str) -> String {
 /// `seq` of every event whose `prev_hash` does not match its predecessor line,
 /// in file order. The predecessor is the raw previous line whatever it is —
 /// v1, unsigned, or unparseable — which is how v2 lines cover the others.
+/// A line whose `kind` this binary does not know (#2287) is a link like any
+/// other: its own `prev_hash` is checked too.
 pub(super) fn chain_breaks(content: &str) -> Vec<u64> {
+    use super::newer_kind::{Line, parse_line};
     let mut breaks = Vec::new();
     let mut expected = GENESIS_PREV_HASH.to_owned();
     for line in chain_lines(content) {
-        if let Ok(ev) = serde_json::from_str::<ChannelEvent>(line)
-            && let Some(prev) = ev.prev_hash.as_deref()
+        let link = match parse_line(line) {
+            Line::Event(ev) => ev.prev_hash.map(|p| (ev.seq, p)),
+            Line::NewerKind(ev) => ev.prev_hash.map(|p| (ev.seq, p)),
+            Line::Corrupt => None,
+        };
+        if let Some((seq, prev)) = link
             && prev != expected
         {
-            breaks.push(ev.seq);
+            breaks.push(seq);
         }
         expected = line_hash(line);
     }

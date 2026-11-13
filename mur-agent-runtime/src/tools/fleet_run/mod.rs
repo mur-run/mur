@@ -30,7 +30,7 @@ pub const FLEET_RUN: &str = "fleet_run";
 /// naming it once keeps a rename of either from silently half-applying.
 const DEEP_RESEARCH: &str = "deep-research";
 
-mod daemon_request;
+pub(crate) mod daemon_request;
 mod gate;
 mod messages;
 

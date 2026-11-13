@@ -145,11 +145,10 @@ pub(super) async fn run_tui(
     let initial_h = crossterm::terminal::size()
         .map(|(_, rows)| viewport_h_for(rows))
         .unwrap_or(INLINE_VIEWPORT_HEIGHT);
-    // The welcome is terminal output, printed at the cursor like any banner:
-    // mascot at the top of what follows, and the viewport anchored below it.
-    if app.welcome_applies() {
-        let _ = welcome::print_banner(&mut io::stdout(), &app.welcome_banner());
-    }
+    // The welcome is the head of the live band, painted on the composer with
+    // the blank rows above it (#2358) — not printed above the viewport, where
+    // the empty band sat between it and the composer.
+    app.reset_welcome_head();
     // One-time "permanent instructions" notice (memories P1 §10). Generic,
     // non-blocking, and shown at most once: it announces the feature, promises
     // that nothing was changed, and recommends no specific memory. Pushed into
@@ -158,6 +157,7 @@ pub(super) async fn run_tui(
     //
     // The flag is written immediately, before the user can possibly act on it:
     // a crash later in the session must not queue the same announcement again.
+    super::ssh_card::attach_notice(&mut app);
     if !app.migration_notice_seen() {
         app.push_system(mur_compress::memory_block::migration_notice());
         app.mark_migration_notice_seen();
@@ -295,10 +295,10 @@ pub(super) fn leave_fullscreen(app: &mut App) {
 /// then had to shrink it, and the only way to shrink an Inline viewport is a
 /// purge plus a re-anchor: on a tall terminal the whole conversation, mascot
 /// included, dropped to the bottom fifth of the window with a void above it.
-/// The welcome is now *printed* above the viewport (`welcome::print_banner`)
-/// instead of painted inside it, so one height serves both surfaces, the
-/// viewport is bottom-anchored from the first frame, and nothing ever
-/// re-anchors.
+/// The welcome is now the head of the live band (`ui::band::welcome_head`),
+/// bottom-aligned on the composer and the first thing flushed to scrollback,
+/// so one height serves both surfaces, the viewport is bottom-anchored from
+/// the first frame, and nothing ever re-anchors.
 /// Where to park the cursor before `Terminal::with_options` anchors the Inline
 /// viewport there. `None` = leave it where it is.
 ///
@@ -306,8 +306,7 @@ pub(super) fn leave_fullscreen(app: &mut App) {
 /// the cursor's row decides where the viewport lands:
 ///
 /// - **Above the anchor row** — move down to it, so the composer sits on the
-///   floor of the window from the first frame. The welcome banner has already
-///   been printed above by then, so nothing is drawn over it. Moving *up*
+///   floor of the window from the first frame. Moving *up*
 ///   would draw the viewport over shell output that is still on screen (and
 ///   not scroll it, so it would not reach scrollback either), which is why
 ///   this only ever descends.
@@ -401,7 +400,7 @@ pub(super) fn rebuild_after_resize(
     // draw-over-the-top path (lost/garbled scrollback rows). A resize is the
     // only time the viewport height changes at all.
     let h = viewport_h_for(size.1);
-    let banner = app.welcome_applies().then(|| app.welcome_banner());
+    app.reset_welcome_head();
     // Reset the flush cursor BEFORE the purge, not after: `purge_and_reanchor`
     // wipes screen and scrollback first and only then queries the cursor
     // position, which can fail (timeout) on a terminal that is still mid-
@@ -413,7 +412,7 @@ pub(super) fn rebuild_after_resize(
     app.flushed_upto = 0;
     app.flushed_bytes = 0;
     app.flushed_raw = false;
-    purge_and_reanchor(terminal, h, banner.as_deref())?;
+    purge_and_reanchor(terminal, h)?;
     Ok(h)
 }
 
@@ -435,8 +434,35 @@ pub(super) fn rebuild_after_resize(
 /// `wants_screen_wipe` is cleared for the same reason the reset is skipped: a
 /// wipe left pending would run `purge_and_reanchor` on the pass after the
 /// child exits and take the transcript with it.
+/// Whether a queued terminal handover may run on this pass (#2357 review).
+///
+/// Not while an agent turn is generating: the live reply is the last message
+/// and still streaming, so `flush_settled` stops in front of it and the
+/// "handing over" notice pushed after it would stay in the viewport the
+/// suspend clears — reappearing below the child's output, the very ordering
+/// #2356 fixed. The request stays queued and runs on the first pass after
+/// the turn settles.
+pub(super) fn handover_ready(app: &App) -> bool {
+    app.render_mode == RenderMode::Inline && !app.streaming
+}
+
+/// Say why a handover queued during a generating turn has not started yet,
+/// so the queued `!command` / `/login` / `/secret` does not look ignored.
+pub(super) fn note_handover_deferred(app: &mut App, label: &str) {
+    if app.streaming {
+        app.push_system(format!(
+            "{label}: needs the terminal — it starts when the current turn finishes"
+        ));
+    }
+}
+
 pub(super) fn prepare_handover(app: &mut App, label: &str, term_rows: u16) -> u16 {
     app.push_system(format!("{label}: handing over the terminal…"));
+    // The child's screen clears the viewport rows; a welcome still painted
+    // there goes to scrollback first, as printed output would have been.
+    if app.welcome_head == welcome::WelcomeHead::Live {
+        app.welcome_head = welcome::WelcomeHead::Commit;
+    }
     app.wants_screen_wipe = false;
     viewport_h_for(term_rows)
 }
@@ -457,7 +483,6 @@ pub(super) fn prepare_handover(app: &mut App, label: &str, term_rows: u16) -> u1
 pub(super) fn purge_and_reanchor(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     h: u16,
-    banner: Option<&[ratatui::text::Line<'static>]>,
 ) -> Result<()> {
     use crossterm::cursor::MoveTo;
     use crossterm::terminal::{Clear, ClearType};
@@ -468,12 +493,10 @@ pub(super) fn purge_and_reanchor(
         Clear(ClearType::All),
         Clear(ClearType::Purge),
     )?;
-    // The welcome, when it still applies, goes back at the top as terminal
-    // output; the viewport then re-anchors on the floor (#725: anchoring it
-    // at the top leaves `insert_before` no headroom and drops replayed rows).
-    if let Some(lines) = banner {
-        welcome::print_banner(&mut io::stdout(), lines)?;
-    }
+    // The welcome, when it still applies, is repainted by the band
+    // (`App::reset_welcome_head`, called by every caller); the viewport
+    // re-anchors on the floor (#725: anchoring it at the top leaves
+    // `insert_before` no headroom and drops replayed rows).
     crossterm::execute!(io::stdout(), MoveTo(0, rows.saturating_sub(h)))?;
     // The cursor-position query inside `with_options` needs crossterm's
     // internal event reader; the just-dropped EventStream's background

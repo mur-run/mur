@@ -50,3 +50,35 @@ fn rollback_hints_parse() {
     };
     assert_hint_commands_parse(&rollback_summary("carol", 1, &out));
 }
+
+#[test]
+fn ssh_hint_commands_parse() {
+    assert_hint_commands_parse(&[crate::cmd::ssh_hint::hint()]);
+}
+
+#[test]
+fn mur_ssh_routes_to_the_hint_even_with_help() {
+    for argv in [
+        vec!["mur", "ssh"],
+        vec!["mur", "ssh", "--help"],
+        vec!["mur", "ssh", "allow", "mur", "--key", "x"],
+    ] {
+        let cli = Cli::try_parse_from(&argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+        assert!(matches!(cli.command, Commands::Ssh { .. }), "{argv:?}");
+    }
+}
+
+#[test]
+fn a_usage_error_renders_as_plain_text_for_the_handover_file() {
+    let e = match Cli::try_parse_from(["mur", "agent", "ssh", "allow"]) {
+        Err(e) => e,
+        Ok(_) => panic!("missing <agent> and --key must not parse"),
+    };
+    assert!(e.use_stderr());
+    let text = e.render().to_string();
+    assert!(text.contains("required"), "{text}");
+    assert!(
+        !text.contains('\u{1b}'),
+        "no ANSI escapes in the file: {text:?}"
+    );
+}

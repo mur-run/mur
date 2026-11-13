@@ -338,6 +338,14 @@ pub enum ProjectAction {
         project_path: String,
         #[arg(long)]
         rebuild: bool,
+        /// Skip the desktop notification (success and failure arms).
+        #[arg(long)]
+        no_notify: bool,
+        /// Skip git post-commit hook maintenance. Daemon-spawned workers pass
+        /// this: `core.hooksPath` is agent-writable repo config, so the worker
+        /// must not write a hook into a directory the agent chose.
+        #[arg(long)]
+        no_hook: bool,
     },
     /// Search indexed code for a query
     Search {

@@ -36,8 +36,12 @@ pub struct IntegrityReport {
     pub log_lines: u64,
     /// Lines the signed head covers; `None` when the channel has no head.
     pub anchored_lines: Option<u64>,
-    /// 1-based numbers of lines that did not parse as an event.
+    /// 1-based numbers of lines that did not parse as an event (corrupt).
     pub unparseable_lines: Vec<usize>,
+    /// 1-based numbers of lines written by a newer MUR with an event kind
+    /// this binary does not know (#2287). The kind alone is not damage; their
+    /// signatures and chain links are checked like every other line's.
+    pub newer_kind_lines: Vec<usize>,
     /// `seq` of events whose signature failed under their actor's key.
     pub unverified_seqs: Vec<u64>,
     /// `seq` of events whose `prev_hash` does not match the line before.
@@ -129,6 +133,11 @@ impl IntegrityReport {
         push_list(&mut out, "unparseable lines", &self.unparseable_lines);
         push_list(&mut out, "bad signature on seq", &self.unverified_seqs);
         push_list(&mut out, "broken hash chain at seq", &self.chain_breaks);
+        push_list(
+            &mut out,
+            "note: written by a newer MUR (kind unknown to this binary, not damage; upgrade to read) at lines",
+            &self.newer_kind_lines,
+        );
         out
     }
 }
@@ -237,8 +246,24 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
         .iter()
         .filter(|ev| !crate::channel_verify::verify_event(mur_home, channel_id, ev, require_sig))
         .map(|ev| ev.seq)
+        .chain(
+            // An unknown kind is no pass on the signature (#2287).
+            damage
+                .newer_kind_events
+                .iter()
+                .filter(|ev| {
+                    !mur_channel::verify::verify_newer_kind_event(
+                        mur_home,
+                        channel_id,
+                        ev,
+                        require_sig,
+                    )
+                })
+                .map(|ev| ev.seq),
+        )
         .collect();
     report.unparseable_lines = damage.unparseable_lines;
+    report.newer_kind_lines = damage.newer_kind_lines;
     report.chain_breaks = damage.chain_breaks;
     report.anchor_mismatch = damage.anchor_mismatch.map(|m| m.kind);
     report.anchor_dirty = damage.anchor_dirty;

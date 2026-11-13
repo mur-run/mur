@@ -37,16 +37,16 @@ const PRIVILEGED_FUNCTIONS: &[&str] = &[
     "lchownsync",
 ];
 
-/// Does `cmd` (already lowercased) call a privileged function through a
-/// system module, e.g. `os.chmod` or `fs.promises.chown`?
-pub(super) fn privileged_call_in(cmd: &str) -> bool {
+/// The first privileged function `cmd` (already lowercased) calls through a
+/// system module, e.g. `os.chmod` or `fs.promises.chown`.
+pub(super) fn privileged_call(cmd: &str) -> Option<&str> {
     // Split on anything that cannot be part of a dotted name, not just on
     // `tokens()`'s separators: `map(os.chmod,`, `f=os.chmod`, `{os.chmod(`
     // and `[os.chmod]` would otherwise glue punctuation to the module or the
     // function and miss the exact match. Whitespace is outside the class too,
     // so this is a superset of the token split.
     let is_name = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.';
-    cmd.split(|c: char| !is_name(c)).any(|t| {
+    cmd.split(|c: char| !is_name(c)).find(|t| {
         let Some((module, _)) = t.split_once('.') else {
             return false;
         };

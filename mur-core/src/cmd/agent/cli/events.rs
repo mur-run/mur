@@ -63,6 +63,34 @@ pub(super) fn paint_gated<B: Backend>(
     Ok(())
 }
 
+/// `paint_gated`, after first committing every settled message to scrollback.
+///
+/// A handover clears the viewport and gives its rows to the child, so a notice
+/// left painted there is erased and only comes back below the child's output.
+/// Scrollback is out of the clear's reach. Skipped while a rebuild is owed, for
+/// the same reason `paint_gated` skips: `insert_before` against stale geometry
+/// overwrites rows instead of scrolling them.
+fn paint_for_handover<B: Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+    viewport_h: u16,
+    force_rebuild: &mut bool,
+) -> Result<()> {
+    if !rebuild_pending(app, *force_rebuild)
+        && let Err(e) = ui::flush_settled(terminal, app)
+    {
+        let e = anyhow::Error::new(e).context("flush before handover");
+        match classify_paint_error(&e) {
+            DrawFault::Recover => {
+                *force_rebuild = true;
+                app.needs_full_redraw = true;
+            }
+            DrawFault::Fatal => return Err(e),
+        }
+    }
+    paint_gated(terminal, app, viewport_h, force_rebuild)
+}
+
 pub(super) async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
@@ -149,8 +177,8 @@ pub(super) async fn event_loop(
         if app.render_mode == RenderMode::Inline && std::mem::take(&mut app.wants_screen_wipe) {
             drop(events);
             let want_h = viewport_h_for(last_size.height);
-            let banner = app.welcome_applies().then(|| app.welcome_banner());
-            if purge_and_reanchor(terminal, want_h, banner.as_deref()).is_ok() {
+            app.reset_welcome_head();
+            if purge_and_reanchor(terminal, want_h).is_ok() {
                 viewport_h = want_h;
             }
             events = EventStream::new();
@@ -161,8 +189,9 @@ pub(super) async fn event_loop(
         // blocks above it: everything below assumes an Inline viewport, and
         // re-anchoring one while the alt-screen is up would anchor it against
         // the wrong surface. Leaving the request in place is correct — it is
-        // taken on the pass after the overlay closes, not dropped.
-        if app.render_mode == RenderMode::Inline
+        // taken on the pass after the overlay closes, not dropped. Likewise
+        // it waits out a generating turn (`handover_ready`).
+        if handover_ready(app)
             && let Some(req) = app.pending_handover.take()
         {
             let want_h = prepare_handover(app, &req.label, last_size.height);
@@ -188,13 +217,14 @@ pub(super) async fn event_loop(
             if want_h != viewport_h && handover::reanchor(terminal, want_h).is_ok() {
                 viewport_h = want_h;
             }
-            // Paint the "handing over" line before we suspend — otherwise it
-            // only appears after the child exits, alongside the result.
-            paint_gated(terminal, app, viewport_h, &mut force_rebuild)?;
+            // Commit the "handing over" line to scrollback before we suspend:
+            // painted only in the viewport, it is cleared by the suspend and
+            // reappears after the child's own output (#2356).
+            paint_for_handover(terminal, app, viewport_h, &mut force_rebuild)?;
             let outcome = handover::run(terminal, viewport_h, &req);
             events = EventStream::new();
             match outcome {
-                Ok(s) if s.success() => {
+                Ok(o) if o.status.success() => {
                     app.push_system(req.done_note.clone().unwrap_or_else(|| {
                         format!(
                             "{}: logged in ✓ — no restart needed, the gateway re-reads per request",
@@ -202,9 +232,14 @@ pub(super) async fn event_loop(
                         )
                     }))
                 }
-                Ok(s) => app.push_error(format!("{}: exited with {s}", req.label)),
+                Ok(o) => app.push_error(handover::failed_line(
+                    &req.label,
+                    &o.status.to_string(),
+                    o.error_tail.as_deref(),
+                )),
                 Err(e) => app.push_error(format!("{}: handover failed: {e:#}", req.label)),
             }
+            super::ssh_card::after_handover(app);
             app.needs_full_redraw = true;
             // The child owned the terminal for as long as it liked, so the
             // size checked at the top of this pass may be gone. Painting now
@@ -217,7 +252,7 @@ pub(super) async fn event_loop(
         // Same shape as the handover above, and for the same reason: the
         // EventStream owns stdin and the child (here, rpassword's tty read)
         // must have it to itself.
-        if app.render_mode == RenderMode::Inline
+        if handover_ready(app)
             && let Some(key) = app.pending_secret_prompt.take()
         {
             let want_h = prepare_handover(app, &format!("/secret {key}"), last_size.height);
@@ -225,7 +260,7 @@ pub(super) async fn event_loop(
             if want_h != viewport_h && handover::reanchor(terminal, want_h).is_ok() {
                 viewport_h = want_h;
             }
-            paint_gated(terminal, app, viewport_h, &mut force_rebuild)?;
+            paint_for_handover(terminal, app, viewport_h, &mut force_rebuild)?;
             let read = handover::read_hidden(
                 terminal,
                 viewport_h,
@@ -420,6 +455,14 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
             }
             if app.hitl.is_some() {
                 handle_hitl_key(app, key, ctrl, tx);
+                return;
+            }
+            // The `/ssh` card owns the keys while open; Ctrl combos (cancel,
+            // quit) still reach the composer's handlers below.
+            if app.ssh.card.is_some() && !ctrl {
+                if app.ssh.settled() {
+                    ssh_card::on_key(app, key, tx);
+                }
                 return;
             }
             // Stale-decision swallow: a gate that auto-resolves (read lane,
@@ -691,6 +734,14 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
             //   empty/whitespace → try the clipboard image (covers raw paste)
             //   otherwise        → ordinary text paste
             let trimmed = text.trim();
+            if let Some(card) = app.ssh.card.as_mut() {
+                // The composer is hidden behind an open card: a paste on any
+                // other step must not land there unseen.
+                if card.step == ssh_card::state::Step::Host {
+                    card.paste(trimmed);
+                }
+                return;
+            }
             if let Some((mime, b64)) = paste::image_from_paste(trimmed) {
                 stage_image(app, mime, b64);
             } else if trimmed.is_empty() {

@@ -17,6 +17,10 @@ use tokio::sync::Mutex;
 const STDERR_TAIL_BYTES: u64 = 8 * 1024;
 const STDERR_TAIL_LINES: usize = 5;
 
+mod state_key;
+mod stop;
+pub use stop::{StopOutcome, TERM_GRACE};
+
 /// Last non-empty lines of a child's stderr, joined for a single-line error.
 /// `None` when the child said nothing, so the caller can omit the clause
 /// entirely rather than print an empty one.
@@ -40,7 +44,9 @@ fn tail_lines(raw: &[u8]) -> Option<String> {
 pub struct StdioMcpClient {
     /// Raw std child — used for kill/wait in `shutdown`.
     child: Mutex<std::process::Child>,
-    stdin: Mutex<ChildStdin>,
+    /// `None` once [`StdioMcpClient::stop`] closed it (MCP stdio shutdown,
+    /// step 1); a request after that fails as a closed stream.
+    stdin: Mutex<Option<ChildStdin>>,
     stdout: Mutex<Lines<BufReader<ChildStdout>>>,
     /// Piped stderr, available once via `take_stderr()`. Callers should drain
     /// this in a background task to prevent the child's stderr buffer filling.
@@ -331,7 +337,8 @@ impl StdioMcpClient {
             std_cmd.env_remove(k);
         }
         std_cmd.envs(serena.env).args(serena.args);
-        let mut child = crate::sandbox::child::spawn_sandboxed(std_cmd, policy)?;
+        // Spawn, handing a live browser its profile key (#2369).
+        let mut child = state_key::spawn(std_cmd, entry, policy)?;
 
         let raw_stdin = child.stdin.take().ok_or(McpError::StreamClosed)?;
         let raw_stdout = child.stdout.take().ok_or(McpError::StreamClosed)?;
@@ -341,7 +348,7 @@ impl StdioMcpClient {
 
         Ok(Self {
             child: Mutex::new(child),
-            stdin: Mutex::new(stdin),
+            stdin: Mutex::new(Some(stdin)),
             stdout: Mutex::new(BufReader::new(stdout).lines()),
             stderr: Mutex::new(raw_stderr),
             next_id: Mutex::new(1),
@@ -382,7 +389,8 @@ impl StdioMcpClient {
     async fn notify(&self, method: &str, params: Value) -> Result<(), McpError> {
         let req = json!({"jsonrpc": "2.0", "method": method, "params": params});
         let line = format!("{req}\n");
-        let mut s = self.stdin.lock().await;
+        let mut g = self.stdin.lock().await;
+        let s = g.as_mut().ok_or(McpError::StreamClosed)?;
         s.write_all(line.as_bytes()).await?;
         s.flush().await?;
         Ok(())
@@ -429,7 +437,8 @@ impl StdioMcpClient {
         let req = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         let line = format!("{req}\n");
         {
-            let mut s = self.stdin.lock().await;
+            let mut g = self.stdin.lock().await;
+            let s = g.as_mut().ok_or(McpError::StreamClosed)?;
             s.write_all(line.as_bytes()).await?;
             s.flush().await?;
         }

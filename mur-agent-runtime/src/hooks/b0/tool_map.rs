@@ -37,8 +37,9 @@ pub(super) enum Effect {
 pub(super) fn classify_builtin(name: &str) -> Option<Effect> {
     use crate::tools::{
         ask::ASK, bash::BASH, bash_control, edit_file::EDIT_FILE, fleet_run::FLEET_RUN, git_push,
-        open_item::OPEN_ITEM, read_file::READ_FILE, recall::RECALL, remember::REMEMBER,
-        remind::REMIND, suggest::SUGGEST_REPLIES, write_file::WRITE_FILE,
+        open_item::OPEN_ITEM, parallel_jobs::PARALLEL_JOBS, read_file::READ_FILE, recall::RECALL,
+        remember::REMEMBER, remind::REMIND, ssh_request::SSH_REQUEST, suggest::SUGGEST_REPLIES,
+        write_file::WRITE_FILE,
     };
     use mur_common::proposal::PROPOSE_TOOL;
     Some(match name {
@@ -49,7 +50,9 @@ pub(super) fn classify_builtin(name: &str) -> Option<Effect> {
         | REMEMBER
         | REMIND
         | OPEN_ITEM
+        | SSH_REQUEST
         | FLEET_RUN
+        | PARALLEL_JOBS
         | ASK
         | git_push::GIT_PUSH_REQUEST
         | git_push::GIT_PUSH_CANCEL => Effect::SideEffect,

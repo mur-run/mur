@@ -57,14 +57,71 @@ const POLL: Duration = Duration::from_millis(100);
 
 /// The fleet binary the daemon launches. `MUR_BIN` (what the daemon itself
 /// honours) wins; else the workspace's `target/<profile>/mur`, which
-/// `cargo nextest run --workspace` builds beside this test's `deps/`.
+/// `cargo nextest run --workspace` builds for `mur-core`.
 fn mur_bin() -> Option<PathBuf> {
     if let Some(v) = std::env::var_os("MUR_BIN") {
         return Some(PathBuf::from(v));
     }
-    let exe = std::env::current_exe().ok()?;
-    let profile_dir = exe.parent()?.parent()?;
-    Some(profile_dir.join("mur")).filter(|p| p.is_file())
+    find_profile_bin(&std::env::current_exe().ok()?, MUR_BIN_NAME)
+}
+
+const MUR_BIN_NAME: &str = "mur";
+/// How far above the test executable `target/<profile>/` can sit. Two levels
+/// before Rust 1.100 (`<profile>/deps/<test>`); the new build-dir layout nests
+/// the test deeper (`<profile>/build/<pkg>/<hash>/deps/<test>`).
+const PROFILE_DIR_MAX_DEPTH: usize = 6;
+
+/// `mur` is another package's binary, so `CARGO_BIN_EXE_mur` is not set for
+/// this test. Walk up from the test executable to the first ancestor holding
+/// it instead of assuming a fixed depth, which broke when cargo's build-dir
+/// layout changed (#2392).
+fn find_profile_bin(test_exe: &Path, name: &str) -> Option<PathBuf> {
+    let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    test_exe
+        .ancestors()
+        .skip(1)
+        .take(PROFILE_DIR_MAX_DEPTH)
+        .map(|dir| dir.join(&file))
+        .find(|p| p.is_file())
+}
+
+#[cfg(test)]
+mod find_profile_bin_tests {
+    use super::*;
+
+    fn layout(test_rel: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let profile = root.path().join("target").join("debug");
+        let bin = profile.join(format!("{MUR_BIN_NAME}{}", std::env::consts::EXE_SUFFIX));
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(&bin, b"").unwrap();
+        let exe = profile.join(test_rel);
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        (root, exe, bin)
+    }
+
+    #[test]
+    fn finds_mur_from_the_pre_1_100_deps_layout() {
+        let (_root, exe, bin) = layout("deps/cross_router_dispatch_e2e-0123456789abcdef");
+        assert_eq!(find_profile_bin(&exe, MUR_BIN_NAME), Some(bin));
+    }
+
+    #[test]
+    fn finds_mur_from_the_1_100_build_dir_layout() {
+        let (_root, exe, bin) =
+            layout("build/mur-daemon/0123456789abcdef/deps/cross_router_dispatch_e2e-0123");
+        assert_eq!(find_profile_bin(&exe, MUR_BIN_NAME), Some(bin));
+    }
+
+    #[test]
+    fn a_build_dir_named_like_the_binary_is_not_the_binary() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = root.path().join("build/mur/0123456789abcdef/deps/t");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        assert_eq!(find_profile_bin(&exe, MUR_BIN_NAME), None);
+    }
 }
 
 fn require_sandbox() -> bool {

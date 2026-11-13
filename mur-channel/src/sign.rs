@@ -37,6 +37,45 @@ pub fn sign_input_v2(
     idempotency_key: Option<&str>,
     prev_hash: &str,
 ) -> Vec<u8> {
+    canon_v2(
+        channel_id,
+        actor,
+        &kind,
+        payload,
+        idempotency_key,
+        prev_hash,
+    )
+}
+
+/// [`sign_input_v2`] with `kind` as its wire string — the bytes a line of a
+/// kind this binary does not know (#2287) was signed over. Byte-identical to
+/// [`sign_input_v2`] for a known kind's string.
+pub fn sign_input_v2_wire_kind(
+    channel_id: &str,
+    actor: &ChannelActor,
+    kind: &str,
+    payload: &serde_json::Value,
+    idempotency_key: Option<&str>,
+    prev_hash: &str,
+) -> Vec<u8> {
+    canon_v2(
+        channel_id,
+        actor,
+        &kind,
+        payload,
+        idempotency_key,
+        prev_hash,
+    )
+}
+
+fn canon_v2(
+    channel_id: &str,
+    actor: &ChannelActor,
+    kind: &impl serde::Serialize,
+    payload: &serde_json::Value,
+    idempotency_key: Option<&str>,
+    prev_hash: &str,
+) -> Vec<u8> {
     let canon = serde_json::json!({
         "v": SIG_INPUT_VERSION_V2,
         "channel_id": channel_id,
@@ -86,6 +125,16 @@ pub fn sign_input(
     channel_id: &str,
     actor: &ChannelActor,
     kind: EventKind,
+    payload: &serde_json::Value,
+    idempotency_key: Option<&str>,
+) -> Vec<u8> {
+    canon_v1(channel_id, actor, &kind, payload, idempotency_key)
+}
+
+fn canon_v1(
+    channel_id: &str,
+    actor: &ChannelActor,
+    kind: &impl serde::Serialize,
     payload: &serde_json::Value,
     idempotency_key: Option<&str>,
 ) -> Vec<u8> {
@@ -141,30 +190,66 @@ pub fn verify_one(
     writer_pubkey: &[u8; 32],
     require_sig: bool,
 ) -> bool {
-    match (ev.sig.as_deref(), ev.prev_hash.as_deref()) {
-        (Some(sig), Some(prev)) => verify_input_sig(
-            &sign_input_v2(
-                channel_id,
-                &ev.actor,
-                ev.kind,
-                &ev.payload,
-                ev.idempotency_key.as_deref(),
-                prev,
-            ),
-            sig,
-            writer_pubkey,
-        ),
-        (Some(sig), None) => verify_event_sig(
+    verify_fields(
+        channel_id,
+        &SignedFields {
+            actor: &ev.actor,
+            kind: serde_json::to_value(ev.kind).expect("EventKind serializes"),
+            payload: &ev.payload,
+            idempotency_key: ev.idempotency_key.as_deref(),
+            sig: ev.sig.as_deref(),
+            prev_hash: ev.prev_hash.as_deref(),
+        },
+        writer_pubkey,
+        require_sig,
+    )
+}
+
+/// [`verify_one`] for a line whose `kind` this binary does not know (#2287).
+/// Same rules, same bytes: the kind goes into the sign input as the string
+/// the writer signed, so an unknown kind is no excuse for a bad signature.
+pub fn verify_newer_kind(
+    channel_id: &str,
+    ev: &crate::store::NewerKindEvent,
+    writer_pubkey: &[u8; 32],
+    require_sig: bool,
+) -> bool {
+    verify_fields(channel_id, &ev.signed_fields(), writer_pubkey, require_sig)
+}
+
+/// The signed fields of a line, whatever type it was read into. `kind` is
+/// the wire value (a string), so a known and an unknown kind produce the
+/// same canonical bytes their writer signed.
+pub(crate) struct SignedFields<'a> {
+    pub actor: &'a ChannelActor,
+    pub kind: serde_json::Value,
+    pub payload: &'a serde_json::Value,
+    pub idempotency_key: Option<&'a str>,
+    pub sig: Option<&'a str>,
+    pub prev_hash: Option<&'a str>,
+}
+
+fn verify_fields(
+    channel_id: &str,
+    f: &SignedFields<'_>,
+    writer_pubkey: &[u8; 32],
+    require_sig: bool,
+) -> bool {
+    let Some(sig) = f.sig else {
+        return !require_sig;
+    };
+    let input = match f.prev_hash {
+        Some(prev) => canon_v2(
             channel_id,
-            &ev.actor,
-            ev.kind,
-            &ev.payload,
-            ev.idempotency_key.as_deref(),
-            sig,
-            writer_pubkey,
+            f.actor,
+            &f.kind,
+            f.payload,
+            f.idempotency_key,
+            prev,
         ),
-        (None, _) => !require_sig,
-    }
+        None => canon_v1(channel_id, f.actor, &f.kind, f.payload, f.idempotency_key),
+    };
+    verify_input_sig(&input, sig, writer_pubkey)
 }
 
 /// Resolve the writer's pubkey for a given `key_version` by folding the agent's

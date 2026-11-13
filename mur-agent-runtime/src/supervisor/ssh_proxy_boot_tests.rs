@@ -52,6 +52,7 @@ async fn over_long_home_is_off_with_its_reason_and_no_socket() {
         pin_trust: PinTrust::Pinned,
         upstream: Arc::new(HeldUpstream::disconnected()),
         sink: RefusalSink::new(None),
+        marks: Default::default(),
         approvals: Default::default(),
     })
     .await;
@@ -74,6 +75,7 @@ async fn a_normal_home_listens_in_the_agent_home() {
         pin_trust: PinTrust::Pinned,
         upstream: Arc::new(HeldUpstream::disconnected()),
         sink: RefusalSink::new(None),
+        marks: Default::default(),
         approvals: Default::default(),
     })
     .await

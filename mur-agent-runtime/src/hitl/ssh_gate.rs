@@ -68,7 +68,7 @@ impl SignGate for SshSignGate {
     async fn decide(&self, ask: &SignAsk) -> GateOutcome {
         let hash = ssh_action_hash(&self.agent, &ask.key_fp, &ask.host_key_fp);
         match self.store.lookup(&hash).await {
-            Some(Settled::Allow) => return GateOutcome::Allow,
+            Some(Settled::Allow) => return self.allow(&hash).await,
             Some(Settled::Deny) => return GateOutcome::Deny,
             None => {}
         }
@@ -77,9 +77,14 @@ impl SignGate for SshSignGate {
             Err(why) => return GateOutcome::Unavailable(why),
         };
         let settled = tokio::time::timeout(self.wait, answer.wait_for(Option::is_some)).await;
+        // Copy the answer out: the watch guard must not be held across the
+        // read-back below.
+        let settled = settled.map(|r| r.map(|v| *v));
         match settled {
-            Ok(Ok(v)) => match *v {
-                Some(true) => GateOutcome::Allow,
+            Ok(Ok(v)) => match v {
+                // The recorder task records, then releases, then sends, so
+                // the decision is on disk (or failed to be) by now.
+                Some(true) => self.allow(&hash).await,
                 _ => GateOutcome::Deny,
             },
             // The waiter went away without an answer: the approvals map was
@@ -91,6 +96,18 @@ impl SignGate for SshSignGate {
 }
 
 impl SshSignGate {
+    /// `Allow`, carrying the live allow decision for `hash` if it can be read
+    /// back. A deny read back here is a newer answer that won a race with the
+    /// one being acted on (a forget and re-ask answered no): it is honored,
+    /// never signed past. A read-back that finds nothing (a failed record, a
+    /// damaged log) still allows, with no decision, so no mark is written.
+    async fn allow(&self, hash: &str) -> GateOutcome {
+        match self.store.live(hash).await {
+            Some(d) if !d.allow => GateOutcome::Deny,
+            decision => GateOutcome::Allow { decision },
+        }
+    }
+
     /// The answer channel of the ask already out for `hash`, or a new ask.
     ///
     /// The pending entry is reserved under one lock, before any await, so
@@ -229,10 +246,11 @@ fn named(label: Option<&str>, fp: &str) -> String {
 
 /// The decision-log label: names and fingerprints only, never session data.
 fn label(ask: &SignAsk) -> String {
-    format!(
-        "{SSH_SIGN_TOOL}: {} -> {}",
-        ask.key_label.as_deref().unwrap_or(&ask.key_fp),
-        ask.host_label.as_deref().unwrap_or(&ask.host_key_fp),
+    super::ssh::ssh_decision_label(
+        &ask.key_fp,
+        ask.key_label.as_deref(),
+        &ask.host_key_fp,
+        ask.host_label.as_deref(),
     )
 }
 

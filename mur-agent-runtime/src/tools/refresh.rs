@@ -81,6 +81,9 @@ pub struct McpRefresh {
     /// `None`: the server's own tool-call timeout, so a server configured as
     /// slow is given the same patience here.
     list_timeout: Option<Duration>,
+    /// MCP wire names a built-in replaced at boot (`parallel_jobs`, #2379); a
+    /// re-list must not bring them back beside it.
+    shadowed: HashSet<String>,
 }
 
 impl McpRefresh {
@@ -108,7 +111,14 @@ impl McpRefresh {
                 said: HashSet::new(),
             }),
             list_timeout: None,
+            shadowed: HashSet::new(),
         }
+    }
+
+    /// Keep `names` out of every re-listed tool set.
+    pub fn with_shadowed(mut self, names: impl IntoIterator<Item = String>) -> Self {
+        self.shadowed = names.into_iter().collect();
+        self
     }
 
     /// Bound every re-list by `t` instead of each server's tool-call timeout.
@@ -167,7 +177,12 @@ impl McpRefresh {
                         self.session_cwd.as_ref(),
                     );
                     tools.retain(|t| !belongs_to(t.name(), &server));
-                    tools.extend(fresh.iter().cloned());
+                    tools.extend(
+                        fresh
+                            .iter()
+                            .filter(|t| !self.shadowed.contains(t.name()))
+                            .cloned(),
+                    );
                     let now = listed(entry, &fresh);
                     if let Some(prev) = &previous {
                         out.notices.extend(name_diff(&server, prev, &now));

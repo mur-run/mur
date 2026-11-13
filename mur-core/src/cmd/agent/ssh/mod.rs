@@ -5,12 +5,15 @@
 //! without its pin would make the supervisor refuse to start, and a stale
 //! `known_hosts` would point ssh at host keys the policy no longer allows.
 
+mod allow;
 mod commit;
-mod edit;
-mod resolve;
+pub(in crate::cmd::agent) mod edit;
+pub(in crate::cmd::agent) mod resolve;
+pub mod setup;
 mod spawn_grant;
 mod stage;
-mod view;
+pub mod status;
+pub(in crate::cmd::agent) mod view;
 
 use std::io::Write;
 
@@ -18,9 +21,9 @@ use anyhow::{Result, bail};
 
 use super::{load_profile_for_edit, perm::warn_if_running, resolve_mur_home};
 use crate::cmd::consent::{Consent, literal_yes};
-use edit::{AllowOutcome, Grant, HostGrant, RevokeScope};
-use resolve::{DEFAULT_SSH_PORT, KeyRef, ScannedKey};
+use edit::RevokeScope;
 
+pub use allow::cmd_ssh_allow;
 pub use view::cmd_ssh_list;
 
 /// Parsed `mur agent ssh allow` arguments.
@@ -33,6 +36,8 @@ pub struct AllowArgs<'a> {
     pub host_key: Option<&'a str>,
     pub host_label: Option<&'a str>,
     pub yes: bool,
+    /// Write the grant and stop there; the user restarts later.
+    pub no_restart: bool,
 }
 
 /// The `--yes` contract: "I already know both fingerprints, don't ask me".
@@ -71,183 +76,6 @@ fn checked_fp(flag: &str, fp: &str) -> Result<String> {
         bail!("{flag} '{fp}' is not a SHA256: fingerprint (as printed by `ssh-keygen -lf`)");
     }
     Ok(fp.to_string())
-}
-
-/// The host keys an `allow` will add, after any scan.
-fn host_grants(a: &AllowArgs) -> Result<Vec<HostGrant>> {
-    let label = a.host_label.map(str::to_string);
-    let pinned_fp = a
-        .host_key
-        .map(|fp| checked_fp("--host-key", fp))
-        .transpose()?;
-    let Some(host) = a.host else {
-        if a.port.is_some() {
-            bail!("--port only applies with --host");
-        }
-        return Ok(pinned_fp
-            .map(|fp| HostGrant {
-                host_key_fp: fp,
-                label,
-                known_host: None,
-            })
-            .into_iter()
-            .collect());
-    };
-    let scanned = resolve::scan_host(host, a.port.unwrap_or(DEFAULT_SSH_PORT))?;
-    let keep: Vec<ScannedKey> = match &pinned_fp {
-        Some(fp) => {
-            let hit: Vec<ScannedKey> = scanned
-                .iter()
-                .filter(|k| &k.fingerprint == fp)
-                .cloned()
-                .collect();
-            if hit.is_empty() {
-                let offered: Vec<&str> = scanned.iter().map(|k| k.fingerprint.as_str()).collect();
-                bail!(
-                    "{host} did not offer host key {fp}; it offered:\n  {}\n\
-                     Nothing was changed. If the server rotated its key, verify the new one \
-                     out of band before allowing it.",
-                    offered.join("\n  ")
-                );
-            }
-            hit
-        }
-        None => scanned,
-    };
-    let label = label.or_else(|| Some(host.to_string()));
-    Ok(keep
-        .into_iter()
-        .map(|k| HostGrant {
-            host_key_fp: k.fingerprint,
-            label: label.clone(),
-            known_host: Some(k.entry),
-        })
-        .collect())
-}
-
-pub fn cmd_ssh_allow(a: &AllowArgs) -> Result<()> {
-    check_yes_contract(a)?;
-    let consent = Consent::detect(a.yes);
-    if consent == Consent::Impossible {
-        bail!(
-            "`mur agent ssh allow` lets the agent sign with your ssh key and needs confirmation, \
-             but there is no terminal to ask. Re-run at a terminal, or with \
-             --key <SHA256:...> --host-key <SHA256:...> --yes"
-        );
-    }
-    let agent = canonical_agent(a.agent)?;
-    // Fail on a missing agent before any network lookup.
-    load_profile_for_edit(&agent)?;
-    let key = resolve::resolve_key(a.key)?;
-    let hosts = host_grants(a)?;
-
-    let mut err = std::io::stderr();
-    print_preview(&mut err, &agent, &key, a.label, &hosts)?;
-    if consent == Consent::Ask && !literal_yes(&mut std::io::stdin().lock(), &mut err)? {
-        bail!("cancelled — nothing was changed");
-    }
-
-    let key_label = a.label.map(str::to_string);
-    let key_fp = key.fingerprint().to_string();
-    let grants: Vec<Grant> = if hosts.is_empty() {
-        vec![Grant {
-            key_fp: key_fp.clone(),
-            key_label: key_label.clone(),
-            host: None,
-        }]
-    } else {
-        hosts
-            .iter()
-            .map(|h| Grant {
-                key_fp: key_fp.clone(),
-                key_label: key_label.clone(),
-                host: Some(h.clone()),
-            })
-            .collect()
-    };
-    let mut outcome = AllowOutcome::Updated;
-    commit::apply(&agent, |ent| {
-        for g in &grants {
-            if edit::allow(ent, g) == AllowOutcome::Added {
-                outcome = AllowOutcome::Added;
-            }
-        }
-        Ok(())
-    })?;
-
-    let verb = match outcome {
-        AllowOutcome::Added => "allowed",
-        AllowOutcome::Updated => "already allowed (labels refreshed)",
-    };
-    println!(
-        "{agent}: {verb} key {key_fp} for {} host key(s)",
-        hosts.len()
-    );
-    print_host_notes(&hosts);
-    spawn_grant::offer(&agent, a.yes)?;
-    warn_if_running(&agent);
-    Ok(())
-}
-
-fn print_preview(
-    out: &mut dyn Write,
-    agent: &str,
-    key: &KeyRef,
-    label: Option<&str>,
-    hosts: &[HostGrant],
-) -> Result<()> {
-    writeln!(
-        out,
-        "Allow agent '{agent}' to request signatures from your ssh-agent:"
-    )?;
-    match key {
-        KeyRef::Fingerprint(fp) => writeln!(out, "  key       {fp}")?,
-        KeyRef::Resolved {
-            fingerprint,
-            comment,
-        } => writeln!(
-            out,
-            "  key       {fingerprint}  (matched comment '{comment}')"
-        )?,
-    }
-    if let Some(l) = label {
-        writeln!(out, "  label     {l}  (display only)")?;
-    }
-    if hosts.is_empty() {
-        writeln!(
-            out,
-            "  hosts     none — the key is listed but signs for no host yet"
-        )?;
-    }
-    for h in hosts {
-        let how = match &h.known_host {
-            Some(kh) => format!("{} {}, scanned just now", kh.host, kh.key_type),
-            None => "fingerprint given, not scanned".to_string(),
-        };
-        writeln!(out, "  host key  {}  ({how})", h.host_key_fp)?;
-    }
-    writeln!(
-        out,
-        "Every signature still asks you first (HITL), unless you remember a decision."
-    )?;
-    if hosts.iter().any(|h| h.known_host.is_some()) {
-        writeln!(
-            out,
-            "Compare the host key(s) with the fingerprints the server operator publishes \
-             before you confirm."
-        )?;
-    }
-    Ok(())
-}
-
-fn print_host_notes(hosts: &[HostGrant]) {
-    if hosts.iter().any(|h| h.known_host.is_none()) {
-        println!(
-            "note: --host-key alone writes no known_hosts entry, so the agent's ssh will fail \
-             host key checking for that host. Add --host <name> to write one (the scanned key \
-             is checked against --host-key)."
-        );
-    }
 }
 
 /// Parsed `mur agent ssh revoke` arguments.

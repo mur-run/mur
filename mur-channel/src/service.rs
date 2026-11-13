@@ -283,10 +283,20 @@ impl ChannelService {
     /// Create a channel that records a workflow execution. No agent participant;
     /// the DAG executor acts as `ChannelActor::System`.
     pub fn create_for_workflow(&self, skill_name: &str) -> Result<Channel> {
+        self.create_for_workflow_with_id(skill_name, &uuid::Uuid::now_v7().to_string())
+    }
+
+    /// [`Self::create_for_workflow`] under an id the caller minted earlier —
+    /// a sealed agent that already handed the id back as its run handle
+    /// (#2379). Refuses an id that is not a UUID or is already taken, so a
+    /// replayed request can never append to someone else's channel.
+    pub fn create_for_workflow_with_id(&self, skill_name: &str, id: &str) -> Result<Channel> {
+        uuid::Uuid::parse_str(id).map_err(|e| anyhow::anyhow!("channel id {id:?}: {e}"))?;
+        anyhow::ensure!(!self.exists(id), "channel {id} already exists");
         let now = Utc::now();
         let ch = Channel {
             v: CHANNEL_SCHEMA_VERSION,
-            id: uuid::Uuid::now_v7().to_string(),
+            id: id.to_string(),
             title: format!("workflow: {skill_name}"),
             goal: Goal::default(),
             state: ChannelState::Working,

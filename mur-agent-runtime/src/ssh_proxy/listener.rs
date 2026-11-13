@@ -15,6 +15,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
 
 use super::gate::SignGate;
+use super::mark::MarkSink;
 use super::policy::Policy;
 use super::refusal::{Refusal, RefusalCode, RefusalSink};
 use super::session::{Session, Upstream};
@@ -183,6 +184,8 @@ pub struct Proxy {
     pub policy: Policy,
     pub upstream: Arc<HeldUpstream>,
     pub sink: RefusalSink,
+    /// Where signing marks go.
+    pub marks: MarkSink,
     /// Who may connect at all (runs before any byte is read).
     pub gate: PeerGate,
     /// Who approves each signature that passed policy.
@@ -202,7 +205,8 @@ impl Proxy {
             );
             return;
         }
-        let session = Session::new(&self.policy, &*self.upstream, &self.sink, &*self.approvals);
+        let session = Session::new(&self.policy, &*self.upstream, &self.sink, &*self.approvals)
+            .with_marks(&self.marks);
         if let Err(e) = session.serve(stream).await {
             tracing::debug!(error = %e, "ssh-agent proxy client connection ended");
         }

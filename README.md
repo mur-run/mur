@@ -200,7 +200,9 @@ to its agent, so `@other …` sends nothing and points you at
 non-zero, and never create a channel or add a participant: `RESERVED_NAME`
 (`agent`, `fleet`, `all`), `UNKNOWN_TARGET`, `AMBIGUOUS_TARGET` (use `@agent:`
 or `@fleet:`), `UNKNOWN_CONVERSATION`, `CHANNEL_NOT_CONVERSATION`,
-`NOT_A_PARTICIPANT`, `TARGET_OFFLINE`.
+`NOT_A_PARTICIPANT`, `TARGET_OFFLINE`. If the agent's runtime dies mid-turn,
+the send reports `TARGET_EXITED`; the message is already in the channel, so
+restart the agent and resend to the same `#N`.
 
 The agent refuses a channel turn it cannot trust, and murmur shows the
 refusal instead of retrying it. Checks run in this order; the first failure wins:
@@ -635,6 +637,12 @@ Agent** wizard offers the same catalog as a source.
   detection covers only the socket the proxy uses. Commit signing (SSHSIG),
   `ssh -A`, and `ssh-add -h` keys are not supported. For git, HTTPS via
   `gh auth setup-git` is still the simpler path.
+  In `mur agent cli`, `/ssh <host[:port]> [user]` does the same in a card:
+  pick (or `ssh-add`) a key, compare the scanned host key against your own
+  `known_hosts` — a changed key is refused until you paste the fingerprint —
+  and Approve writes the grant and restarts the agent once. When the agent
+  calls `ssh_request` the card opens by itself and resumes its work after;
+  bare `/ssh` lists the grants and the requests still waiting.
 - **Grant a host when it is blocked** — when the browser is refused a host, the
   chat shows *this time* / *always* / *no* choices after the turn. *This time*
   lets it through until the agent restarts and writes nothing; *always* shows
@@ -1073,6 +1081,13 @@ Agent** wizard offers the same catalog as a source.
   in `fleet.yaml`, which is left untouched. An agent's `fleet_run` tool does
   the same with `goal`; its new `job` field is the one-shot task (passing
   `goal` alone used to run it as a one-shot job).
+- **`parallel_jobs` from a sandboxed agent goes through the daemon** — the
+  agent signs the request with its own key and `mur-daemon` launches the run,
+  so a write-grant approval it parks is signed and you can answer it (it used
+  to land unsigned and could never be approved). Needs `mur daemon start`.
+  Only agents in `parallel_jobs.targets` can be named; set
+  `parallel_jobs.requesters` in `~/.mur/config.yaml` to limit who may ask
+  (empty = any agent). An agent's `yes: true` is ignored: approvals go to you.
 - **Long work returns a handle; liveness is a heartbeat** — `fleet_run` and
   `parallel_jobs` answer `{run_id, status: dispatched}` within a second and
   you poll `mur_job_status <run_id>` (or `mur fleet status`); the result lands

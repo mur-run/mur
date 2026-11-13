@@ -14,8 +14,6 @@ pub const KEYSCAN_BIN: &str = "ssh-keyscan";
 pub const SSH_ADD_BIN: &str = "ssh-add";
 /// Per-host connect timeout handed to `ssh-keyscan -T`.
 pub const KEYSCAN_TIMEOUT: Duration = Duration::from_secs(10);
-/// Port `known_hosts` leaves implicit.
-pub const DEFAULT_SSH_PORT: u16 = 22;
 
 /// One host key a scan returned, with its fingerprint.
 #[derive(Debug, Clone, PartialEq)]
@@ -24,17 +22,13 @@ pub struct ScannedKey {
     pub entry: SshKnownHost,
 }
 
-/// Reject a host that could be read as an option, or that is not one token.
+/// Reject anything that is not a DNS name or an address. The same rule the
+/// `ssh_request` reader applies (`mur_ssh_request`), so a host
+/// the CLI accepts is one a request could name.
 pub fn validate_host(host: &str) -> Result<()> {
-    if host.is_empty()
-        || host.starts_with('-')
-        || host
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || c == ',')
-    {
-        bail!("invalid host '{host}': expected a single hostname or address");
-    }
-    Ok(())
+    mur_ssh_request::RequestHost::parse(host, None)
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Scan `host:port` once and return every host key it offers.

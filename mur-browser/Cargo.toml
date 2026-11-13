@@ -25,7 +25,12 @@ unicode-normalization = "0.1.25"
 unicode-width = "0.1"
 tempfile = "3"
 shell-words = "1"
+fs2 = { workspace = true }
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
 tracing-subscriber = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

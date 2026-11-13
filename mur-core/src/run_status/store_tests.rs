@@ -177,7 +177,8 @@ fn save_is_atomic_under_concurrent_reads() {
     writer.join().unwrap();
 
     // No leftover run.json.tmp after the dust settles, even under load.
-    let entries: Vec<_> = std::fs::read_dir(runs_dir(&mur_home).join(run_id))
+    // Where `save` actually wrote: honours `MUR_RUN_OWNER` like the writer.
+    let entries: Vec<_> = std::fs::read_dir(record_dir(&mur_home, RunKind::Job, None, run_id))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
@@ -305,7 +306,9 @@ fn concurrent_updates_all_land_with_no_lost_writes() {
     // No leftover .lock cruft mid-run either — best-effort sanity check,
     // not load-bearing for correctness.
     assert!(
-        runs_dir(&mur_home).join(run_id).join(".lock").exists(),
+        record_dir(&mur_home, RunKind::Job, None, run_id)
+            .join(".lock")
+            .exists(),
         "lock file should exist (created on first update)"
     );
 }

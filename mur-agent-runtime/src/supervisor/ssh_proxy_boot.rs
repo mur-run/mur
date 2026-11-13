@@ -68,6 +68,7 @@ pub(super) struct StartArgs<'a> {
     pub pin_trust: PinTrust,
     pub upstream: Arc<HeldUpstream>,
     pub sink: RefusalSink,
+    pub marks: crate::ssh_proxy::mark::MarkSink,
     /// Filled by the supervisor once its approval channel exists; until then
     /// every sign request is refused `hitl_unavailable`.
     pub approvals: Arc<GateSlot>,
@@ -110,6 +111,7 @@ pub(super) async fn start_after_seal(a: StartArgs<'_>) -> Option<PathBuf> {
         policy,
         upstream: a.upstream,
         sink: a.sink,
+        marks: a.marks,
         gate: listener::self_only_gate(std::process::id(), a.agents_dir),
         approvals: a.approvals,
     });

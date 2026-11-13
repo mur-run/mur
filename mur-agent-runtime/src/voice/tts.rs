@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use anyhow::{Context, Result};
 use mur_common::agent::VoiceId;
 use ndarray::{Array1, Array2};
-use ort::{session::Session, value::Tensor};
+use ort::{environment::Environment, session::Session, value::Tensor};
 
 use crate::voice::types::{N_VOICES, STYLE_DIM, STYLE_ROWS, VOICES_BIN_LEN};
 
@@ -69,11 +69,29 @@ pub struct KokoroTts {
     voice_id: VoiceId,
 }
 
+/// The process-wide ONNX Runtime environment. ort >= rc.14 requires an explicit
+/// environment per session and refuses to build a second one in the same
+/// process, so every `KokoroTts` shares this one. A failed build is cached too:
+/// retrying would hit ort's "only one environment" guard anyway.
+static ORT_ENV: std::sync::LazyLock<std::result::Result<Environment, String>> =
+    std::sync::LazyLock::new(|| {
+        ort::init()
+            .with_name("mur-tts")
+            .build()
+            .map_err(|e| e.to_string())
+    });
+
+fn ort_env() -> Result<&'static Environment> {
+    ORT_ENV
+        .as_ref()
+        .map_err(|e| anyhow::anyhow!("ort environment init: {e}"))
+}
+
 impl KokoroTts {
     /// Load the Kokoro ONNX model from `onnx_path` and the style matrix from
     /// `voices_path`. Returns an error if either file is missing or corrupt.
     pub fn new(onnx_path: &Path, voices_path: &Path, voice_id: VoiceId) -> Result<Self> {
-        let session = Session::builder()
+        let session = Session::builder(ort_env()?)
             .context("ort Session::builder")?
             .commit_from_file(onnx_path)
             .context("load kokoro onnx")?;

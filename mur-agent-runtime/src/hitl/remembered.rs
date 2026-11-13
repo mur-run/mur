@@ -21,7 +21,7 @@ use serde::Serialize;
 use super::store::Settled;
 
 /// One decision gate B would replay right now.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LiveDecision {
     pub action_hash: String,
     pub allow: bool,
@@ -92,4 +92,26 @@ pub fn live_decisions(
         }
     }
     live
+}
+
+/// Every signed allow ever recorded, as `(action_hash, issued_at)`, ignoring
+/// freshness and revocations: the history a signing mark can be matched
+/// against after its approval stopped being live (SSH setup spec, "Expired
+/// marks are history, not state"). Never a decision source: the gate reads
+/// [`live_decisions`] only.
+pub fn signed_allows(
+    channel_id: &str,
+    events: &[ChannelEvent],
+    pubkey: &[u8; 32],
+) -> std::collections::HashSet<(String, DateTime<Utc>)> {
+    events
+        .iter()
+        .filter(|e| e.kind == EventKind::HitlResponse)
+        .filter_map(|e| {
+            let r = serde_json::from_value::<HitlResponse>(e.payload.clone()).ok()?;
+            let at = r.issued_at?;
+            (r.allow && mur_channel::sign::verify_one(channel_id, e, pubkey, true))
+                .then_some((r.action_hash, at))
+        })
+        .collect()
 }

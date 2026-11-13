@@ -69,6 +69,7 @@ mod shell;
 mod shell_complete;
 mod skin_cmd;
 mod slash_cmds;
+mod ssh_card;
 mod step;
 pub(crate) mod stream;
 mod stream_handler;
@@ -275,7 +276,7 @@ fn help_text() -> String {
         "  chat      /clear (new conversation) · /sessions · /channels [N|id-prefix] (list/switch) · /channels N --follow (live-tail) · /channels --stop",
         "  look      /card · /open (outstanding items) · /memories · /monitor (durable monitors; Ctrl+T / Alt+M)",
         settings.as_str(),
-        "  agent     /mcp · /skill · /browser [--add|auth|testing|automation [--profile <site>]|live <host>... [--replace] [--profile <site>|--no-profile]|list [keyword]] · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
+        "  agent     /mcp · /skill · /browser [--add|auth|testing|automation [--profile <site>]|live <host>... [--replace] [--profile <site>|--no-profile]|list [keyword]] · /secret <KEY> [--delete] (hidden input, never enters the chat) · /ssh [host[:port] [user]|N] (SSH setup card; bare lists requests) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
         "  memory    /remember <text> (when relevant) · /instruct <text> (every turn) · /memories · /forget <name|last>",
         "            /pin <name> · /unpin <name> · /instruct-edit <name> <text>",
         "  review    /review --main <agent> --reviewer <agent> <task…> (main/reviewer loop in this pane) · /review resume <session> · /review (paused sessions)",

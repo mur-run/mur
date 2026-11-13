@@ -708,6 +708,7 @@ fn request_login_handover(app: &mut crate::cmd::agent::cli::app::App, p: Provide
         done_note: None,
         _lock: lock,
     });
+    crate::cmd::agent::cli::term::note_handover_deferred(app, p.label());
 }
 
 mod stamp;

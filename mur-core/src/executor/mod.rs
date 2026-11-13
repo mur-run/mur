@@ -4,6 +4,7 @@ pub mod dag;
 pub mod delegation;
 #[allow(dead_code)] // jobs.rs's pub API consumed cross-crate by mur-mcp-server, not by mur binary
 pub mod jobs;
+pub mod jobs_request;
 pub mod pipeline;
 pub mod triage;
 pub mod triage_calibration;

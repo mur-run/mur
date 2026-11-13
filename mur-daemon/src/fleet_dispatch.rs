@@ -20,12 +20,9 @@ use anyhow::Context;
 use mur_common::config::Config;
 use mur_common::identity::AgentIdentity;
 use mur_track::fleet_dispatch_request::{
-    FLEET_DISPATCH_RECORD_FILE, FLEET_DISPATCH_REQUEST_DIR, FleetDispatchRecord,
-    FleetDispatchRequest, FleetDispatchStatus,
+    FLEET_DISPATCH_RECORD_FILE, FLEET_DISPATCH_REQUEST_DIR, FLEET_RUN_LOG_FILE as RUN_LOG_FILE,
+    FleetDispatchRecord, FleetDispatchRequest, FleetDispatchStatus,
 };
-
-/// The child's log, beside its record — the path `fleet_run` already returned.
-const RUN_LOG_FILE: &str = "fleet_run.log";
 
 pub fn spawn(mur_dir: PathBuf) {
     tokio::spawn(async move {
@@ -84,7 +81,7 @@ pub fn write_heartbeat(mur_dir: &Path, now: chrono::DateTime<chrono::Utc>) -> an
 
 /// The `mur` CLI to launch: `MUR_BIN` if set, else the `mur` beside this
 /// binary (they ship together), else a PATH lookup as the last resort.
-fn mur_bin() -> PathBuf {
+pub(crate) fn mur_bin() -> PathBuf {
     if let Some(v) = std::env::var_os("MUR_BIN") {
         return PathBuf::from(v);
     }
@@ -174,13 +171,14 @@ fn process_one(
     anyhow::ensure!(!record_path.exists(), "run id already used (replay)");
 
     match authorize_and_launch(mur_dir, &req, cfg, mur_bin, &run_dir, launched) {
-        Ok(router) => {
+        Ok((router, pid)) => {
             write_record(
                 &record_path,
                 &req,
                 Some(router),
                 FleetDispatchStatus::Launched,
                 None,
+                Some(pid),
             )?;
             tracing::info!(fleet = %d.fleet, run_id = %d.run_id, dispatched_by = %d.requested_by, "fleet dispatched by daemon");
             Ok(())
@@ -194,6 +192,7 @@ fn process_one(
                 None,
                 FleetDispatchStatus::Rejected,
                 Some(format!("{e:#}")),
+                None,
             );
             Err(e)
         }
@@ -201,7 +200,7 @@ fn process_one(
 }
 
 /// Re-apply every gate `fleet_run` applies, from the user's config — then
-/// launch. Returns the router the child will sign as.
+/// launch. Returns the router the child will sign as, and the child's pid.
 fn authorize_and_launch(
     mur_dir: &Path,
     req: &FleetDispatchRequest,
@@ -209,7 +208,7 @@ fn authorize_and_launch(
     mur_bin: &Path,
     run_dir: &Path,
     launched: &mut HashSet<String>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(String, u32)> {
     let d = &req.dispatch;
     anyhow::ensure!(
         mur_agent_runtime::tools::fleet_run::allowed(&cfg.fleet_run, &d.requested_by, &d.fleet),
@@ -266,13 +265,14 @@ fn authorize_and_launch(
         .stderr(std::process::Stdio::from(log_err))
         .spawn()
         .with_context(|| format!("spawn {}", mur_bin.display()))?;
+    let pid = child.id();
     launched.insert(d.fleet.clone());
     // Detached; reap on a thread so it never lingers as a zombie. The run is
     // bounded by the fleet's limits and `mur fleet stop`, not by this daemon.
     std::thread::spawn(move || {
         let _ = child.wait();
     });
-    Ok(router)
+    Ok((router, pid))
 }
 
 fn write_record(
@@ -281,6 +281,7 @@ fn write_record(
     router: Option<String>,
     status: FleetDispatchStatus,
     reason: Option<String>,
+    pid: Option<u32>,
 ) -> anyhow::Result<()> {
     let record = FleetDispatchRecord {
         run_id: req.dispatch.run_id.clone(),
@@ -289,6 +290,7 @@ fn write_record(
         router,
         status,
         reason,
+        pid,
         decided_at: chrono::Utc::now(),
     };
     if let Some(parent) = path.parent() {

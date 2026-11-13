@@ -364,6 +364,9 @@ pub fn playwright_command(extra_args: &[String]) -> Result<Command> {
     let (program, args) = crate::server::launch_argv(&entry, extra_args);
     let mut cmd = Command::new(program);
     cmd.args(args);
+    // The handover env is this process's alone (#2369). The fd it named is
+    // already closed: `record` takes the key before spawning anything.
+    cmd.env_remove(crate::state::STATE_KEY_FD_ENV);
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit())
@@ -499,7 +502,7 @@ where
     run_io_inner(agent_in, agent_out, server_in, server_out, hook, None).await
 }
 
-async fn run_io_inner<H, AI, AO, SI, SO>(
+pub(crate) async fn run_io_inner<H, AI, AO, SI, SO>(
     agent_in: AI,
     mut agent_out: AO,
     mut server_in: SI,

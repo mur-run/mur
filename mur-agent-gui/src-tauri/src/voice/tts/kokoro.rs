@@ -12,8 +12,27 @@
 //! we hardcode 0 in callers and ignore the per-pack idx.
 
 use anyhow::{Context, Result};
+use ort::environment::Environment;
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use std::path::Path;
+use std::sync::LazyLock;
+
+/// The process-wide ONNX Runtime environment. ort >= rc.14 requires an explicit
+/// environment per session and refuses to build a second one in the same
+/// process, so every `KokoroSession` shares this one. A failed build is cached
+/// too: retrying would hit ort's "only one environment" guard anyway.
+static ORT_ENV: LazyLock<std::result::Result<Environment, String>> = LazyLock::new(|| {
+    ort::init()
+        .with_name("mur-agent-gui-tts")
+        .build()
+        .map_err(|e| e.to_string())
+});
+
+fn ort_env() -> Result<&'static Environment> {
+    ORT_ENV
+        .as_ref()
+        .map_err(|e| anyhow::anyhow!("ort environment init: {e}"))
+}
 
 pub struct KokoroSession {
     session: Session,
@@ -25,7 +44,7 @@ impl KokoroSession {
     /// rate (24 kHz for Kokoro 82M); resampling for playback happens
     /// in the audio module.
     pub fn load(onnx_path: &Path, sample_rate_hz: u32) -> Result<Self> {
-        let session = Session::builder()
+        let session = Session::builder(ort_env()?)
             .context("ort Session builder")?
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(|e| anyhow::anyhow!("set optimization level: {e:?}"))?

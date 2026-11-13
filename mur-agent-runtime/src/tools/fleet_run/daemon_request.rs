@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use mur_track::fleet_dispatch_request::{
-    FLEET_DISPATCH_REQUEST_DIR, FleetDispatch, FleetDispatchRequest,
+    FLEET_DISPATCH_REQUEST_DIR, FLEET_RUN_LOG_FILE, FleetDispatch, FleetDispatchRequest,
 };
 
 use super::{FleetRunTool, ToolError, ToolOutput, dispatched_reply};
@@ -51,7 +51,7 @@ pub(super) fn dispatch_via_daemon(
         .map_err(|e| ToolError::Execution(format!("write fleet dispatch request: {e}")))?;
 
     let log_path =
-        mur_common::paths::fleet_run_dir(&tool.mur_home, &fleet, &run_id).join("fleet_run.log");
+        mur_common::paths::fleet_run_dir(&tool.mur_home, &fleet, &run_id).join(FLEET_RUN_LOG_FILE);
     let mut reply = dispatched_reply(&run_id, &fleet, &log_path, stale_timeout);
     reply["via"] = serde_json::json!("daemon");
     reply["signed_as"] = serde_json::json!(router);
@@ -76,7 +76,7 @@ pub(super) fn write_request(mur_home: &Path, req: &FleetDispatchRequest) -> anyh
 /// the sandbox grants a read on the heartbeat DIRECTORY (Landlock pins a file
 /// grant to one inode), and only a daemon that sweeps the request inbox
 /// writes it — an older daemon correctly reads as down.
-pub(super) fn daemon_alive(
+pub(crate) fn daemon_alive(
     mur_home: &Path,
     stale_secs: u64,
     now: chrono::DateTime<chrono::Utc>,

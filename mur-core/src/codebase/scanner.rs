@@ -1,5 +1,8 @@
-use std::fs;
+mod dir_handle;
+
 use std::path::{Path, PathBuf};
+
+use dir_handle::DirHandle;
 
 pub struct ScannedFile {
     pub relative_path: String,
@@ -58,88 +61,143 @@ fn language_for_ext(ext: &str) -> Option<&'static str> {
     }
 }
 
+/// Directory nesting the walk descends into before it stops. A bound on
+/// recursion, not a tuning knob: real source trees sit far below it.
+pub(crate) const MAX_WALK_DEPTH: usize = 64;
+
+/// Scans `project_path`, which on unix must be absolute and symlink-free
+/// (indexed roots are stored canonicalized); otherwise the scan is empty.
+/// See [`DirHandle::open_root`].
 pub fn scan_project(project_path: &Path) -> Vec<ScannedFile> {
-    let gitignore = load_gitignore(project_path);
     let mut files = Vec::new();
-    walk_dir(project_path, project_path, &gitignore, &mut files);
+    if let Some(dir) = DirHandle::open_root(project_path) {
+        let gitignore = load_gitignore_at(&dir);
+        walk_dir(
+            &dir,
+            project_path,
+            project_path,
+            0,
+            &gitignore,
+            &mut |_| {},
+            &mut files,
+        );
+    }
     files
 }
 
-fn walk_dir(root: &Path, dir: &Path, gitignore_patterns: &[String], out: &mut Vec<ScannedFile>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+/// What a directory entry is, judged from the entry itself, never its target.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EntryKind {
+    Dir,
+    File,
+    Other,
+}
 
-    let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-    entries.sort_by_key(|e| e.file_name());
+/// Walks `dir` without ever following a symlink. The index can be built by a
+/// process with wider filesystem access than whoever planted the tree (a
+/// sandboxed agent's commit triggers it), so a link pointing out of the repo
+/// would read files the planter could not, and `a -> .` would recurse forever.
+///
+/// Every open goes through the parent's [`DirHandle`], not a path, so
+/// swapping any directory on the way for a symlink after it was classified
+/// cannot redirect the walk: the handle already pins the real directory.
+/// `path` is only the logical location, used for ignore rules and output.
+/// `before_open` runs just before each open (tests use it to race the walk).
+fn walk_dir(
+    dir: &DirHandle,
+    root: &Path,
+    path: &Path,
+    depth: usize,
+    gitignore_patterns: &[String],
+    before_open: &mut dyn FnMut(&str),
+    out: &mut Vec<ScannedFile>,
+) {
+    if depth >= MAX_WALK_DEPTH {
+        return;
+    }
+    let mut entries = dir.entries();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-    for entry in entries {
-        let path = entry.path();
-        let file_name = entry.file_name();
+    for (file_name, kind) in entries {
         let name = file_name.to_string_lossy();
-
         if name.starts_with('.') {
             continue;
         }
+        let child = path.join(&file_name);
+        let rel = relative_path(root, &child);
 
-        if path.is_dir() {
-            if SKIP_DIRS.iter().any(|&s| name == s) {
-                continue;
-            }
-            let rel = relative_path(root, &path);
-            if is_gitignored(&rel, gitignore_patterns, true) {
-                continue;
-            }
-            walk_dir(root, &path, gitignore_patterns, out);
-        } else if path.is_file() {
-            let rel = relative_path(root, &path);
-            if is_gitignored(&rel, gitignore_patterns, false) {
-                continue;
-            }
-
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let language = match language_for_ext(ext) {
-                Some(lang) => lang,
-                None => continue,
-            };
-
-            let metadata = match fs::metadata(&path) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            if metadata.len() > 512 * 1024 {
-                continue;
-            }
-
-            let content = match fs::read(&path) {
-                Ok(bytes) => {
-                    let check_len = bytes.len().min(512);
-                    if bytes[..check_len].contains(&0) {
-                        continue;
-                    }
-                    match String::from_utf8(bytes) {
-                        Ok(s) => s,
-                        Err(_) => continue,
-                    }
+        match kind {
+            EntryKind::Dir => {
+                if SKIP_DIRS.iter().any(|&s| name == s)
+                    || is_gitignored(&rel, gitignore_patterns, true)
+                {
+                    continue;
                 }
-                Err(_) => continue,
-            };
-
-            out.push(ScannedFile {
-                relative_path: rel,
-                content,
-                language: language.to_string(),
-            });
+                before_open(&rel);
+                if let Some(sub) = dir.open_dir(&file_name) {
+                    walk_dir(
+                        &sub,
+                        root,
+                        &child,
+                        depth + 1,
+                        gitignore_patterns,
+                        before_open,
+                        out,
+                    );
+                }
+            }
+            EntryKind::File => {
+                if is_gitignored(&rel, gitignore_patterns, false) {
+                    continue;
+                }
+                let ext = child.extension().and_then(|e| e.to_str()).unwrap_or("");
+                let Some(language) = language_for_ext(ext) else {
+                    continue;
+                };
+                before_open(&rel);
+                let Some(bytes) = dir.read_file(&file_name) else {
+                    continue;
+                };
+                let check_len = bytes.len().min(512);
+                if bytes[..check_len].contains(&0) {
+                    continue;
+                }
+                let Ok(content) = String::from_utf8(bytes) else {
+                    continue;
+                };
+                out.push(ScannedFile {
+                    relative_path: rel,
+                    content,
+                    language: language.to_string(),
+                });
+            }
+            EntryKind::Other => {}
         }
     }
 }
 
+/// Root `.gitignore` patterns for a caller holding only a path (the code-nav
+/// wizard, which runs as the user). Canonicalizes first, so a root reached
+/// through a link still works there; the file itself is still opened
+/// `O_NOFOLLOW` through the root handle.
 pub(crate) fn load_gitignore(project_path: &Path) -> Vec<String> {
-    let gitignore_path = project_path.join(".gitignore");
-    let content = match fs::read_to_string(gitignore_path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
+    project_path
+        .canonicalize()
+        .ok()
+        .and_then(|p| DirHandle::open_root(&p))
+        .map(|dir| load_gitignore_at(&dir))
+        .unwrap_or_default()
+}
+
+/// Root `.gitignore` patterns, read through the already-open root handle
+/// (`O_NOFOLLOW`, size-capped), so a `.gitignore` symlinked out of the repo
+/// is not read and yields no patterns.
+fn load_gitignore_at(root: &DirHandle) -> Vec<String> {
+    let Some(content) = root
+        .read_file(std::ffi::OsStr::new(".gitignore"))
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    else {
+        return Vec::new();
     };
     content
         .lines()
@@ -269,6 +327,7 @@ pub fn expand_tilde(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_language_detection() {
@@ -291,6 +350,167 @@ mod tests {
         // Non-git path falls back to its own basename.
         let path = PathBuf::from("/home/user/Projects/my-app");
         assert_eq!(project_name_from_path(&path), "my-app");
+    }
+
+    /// A tempdir and its canonical path. The scanner requires a symlink-free
+    /// root (production stores `project_path` canonicalized), and macOS's
+    /// default temp dir sits under the `/var -> private/var` link.
+    fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        (tmp, base)
+    }
+
+    #[cfg(unix)]
+    fn symlink_fixture() -> (tempfile::TempDir, PathBuf) {
+        let (tmp, base) = canonical_tempdir();
+        let outside = base.join("outside");
+        let repo = base.join("repo");
+        fs::create_dir_all(outside.join("secrets")).unwrap();
+        fs::write(outside.join("secret.toml"), "token = \"leak\"\n").unwrap();
+        fs::write(outside.join("secrets/key.json"), "{\"k\":\"leak\"}\n").unwrap();
+        fs::create_dir_all(repo.join("src")).unwrap();
+        fs::write(repo.join("src/main.rs"), "fn main() {}\n").unwrap();
+        (tmp, repo)
+    }
+
+    fn paths(files: &[ScannedFile]) -> Vec<&str> {
+        files.iter().map(|f| f.relative_path.as_str()).collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_file_outside_root_is_not_indexed() {
+        let (tmp, repo) = symlink_fixture();
+        std::os::unix::fs::symlink(
+            tmp.path().join("outside/secret.toml"),
+            repo.join("cfg.toml"),
+        )
+        .unwrap();
+        let files = scan_project(&repo);
+        assert_eq!(paths(&files), ["src/main.rs"]);
+        assert!(files.iter().all(|f| !f.content.contains("leak")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_dir_outside_root_is_not_followed() {
+        let (tmp, repo) = symlink_fixture();
+        std::os::unix::fs::symlink(tmp.path().join("outside/secrets"), repo.join("vault")).unwrap();
+        let files = scan_project(&repo);
+        assert_eq!(paths(&files), ["src/main.rs"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn self_referencing_symlink_loop_terminates_without_duplicates() {
+        let (_tmp, repo) = symlink_fixture();
+        std::os::unix::fs::symlink(".", repo.join("a")).unwrap();
+        std::os::unix::fs::symlink("..", repo.join("src/up")).unwrap();
+        let files = scan_project(&repo);
+        assert_eq!(paths(&files), ["src/main.rs"]);
+    }
+
+    /// Scans `repo`, and the moment the walk has classified `trigger` but
+    /// not yet opened it, swaps `repo/src` for a symlink to an outside
+    /// directory holding a `main.rs` full of secrets.
+    #[cfg(unix)]
+    fn scan_with_src_swapped_at(trigger: &str) -> Vec<ScannedFile> {
+        let (tmp, repo) = symlink_fixture();
+        let outside = tmp.path().join("outside");
+        fs::write(outside.join("main.rs"), "const K: &str = \"leak\";\n").unwrap();
+        let gitignore = load_gitignore(&repo);
+        let mut swapped = false;
+        let mut files = Vec::new();
+        let mut swap = |rel: &str| {
+            if rel == trigger && !swapped {
+                swapped = true;
+                fs::rename(repo.join("src"), repo.join("src-moved")).unwrap();
+                std::os::unix::fs::symlink(&outside, repo.join("src")).unwrap();
+            }
+        };
+        let dir = DirHandle::open_root(&repo).unwrap();
+        walk_dir(&dir, &repo, &repo, 0, &gitignore, &mut swap, &mut files);
+        assert!(swapped, "walk never reached {trigger}");
+        files
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dir_swapped_for_symlink_before_descent_is_not_followed() {
+        let files = scan_with_src_swapped_at("src");
+        assert!(files.iter().all(|f| !f.content.contains("leak")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_swapped_for_symlink_before_file_read_is_not_followed() {
+        let files = scan_with_src_swapped_at("src/main.rs");
+        assert!(files.iter().all(|f| !f.content.contains("leak")));
+        assert_eq!(paths(&files), ["src/main.rs"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_that_is_a_symlink_scans_empty() {
+        let (tmp, repo) = symlink_fixture();
+        let link = tmp.path().canonicalize().unwrap().join("repo-link");
+        std::os::unix::fs::symlink(&repo, &link).unwrap();
+        assert!(scan_project(&link).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_below_a_symlinked_ancestor_scans_empty() {
+        let (tmp, _repo) = symlink_fixture();
+        let base = tmp.path().canonicalize().unwrap();
+        // `alias -> .`, so `alias/repo` names the real repo through a link.
+        std::os::unix::fs::symlink(".", base.join("alias")).unwrap();
+        assert!(scan_project(&base.join("alias/repo")).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_canonical_root_paths_scan_empty() {
+        let (_tmp, repo) = symlink_fixture();
+        assert!(scan_project(&repo.join("src/..")).is_empty());
+        assert!(scan_project(Path::new("relative/repo")).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_root_scans_as_before() {
+        let (_tmp, repo) = symlink_fixture();
+        fs::write(repo.join("src/gen.rs"), "fn g() {}\n").unwrap();
+        fs::write(repo.join("lib.py"), "x = 1\n").unwrap();
+        fs::write(repo.join(".gitignore"), "# generated\n/src/gen.rs\n").unwrap();
+        assert_eq!(load_gitignore(&repo), ["src/gen.rs"]);
+        assert_eq!(paths(&scan_project(&repo)), ["lib.py", "src/main.rs"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gitignore_symlinked_out_of_repo_is_not_read() {
+        let (tmp, repo) = symlink_fixture();
+        let outside = tmp.path().canonicalize().unwrap().join("outside/ignore");
+        fs::write(&outside, "src\n").unwrap();
+        std::os::unix::fs::symlink(&outside, repo.join(".gitignore")).unwrap();
+        assert!(load_gitignore(&repo).is_empty());
+        assert_eq!(paths(&scan_project(&repo)), ["src/main.rs"]);
+    }
+
+    #[test]
+    fn walk_stops_at_max_depth() {
+        let (_tmp, base) = canonical_tempdir();
+        let mut deep = base.clone();
+        for i in 0..=MAX_WALK_DEPTH {
+            deep.push(format!("d{i}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("too_deep.rs"), "fn x() {}\n").unwrap();
+        fs::write(base.join("d0/shallow.rs"), "fn y() {}\n").unwrap();
+        let files = scan_project(&base);
+        assert_eq!(paths(&files), ["d0/shallow.rs"]);
     }
 
     #[test]

@@ -41,8 +41,26 @@ pub enum Settled {
 pub trait DecisionStore: Send + Sync {
     /// Newest verified `HitlResponse` for `action_hash` inside the TTL, if any.
     async fn lookup(&self, action_hash: &str) -> Option<Settled>;
+    /// The live decision for `action_hash`: the same fold [`Self::lookup`]
+    /// reads, with its signed `issued_at`. The ssh gate hands it to the proxy
+    /// so a signing mark can name the approval. `None` by default, which
+    /// only costs a store the mark, never a decision.
+    async fn live(&self, _action_hash: &str) -> Option<LiveDecision> {
+        None
+    }
     /// Append a signed `HitlResponse`. Best-effort: an error is logged, never returned.
     async fn record(&self, resp: HitlResponse);
+}
+
+/// What a checked write did, beyond succeeding (#2350).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordOutcome {
+    /// Appended to the agent's existing decision channel.
+    Recorded,
+    /// The existing channel failed its integrity check, so the decision went
+    /// to a fresh one. Every decision remembered before this is gone, and the
+    /// agent will ask again for each of them.
+    RecordedOnFreshChannel { damaged_channel: String },
 }
 
 /// What `hitl/list` can report: the live decisions, or why there are none to
@@ -83,7 +101,7 @@ impl ChannelDecisionStore {
     }
 
     /// The live decisions — the same fold the gate and `hitl/list` read.
-    fn live(&self) -> Result<std::collections::HashMap<String, LiveDecision>> {
+    fn live_all(&self) -> Result<std::collections::HashMap<String, LiveDecision>> {
         let svc = ChannelService::open(&self.mur_home)?;
         let channel_id = self.channel_id(&svc)?;
         let pubkey = self.identity.verifying_key_bytes();
@@ -104,12 +122,12 @@ impl ChannelDecisionStore {
     }
 
     fn scan(&self, action_hash: &str) -> Result<Option<Settled>> {
-        Ok(self.live()?.get(action_hash).map(LiveDecision::settled))
+        Ok(self.live_all()?.get(action_hash).map(LiveDecision::settled))
     }
 
     /// Live decisions, newest first.
     pub fn list(&self) -> Result<Vec<LiveDecision>> {
-        let mut v: Vec<_> = self.live()?.into_values().collect();
+        let mut v: Vec<_> = self.live_all()?.into_values().collect();
         v.sort_by(|a, b| {
             b.issued_at
                 .cmp(&a.issued_at)
@@ -219,7 +237,7 @@ impl ChannelDecisionStore {
             return Ok(hashes);
         }
         let svc = self.sealing_service()?;
-        let channel_id = self.writable_channel(&svc)?;
+        let (channel_id, _) = self.writable_channel(&svc)?;
         for (scope, issued_at) in scopes {
             let rev = HitlRevocation { scope, issued_at };
             svc.append_signed(
@@ -253,8 +271,9 @@ impl ChannelDecisionStore {
     /// check, start a fresh one: sealing over a log with a hole would make the
     /// surviving older allow live again. The damaged channel is left on disk
     /// as evidence and never read again; the cost is that the agent asks
-    /// again for everything it had remembered.
-    fn writable_channel(&self, svc: &ChannelService) -> Result<String> {
+    /// again for everything it had remembered. The second value names the
+    /// damaged channel when one was replaced.
+    fn writable_channel(&self, svc: &ChannelService) -> Result<(String, Option<String>)> {
         let channel_id = self.channel_id(svc)?;
         let pubkey = self.identity.verifying_key_bytes();
         let verdict = {
@@ -262,7 +281,7 @@ impl ChannelDecisionStore {
             integrity::verify(&self.mur_home, &self.agent, &channel_id, &pubkey)
         };
         let Err(e) = verdict else {
-            return Ok(channel_id);
+            return Ok((channel_id, None));
         };
         tracing::warn!(
             error = %e,
@@ -276,12 +295,20 @@ impl ChannelDecisionStore {
             .join(&self.agent)
             .join(HITL_CHANNEL_FILE);
         std::fs::write(&marker, &fresh.id).context("record the replacement hitl channel id")?;
-        Ok(fresh.id)
+        Ok((fresh.id, Some(channel_id)))
     }
 
-    fn append(&self, resp: &HitlResponse) -> Result<()> {
+    /// Append a signed `HitlResponse` and report the result, for callers that
+    /// must not proceed when the decision was not stored (#2350). `record` is
+    /// the best-effort wrapper over this.
+    ///
+    /// Creating the channel and writing its marker are not under any lock, so
+    /// a caller outside the runtime must hold the agent's `running.sentinel`
+    /// (`mur_common::lock_file::probe_sentinel` returning `Free`) across this
+    /// call, or two first writes can each create a channel and one is lost.
+    pub fn record_checked(&self, resp: &HitlResponse) -> Result<RecordOutcome> {
         let svc = self.sealing_service()?;
-        let channel_id = self.writable_channel(&svc)?;
+        let (channel_id, damaged) = self.writable_channel(&svc)?;
         svc.append_signed(
             &channel_id,
             &self.identity,
@@ -293,7 +320,10 @@ impl ChannelDecisionStore {
             serde_json::to_value(resp)?,
             Some(format!("chat-hitl:{}", resp.hitl_id)),
         )?;
-        Ok(())
+        Ok(match damaged {
+            None => RecordOutcome::Recorded,
+            Some(damaged_channel) => RecordOutcome::RecordedOnFreshChannel { damaged_channel },
+        })
     }
 }
 
@@ -309,8 +339,18 @@ impl DecisionStore for ChannelDecisionStore {
         }
     }
 
+    async fn live(&self, action_hash: &str) -> Option<LiveDecision> {
+        match self.live_all() {
+            Ok(mut all) => all.remove(action_hash),
+            Err(e) => {
+                tracing::warn!(error = %e, "ssh-gate decision read-back failed; no signing mark");
+                None
+            }
+        }
+    }
+
     async fn record(&self, resp: HitlResponse) {
-        if let Err(e) = self.append(&resp) {
+        if let Err(e) = self.record_checked(&resp) {
             tracing::warn!(error = %e, hitl_id = %resp.hitl_id, "chat-gate decision not recorded");
         }
     }

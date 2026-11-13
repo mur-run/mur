@@ -119,6 +119,12 @@ pub enum Commands {
         #[command(subcommand)]
         action: MurmurdAction,
     },
+    /// Not a command: prints where SSH grants live (`mur agent ssh`).
+    #[command(hide = true, disable_help_flag = true)]
+    Ssh {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Run a workflow by name or semantic query
     #[command(hide = true)]
     Run {
@@ -538,3 +544,7 @@ mod code_nav_tests;
 #[cfg(test)]
 #[path = "fleet_goal_tests.rs"]
 mod fleet_goal_tests;
+
+#[cfg(test)]
+#[path = "index_worker_flags_tests.rs"]
+mod index_worker_flags_tests;

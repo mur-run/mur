@@ -24,7 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use mur_common::agent::SshEntitlement;
+use mur_common::agent::{Entitlements, SshEntitlement};
 use mur_common::entitlements_pin::{self, PinCheck, ProfileLock};
 
 use super::super::{load_profile_for_edit, resolve_mur_home, save_profile_pinned_held};
@@ -64,12 +64,21 @@ pub fn apply<F>(agent: &str, edit: F) -> Result<()>
 where
     F: FnOnce(&mut SshEntitlement) -> Result<()>,
 {
+    apply_entitlements(agent, |ent| edit(&mut ent.ssh))
+}
+
+/// [`apply`] over the whole entitlement block, so the SSH grant and the spawn
+/// change land in one locked write (SSH setup spec, `apply_and_restart`).
+pub fn apply_entitlements<F>(agent: &str, edit: F) -> Result<()>
+where
+    F: FnOnce(&mut Entitlements) -> Result<()>,
+{
     let mur_home = resolve_mur_home()?;
     let lock = lock(&mur_home, agent)?;
     let (profile_path, mut profile) = load_profile_for_edit(agent)?;
     require_trusted_pin(&mur_home, agent, &profile.entitlements)?;
 
-    edit(&mut profile.entitlements.ssh)?;
+    edit(&mut profile.entitlements)?;
 
     let agent_home = profile_path
         .parent()
@@ -117,11 +126,7 @@ fn lock(mur_home: &Path, agent: &str) -> Result<ProfileLock> {
 
 /// The ssh block is only as trustworthy as the pin, so refuse to build on a
 /// profile that already differs from it.
-fn require_trusted_pin(
-    mur_home: &Path,
-    agent: &str,
-    ent: &mur_common::agent::Entitlements,
-) -> Result<()> {
+fn require_trusted_pin(mur_home: &Path, agent: &str, ent: &Entitlements) -> Result<()> {
     match entitlements_pin::check(mur_home, agent, ent) {
         Ok(PinCheck::Match | PinCheck::Missing) => Ok(()),
         Ok(PinCheck::Mismatch { changed }) => bail!(

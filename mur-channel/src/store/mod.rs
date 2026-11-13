@@ -29,6 +29,9 @@ mod load;
 mod manifest_gate;
 #[cfg(test)]
 mod manifest_gate_tests;
+mod newer_kind;
+#[cfg(test)]
+mod newer_kind_tests;
 mod quarantine;
 
 pub(crate) use append::line_seq;
@@ -38,6 +41,7 @@ pub use chain::{GENESIS_PREV_HASH, line_hash};
 use load::check_absence_is_not_corruption;
 pub use load::{AnchorMismatch, AnchorMismatchKind, DamageReport};
 pub use manifest_gate::{ManifestError, ManifestPolicy};
+pub use newer_kind::NewerKindEvent;
 pub use quarantine::QUARANTINE_PREFIX;
 
 impl ChannelStore {
