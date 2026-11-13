@@ -900,6 +900,16 @@ Agent** wizard offers the same catalog as a source.
   registered before the agent started. A worktree added with `git worktree
   add` *after* that isn't covered until the agent restarts: the sandbox is
   sealed once, at start, and does not widen itself afterwards.
+- **A sealed agent's commits still refresh `mur project search`** — the
+  `post-commit` hook re-indexes the repo, but a sealed agent can't write
+  `~/.mur/indexes/codebase/`, so its commits used to leave the index stale
+  with `mur: skipped auto-index … Operation not permitted`. The hook now
+  drops an empty wake-up for `murmurd` and prints `mur: queued auto-index for
+  '<project>' with the daemon`; the daemon, outside every sandbox, rebuilds
+  whichever indexes are behind their repo's `HEAD`. The wake-up only says
+  "look": which index gets rebuilt is decided from index metadata no agent
+  can write. Tune or switch it off under `codebase_reindex:` in
+  `~/.mur/config.yaml`.
 - **A grant that never reached the kernel** — a filesystem entitlement only
   takes effect if its path exists when the agent starts, so granting a
   directory you hadn't created yet used to succeed at the CLI, survive a

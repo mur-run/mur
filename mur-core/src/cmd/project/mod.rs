@@ -376,13 +376,7 @@ pub(crate) async fn cmd_project_index(
         }
 
         // Overwrite lock with the child's pid
-        let lock = IndexLock {
-            pid,
-            project_name: project_name.clone(),
-            started_at: chrono::Utc::now().to_rfc3339(),
-        };
-        let lock_path = index.lock_path();
-        std::fs::write(&lock_path, serde_json::to_string(&lock)?)?;
+        index.hand_lock_to(pid)?;
 
         // Write initial progress
         index.write_progress(&IndexProgress {

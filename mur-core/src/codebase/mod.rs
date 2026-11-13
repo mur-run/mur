@@ -85,10 +85,18 @@ pub struct CodebaseIndex {
 
 impl CodebaseIndex {
     pub fn new(project_name: &str, project_path: &Path) -> Self {
-        let lance_path = crate::paths::mur_root(None)
-            .join("indexes")
-            .join("codebase")
-            .join(format!("{project_name}.lance"));
+        Self::in_dir(
+            &indexes_dir(&crate::paths::mur_root(None)),
+            project_name,
+            project_path,
+        )
+    }
+
+    /// Same index, but with its state files under an explicit `indexes_dir`
+    /// instead of the one derived from `MUR_HOME`. The daemon holds its MUR
+    /// home as a value, and tests point this at a temp dir.
+    pub fn in_dir(indexes_dir: &Path, project_name: &str, project_path: &Path) -> Self {
+        let lance_path = indexes_dir.join(format!("{project_name}.lance"));
         Self {
             lance_path,
             project_name: project_name.to_string(),
@@ -96,6 +104,11 @@ impl CodebaseIndex {
             db: Arc::new(OnceCell::new()),
         }
     }
+}
+
+/// Directory holding every codebase index and its state files.
+pub fn indexes_dir(mur_root: &Path) -> PathBuf {
+    mur_root.join("indexes").join("codebase")
 }
 
 /// Whether a recorded index width forces a full rebuild against the
