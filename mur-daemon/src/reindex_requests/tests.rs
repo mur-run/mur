@@ -69,7 +69,7 @@ impl Fx {
         ExecEnv {
             mur_home: self.home.clone(),
             indexes_dir: self.indexes(),
-            mur_bin: self.bin_dir.join("mur"),
+            mur_bin: Some(self.bin_dir.join("mur")),
             timeout,
         }
     }
@@ -195,6 +195,53 @@ fn in_flight_temp_left_alone_stale_temp_removed() {
     assert!(!tmp.exists(), "abandoned temp is reclaimed");
 }
 
+#[test]
+fn planted_directory_tree_is_removed_within_the_bound_each_sweep() {
+    let fx = Fx::new();
+    let inbox = fx.inbox();
+    let deep = inbox.join("planted/a/b");
+    std::fs::create_dir_all(&deep).unwrap();
+    for d in [&inbox.join("planted"), &inbox.join("planted/a"), &deep] {
+        for i in 0..5 {
+            std::fs::write(d.join(format!("f{i}")), "x").unwrap();
+        }
+    }
+    // 15 files and 3 directories against a bound of 4 per sweep.
+    let bound = 4;
+    let mut sweeps = 0;
+    while std::fs::read_dir(&inbox).unwrap().count() > 0 {
+        let s = intake::sweep(&inbox, bound, SystemTime::now());
+        assert!(
+            s.examined <= bound,
+            "one sweep did {} > {bound}",
+            s.examined
+        );
+        assert_eq!(s.wakeups, 0);
+        sweeps += 1;
+        assert!(sweeps < 50, "the tree is never fully removed");
+    }
+    assert!(sweeps > 18 / bound, "it cannot fit in fewer sweeps");
+}
+
+#[test]
+fn links_inside_a_planted_directory_are_unlinked_not_followed() {
+    let fx = Fx::new();
+    let inbox = fx.inbox();
+    let outside = fx.repos.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("keep"), "do not touch").unwrap();
+    std::fs::create_dir_all(inbox.join("planted")).unwrap();
+    std::os::unix::fs::symlink(&outside, inbox.join("planted/dirlink")).unwrap();
+    std::os::unix::fs::symlink(outside.join("keep"), inbox.join("planted/filelink")).unwrap();
+
+    intake::sweep(&inbox, 256, SystemTime::now());
+    assert_eq!(std::fs::read_dir(&inbox).unwrap().count(), 0);
+    assert_eq!(
+        std::fs::read_to_string(outside.join("keep")).unwrap(),
+        "do not touch"
+    );
+}
+
 // ── reconcile ───────────────────────────────────────────────────────────
 
 #[test]
@@ -240,11 +287,38 @@ fn symlinked_meta_rejected_torn_meta_deferred() {
 
     let r = reconcile::reconcile(&fx.indexes());
     assert!(r.stale.is_empty(), "symlinked meta must not yield a job");
-    assert!(r.deferred, "torn meta is retried, not dropped");
+    assert_eq!(r.deferred, ["torn"], "torn meta is retried, not dropped");
 
     let mut s = fx.scheduler(cfg());
     s.plan(0, Instant::now(), SystemTime::now());
     assert!(s.pending, "deferral keeps the next sweep reconciling");
+}
+
+#[test]
+fn meta_that_never_parses_stops_forcing_a_reconcile_every_sweep() {
+    let fx = Fx::new();
+    std::fs::write(meta_path(&fx.indexes(), "torn"), "{\"project_pa").unwrap();
+    let mut s = fx.scheduler(cfg());
+    let t = Instant::now();
+    for attempt in 1..=super::MAX_DEFERRED_RETRIES {
+        s.plan(0, t, SystemTime::now());
+        assert!(s.pending, "attempt {attempt} is still retried right away");
+    }
+    s.plan(0, t, SystemTime::now());
+    assert!(!s.pending, "past the bound it no longer forces a reconcile");
+
+    // Not forgotten: the next reconcile (here a wake-up) reads it again, and
+    // a meta that parses by then is rebuilt like any other.
+    let (r, _) = repo(&fx.repos.join("torn"));
+    commit(&r, "x");
+    fx.meta("torn", &fx.repos.join("torn"), Some("old".into()));
+    assert!(s.plan(0, t, SystemTime::now()).is_empty(), "not due");
+    mur_common::reindex_request::drop_wakeup(&fx.home).unwrap();
+    assert_eq!(s.plan(0, t, SystemTime::now()).len(), 1);
+    assert!(
+        s.unreadable.is_empty(),
+        "a meta that parses clears its count"
+    );
 }
 
 #[test]
@@ -323,6 +397,34 @@ async fn successful_worker_runs_with_opt_outs_and_releases_lock() {
     let argv = std::fs::read_to_string(fx.bin_dir.join("argv")).unwrap();
     assert!(argv.lines().any(|l| l == "--no-hook") && argv.lines().any(|l| l == "--no-notify"));
     assert_eq!(fx.lock_pid("a"), None, "lock released");
+}
+
+#[test]
+fn mur_binary_is_the_override_or_the_daemons_sibling_never_a_bare_name() {
+    let exe = Some(PathBuf::from("/opt/mur/bin/murmurd"));
+    assert_eq!(
+        exec::resolve_mur_bin(None, exe.clone()),
+        Some(PathBuf::from("/opt/mur/bin/mur"))
+    );
+    assert_eq!(
+        exec::resolve_mur_bin(Some("/dev/mur".into()), exe),
+        Some(PathBuf::from("/dev/mur"))
+    );
+    assert_eq!(exec::resolve_mur_bin(None, None), None);
+}
+
+#[tokio::test]
+async fn unlocatable_mur_binary_fails_the_job_and_releases_the_lock() {
+    let fx = Fx::new();
+    let (_r, _) = repo(&fx.repos.join("a"));
+    let env = ExecEnv {
+        mur_bin: None,
+        ..fx.env(Duration::from_secs(10))
+    };
+    let out = exec::run(&env, &job("a", &fx.repos.join("a")), no_shutdown()).await;
+    assert_eq!(out, Outcome::Failure(exec::NO_MUR_BIN.into()));
+    assert!(!fx.ran(), "nothing was spawned");
+    assert_eq!(fx.lock_pid("a"), None);
 }
 
 #[tokio::test]

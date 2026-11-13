@@ -51,7 +51,7 @@ pub(crate) async fn cmd_project_index_worker(
                 error_message: None,
             };
             let _ = index.write_progress(&progress);
-            index.release_lock();
+            index.release_lock_if_held_by(std::process::id());
 
             // Parity with the foreground path: install the post-commit
             // auto-reindex hook on first successful index (idempotent).
@@ -86,7 +86,7 @@ pub(crate) async fn cmd_project_index_worker(
                 error_message: Some(e.to_string()),
             };
             let _ = index.write_progress(&progress);
-            index.release_lock();
+            index.release_lock_if_held_by(std::process::id());
 
             if !no_notify {
                 send_notification(

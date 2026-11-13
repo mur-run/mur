@@ -173,11 +173,6 @@ impl CodebaseIndex {
         Ok(true)
     }
 
-    pub fn release_lock(&self) {
-        let path = self.lock_path();
-        let _ = std::fs::remove_file(&path);
-    }
-
     /// Hand a lock this process just acquired over to the worker it spawned,
     /// so a crashed worker reads as a dead holder instead of blocking the
     /// project for as long as the spawner lives.
@@ -194,10 +189,9 @@ impl CodebaseIndex {
     }
 
     /// Remove the lock only if it still names `pid`. A lock taken over by
-    /// someone else since then is left alone.
-    // Used by mur-daemon through the library; the `mur` bin compiles this
-    // module too and never calls it.
-    #[allow(dead_code)]
+    /// someone else since then is left alone. The index worker releases its
+    /// own lock this way; the spawner that handed it over does the same for
+    /// a worker that died without getting there.
     pub fn release_lock_if_held_by(&self, pid: u32) {
         let path = self.lock_path();
         let held = std::fs::read_to_string(&path)

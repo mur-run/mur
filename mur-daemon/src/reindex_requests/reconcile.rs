@@ -21,9 +21,10 @@ pub(super) struct Job {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Reconciled {
     pub stale: Vec<Job>,
-    /// A meta could not be parsed (possibly mid-write by a terminal build).
-    /// It is retried on the next sweep instead of being forgotten.
-    pub deferred: bool,
+    /// Indexes whose meta could not be parsed (possibly mid-write by a
+    /// terminal build), sorted by name. The scheduler retries them on the
+    /// next sweeps instead of forgetting them.
+    pub deferred: Vec<String>,
 }
 
 /// Scan `indexes_dir` for metas and return the stale ones, sorted by name.
@@ -54,7 +55,7 @@ pub(super) fn reconcile(indexes_dir: &Path) -> Reconciled {
             .and_then(|d| serde_json::from_str::<IndexMetadata>(&d).ok());
         let Some(meta) = parsed else {
             tracing::debug!(index = name, "index meta unreadable; deferring");
-            out.deferred = true;
+            out.deferred.push(name.to_string());
             continue;
         };
         if let Some(job) = job_if_stale(name, &meta) {
@@ -62,6 +63,7 @@ pub(super) fn reconcile(indexes_dir: &Path) -> Reconciled {
         }
     }
     out.stale.sort_by(|a, b| a.name.cmp(&b.name));
+    out.deferred.sort();
     out
 }
 

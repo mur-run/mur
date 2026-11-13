@@ -100,6 +100,12 @@ async fn exit_on_signal(stop: tokio::sync::watch::Sender<bool>, task: tokio::tas
     if tokio::time::timeout(SHUTDOWN_GRACE, task).await.is_err() {
         tracing::warn!("reindex workers did not stop within the grace period");
     }
+    // Deliberately `exit`, not a return through `main`: with this handler
+    // installed a stop signal no longer kills the process by itself, so
+    // something has to end it. Destructors are skipped exactly as they were
+    // under the default signal action, and nothing depends on them: the
+    // singleton lock is an flock the OS drops with the process, and the
+    // reindex task has already released its index locks above.
     std::process::exit(0);
 }
 

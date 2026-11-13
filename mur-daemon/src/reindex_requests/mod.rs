@@ -13,7 +13,7 @@ mod intake;
 mod reconcile;
 mod state;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -26,6 +26,13 @@ use exec::{ExecEnv, Outcome};
 use reconcile::Job;
 use state::{ReindexState, STATE_FILE};
 
+/// Sweeps in a row an unreadable index meta is re-read right away. A meta
+/// caught mid-write parses on the next sweep; one still unreadable after
+/// this many is damaged, and reconciling for it on every sweep would re-scan
+/// every index and open every repo for nothing. It is then logged once and
+/// only looked at again when a reconcile happens for another reason.
+const MAX_DEFERRED_RETRIES: u32 = 3;
+
 /// Start the reindex task. `None` (and no task at all) when
 /// `codebase_reindex.enabled` is off. The task returns once `shutdown`
 /// flips to `true` and every in-flight worker has been killed and its lock
@@ -36,10 +43,14 @@ pub fn spawn(mur_dir: PathBuf, shutdown: watch::Receiver<bool>) -> Option<JoinHa
         tracing::info!("codebase reindex disabled (codebase_reindex.enabled: false)");
         return None;
     }
+    let mur_bin = exec::mur_bin();
+    if mur_bin.is_none() {
+        tracing::error!("{}; codebase reindex jobs will fail", exec::NO_MUR_BIN);
+    }
     let env = ExecEnv {
         indexes_dir: mur_core::codebase::indexes_dir(&mur_dir),
         mur_home: mur_dir,
-        mur_bin: exec::mur_bin(),
+        mur_bin,
         timeout: Duration::from_secs(cfg.job_timeout_secs),
     };
     Some(tokio::spawn(run(Scheduler::new(env, cfg), shutdown)))
@@ -88,6 +99,8 @@ struct Scheduler {
     /// Reconcile on the next sweep regardless of wake-ups. Starts `true`:
     /// commits made while the daemon was down are picked up at startup.
     pending: bool,
+    /// Consecutive reconciles each unreadable meta has failed to parse in.
+    unreadable: HashMap<String, u32>,
     last_reconcile: Option<Instant>,
     /// Earliest unix second a held-back stale project becomes eligible.
     retry_at: Option<i64>,
@@ -104,6 +117,7 @@ impl Scheduler {
             cfg,
             running: HashSet::new(),
             pending: true,
+            unreadable: HashMap::new(),
             last_reconcile: None,
             retry_at: None,
         }
@@ -125,7 +139,7 @@ impl Scheduler {
         }
         let found = reconcile::reconcile(&self.env.indexes_dir);
         self.last_reconcile = Some(now_mono);
-        self.pending = found.deferred;
+        self.pending = self.note_unreadable(found.deferred);
         self.retry_at = None;
 
         let mut start = Vec::new();
@@ -145,6 +159,28 @@ impl Scheduler {
             start.push(job);
         }
         start
+    }
+
+    /// Count this reconcile against each meta that did not parse, and say
+    /// whether any of them is still worth re-reading on the next sweep.
+    fn note_unreadable(&mut self, names: Vec<String>) -> bool {
+        self.unreadable.retain(|name, _| names.contains(name));
+        let mut retry = false;
+        for name in names {
+            let failed = self.unreadable.entry(name.clone()).or_insert(0);
+            *failed = failed.saturating_add(1);
+            if *failed <= MAX_DEFERRED_RETRIES {
+                retry = true;
+            } else if *failed == MAX_DEFERRED_RETRIES + 1 {
+                tracing::warn!(
+                    index = %name,
+                    retries = MAX_DEFERRED_RETRIES,
+                    "index meta is still unreadable; it is not rebuilt until the file parses \
+                     (run `mur project index` in that project to rewrite it)"
+                );
+            }
+        }
+        retry
     }
 
     fn finish(&mut self, name: &str, outcome: &Outcome, now: i64) {

@@ -29,7 +29,9 @@ pub(super) enum Outcome {
 pub(super) struct ExecEnv {
     pub mur_home: PathBuf,
     pub indexes_dir: PathBuf,
-    pub mur_bin: PathBuf,
+    /// `None` when [`mur_bin`] could not place the CLI; every job then fails
+    /// (and backs off) instead of running some other `mur`.
+    pub mur_bin: Option<PathBuf>,
     pub timeout: Duration,
 }
 
@@ -47,17 +49,25 @@ pub(super) fn worker_args(job: &Job) -> Vec<OsString> {
     ]
 }
 
-/// The `mur` CLI shipped beside this daemon. Never a `PATH` lookup: the
-/// daemon runs unsandboxed and must not pick up whatever `mur` the
-/// environment offers. `MUR_BIN` overrides for development installs.
-pub(super) fn mur_bin() -> PathBuf {
-    if let Some(v) = std::env::var_os("MUR_BIN") {
-        return PathBuf::from(v);
-    }
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("mur")))
-        .unwrap_or_else(|| PathBuf::from("mur"))
+/// Reported when the daemon cannot tell where the `mur` CLI is.
+pub(super) const NO_MUR_BIN: &str =
+    "cannot locate the mur binary beside the daemon (set MUR_BIN to its path)";
+
+/// The `mur` CLI shipped beside this daemon; `MUR_BIN` overrides for
+/// development installs. `None` when the daemon cannot find its own path.
+/// There is no bare-`mur` fallback: the daemon runs unsandboxed and must not
+/// pick up whatever `mur` its `PATH` offers.
+pub(super) fn mur_bin() -> Option<PathBuf> {
+    resolve_mur_bin(std::env::var_os("MUR_BIN"), std::env::current_exe().ok())
+}
+
+pub(super) fn resolve_mur_bin(
+    overridden: Option<OsString>,
+    exe: Option<PathBuf>,
+) -> Option<PathBuf> {
+    overridden
+        .map(PathBuf::from)
+        .or_else(|| exe?.parent().map(|d| d.join("mur")))
 }
 
 pub(super) async fn run(env: &ExecEnv, job: &Job, mut shutdown: watch::Receiver<bool>) -> Outcome {
@@ -71,7 +81,11 @@ pub(super) async fn run(env: &ExecEnv, job: &Job, mut shutdown: watch::Receiver<
     // A crashed worker must not leave a stale "done" behind to be misread.
     let _ = index.write_progress(&progress(IndexStatus::Running, None));
 
-    let mut cmd = tokio::process::Command::new(&env.mur_bin);
+    let Some(mur_bin) = env.mur_bin.as_deref() else {
+        index.release_lock_if_held_by(me);
+        return fail(&index, NO_MUR_BIN.into());
+    };
+    let mut cmd = tokio::process::Command::new(mur_bin);
     cmd.args(worker_args(job))
         .env(mur_common::home::MUR_HOME_ENV, &env.mur_home)
         .stdin(Stdio::null())
@@ -84,7 +98,7 @@ pub(super) async fn run(env: &ExecEnv, job: &Job, mut shutdown: watch::Receiver<
         Ok(c) => c,
         Err(e) => {
             index.release_lock_if_held_by(me);
-            return fail(&index, format!("spawning {}: {e}", env.mur_bin.display()));
+            return fail(&index, format!("spawning {}: {e}", mur_bin.display()));
         }
     };
     let Some(pid) = child.id() else {
