@@ -239,6 +239,7 @@ pub(super) async fn event_loop(
                 )),
                 Err(e) => app.push_error(format!("{}: handover failed: {e:#}", req.label)),
             }
+            super::ssh_card::after_handover(app);
             app.needs_full_redraw = true;
             // The child owned the terminal for as long as it liked, so the
             // size checked at the top of this pass may be gone. Painting now
@@ -454,6 +455,14 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
             }
             if app.hitl.is_some() {
                 handle_hitl_key(app, key, ctrl, tx);
+                return;
+            }
+            // The `/ssh` card owns the keys while open; Ctrl combos (cancel,
+            // quit) still reach the composer's handlers below.
+            if app.ssh.card.is_some() && !ctrl {
+                if app.ssh.settled() {
+                    ssh_card::on_key(app, key, tx);
+                }
                 return;
             }
             // Stale-decision swallow: a gate that auto-resolves (read lane,
@@ -725,6 +734,14 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
             //   empty/whitespace → try the clipboard image (covers raw paste)
             //   otherwise        → ordinary text paste
             let trimmed = text.trim();
+            if let Some(card) = app.ssh.card.as_mut() {
+                // The composer is hidden behind an open card: a paste on any
+                // other step must not land there unseen.
+                if card.step == ssh_card::state::Step::Host {
+                    card.paste(trimmed);
+                }
+                return;
+            }
             if let Some((mime, b64)) = paste::image_from_paste(trimmed) {
                 stage_image(app, mime, b64);
             } else if trimmed.is_empty() {

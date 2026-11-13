@@ -7,13 +7,13 @@
 
 mod allow;
 mod commit;
-mod edit;
-mod resolve;
+pub(in crate::cmd::agent) mod edit;
+pub(in crate::cmd::agent) mod resolve;
 pub mod setup;
 mod spawn_grant;
 mod stage;
 pub mod status;
-mod view;
+pub(in crate::cmd::agent) mod view;
 
 use std::io::Write;
 

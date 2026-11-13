@@ -116,6 +116,8 @@ pub enum StreamMsg {
     /// A background manage op (`run_manage_bg`, #1921) finished; the error
     /// side is already display-formatted.
     ManageDone(Result<super::manage::Managed, String>),
+    /// A `/ssh` plan or apply finished off the UI thread.
+    SshCard(super::ssh_card::CardMsg),
 }
 
 impl StreamMsg {
@@ -139,7 +141,8 @@ impl StreamMsg {
             | StreamMsg::ReviewReq(_)
             | StreamMsg::ReviewFinished(_)
             | StreamMsg::ReviewCancelFailed(_)
-            | StreamMsg::ManageDone(_) => None,
+            | StreamMsg::ManageDone(_)
+            | StreamMsg::SshCard(_) => None,
         }
     }
 }

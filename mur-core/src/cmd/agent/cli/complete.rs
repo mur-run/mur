@@ -434,6 +434,7 @@ const COMMANDS: &[(&str, &str, Args)] = &[
         Args::Fixed(SEARCH_FLAGS),
     ),
     ("sessions", "list past sessions", Args::None),
+    ("ssh", "set up SSH access (card)", Args::None),
     ("skill", "manage agent skills", Args::Fixed(SKILL_SUBS)),
     ("skin", "switch theme", Args::Fixed(SKIN_CHOICES)),
     (

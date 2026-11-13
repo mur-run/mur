@@ -51,10 +51,9 @@ pub struct ExecSurface {
     pub reach: ExecReach,
 }
 
-/// The CLI reads the host half; the key and user fields are for the
-/// murmur and Hub cards (slices 4 and 5).
+/// The CLI reads the host half; murmur's `/ssh` card (and Hub's, slice 5)
+/// reads all of it.
 #[derive(Debug, Clone)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub struct SetupPlan {
     pub agent: String,
     pub host: RequestHost,
@@ -83,19 +82,14 @@ pub fn plan(
     let stored = probe.stored_host_keys(&host);
     let writable = probe
         .user_known_hosts()
-        .is_some_and(|kh| may_write(ent, &SandboxPolicy::from_entitlements(ent, agent_home), &kh));
+        .is_some_and(|kh| may_write(ent, &quiet_policy(ent, agent_home), &kh));
     let (verdict, matched) = verdict(&scanned, &stored, writable);
-    let loaded = probe.agent_keys();
-    let unloaded = probe
-        .unloaded_keys()
-        .into_iter()
-        .filter(|k| !loaded.iter().any(|l| l.fingerprint == k.fingerprint))
-        .collect();
+    let (loaded, unloaded) = split_keys(probe);
     let spawn = SpawnChange::needed(&ent.processes);
     let exec_surface = spawn.and_then(|c| {
         let mut after = ent.clone();
         c.apply(&mut after.processes);
-        exec_surface(&SandboxPolicy::from_entitlements(&after, agent_home))
+        exec_surface(&quiet_policy(&after, agent_home))
     });
     Ok(SetupPlan {
         agent: agent.to_string(),
@@ -109,6 +103,18 @@ pub fn plan(
         spawn,
         exec_surface,
     })
+}
+
+/// The user's ssh-agent keys, then the `~/.ssh/*.pub` files not among them.
+/// Re-read by the card after an `ssh-add`, so it is its own step.
+pub fn split_keys(probe: &dyn Probe) -> (Vec<AgentKey>, Vec<AgentKey>) {
+    let loaded = probe.agent_keys();
+    let unloaded = probe
+        .unloaded_keys()
+        .into_iter()
+        .filter(|k| !loaded.iter().any(|l| l.fingerprint == k.fingerprint))
+        .collect();
+    (loaded, unloaded)
 }
 
 /// True when the computed write grants cover `known_hosts` and no deny
@@ -171,4 +177,17 @@ impl ExecSurface {
         }
         s
     }
+}
+
+/// Build the sandbox policy for a preview without its start-up warnings.
+///
+/// `from_entitlements` warns once per inactive build-lane grant — meant for
+/// the runtime's `stderr.log` at agent start. The plan is built while
+/// murmur's TUI owns the screen, where a stderr line paints straight over
+/// the `/ssh` card. The dropped grants still land in the policy; only the
+/// log line is muted.
+fn quiet_policy(ent: &Entitlements, agent_home: &Path) -> SandboxPolicy {
+    tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
+        SandboxPolicy::from_entitlements(ent, agent_home)
+    })
 }
