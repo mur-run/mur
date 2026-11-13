@@ -53,6 +53,7 @@ fn saved(home: &Path, site: &str, url: &str) {
             earliest_cookie_expires: None,
             allow_domains: Vec::new(),
             last_refresh: None,
+            writeback_abandoned: None,
         },
     )
     .unwrap();

@@ -76,32 +76,34 @@ const MACOS_SYSTEM_WRITE_PATHS: &[&str] = &[
     "/dev/stderr",
 ];
 
-/// Standard macOS binary locations a process must be able to exec in order
-/// to run the shell interpreter and coreutils (per-agent spawn allowlists
-/// enumerate arbitrary tool binaries, but the shell itself and basic
-/// coreutils it relies on live here). Mirrors `system_exec_paths` in
-/// `sandbox::policy`'s narrower set — this is deliberately the coarse system
-/// locations only; anything else must be explicitly allowlisted via
-/// `spawn_allowed_paths`.
-///
-/// **Exemption semantic (intentional, not a bug) — `Allowlist`/`None` only:**
-/// under `SpawnMode::Allowlist` (and the exec-deny baseline `None` shares),
-/// every binary under these three roots — `mkdir`, `cat`, `cp`, `git`,
-/// etc. — is exec'able regardless of `spawn_allowed_paths`, because the
-/// shell tool (`bash`) needs a working coreutils environment to be usable
-/// at all (see `hooks/b0.rs`'s coarse spawn gate, which defers per-binary
-/// enforcement to this layer). That allowlist therefore bounds the real
-/// threat surface — downloaded, Homebrew-installed, and project-local
-/// binaries outside the system roots — not an executable already trusted
-/// enough to ship with the OS.
-///
-/// `SpawnMode::Strict` does NOT get this exemption (see `build_sbpl_profile`):
-/// it skips this whole path list, so only the resolved shell binary the
-/// `bash` tool spawns (auto-seeded into `spawn_allowed_paths` by
-/// `SandboxPolicy::from_entitlements`) plus the profile's own
-/// `spawn_allowed_paths`/`spawn_allowed_prefixes` remain exec'able — no
-/// other system binary, including coreutils, is implied.
-const MACOS_SYSTEM_EXEC_PATHS: &[&str] = &["/bin", "/usr/bin", "/usr/lib"];
+// Standard macOS binary locations a process must be able to exec in order
+// to run the shell interpreter and coreutils (per-agent spawn allowlists
+// enumerate arbitrary tool binaries, but the shell itself and basic
+// coreutils it relies on live here). Mirrors `system_exec_paths` in
+// `sandbox::policy`'s narrower set — this is deliberately the coarse system
+// locations only; anything else must be explicitly allowlisted via
+// `spawn_allowed_paths`.
+//
+// **Exemption semantic (intentional, not a bug) — `Allowlist`/`None` only:**
+// under `SpawnMode::Allowlist` (and the exec-deny baseline `None` shares),
+// every binary under these three roots — `mkdir`, `cat`, `cp`, `git`,
+// etc. — is exec'able regardless of `spawn_allowed_paths`, because the
+// shell tool (`bash`) needs a working coreutils environment to be usable
+// at all (see `hooks/b0.rs`'s coarse spawn gate, which defers per-binary
+// enforcement to this layer). That allowlist therefore bounds the real
+// threat surface — downloaded, Homebrew-installed, and project-local
+// binaries outside the system roots — not an executable already trusted
+// enough to ship with the OS.
+//
+// `SpawnMode::Strict` does NOT get this exemption (see `build_sbpl_profile`):
+// it skips this whole path list, so only the resolved shell binary the
+// `bash` tool spawns (auto-seeded into `spawn_allowed_paths` by
+// `SandboxPolicy::from_entitlements`) plus the profile's own
+// `spawn_allowed_paths`/`spawn_allowed_prefixes` remain exec'able — no
+// other system binary, including coreutils, is implied.
+//
+// Defined beside `SandboxPolicy::exec_reach`, which mirrors these clauses.
+use super::policy::exec_reach::MACOS_SYSTEM_EXEC_PATHS;
 
 /// Would the seal [`build_sbpl_profile`] emits for `policy` let `path` be
 /// exec'd? Mirrors its `process-exec*` clauses one for one — keep the two in

@@ -165,7 +165,7 @@ jobs:
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
           sudo docker image prune --all --force > /dev/null || true
           df -h /
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
       - name: Expose runner image for cache key
         # ImageOS/ImageVersion are runner env vars, not part of the `env`
         # context, so `${{ env.ImageOS }}` expands to "" in a `with:` field.
@@ -358,7 +358,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: clippy
       - name: Expose runner image for cache key
@@ -406,7 +406,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt
       - name: Repo-root allowlist (#1607)
@@ -427,7 +427,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: clippy
       - name: Expose runner image for cache key
@@ -508,7 +508,7 @@ jobs:
         os: [ubuntu-22.04, macos-15, windows-latest]
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: clippy
       - name: Expose runner image for cache key
@@ -580,10 +580,12 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     env:
-      RUSTUP_TOOLCHAIN: stable
+      # Pinned until #2392. Must match the dtolnay/rust-toolchain pin: this env var overrides
+      # `rustup default`, so leaving it at `stable` silently un-pins this job.
+      RUSTUP_TOOLCHAIN: 1.99.1
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
       - name: Expose runner image for cache key
         # ImageOS/ImageVersion are runner env vars, not part of the `env`
         # context, so `${{ env.ImageOS }}` expands to "" in a `with:` field.

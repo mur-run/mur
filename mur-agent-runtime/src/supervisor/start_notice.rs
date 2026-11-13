@@ -132,6 +132,48 @@ pub(super) fn append_ssh_refusal(
     Ok(channel_id)
 }
 
+/// A `'static` poster for the proxy's signing marks: each becomes one signed
+/// note on the start channel, keyed so one approval yields one mark even
+/// across restarts. Best-effort: a failed write loses a mark, nothing else.
+pub(super) fn mark_poster(signer: &Signer<'_>) -> crate::ssh_proxy::mark::MarkPost {
+    let mur_home = signer.mur_home.to_path_buf();
+    let agent = signer.agent.to_string();
+    let identity = signer.identity.clone();
+    let key_version = signer.key_version;
+    std::sync::Arc::new(move |m| {
+        let signer = Signer {
+            mur_home: &mur_home,
+            agent: &agent,
+            identity: &identity,
+            key_version,
+        };
+        if let Err(e) = append_signing_mark(&signer, m) {
+            tracing::warn!(error = %e, "could not post the ssh signing mark to the agent's channel");
+        }
+    })
+}
+
+/// Append one signing mark. Returns the channel id written to.
+pub(super) fn append_signing_mark(
+    signer: &Signer<'_>,
+    mark: &mur_ssh_request::SigningMark,
+) -> anyhow::Result<String> {
+    let svc = ChannelService::open(signer.mur_home)?;
+    let channel_id = start_channel(&svc, signer.mur_home, signer.agent)?;
+    svc.append_signed(
+        &channel_id,
+        signer.identity,
+        signer.key_version,
+        ChannelActor::Agent {
+            id: signer.agent.to_string(),
+        },
+        EventKind::Note,
+        serde_json::to_value(mark)?,
+        Some(mark.idempotency_key()),
+    )?;
+    Ok(channel_id)
+}
+
 /// `payload.notice` value marking the startup-override banner (boot step 11).
 pub(super) const STARTUP_OVERRIDE_NOTICE: &str = "startup_override";
 

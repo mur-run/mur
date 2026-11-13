@@ -5,11 +5,13 @@ use clap::Subcommand;
 #[derive(Subcommand, Debug)]
 pub enum AgentSshAction {
     /// Let the agent request signatures with one of your ssh-agent keys for
-    /// one host. Every signature still goes through HITL.
+    /// one host, then restart it.
     ///
-    /// With --host the host key is scanned once and shown for confirmation,
-    /// and a known_hosts entry is written for the agent's ssh. Labels are
-    /// display only: the proxy matches fingerprints and nothing else.
+    /// With --host the host key is scanned once, compared with your
+    /// ~/.ssh/known_hosts and shown for confirmation, and a known_hosts entry
+    /// is written for the agent's ssh. Confirming also approves the first
+    /// signature for these pairs (remembered like any HITL decision). Labels
+    /// are display only: the proxy matches fingerprints and nothing else.
     Allow {
         /// Agent name
         agent: String,
@@ -37,6 +39,10 @@ pub enum AgentSshAction {
         /// never scans and never adds the ssh spawn grant
         #[arg(long, requires = "host_key")]
         yes: bool,
+        /// Write the grant without restarting the agent. The first
+        /// signature then asks you once
+        #[arg(long)]
+        no_restart: bool,
     },
     /// Take a grant back. --key and --host-key together revoke one pair;
     /// either alone revokes every pair it names (confirmed first)

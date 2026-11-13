@@ -85,7 +85,11 @@ pub fn merge_states(parts: &[Part<'_>]) -> Result<Vec<u8>> {
     }))?)
 }
 
-fn array<'v>(obj: &'v Map<String, Value>, field: &str, site: &str) -> Result<&'v Vec<Value>> {
+pub(crate) fn array<'v>(
+    obj: &'v Map<String, Value>,
+    field: &str,
+    site: &str,
+) -> Result<&'v Vec<Value>> {
     obj.get(field).and_then(Value::as_array).ok_or_else(|| {
         anyhow::anyhow!(
             "browser profile {site:?}: storage state must contain an array field {field:?}"
@@ -94,26 +98,31 @@ fn array<'v>(obj: &'v Map<String, Value>, field: &str, site: &str) -> Result<&'v
 }
 
 /// Cookie domain as the browser matches it: no leading dot, lower-case.
-fn norm_domain(domain: &str) -> String {
+pub(crate) fn norm_domain(domain: &str) -> String {
     domain.trim_start_matches('.').to_ascii_lowercase()
 }
 
 /// Host of a storage-state `origin` (`https://chat.x.example:8443` →
-/// `chat.x.example`). An origin that is not a URL is kept as written.
-fn origin_host(origin: &str) -> String {
+/// `chat.x.example`). An origin that is not a URL is kept as written. A
+/// bracketed IPv6 literal keeps its address (`http://[::1]:3000` → `::1`);
+/// splitting on the first `:` used to cut it to `[` (#2360).
+pub(crate) fn origin_host(origin: &str) -> String {
     let rest = origin.split_once("://").map_or(origin, |(_, r)| r);
     let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    if let Some(v6) = host.strip_prefix('[') {
+        return v6.split(']').next().unwrap_or(v6).to_ascii_lowercase();
+    }
     norm_domain(host.split(':').next().unwrap_or(host))
 }
 
 /// `a` is `b` or a subdomain of it — the same rule the binder applies to
 /// declared domains (`mur_core::cmd::browser::live_entry::within`).
-fn within(a: &str, b: &str) -> bool {
+pub(crate) fn within(a: &str, b: &str) -> bool {
     a == b || a.strip_suffix(b).is_some_and(|p| p.ends_with('.'))
 }
 
-fn str_field(v: &Value, field: &str) -> String {
+pub(crate) fn str_field(v: &Value, field: &str) -> String {
     v.get(field)
         .and_then(Value::as_str)
         .unwrap_or_default()
@@ -234,6 +243,12 @@ mod tests {
         assert_eq!(origin_host("https://Chat.X.example:8443"), "chat.x.example");
         assert_eq!(origin_host("http://x.example/"), "x.example");
         assert_eq!(norm_domain(".X.example"), "x.example");
+    }
+
+    #[test]
+    fn origin_host_keeps_a_bracketed_ipv6_address() {
+        assert_eq!(origin_host("http://[::1]:3000"), "::1");
+        assert_eq!(origin_host("https://[2001:DB8::1]/x"), "2001:db8::1");
     }
 
     #[test]

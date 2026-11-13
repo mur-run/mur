@@ -239,6 +239,7 @@ fn profile_domains_default_to_login_host_and_normalize() {
         earliest_cookie_expires: None,
         allow_domains: Vec::new(),
         last_refresh: None,
+        writeback_abandoned: None,
     };
     assert_eq!(profile_domains(&meta), Some(d(&["chat.deepseek.com"])));
     meta.allow_domains = d(&["DeepSeek.com"]);
@@ -317,5 +318,23 @@ fn broad_audited_refuses_when_a_retained_profile_is_denied() {
         BindPlan::Denied {
             hosts: d(&["a.com"])
         }
+    );
+}
+
+/// The runtime reserves `MCP_STOP_SLICE` for stopping MCP servers so a browser
+/// can export its login at agent stop (#2360). After stdin EOF the browser
+/// proxy spends up to `EXPORT_TIMEOUT` exporting and `WRITEBACK_BUDGET`
+/// writing back; SIGTERM arrives `TERM_GRACE` before the slice ends. If the
+/// sum outgrows the slice, an export finishing inside its own timeout is
+/// killed before it is saved.
+#[test]
+fn the_browser_export_and_write_back_fit_the_runtime_mcp_stop_slice() {
+    let needed = mur_browser::refresh::EXPORT_TIMEOUT
+        + mur_browser::refresh::WRITEBACK_BUDGET
+        + mur_agent_runtime::protocol::mcp_client::TERM_GRACE;
+    assert!(
+        needed <= mur_agent_runtime::mcp::pool::MCP_STOP_SLICE,
+        "{needed:?} > {:?}",
+        mur_agent_runtime::mcp::pool::MCP_STOP_SLICE
     );
 }

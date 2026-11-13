@@ -29,7 +29,7 @@ pub(super) struct SshGateSlot {
 }
 
 pub(super) async fn prepare_and_seal(
-    profile: &Profile,
+    profile: &mut Profile,
     agent_home: &Path,
     mur_home: &Path,
     identity: &mur_common::identity::AgentIdentity,
@@ -78,10 +78,11 @@ pub(super) async fn prepare_and_seal(
         // shape that crash-looped.
         match mur_common::mcp_first_party::current_install_dir() {
             Some(runtime_dir) => {
-                if let Err(e) = crate::mcp_repin::repin_first_party(
+                if let Err(e) = crate::mcp_repin::repin_first_party_at_boot(
                     agent_home,
                     bundled_refreshed.as_deref(),
                     &runtime_dir,
+                    &mut profile.inner,
                 ) {
                     warn!(error = %e, "could not re-pin first-party MCP binaries");
                 }
@@ -129,6 +130,10 @@ pub(super) async fn prepare_and_seal(
     // not just macOS. (We create the dir first so the Landlock rule sticks.)
     let _ =
         std::fs::create_dir_all(mur_home.join(mur_track::snapshot_request::SNAPSHOT_REQUEST_DIR));
+    // Codebase reindex wake-ups (post-commit hook in a sealed agent). Same
+    // reason: exist before the seal so the inbox rule covers it on Landlock.
+    let _ =
+        std::fs::create_dir_all(mur_home.join(mur_common::reindex_request::REINDEX_REQUEST_DIR));
     let vlc = mur_common::media::load_runtime(mur_home);
     if let Some(vlc) = &vlc {
         let _ = std::fs::create_dir_all(mur_common::media::runtime_dir(mur_home));
@@ -456,6 +461,9 @@ pub(super) async fn prepare_and_seal(
                 pin_trust,
                 upstream,
                 sink,
+                marks: crate::ssh_proxy::mark::MarkSink::new(super::start_notice::mark_poster(
+                    &signer,
+                )),
                 approvals: slot.clone(),
             })
             .await;
@@ -510,10 +518,13 @@ fn o2_client(agent_home: &Path) -> Option<crate::tools::ssh_client_env::SshClien
 /// Pure: it creates nothing. The seal creates the directories first so the Landlock
 /// rule sticks.
 ///
-/// - Memory federation (P0): the sleep cycle drops signed snapshot requests and flushed
-///   outbox signals into `<mur_home>/inbox/…`. The daemon treats the inbox as an
-///   attacker-writable surface and verifies signatures, so this grant widens no trust
-///   boundary.
+/// - `<mur_home>/inbox/…`: the sleep cycle drops signed snapshot requests and flushed
+///   outbox signals there, and the post-commit hook drops codebase reindex wake-ups.
+///   The inbox is an attacker-writable surface. The invariant that keeps this grant
+///   from widening a trust boundary: every inbox consumer either verifies a signature
+///   before acting, or reads no attacker-controlled content at all (reindex wake-ups
+///   are never opened — the daemon only counts and unlinks them, then decides what
+///   is stale on its own). A new inbox consumer must hold to one of the two.
 /// - Co-watching: the whole `<mur_home>/runtime` directory (a per-file grant cannot
 ///   confer the directory-level rights a temp-file + rename needs under Landlock) and the
 ///   VLC snapshot dir, which `vlc.json` may point elsewhere. Gated on `vlc.json` existing.
