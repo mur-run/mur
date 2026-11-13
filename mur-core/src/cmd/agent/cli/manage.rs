@@ -85,6 +85,7 @@ pub fn mcp_add_with_network(
         network,
         &Policy {
             fs: &FilesystemEntitlement::default(),
+            spawn: &[],
             spawn_dirs: &[],
         },
     )
@@ -95,6 +96,9 @@ pub fn mcp_add_with_network(
 pub struct Policy<'a> {
     /// Filesystem grants (vetted and created by the caller).
     pub fs: &'a FilesystemEntitlement,
+    /// Programs the server itself execs (#2400). The entry's own command is
+    /// granted separately; this is for what that command launches in turn.
+    pub spawn: &'a [String],
     /// Build-lane dirs whose executables the server may spawn (#1639).
     pub spawn_dirs: &'a [String],
 }
@@ -125,6 +129,10 @@ pub fn mcp_add_with_policy(
             notes.push(format!("allowed spawn under {d}"));
         }
     }
+    notes.extend(merge_spawn(
+        &mut profile.entitlements.processes.spawn.allowed,
+        policy.spawn,
+    ));
     let (binary_sha256, resolved_path) =
         match crate::cmd::agent_mcp_pin::resolve_mcp_launch(command) {
             Ok(p) => {
@@ -201,6 +209,19 @@ pub fn mcp_add_with_policy(
         out.push_str(&format!("\n  {n}"));
     }
     Ok(applied(&out))
+}
+
+/// Add each program in `add` that the spawn allowlist `dst` lacks (exact
+/// match, like `perm allow-spawn`). Returns one note per new grant.
+pub(super) fn merge_spawn(dst: &mut Vec<String>, add: &[String]) -> Vec<String> {
+    let mut notes = Vec::new();
+    for program in add {
+        if !dst.contains(program) {
+            dst.push(program.clone());
+            notes.push(format!("allowed spawn of {program}"));
+        }
+    }
+    notes
 }
 
 /// Add each path in `add` that `dst` lacks (exact match, like `perm`).

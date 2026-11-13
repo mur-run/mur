@@ -42,8 +42,10 @@ impl LiveOps for ProfileOps<'_> {
         let command = live_command(std::env::current_exe());
         let browsers = mur_browser::chromium::system_browsers_dir();
         let spawn_dirs: Vec<String> = live_spawn_dir(browsers.as_deref()).into_iter().collect();
+        let spawn = live_spawn();
         let policy = manage::Policy {
             fs: &fs,
+            spawn: &spawn,
             spawn_dirs: &spawn_dirs,
         };
         Ok(
@@ -81,6 +83,14 @@ impl LiveOps for ProfileOps<'_> {
     }
 }
 
+/// What the live server execs besides itself and the browser build dir: the
+/// interpreter `mur browser record` launches the Playwright server with. The
+/// install probe runs unsealed and cannot see this missing; the sealed agent
+/// then fails the exec with EPERM and the browser tools never list (#2400).
+fn live_spawn() -> Vec<String> {
+    vec![crate::cmd::browser::perms::NODE.to_string()]
+}
+
 /// Re-pin the live entry onto this binary and backfill its fs/spawn grants on
 /// `profile` in memory. Returns whether `servers` differ from the profile's,
 /// and one note per repair. Shared by `save` and `pending_repairs` so the
@@ -110,6 +120,10 @@ fn apply_repairs(
         notes.extend(ensure_spawn_allowed(
             &mut profile.entitlements.processes.spawn.allowed,
             &command,
+        ));
+        notes.extend(manage::merge_spawn(
+            &mut profile.entitlements.processes.spawn.allowed,
+            &live_spawn(),
         ));
         let browsers = mur_browser::chromium::system_browsers_dir();
         if let Some(dir) = live_spawn_dir(browsers.as_deref()) {
@@ -199,4 +213,58 @@ fn lock_profile(agent_dir: &std::path::Path) -> anyhow::Result<std::fs::File> {
     f.lock_exclusive()
         .with_context(|| format!("lock {}", path.display()))?;
     Ok(f)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile() -> mur_common::AgentProfile {
+        serde_yaml::from_str(include_str!(
+            "../../../../../mur-common/tests/fixtures/minimal_profile.yaml"
+        ))
+        .unwrap()
+    }
+
+    fn live_entry() -> McpServerEntry {
+        McpServerEntry {
+            name: LIVE_ENTRY.into(),
+            command: "mur".into(),
+            ..Default::default()
+        }
+    }
+
+    /// #2400: the sealed live server execs `node`; without the grant the exec
+    /// fails with EPERM. A save on an existing entry backfills it, once.
+    #[test]
+    fn repairs_grant_the_interpreter_the_live_server_execs() {
+        let node = crate::cmd::browser::perms::NODE.to_string();
+        let mut p = profile();
+        assert!(!p.entitlements.processes.spawn.allowed.contains(&node));
+        let fs = FilesystemEntitlement::default();
+
+        let (_, notes) = apply_repairs(&mut p, vec![live_entry()], &fs).unwrap();
+        assert!(p.entitlements.processes.spawn.allowed.contains(&node));
+        assert!(
+            notes.iter().any(|n| n == "allowed spawn of node"),
+            "{notes:?}"
+        );
+
+        let servers = p.mcp_servers.clone();
+        let (_, again) = apply_repairs(&mut p, servers, &fs).unwrap();
+        assert!(!again.iter().any(|n| n.contains("node")), "{again:?}");
+        let grants = p.entitlements.processes.spawn.allowed.iter();
+        assert_eq!(grants.filter(|a| **a == node).count(), 1);
+    }
+
+    /// No live entry, no grant: saving other servers must not widen spawn.
+    #[test]
+    fn repairs_without_a_live_entry_grant_no_spawn() {
+        let mut p = profile();
+        let before = p.entitlements.processes.spawn.allowed.clone();
+        let fs = FilesystemEntitlement::default();
+        let (_, notes) = apply_repairs(&mut p, Vec::new(), &fs).unwrap();
+        assert_eq!(p.entitlements.processes.spawn.allowed, before);
+        assert!(notes.is_empty(), "{notes:?}");
+    }
 }
