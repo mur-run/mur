@@ -11,6 +11,12 @@
 //! is named by [`FD_ENV`]. A pipe, not an env var: the value then never sits
 //! in the child's environment block, which other same-user processes can read.
 //!
+//! One key for all profiles, by design: the identity at
+//! [`KEYCHAIN_ACCOUNT`] encrypts every saved profile, so a trusted live
+//! browser that is handed it can decrypt any of them, not only the one it was
+//! started for. The trust boundary is who receives the key (only the `mur`
+//! CLI in MUR's install dir), not which profile it opens.
+//!
 //! The Keychain coordinates and the env name are duplicated in `mur-browser`
 //! (which does not depend on this crate); a `mur-core` test pins them equal.
 

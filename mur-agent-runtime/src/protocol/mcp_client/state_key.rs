@@ -9,6 +9,11 @@
 //! has the whole key the moment it looks and stops at the newline, never
 //! waiting for an EOF a stray write-end holder could withhold (macOS has no
 //! `pipe2`, so `std::io::pipe` sets close-on-exec a step after creating it).
+//! That same gap applies to the read end: an MCP child spawned on another
+//! thread between `pipe()` and the close-on-exec step inherits it too. It
+//! cannot stall startup (the write end is closed first), but it could read
+//! the key, or drain it before the browser does. Accepted: such a child is
+//! already inside this agent's sandbox, and the window is a few instructions.
 //! Only the `mur` CLI in MUR's own install dir is ever handed the key.
 
 use crate::sandbox::policy::SandboxPolicy;
