@@ -62,10 +62,7 @@ pub fn is_reasoning_model(model: &str) -> bool {
             }
         }
     }
-    if m.contains("reasoning") || m.contains("think") {
-        return true;
-    }
-    false
+    m.contains("reasoning") || m.contains("think")
 }
 
 /// How hard the model should work on a request — the Anthropic
