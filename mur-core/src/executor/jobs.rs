@@ -684,4 +684,58 @@ mod tests {
             .expect("recorded by execute_dag");
         assert!(rec.state.is_terminal(), "{:?}", rec.state);
     }
+
+    /// #2379: `parallel_jobs` runs inside `mur-mcp-server`, which sits in the
+    /// agent sandbox and cannot read `keys/`. Before the fix the write-grant
+    /// gate wrote its `HitlRequest` unsigned anyway — a card
+    /// `hitl::authority` refuses to answer, so nobody could ever release it.
+    /// Now the gate writes nothing and the dispatch fails with the command
+    /// that works from the user's own terminal. The sandbox deny is
+    /// simulated by making the router key unreadable on disk.
+    #[cfg(unix)]
+    #[tokio::test]
+    // The refusal bumps the process-wide counter, so this holds the same lock
+    // as the tests that count it. Nothing else in this test takes the lock.
+    #[allow(clippy::await_holding_lock)]
+    async fn grant_gate_refuses_to_park_an_unsigned_request() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = crate::channel_writer::tests::COUNTER
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (tmp, project) = grant_home("coder", false);
+        let home = tmp.path();
+        let key = mur_common::identity::private_key_dir(
+            &home
+                .join("agents")
+                .join(crate::channel_writer::ROUTER_AGENT),
+        )
+        .join("identity.key");
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let jobs = vec![Job {
+            description: "fix it".into(),
+            assignee: "coder".into(),
+        }];
+        let res = dispatch_parallel_jobs(home, &jobs, Some(1), false, &explicit(&project)).await;
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let msg = match res {
+            Err(e) => format!("{e:#}"),
+            Ok(_) => panic!("an ungranted member must not be dispatched"),
+        };
+        assert!(
+            msg.contains("cannot ask for it") && msg.contains("mur agent perm allow-write coder"),
+            "the failure must say why and what works instead: {msg}"
+        );
+        let svc = mur_channel::ChannelService::open(home).unwrap();
+        let requests: Vec<_> = svc
+            .list(100)
+            .unwrap()
+            .iter()
+            .flat_map(|c| svc.load_events(&c.id).unwrap())
+            .filter(|e| e.kind == mur_common::channel::EventKind::HitlRequest)
+            .collect();
+        assert!(
+            requests.is_empty(),
+            "no request may be parked that nobody could answer: {requests:?}"
+        );
+    }
 }

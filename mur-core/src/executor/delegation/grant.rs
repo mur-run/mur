@@ -29,7 +29,7 @@ use mur_agent_runtime::sandbox::launch_chain::{LaunchChain, is_overbroad_grant_r
 use mur_common::channel::{ChannelActor, EventKind};
 use mur_common::hitl::RiskTier;
 
-use crate::channel_writer::ROUTER_AGENT;
+use crate::channel_writer::{ROUTER_AGENT, UnanswerableRequest};
 use crate::hitl::gate::{ActionRequest, GatePolicy, gate};
 
 /// One member and the directory it is about to be sent to.
@@ -64,6 +64,10 @@ pub enum BlockReason {
     /// deliberately excludes `agents/` (#712). The user must apply the grant
     /// from their own shell (#2004).
     NeedsHostGrant(String),
+    /// Approval is needed but this process cannot sign the request — the
+    /// router key is unreadable here (inside an agent's sandbox). An unsigned
+    /// request could never be approved, so none is written (#2379).
+    Unsignable(String),
     /// The grant was approved but writing it failed.
     GrantWriteFailed(String),
     /// Nobody answered and nobody was made to wait: the request is parked on
@@ -184,6 +188,12 @@ pub fn block_message(
                  terminal run `mur agent perm allow-write {member} {dir}`, then re-run (or run \
                  the whole dispatch there, e.g. `mur fleet run <fleet> --cwd {dir} ...`)."
             ),
+            BlockReason::Unsignable(why) => format!(
+                "{member}: needs approval to write `{dir}`, but this process cannot ask for it \
+                 ({why}) — it is likely running inside an agent's sandbox. From your own \
+                 terminal run `mur agent perm allow-write {member} {dir}`, then re-run (or run \
+                 the whole dispatch there, e.g. `mur fleet run <fleet> --cwd {dir} ...`)."
+            ),
             BlockReason::GrantWriteFailed(why) => format!(
                 "{member}: approved, but writing the grant for `{dir}` failed ({why}). From your \
                  own terminal run `mur agent perm allow-write {member} {dir}`, then re-run."
@@ -266,7 +276,7 @@ async fn ensure_one(ctx: &GrantContext<'_>, t: &DelegationTarget) -> Result<Gran
         agent_id: ROUTER_AGENT.into(),
         summary: prompt(t, allowed, service, ctx.job_count),
     };
-    let decision = gate(
+    let decision = match gate(
         ctx.mur_home,
         ctx.channel_id,
         &req,
@@ -275,7 +285,16 @@ async fn ensure_one(ctx: &GrantContext<'_>, t: &DelegationTarget) -> Result<Gran
         Some(ctx.run_id),
     )
     .await
-    .context("write-grant gate")?;
+    {
+        Ok(d) => d,
+        // This process cannot sign the question, so it must not park one
+        // nobody could answer (#2379). Same remedy as #2004: ask from the
+        // user's own terminal, which can.
+        Err(e) if e.downcast_ref::<UnanswerableRequest>().is_some() => {
+            return Ok(Blocked(BlockReason::Unsignable(format!("{e:#}"))));
+        }
+        Err(e) => return Err(e).context("write-grant gate"),
+    };
     if decision.deferred {
         return Ok(Blocked(BlockReason::Deferred {
             hitl_id: decision.hitl_id.unwrap_or_default(),
