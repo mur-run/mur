@@ -96,26 +96,48 @@ mod find_profile_bin_tests {
         assert_eq!(find_profile_bin(&exe, RUNTIME_BIN_NAME), Some(bin));
     }
 
-    #[test]
-    fn a_runtime_beyond_the_depth_bound_is_ignored() {
-        let root = tempfile::tempdir().unwrap();
-        let stray = root.path().join(format!(
+    /// Put the runtime in `dir` and the test executable `levels` directories
+    /// below it, so the runtime is the `levels + 1`th ancestor the walk visits.
+    fn runtime_above(dir: &Path, levels: usize) -> (PathBuf, PathBuf) {
+        let bin = dir.join(format!(
             "{RUNTIME_BIN_NAME}{}",
             std::env::consts::EXE_SUFFIX
         ));
-        std::fs::write(&stray, b"").unwrap();
-        let exe = root.path().join("a/b/c/d/e/f/g/test");
-        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&bin, b"").unwrap();
+        let mut exe = dir.to_path_buf();
+        for i in 0..levels {
+            exe.push(format!("d{i}"));
+        }
+        std::fs::create_dir_all(&exe).unwrap();
+        exe.push("test");
         std::fs::write(&exe, b"").unwrap();
+        (exe, bin)
+    }
+
+    #[test]
+    fn a_runtime_exactly_at_the_depth_bound_is_found() {
+        let root = tempfile::tempdir().unwrap();
+        let (exe, bin) = runtime_above(root.path(), PROFILE_DIR_MAX_DEPTH - 1);
+        assert_eq!(find_profile_bin(&exe, RUNTIME_BIN_NAME), Some(bin));
+    }
+
+    #[test]
+    fn a_runtime_one_past_the_depth_bound_is_ignored() {
+        // Every directory the bounded walk visits sits inside `root`, so a
+        // stray runtime in the system temp dir cannot satisfy it.
+        let root = tempfile::tempdir().unwrap();
+        let (exe, _bin) = runtime_above(root.path(), PROFILE_DIR_MAX_DEPTH);
         assert_eq!(find_profile_bin(&exe, RUNTIME_BIN_NAME), None);
     }
 
     #[test]
     fn a_directory_named_like_the_runtime_is_not_the_runtime() {
+        // The `pad` level keeps all six visited ancestors inside `root`,
+        // never the shared system temp dir above it.
         let root = tempfile::tempdir().unwrap();
         let exe = root
             .path()
-            .join("build/mur-agent-runtime/0123456789abcdef/deps/t");
+            .join("pad/build/mur-agent-runtime/0123456789abcdef/deps/t");
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         std::fs::write(&exe, b"").unwrap();
         assert_eq!(find_profile_bin(&exe, RUNTIME_BIN_NAME), None);
