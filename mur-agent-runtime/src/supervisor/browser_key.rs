@@ -15,7 +15,7 @@
 use super::bootstrap::USER_SECRET_RESOLVE_TIMEOUT;
 use mur_common::agent::McpServerEntry;
 use mur_common::browser_state_key::{PENDING_NAME, is_live_browser, keychain_ref};
-use mur_common::secret::keychain_pending;
+use mur_common::secret::{SecretError, keychain_pending};
 use std::path::Path;
 use tracing::{info, warn};
 
@@ -49,6 +49,11 @@ pub(super) fn cache_before_seal(entries: &[McpServerEntry], agent_home: &Path, a
     });
     match rx.recv_timeout(USER_SECRET_RESOLVE_TIMEOUT) {
         Ok(Ok(())) => info!("browser state key resolved before sandbox seal"),
+        Ok(Err(e)) if is_absent(&e) => info!(
+            "no browser state key in the keychain yet: no profile has been saved on \
+             this machine, so there is nothing to decrypt. Public pages work as is; \
+             `mur browser auth <site>` creates the key when a site needs a login"
+        ),
         Ok(Err(e)) => warn!(
             error = %e,
             "could not read the browser state key before sealing; a live browser with \
@@ -68,6 +73,13 @@ pub(super) fn cache_before_seal(entries: &[McpServerEntry], agent_home: &Path, a
             }
         }
     }
+}
+
+/// The key was never created: no profile has been saved on this machine.
+/// That is the normal state for an agent that only reads public pages, not a
+/// failure to report (#2369 review).
+fn is_absent(e: &SecretError) -> bool {
+    matches!(e, SecretError::KeychainNotFound { .. })
 }
 
 #[cfg(test)]
@@ -100,5 +112,16 @@ mod tests {
         ])]));
         assert!(!needs_key(&[entry(&["serve"])]));
         assert!(!needs_key(&[]));
+    }
+
+    /// A missing key is "no profile saved yet", not an error; anything else
+    /// (locked keychain, denied access) still warns.
+    #[test]
+    fn only_a_missing_key_is_treated_as_absent() {
+        assert!(is_absent(&SecretError::KeychainNotFound {
+            service: "s".into(),
+            account: "a".into(),
+        }));
+        assert!(!is_absent(&SecretError::KeychainBackend("locked".into())));
     }
 }
