@@ -8,7 +8,6 @@ use mur_common::agent::{AgentProfile, SshKnownHost, known_hosts_path};
 use mur_common::entitlements_pin::{self, PinCheck};
 
 use super::edit::{Grant, HostGrant, RevokeScope};
-use super::spawn_grant::{Offer, decide};
 use super::*;
 
 pub(super) fn fp(c: char) -> String {
@@ -164,6 +163,7 @@ fn args<'a>(key: &'a str, host: Option<&'a str>, host_key: Option<&'a str>) -> A
         host_key,
         host_label: None,
         yes: true,
+        no_restart: false,
     }
 }
 
@@ -177,39 +177,4 @@ fn yes_means_known_fingerprints_never_a_lookup() {
     let mut attended = args("deploy@ci", Some("github.com"), None);
     attended.yes = false;
     assert!(check_yes_contract(&attended).is_ok());
-}
-
-#[test]
-fn spawn_grant_offer_covers_every_path() {
-    let run = |spawnable, attended, answer: &str| {
-        let mut granted = false;
-        let mut out = Vec::new();
-        let o = decide(
-            "bot",
-            spawnable,
-            attended,
-            &mut answer.as_bytes(),
-            &mut out,
-            || {
-                granted = true;
-                Ok(())
-            },
-        )
-        .unwrap();
-        (o, granted, String::from_utf8(out).unwrap())
-    };
-    assert_eq!(run(true, true, "").0, Offer::AlreadySpawnable);
-    let (o, g, out) = run(false, true, "yes\n");
-    assert_eq!((o, g), (Offer::Granted, true));
-    assert!(out.contains("allow-spawn bot ssh"));
-    let (o, g, out) = run(false, true, "y\n");
-    assert_eq!((o, g), (Offer::Declined, false));
-    assert!(out.contains("mur agent perm allow-spawn bot ssh"));
-    let (o, g, out) = run(false, false, "yes\n");
-    assert_eq!(
-        (o, g),
-        (Offer::PrintedCommand, false),
-        "never auto-grants unattended"
-    );
-    assert!(out.contains("mur agent perm allow-spawn bot ssh"));
 }

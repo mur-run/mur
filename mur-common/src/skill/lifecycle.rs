@@ -418,10 +418,7 @@ pub fn transition_allowed(
         return false;
     }
     let elapsed = now - stats.lifecycle_changed_at;
-    if elapsed < Duration::hours(MIN_DWELL_HOURS) {
-        return false;
-    }
-    true
+    elapsed >= Duration::hours(MIN_DWELL_HOURS)
 }
 
 /// Total order over lifecycle states. Public because the federation snapshot

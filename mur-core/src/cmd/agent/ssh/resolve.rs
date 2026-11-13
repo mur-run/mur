@@ -14,8 +14,6 @@ pub const KEYSCAN_BIN: &str = "ssh-keyscan";
 pub const SSH_ADD_BIN: &str = "ssh-add";
 /// Per-host connect timeout handed to `ssh-keyscan -T`.
 pub const KEYSCAN_TIMEOUT: Duration = Duration::from_secs(10);
-/// Port `known_hosts` leaves implicit.
-pub const DEFAULT_SSH_PORT: u16 = 22;
 
 /// One host key a scan returned, with its fingerprint.
 #[derive(Debug, Clone, PartialEq)]
