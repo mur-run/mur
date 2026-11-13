@@ -594,6 +594,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+          # Preinstall: otherwise parallel rustc proxies auto-install rust-src
+          # at once and race on ~/.rustup/downloads (rename ENOENT).
+          components: rust-src
       - name: Expose runner image for cache key
         # ImageOS/ImageVersion are runner env vars, not part of the `env`
         # context, so `${{ env.ImageOS }}` expands to "" in a `with:` field.
