@@ -64,7 +64,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: mur-hub-gui/ui/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: aarch64-apple-darwin
 
