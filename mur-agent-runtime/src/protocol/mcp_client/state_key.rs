@@ -12,7 +12,10 @@
 //! That same gap applies to the read end: an MCP child spawned on another
 //! thread between `pipe()` and the close-on-exec step inherits it too. It
 //! cannot stall startup (the write end is closed first), but it could read
-//! the key, or drain it before the browser does. Accepted: such a child is
+//! the key, or drain it before the browser does. A drained pipe gives the
+//! browser an empty read: `read_handed_fd` fails with "handed key is empty",
+//! and the browser logs a warning and falls back to the Keychain, which a
+//! sandboxed child usually cannot reach. Accepted: such a child is
 //! already inside this agent's sandbox, and the window is a few instructions.
 //! Only the `mur` CLI in MUR's own install dir is ever handed the key.
 

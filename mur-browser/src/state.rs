@@ -339,7 +339,7 @@ mod tests {
         }
 
         #[test]
-        fn a_pipe_is_read_to_its_newline_and_trimmed() {
+        fn a_pipe_key_is_trimmed() {
             let (r, mut w) = std::io::pipe().unwrap();
             w.write_all(b"AGE-SECRET-KEY-1TEST\n").unwrap();
             drop(w);
