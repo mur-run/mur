@@ -66,6 +66,8 @@ export function Shell({ page, onNavigate, badge, banners, onSettings, onSearch, 
         />
       </div>
       <div className="shell__content">
+        {/* Overlay title bar: without this strip only the sidebar can move the window. */}
+        {isMac() && <div className="shell__titlebar" data-tauri-drag-region />}
         {banners}
         <div className="shell__page">{children}</div>
       </div>

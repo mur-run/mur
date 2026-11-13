@@ -25,8 +25,8 @@ cargo build --manifest-path mur-hub-gui/src-tauri/Cargo.toml
 ```bash
 # Terminal 1
 cd mur-hub-gui/ui && npm run dev
-# Terminal 2
-cargo tauri dev --manifest-path mur-hub-gui/src-tauri/Cargo.toml
+# Terminal 2 (Tauri 2's `cargo tauri dev` has no --manifest-path; run it from src-tauri)
+cd mur-hub-gui/src-tauri && cargo tauri dev
 ```
 
 ## Bundling (self-contained .app)
