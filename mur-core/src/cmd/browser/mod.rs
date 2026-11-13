@@ -56,6 +56,9 @@ pub async fn record(
     trace: bool,
     extra: &[String],
 ) -> Result<()> {
+    // Before anything here spawns a child (`<shell> --version` below): the
+    // handed key's fd is inheritable until read (#2369 review).
+    mur_browser::state::prime_handed_key();
     mur_browser::paths::validate_name(run)?;
     for profile in profiles {
         mur_browser::paths::validate_name(profile)?;

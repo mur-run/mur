@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 const STDERR_TAIL_BYTES: u64 = 8 * 1024;
 const STDERR_TAIL_LINES: usize = 5;
 
+mod state_key;
 mod stop;
 pub use stop::{StopOutcome, TERM_GRACE};
 
@@ -336,7 +337,8 @@ impl StdioMcpClient {
             std_cmd.env_remove(k);
         }
         std_cmd.envs(serena.env).args(serena.args);
-        let mut child = crate::sandbox::child::spawn_sandboxed(std_cmd, policy)?;
+        // Spawn, handing a live browser its profile key (#2369).
+        let mut child = state_key::spawn(std_cmd, entry, policy)?;
 
         let raw_stdin = child.stdin.take().ok_or(McpError::StreamClosed)?;
         let raw_stdout = child.stdout.take().ok_or(McpError::StreamClosed)?;

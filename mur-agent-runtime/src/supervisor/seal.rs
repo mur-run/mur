@@ -316,6 +316,13 @@ pub(super) async fn prepare_and_seal(
         }
     }
 
+    // The live browser's profile key, for the same reason (#2369).
+    super::browser_key::cache_before_seal(
+        &profile.inner.enabled_mcp_servers(),
+        agent_home,
+        &profile.inner.name,
+    );
+
     // The approval token lives in `secrets/`, which the seal below makes
     // unreadable — to this process too. Load (or create) it now. Failure is
     // not fatal: the agent still runs, and every allow is refused with a
