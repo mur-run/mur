@@ -266,6 +266,7 @@ const LAUNCHD_DEFAULT_PATH_DIRS: &[&str] = &["/usr/bin", "/bin", "/usr/sbin", "/
 /// with its minimal default PATH.
 ///
 /// Includes, in order: `bin_dir` (where MUR installed its own binaries),
+/// the cargo bin dir when present (see [`cargo_bin_dir`]),
 /// `<npm global prefix>/bin` (best-effort, skipped gracefully if npm is
 /// absent or fails), `/opt/homebrew/bin`, `/usr/local/bin`, then the launchd
 /// default dirs.
@@ -279,7 +280,30 @@ const LAUNCHD_DEFAULT_PATH_DIRS: &[&str] = &["/usr/bin", "/bin", "/usr/sbin", "/
 /// depending on how it was launched, so the B0 rule 6 pin verifies
 /// interactively and fail-closes under launchd, crash-looping the agent.
 fn derive_service_path(bin_dir: &Path) -> String {
+    derive_service_path_with(bin_dir, cargo_bin_dir().as_deref())
+}
+
+/// The rustup/cargo bin dir: `$CARGO_HOME/bin`, else `~/.cargo/bin`, and only
+/// when it exists. A rustup toolchain lives only here, so without it an agent
+/// under launchd/systemd either finds no `cargo` at all or silently builds
+/// with a stale Homebrew copy that the user's shell no longer runs.
+fn cargo_bin_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("CARGO_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".cargo")))?;
+    let bin = home.join("bin");
+    bin.is_dir().then_some(bin)
+}
+
+/// [`derive_service_path`] with the cargo dir injected, so tests do not depend
+/// on the machine's toolchain. Cargo ranks right after `bin_dir`, ahead of
+/// Homebrew, mirroring a rustup shell where `~/.cargo/bin` outranks brew.
+fn derive_service_path_with(bin_dir: &Path, cargo_bin: Option<&Path>) -> String {
     let mut dirs: Vec<String> = vec![bin_dir.to_string_lossy().into_owned()];
+    if let Some(cargo) = cargo_bin {
+        dirs.push(cargo.to_string_lossy().into_owned());
+    }
 
     if let Ok(output) = std::process::Command::new("npm")
         .args(["config", "get", "prefix"])
@@ -426,6 +450,25 @@ mod tests {
             path.find("/Users/x/.local/bin").unwrap() < path.find("/opt/homebrew/bin").unwrap(),
             "install dir must outrank homebrew: {path}"
         );
+    }
+
+    /// A rustup toolchain is only reachable through the cargo bin dir; it must
+    /// be on the service PATH and outrank a leftover Homebrew `rustc`.
+    #[test]
+    fn cargo_bin_outranks_homebrew() {
+        let path = derive_service_path_with(
+            Path::new("/Users/x/.local/bin"),
+            Some(Path::new("/Users/x/.cargo/bin")),
+        );
+        let cargo = path.find("/Users/x/.cargo/bin").expect("cargo dir missing");
+        assert!(cargo < path.find("/opt/homebrew/bin").unwrap(), "{path}");
+        assert!(path.starts_with("/Users/x/.local/bin:"), "{path}");
+    }
+
+    #[test]
+    fn no_cargo_dir_adds_nothing() {
+        let path = derive_service_path_with(Path::new("/Users/x/.local/bin"), None);
+        assert!(!path.contains(".cargo"), "{path}");
     }
 
     /// A brew install has `bin_dir == /opt/homebrew/bin`; it must appear once.
