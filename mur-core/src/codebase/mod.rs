@@ -12,7 +12,7 @@ pub use discover::{discover_all_indexes, prune_orphan_indexes};
 use git_hook::HOOK_MARKER;
 pub use git_hook::ensure_git_hook;
 pub(crate) use hooks_dir::{HookHealth, MANUAL_HOOK_CMD, hook_health};
-pub use state::{IndexLock, IndexMetadata, IndexProgress, IndexStatus};
+pub use state::{IndexLock, IndexMetadata, IndexProgress, IndexStateIoError, IndexStatus};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

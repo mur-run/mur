@@ -69,6 +69,7 @@ pub mod pipeline;
 pub mod project;
 pub mod proposal;
 pub mod redact;
+pub mod reindex_request;
 pub mod removable_volume;
 pub mod repo_walk;
 pub mod research_provider;

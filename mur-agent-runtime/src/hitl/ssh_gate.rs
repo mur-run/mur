@@ -246,10 +246,11 @@ fn named(label: Option<&str>, fp: &str) -> String {
 
 /// The decision-log label: names and fingerprints only, never session data.
 fn label(ask: &SignAsk) -> String {
-    format!(
-        "{SSH_SIGN_TOOL}: {} -> {}",
-        ask.key_label.as_deref().unwrap_or(&ask.key_fp),
-        ask.host_label.as_deref().unwrap_or(&ask.host_key_fp),
+    super::ssh::ssh_decision_label(
+        &ask.key_fp,
+        ask.key_label.as_deref(),
+        &ask.host_key_fp,
+        ask.host_label.as_deref(),
     )
 }
 
