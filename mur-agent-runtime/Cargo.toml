@@ -120,7 +120,7 @@ indicatif = "0.17"   # progress bar for download
 # dlopen): the static lib can't drift from ort's expected ABI, covers all
 # platforms via upstream prebuilts, and works offline — no runtime voice-pack
 # dylib to provision. See `docs` / memory `project_voice_mobile_runtime_gotchas`.
-ort = { version = "2.0.0-rc.12", features = ["ndarray"], optional = true }
+ort = { version = "2.0.0-rc.15", features = ["ndarray"], optional = true }
 ndarray = { version = "0.17", optional = true }            # tensor arrays for ort
 espeak-ng = "0.1"                                           # espeak-ng G2P for Kokoro tokenizer (pure Rust, no bindgen)
 whisper-rs = { version = "0.16", default-features = false } # whisper.cpp STT bindings (CPU-only; no metal to keep CI clean). 0.16 vendors a modern whisper.cpp that builds under Xcode 16; 0.11 (whisper-rs-sys 0.9) does not.
