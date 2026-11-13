@@ -285,7 +285,7 @@ fn derive_service_path(bin_dir: &Path) -> String {
 
 /// The rustup/cargo bin dir: `$CARGO_HOME/bin`, else `~/.cargo/bin`, and only
 /// when it exists. A rustup toolchain lives only here, so without it an agent
-/// under launchd/systemd either finds no `cargo` at all or silently builds
+/// started by the service manager either finds no `cargo` at all or silently builds
 /// with a stale Homebrew copy that the user's shell no longer runs.
 fn cargo_bin_dir() -> Option<PathBuf> {
     let home = std::env::var_os("CARGO_HOME")
