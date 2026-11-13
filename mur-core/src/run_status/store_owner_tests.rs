@@ -120,3 +120,49 @@ fn unit_tests_ignore_an_inherited_run_owner() {
         runs_dir(h).join("run-1")
     );
 }
+
+/// Review P3 (#2386): the daemon-hosted child records a job run in the
+/// daemon's own tree, never in the requester's home — even with an owner set.
+#[test]
+fn a_hosted_job_run_is_recorded_in_the_daemon_tree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let h = tmp.path();
+    let daemon = mur_track::jobs_dispatch_request::jobs_dispatch_run_dir(h, "run-6");
+    assert_eq!(
+        dir_for_host(h, RunKind::Job, Some("c"), true, Some("bob"), "run-6"),
+        daemon
+    );
+    assert_eq!(
+        dir_for_host(h, RunKind::Job, Some("c"), true, None, "run-6"),
+        daemon
+    );
+    // A fleet run keeps its carve-in; unhosted keeps the owner route.
+    assert_eq!(
+        dir_for_host(h, RunKind::Fleet, Some("fleet-x"), true, None, "fleet-x-1"),
+        fleet_run_dir(h, "x", "fleet-x-1")
+    );
+    assert_eq!(
+        dir_for_host(h, RunKind::Job, Some("c"), false, Some("bob"), "run-6"),
+        mur_common::paths::agent_runs_dir(h, "bob").join("run-6")
+    );
+}
+
+/// Review P3 (#2386): `jobs-dispatch/` is searched before the agent trees, and
+/// a copy the requester forges in its own home makes the id ambiguous rather
+/// than answering for the daemon's run.
+#[test]
+fn the_daemon_tree_wins_and_a_forged_copy_is_ambiguous() {
+    let tmp = tempfile::tempdir().unwrap();
+    let h = tmp.path();
+    let run = record("run-7", RunKind::Job, Some("c"));
+    let daemon = dir_for_host(h, run.kind, Some("c"), true, None, &run.run_id);
+    save_in(&daemon, &run).unwrap();
+    assert_eq!(run_dir(h, "run-7"), daemon);
+    assert!(crate::run_status::status_of(h, "run-7").is_ok());
+
+    save_as(h, Some("pm"), &record("run-7", RunKind::Job, Some("c")));
+    assert_eq!(run_dir(h, "run-7"), daemon, "daemon tree is searched first");
+    assert_eq!(run_dirs_of(h, "run-7").len(), 2);
+    let err = crate::run_status::status_of(h, "run-7").unwrap_err();
+    assert!(err.to_string().contains("2 places"), "{err:#}");
+}

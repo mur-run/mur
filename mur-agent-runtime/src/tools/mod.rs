@@ -19,6 +19,7 @@ pub mod guarded;
 pub mod mcp;
 pub mod naming;
 pub mod open_item;
+pub mod parallel_jobs;
 pub(crate) mod propose;
 pub mod read_file;
 pub mod recall;
@@ -247,6 +248,7 @@ fn builtin_tool_names_cover_every_builtin() {
         open_item::OPEN_ITEM,
         ssh_request::SSH_REQUEST,
         fleet_run::FLEET_RUN,
+        parallel_jobs::PARALLEL_JOBS,
         ask::ASK,
         git_push::GIT_PUSH_REQUEST,
         git_push::GIT_PUSH_STATUS,

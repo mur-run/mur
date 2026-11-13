@@ -215,7 +215,7 @@ pub async fn build_provider_runner(
             .collect()
     };
     let edit_file_def = edit_file_exec.def();
-    let tools_policy = profile.inner.entitlements.tools.clone();
+    let mut tools_policy = profile.inner.entitlements.tools.clone();
     let (_defs, mut tool_map) = build_tools(
         Some((bash_def, bash_exec)),
         Some((read_file_def, read_file_exec)),
@@ -256,6 +256,20 @@ pub async fn build_provider_runner(
             );
         }
     }
+    // Built-in parallel_jobs (#2379); see `tools::parallel_jobs::register`.
+    let shadowed_mcp = crate::tools::parallel_jobs::register(
+        &mut tool_map,
+        &boot_cfg.parallel_jobs,
+        &mut tools_policy,
+        &enabled_mcp,
+        crate::tools::parallel_jobs::ParallelJobsTool {
+            mur_home: mur_home.clone(),
+            agent_name: profile.inner.name.clone(),
+            signing: Some(identity.clone()),
+            key_version: profile.inner.identity.key_version,
+            session_cwd: Some(session_cwd.clone()),
+        },
+    );
     // Channel consult, asker side. Off until release N+1 (D3/E7): readers of
     // the `Ask` kind ship one release before any writer (§D7). An explicit
     // Deny in the profile still wins once it is on.
@@ -415,12 +429,15 @@ pub async fn build_provider_runner(
     // Hot reload re-lists an edited MCP server at turn start; nothing to
     // refresh on an agent with none.
     let mcp_refresh = (!enabled_mcp.is_empty()).then(|| {
-        Arc::new(crate::tools::refresh::McpRefresh::new(
-            pool.clone(),
-            Some(session_cwd.clone()),
-            profile.inner.name.clone(),
-            &tools,
-        ))
+        Arc::new(
+            crate::tools::refresh::McpRefresh::new(
+                pool.clone(),
+                Some(session_cwd.clone()),
+                profile.inner.name.clone(),
+                &tools,
+            )
+            .with_shadowed(shadowed_mcp),
+        )
     });
 
     // Memory-capture directive (P2a): appended to the system prompt whenever

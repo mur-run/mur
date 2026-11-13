@@ -10,6 +10,8 @@
 
 pub mod backend;
 pub mod fleet_dispatch_request;
+pub mod jobs_dispatch_request;
+pub mod signed_request;
 pub mod snapshot_request;
 pub mod turn;
 pub mod zfs_protocol;

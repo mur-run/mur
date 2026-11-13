@@ -22,6 +22,7 @@
 pub mod abandon;
 pub mod dispatch;
 pub mod heartbeat;
+pub mod jobs_dispatch;
 pub mod rebuild;
 pub mod store;
 
@@ -253,8 +254,8 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
     let places = store::run_dirs_of(mur_home, run_id).len();
     anyhow::ensure!(
         places < 2,
-        "run id {run_id} is recorded in {places} places (another fleet's tree or runs/); \
-         ask by fleet: `mur fleet status <fleet>`"
+        "run id {run_id} is recorded in {places} places (jobs-dispatch/, a fleet's tree, \
+         an agent's tree or runs/); for a fleet run, ask by fleet: `mur fleet status <fleet>`"
     );
     status_of_in(mur_home, None, run_id)
 }
@@ -279,7 +280,11 @@ fn status_of_in(
         Some(record) => Some(record),
         // No record and no channel: the daemon's dispatch verdict is the
         // only thing that can know about this run (#2116).
-        None => unrecorded(mur_home, fleet, run_id, dispatch::load_in)?,
+        None => match unrecorded(mur_home, fleet, run_id, dispatch::load_in)? {
+            Some(r) => Some(r),
+            // A sealed agent's `parallel_jobs` request (#2379).
+            None => unrecorded(mur_home, fleet, run_id, jobs_dispatch::load_in)?,
+        },
     };
     let Some(mut record) = record else {
         return Ok(None);

@@ -662,3 +662,52 @@ fn fleet_run_dirs_are_writable_only_for_allowlisted_fleets() {
         "the fleet-state root is granted whole"
     );
 }
+
+/// #2379: an agent offered the built-in `parallel_jobs` can drop a request in
+/// the jobs inbox and read the daemon heartbeat; one that is not, cannot.
+#[test]
+fn parallel_jobs_agents_get_the_jobs_inbox_and_heartbeat() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path();
+    let agent_home = mur_home.join("agents").join("pm");
+    std::fs::create_dir_all(&agent_home).unwrap();
+    let (inbox, heartbeat) = super::super::jobs_dispatch_dirs(mur_home);
+
+    let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+    assert!(!policy.fs_write.contains(&inbox), "no targets, no grant");
+
+    std::fs::write(
+        mur_home.join("config.yaml"),
+        "parallel_jobs:\n  targets: [coder]\n  requesters: [pm]\n",
+    )
+    .unwrap();
+    let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+    assert!(policy.fs_write.contains(&inbox), "{:?}", policy.fs_write);
+    assert!(policy.fs_read.contains(&heartbeat), "{:?}", policy.fs_read);
+    assert!(inbox.is_dir() && heartbeat.is_dir());
+    // The daemon's run tree: readable for `mur_job_status`, never writable.
+    let state = super::super::jobs_dispatch_state_dir(mur_home);
+    assert!(policy.fs_read.contains(&state), "{:?}", policy.fs_read);
+    assert!(
+        !policy
+            .fs_write
+            .iter()
+            .any(|w| w.starts_with(&state) || state.starts_with(w)),
+        "{:?}",
+        policy.fs_write
+    );
+    assert!(
+        policy
+            .launch_chain
+            .protects_write(&state.join("run-1").join("request.yaml"))
+            .is_some()
+    );
+
+    let other = mur_home.join("agents").join("qa");
+    std::fs::create_dir_all(&other).unwrap();
+    let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &other);
+    assert!(
+        !policy.fs_write.contains(&inbox),
+        "not a requester, no grant"
+    );
+}

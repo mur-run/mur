@@ -212,7 +212,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         },
         Commands::Job { action } => {
             let mur_home = crate::paths::mur_root(None);
-            crate::cmd::job::run(&mur_home, action)?
+            crate::cmd::job::run(&mur_home, action).await?
         }
         #[cfg(unix)]
         Commands::GitPush { action } => {

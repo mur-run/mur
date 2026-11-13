@@ -60,7 +60,7 @@ fn launched_child_exited(r: &FleetDispatchRecord) -> bool {
             .is_some_and(|pid| pid != 0 && !mur_common::lock_file::pid_alive(pid))
 }
 
-fn log_tail(log: &Path) -> String {
+pub(super) fn log_tail(log: &Path) -> String {
     let where_ = format!("see {}", log.display());
     match std::fs::read_to_string(log) {
         Ok(text) => {

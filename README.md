@@ -1075,6 +1075,13 @@ Agent** wizard offers the same catalog as a source.
   in `fleet.yaml`, which is left untouched. An agent's `fleet_run` tool does
   the same with `goal`; its new `job` field is the one-shot task (passing
   `goal` alone used to run it as a one-shot job).
+- **`parallel_jobs` from a sandboxed agent goes through the daemon** — the
+  agent signs the request with its own key and `mur-daemon` launches the run,
+  so a write-grant approval it parks is signed and you can answer it (it used
+  to land unsigned and could never be approved). Needs `mur daemon start`.
+  Only agents in `parallel_jobs.targets` can be named; set
+  `parallel_jobs.requesters` in `~/.mur/config.yaml` to limit who may ask
+  (empty = any agent). An agent's `yes: true` is ignored: approvals go to you.
 - **Long work returns a handle; liveness is a heartbeat** — `fleet_run` and
   `parallel_jobs` answer `{run_id, status: dispatched}` within a second and
   you poll `mur_job_status <run_id>` (or `mur fleet status`); the result lands
