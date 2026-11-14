@@ -8,11 +8,9 @@ use std::path::PathBuf;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mur_common::agent::is_fingerprint;
 use mur_ssh_request::PendingRequest;
-use mur_ssh_request::validate_user;
 
-use crate::cmd::agent::ssh::edit::HostGrant;
+use crate::cmd::agent::ssh::setup::choices::{Choices, NotReady, build_approval};
 use crate::cmd::agent::ssh::setup::probe::{AgentKey, private_key_of};
-use crate::cmd::agent::ssh::setup::verdict::{self, HostChoice};
 use crate::cmd::agent::ssh::setup::{Approval, SetupPlan, SpawnChange, Verdict};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,12 +52,9 @@ impl Origin {
             Self::Tool {
                 resend: Some(t), ..
             } => Some(t.clone()),
-            Self::Pending(r) | Self::Tool { request: r, .. } => Some(format!(
-                "SSH access to {} is set up (you asked: \"{}\"). Run one test connection and \
-                 report the result.",
-                r.target.canonical(),
-                r.reason
-            )),
+            Self::Pending(r) | Self::Tool { request: r, .. } => {
+                Some(crate::cmd::agent::ssh::setup::pending::hand_back_text(r))
+            }
         }
     }
 }
@@ -163,48 +158,23 @@ impl CardState {
         }
     }
 
-    /// The approval the user built, or why Approve is unavailable.
+    /// The approval the user built, or why Approve is unavailable. The rule
+    /// is `setup::choices`; only the words are murmur's.
     pub fn approval(&self) -> Result<Approval, String> {
-        let Some((key, loaded)) = self.chosen_key() else {
-            return Err("no key to grant: load one with ssh-add, then reopen /ssh".into());
-        };
-        if !loaded {
-            return Err("the chosen key is not loaded in ssh-agent; go back and load it".into());
-        }
-        let host = self.plan.host.host();
-        let choice = HostChoice {
+        let choices = Choices {
+            key_fp: self.chosen_key().map(|(k, _)| k.fingerprint.clone()),
             pasted: self.pasted.clone(),
             ticked: self.ticked.clone(),
-        };
-        let keep = verdict::select(
-            host,
-            &self.plan.scanned,
-            &self.plan.verdict,
-            &self.plan.matched,
-            &choice,
-        )
-        .map_err(|e| e.to_string())?;
-        if self.plan.spawn == Some(SpawnChange::NoneToStrict) && !self.spawn_consented {
-            return Err("tick the process-permission consent (c) first".into());
-        }
-        if !self.user.is_empty() {
-            validate_user(&self.user).map_err(|e| e.to_string())?;
-        }
-        let label = Some(self.plan.host.canonical());
-        Ok(Approval {
-            key_fp: key.fingerprint.clone(),
-            key_label: (!key.comment.is_empty()).then(|| key.comment.clone()),
-            hosts: keep
-                .into_iter()
-                .map(|k| HostGrant {
-                    host_key_fp: k.fingerprint,
-                    label: label.clone(),
-                    known_host: Some(k.entry),
-                })
-                .collect(),
-            spawn: self.plan.spawn,
             spawn_consented: self.spawn_consented,
-            restart: true,
+            user: self.user.clone(),
+        };
+        build_approval(&self.plan, &choices).map_err(|e| match e {
+            NotReady::NoKey => "no key to grant: load one with ssh-add, then reopen /ssh".into(),
+            NotReady::KeyNotLoaded => {
+                "the chosen key is not loaded in ssh-agent; go back and load it".into()
+            }
+            NotReady::SpawnConsent => "tick the process-permission consent (c) first".into(),
+            NotReady::Host(s) | NotReady::User(s) => s,
         })
     }
 

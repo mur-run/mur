@@ -128,9 +128,9 @@ fn host_grants(
         pasted,
     };
     if p.verdict == Verdict::Differs && choice.pasted.is_none() {
-        bail!("{}", verdict::differs_text(host));
+        bail!("{}", verdict::differs_text(&p.host));
     }
-    let keep = verdict::select(host, &p.scanned, &p.verdict, &p.matched, &choice)?;
+    let keep = verdict::select(&p.host, &p.scanned, &p.verdict, &p.matched, &choice)?;
     let label = label.or_else(|| Some(host.to_string()));
     Ok(Hosts {
         grants: keep

@@ -140,6 +140,9 @@ pub use ssh::{
     AllowArgs as SshAllowArgs, RevokeArgs as SshRevokeArgs, cmd_ssh_allow, cmd_ssh_list,
     cmd_ssh_revoke,
 };
+/// The SSH setup implementation the Hub calls (SSH setup spec, Goal 6).
+#[allow(unused_imports)] // Read by mur-hub-gui, not the bin crate.
+pub use ssh::{setup as ssh_setup, status as ssh_status};
 // Only `cli::perm_hint_tests` (bin crate) reads it.
 #[allow(unused_imports)]
 pub(crate) use perm::reseal_summary;
@@ -264,7 +267,12 @@ pub(super) fn pid_alive(pid: u32) -> bool {
 }
 
 pub(crate) fn load_profile_for_edit(name: &str) -> Result<(PathBuf, _AgentProfile)> {
-    let mur_home = resolve_mur_home()?;
+    load_profile_at(&resolve_mur_home()?, name)
+}
+
+/// `load_profile_for_edit` under an explicit MUR home, for callers that were
+/// handed one (Hub's SSH commands) and must not read `MUR_HOME` instead.
+pub(crate) fn load_profile_at(mur_home: &Path, name: &str) -> Result<(PathBuf, _AgentProfile)> {
     let path = mur_home.join("agents").join(name).join("profile.yaml");
     if !path.exists() {
         bail!("agent '{name}' not found");

@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 
 use super::super::theme::Theme;
 use super::state::{CardState, Step};
+use crate::cmd::agent::ssh::setup::verdict::forget_cmd;
 use crate::cmd::agent::ssh::setup::{SpawnChange, Verdict};
 
 const MARK_ON: &str = "[x]";
@@ -148,8 +149,8 @@ fn host_lines(c: &CardState, t: &'static Theme, out: &mut Vec<Line<'static>>) {
     if c.plan.verdict == Verdict::Differs {
         out.push(Line::styled(
             format!(
-                "or update ~/.ssh/known_hosts yourself (`ssh-keygen -R {}`), then reopen /ssh",
-                c.plan.host.host()
+                "or update ~/.ssh/known_hosts yourself (`{}`), then reopen /ssh",
+                forget_cmd(&c.plan.host)
             ),
             t.muted,
         ));
