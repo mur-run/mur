@@ -270,13 +270,15 @@ pub async fn build_provider_runner(
             session_cwd: Some(session_cwd.clone()),
         },
     );
-    // Channel consult, asker side. Off until release N+1 (D3/E7): readers of
-    // the `Ask` kind ship one release before any writer (§D7). An explicit
-    // Deny in the profile still wins once it is on.
+    // Channel consult, asker side; the rule is `tools::ask::offered`.
     {
-        use crate::tools::ask::{ASK, AskTool, ENABLED};
-        use mur_common::agent::{ToolPolicy, resolve_tool_policy};
-        if ENABLED && resolve_tool_policy(&tools_policy, ASK) != ToolPolicy::Deny {
+        use crate::protocol::methods::channel_consult::checks::platform_refusal;
+        use crate::tools::ask::{ASK, AskTool, offered};
+        use mur_common::agent::resolve_tool_policy;
+        if offered(
+            platform_refusal().as_ref(),
+            resolve_tool_policy(&tools_policy, ASK),
+        ) {
             tool_map.insert(
                 ASK.to_string(),
                 Arc::new(AskTool {

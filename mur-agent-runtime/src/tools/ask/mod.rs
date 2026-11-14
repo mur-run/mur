@@ -6,9 +6,10 @@
 //! the answer. The dial carries no scope: the answerer derives it from this
 //! agent's own profile.
 //!
-//! **Gated off in release N (D3).** Readers of the `Ask` kind ship one release
-//! before any writer (§D7), so [`ENABLED`] is `false` and the provider never
-//! registers the tool. E7 flips it in release N+1.
+//! Readers of the `Ask` kind shipped in v2.99.0, one release before this
+//! writer (§D7): a binary older than that reuses an `Ask`'s `seq` on its next
+//! append. See `docs/superpowers/specs/2026-09-26-channel-consult-design.md`
+//! D7 ("Mixed versions: an older writer can reuse a `seq`").
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,9 +24,15 @@ use super::{ToolDef, ToolError, ToolExecutor, ToolOutput};
 
 pub const ASK: &str = "ask";
 
-/// D3: whether this release writes `Ask` events at all. `false` in release N
-/// (readers only); E7 sets it `true` in release N+1.
-pub const ENABLED: bool = false;
+/// Whether `ask` is registered at boot. Not where `channel/consult` refuses
+/// every Ask (R6): a consult is same-machine, so the asker's platform is the
+/// answerer's. An explicit profile `deny` wins everywhere.
+pub fn offered(
+    platform: Option<&crate::protocol::methods::channel_consult::checks::Refusal>,
+    policy: mur_common::agent::ToolPolicy,
+) -> bool {
+    platform.is_none() && policy != mur_common::agent::ToolPolicy::Deny
+}
 
 /// Marker file in the agent home naming the channel this agent's `Ask`s go
 /// to. Created on first use and remembered, like the schedule channel, so

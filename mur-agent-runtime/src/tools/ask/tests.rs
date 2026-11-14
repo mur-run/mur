@@ -53,12 +53,6 @@ impl World {
     }
 }
 
-#[test]
-fn the_gate_is_off_in_this_release() {
-    // D3: readers ship one release before writers (§D7). E7 flips this.
-    const { assert!(!ENABLED) };
-}
-
 // R1 · Asker's runtime writes the Ask.
 #[test]
 fn askers_runtime_writes_the_ask() {
@@ -247,4 +241,28 @@ fn an_old_peer_is_named_with_the_restart_hint() {
         err.to_string().contains("mur agent restart tech-writer"),
         "{err}"
     );
+}
+
+// Whether `ask` is registered at boot: R6 (not on a platform that refuses
+// every consult) and an explicit profile `deny` both hide it.
+mod offered {
+    use super::super::offered;
+    use crate::protocol::methods::channel_consult::checks::Refusal;
+    use mur_common::agent::ToolPolicy;
+
+    const LINUX: Refusal = Refusal::Platform("linux");
+
+    #[test]
+    fn supported_platform_offers_unless_denied() {
+        assert!(offered(None, ToolPolicy::Allow));
+        assert!(offered(None, ToolPolicy::Ask));
+        assert!(!offered(None, ToolPolicy::Deny));
+    }
+
+    #[test]
+    fn refusing_platform_never_offers() {
+        assert!(!offered(Some(&LINUX), ToolPolicy::Allow));
+        assert!(!offered(Some(&LINUX), ToolPolicy::Ask));
+        assert!(!offered(Some(&LINUX), ToolPolicy::Deny));
+    }
 }
