@@ -40,6 +40,39 @@ fn the_grant_gates_refuse_the_credential_store() {
     }
 }
 
+/// An agent's dedicated SSH key (`mur_ssh_request::keystore`) is protected by
+/// the `secrets/` subtree rule and by nothing else. This pins that: narrowing
+/// the rule to named files would hand every agent its own private key.
+#[cfg(unix)]
+#[test]
+fn the_grant_gates_refuse_the_dedicated_ssh_key() {
+    use mur_ssh_request::keystore::{KEY_FILE, PUB_SUFFIX, key_dir};
+    let tmp = tempfile::tempdir().unwrap();
+    let mur = tmp.path().to_path_buf();
+    let chain = LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
+    // Its own key and another agent's: neither is reachable.
+    for agent in ["alice", "bob"] {
+        let dir = key_dir(&mur, agent).unwrap();
+        for p in [
+            dir.join(KEY_FILE),
+            dir.join(format!("{KEY_FILE}{PUB_SUFFIX}")),
+            dir.clone(),
+            dir.parent().unwrap().to_path_buf(),
+        ] {
+            assert!(
+                chain.protects_read(&p).is_some(),
+                "read grant not refused: {}",
+                p.display()
+            );
+            assert!(
+                chain.protects_write(&p).is_some(),
+                "write grant not refused: {}",
+                p.display()
+            );
+        }
+    }
+}
+
 /// ...and must not swallow the ordinary stores an agent legitimately uses.
 #[test]
 fn the_grant_gates_still_allow_the_ordinary_stores() {
