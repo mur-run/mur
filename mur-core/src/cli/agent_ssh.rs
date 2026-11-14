@@ -17,8 +17,19 @@ pub enum AgentSshAction {
         agent: String,
         /// Key fingerprint (SHA256:..., from `ssh-add -l`), or a key comment
         /// looked up in your ssh-agent and confirmed (the comment is not stored)
-        #[arg(long)]
-        key: String,
+        #[arg(long, required_unless_present = "generate")]
+        key: Option<String>,
+        /// Grant the agent's own dedicated key instead of one of yours. It is
+        /// generated on first use and kept where the agent cannot read it
+        #[arg(long, conflicts_with_all = ["key", "yes"])]
+        generate: bool,
+        /// Also add the dedicated public key to ~/.ssh/authorized_keys on the
+        /// host, logging in as --user with your own keys
+        #[arg(long, requires_all = ["user", "host"], conflicts_with = "yes")]
+        install: bool,
+        /// Login name on the host, for --install
+        #[arg(long, requires = "install")]
+        user: Option<String>,
         /// Display label for the key (not used for matching)
         #[arg(long)]
         label: Option<String>,

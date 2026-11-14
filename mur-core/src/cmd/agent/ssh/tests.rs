@@ -156,7 +156,10 @@ fn a_known_hosts_install_failure_rolls_back_profile_and_pin() {
 fn args<'a>(key: &'a str, host: Option<&'a str>, host_key: Option<&'a str>) -> AllowArgs<'a> {
     AllowArgs {
         agent: "bot",
-        key,
+        key: Some(key),
+        generate: false,
+        install: false,
+        user: None,
         label: None,
         host,
         port: None,

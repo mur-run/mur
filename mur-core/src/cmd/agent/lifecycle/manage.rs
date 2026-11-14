@@ -1,5 +1,6 @@
 use super::create::validate_name;
 use super::*;
+use crate::cmd::agent::ssh::setup::dedicated;
 
 // ─── stop / remove / rename ──────────────────────────────────────────────
 
@@ -160,6 +161,12 @@ pub fn cmd_remove(name: &str, purge: bool, force: bool) -> Result<()> {
         if let Err(e) = mur_agent_runtime::concierge_spawn_migrate::forget(&mur_home, name) {
             eprintln!("warning: could not remove concierge migration marker: {e}");
         }
+        // After the agent home is gone: the key outlives nothing that grants it.
+        match dedicated::remove(&mur_home, name) {
+            Ok(Some(note)) => println!("{note}"),
+            Ok(None) => {}
+            Err(e) => eprintln!("warning: {e}"),
+        }
         println!("Purged agent '{name}'");
     } else {
         println!(
@@ -234,6 +241,9 @@ pub fn cmd_rename(old: &str, new: &str) -> Result<()> {
     }
     if let Err(e) = mur_common::identity_pin::rename_pin(&mur_home, old, new) {
         eprintln!("warning: could not move identity pin ({e}); peers may not verify '{new}'");
+    }
+    if let Err(e) = dedicated::rename(&mur_home, old, new) {
+        eprintln!("warning: could not move the dedicated ssh key: {e}");
     }
 
     let bin_dir = resolve_bin_dir()?;
