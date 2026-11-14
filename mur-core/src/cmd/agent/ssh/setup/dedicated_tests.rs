@@ -88,7 +88,8 @@ fn a_stored_key_is_reported_with_its_fingerprint() {
     assert_eq!(
         dedicated_for(home.path(), AGENT, &ent(true), true, SEALED),
         Dedicated::Stored {
-            fingerprint: key.fingerprint
+            fingerprint: key.fingerprint,
+            public_line: key.public_line,
         }
     );
 }

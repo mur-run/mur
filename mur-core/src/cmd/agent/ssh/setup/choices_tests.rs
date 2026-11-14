@@ -196,6 +196,7 @@ fn plan_with(dedicated: Dedicated) -> SetupPlan {
 fn install_targets_the_host_with_the_dedicated_key() {
     let p = plan_with(Dedicated::Stored {
         fingerprint: fp('K'),
+        public_line: String::new(),
     });
     let a = build_approval(&p, &installing("git")).unwrap();
     let t = a.install.expect("an install target");
@@ -218,6 +219,7 @@ fn install_targets_the_host_with_the_dedicated_key() {
 fn install_is_refused_for_any_key_but_the_dedicated_one() {
     let other = plan_with(Dedicated::Stored {
         fingerprint: fp('D'),
+        public_line: String::new(),
     });
     assert_eq!(
         build_approval(&other, &installing("git")).unwrap_err(),

@@ -5,6 +5,7 @@
 //! profile or the runtime runs off the UI thread and reports back as a
 //! `StreamMsg`: the plan (one `ssh-keyscan`), and `apply_and_restart`.
 
+mod clip;
 pub mod render;
 pub mod state;
 
@@ -16,7 +17,11 @@ use tokio::sync::mpsc;
 
 use super::app::{App, HandoverRequest};
 use super::stream::StreamMsg;
+use crate::cmd::agent::ssh::setup::advisory::AdvisoryResult;
+use crate::cmd::agent::ssh::setup::apply::{Finished, Restart};
+use crate::cmd::agent::ssh::setup::plan::Dedicated;
 use crate::cmd::agent::ssh::setup::plan::split_keys;
+use crate::cmd::agent::ssh::setup::probe::AgentKey;
 use crate::cmd::agent::ssh::setup::probe::System;
 use crate::cmd::agent::ssh::setup::{Applied, Approval, front, pending, report};
 use crate::cmd::agent::ssh::view;
@@ -55,10 +60,28 @@ pub const USAGE: &str =
 #[derive(Debug)]
 pub enum CardMsg {
     Planned(Result<Box<CardState>, String>),
+    /// The card rides along so it can stay open on a held restart.
     Applied {
         result: Result<Applied, String>,
-        hand_back: Option<String>,
+        card: Box<CardState>,
+        approval: Box<Approval>,
     },
+    /// The dedicated key was generated (or loaded), with fresh key lists.
+    Generated(Result<Generated, String>),
+    /// Retry install or restart anyway, from the held step.
+    Finished {
+        result: Result<Finished, String>,
+        card: Box<CardState>,
+    },
+    Advisory(AdvisoryResult),
+}
+
+#[derive(Debug)]
+pub struct Generated {
+    key: AgentKey,
+    dedicated: Dedicated,
+    loaded: Vec<AgentKey>,
+    unloaded: Vec<AgentKey>,
 }
 
 /// `/ssh` with its arguments.
@@ -276,7 +299,117 @@ pub fn on_key(app: &mut App, key: crossterm::event::KeyEvent, tx: &mpsc::Sender<
             });
         }
         KeyAction::Approve(a) => approve(app, a, tx),
+        KeyAction::Generate => generate(app, tx),
+        KeyAction::RetryInstall(a) => finish(app, a, true, tx),
+        KeyAction::Finish(a) => finish(app, a, false, tx),
+        KeyAction::Copy(line) => {
+            let note = match clip::copy(&line) {
+                Ok(()) => "copied the line (OSC 52; your terminal must allow clipboard writes)",
+                Err(_) => "could not write to the terminal; select the line instead",
+            };
+            if let Some(c) = app.ssh.card.as_mut() {
+                c.note = Some(note.into());
+            }
+        }
+        KeyAction::Advisory {
+            host,
+            user,
+            known_hosts,
+        } => advisory(app, host, user, known_hosts, tx),
     }
+}
+
+/// Run blocking `job` off the UI thread and send its message back.
+fn spawn_job(
+    app: &mut App,
+    tx: &mpsc::Sender<StreamMsg>,
+    job: impl FnOnce(&Path, &str) -> CardMsg + Send + 'static,
+) {
+    app.ssh.busy = true;
+    let (agent, home, tx) = (app.agent.clone(), app.home.clone(), tx.clone());
+    tokio::spawn(async move {
+        let msg = tokio::task::spawn_blocking(move || job(&home, &agent))
+            .await
+            .unwrap_or_else(|e| CardMsg::Planned(Err(format!("task failed: {e}"))));
+        let _ = tx.send(StreamMsg::SshCard(msg)).await;
+    });
+}
+
+fn generate(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
+    if app.ssh.busy {
+        return;
+    }
+    if let Some(c) = app.ssh.card.as_mut() {
+        c.note = Some("making the dedicated key…".into());
+    }
+    spawn_job(app, tx, |home, agent| {
+        CardMsg::Generated(front::generate_for(home, agent).and_then(|key| {
+            let dedicated = front::dedicated_state(home, agent)?;
+            let (loaded, unloaded) = split_keys(&System);
+            Ok(Generated {
+                key,
+                dedicated,
+                loaded,
+                unloaded,
+            })
+        }))
+    });
+}
+
+/// From the held step: `retry` installs again, otherwise restart anyway.
+fn finish(app: &mut App, a: Approval, retry: bool, tx: &mpsc::Sender<StreamMsg>) {
+    if app.ssh.busy {
+        return;
+    }
+    let Some(card) = app.ssh.card.take() else {
+        return;
+    };
+    app.push_system(if retry {
+        "/ssh: installing the public key again…".to_string()
+    } else {
+        format!("/ssh: restarting '{}' without the install…", app.agent)
+    });
+    spawn_job(app, tx, move |home, agent| {
+        let result = mur_exe().and_then(|exe| {
+            if retry {
+                front::retry_install_for(home, agent, &a, exe)
+            } else {
+                front::finish_for(home, agent, &a, exe)
+            }
+        });
+        CardMsg::Finished { result, card }
+    });
+}
+
+fn advisory(
+    app: &mut App,
+    host: RequestHost,
+    user: String,
+    known_hosts: String,
+    tx: &mpsc::Sender<StreamMsg>,
+) {
+    if app.ssh.busy {
+        return;
+    }
+    if user.is_empty() {
+        if let Some(c) = app.ssh.card.as_mut() {
+            c.note = Some("the advisory test needs a login user".into());
+        }
+        return;
+    }
+    app.push_system(format!(
+        "/ssh: advisory test of {user}@{}…",
+        host.canonical()
+    ));
+    spawn_job(app, tx, move |home, agent| {
+        CardMsg::Advisory(front::advisory_test_for(
+            home,
+            agent,
+            &host,
+            &user,
+            &known_hosts,
+        ))
+    });
 }
 
 fn approve(app: &mut App, a: Approval, tx: &mpsc::Sender<StreamMsg>) {
@@ -289,23 +422,20 @@ fn approve(app: &mut App, a: Approval, tx: &mpsc::Sender<StreamMsg>) {
         card.plan.host.canonical(),
         app.agent
     ));
-    let hand_back = card.origin.hand_back();
-    let (agent, home, tx) = (app.agent.clone(), app.home.clone(), tx.clone());
-    tokio::spawn(async move {
-        let result = tokio::task::spawn_blocking(move || run_apply(&home, &agent, &a))
-            .await
-            .unwrap_or_else(|e| Err(format!("task failed: {e}")));
-        let _ = tx
-            .send(StreamMsg::SshCard(CardMsg::Applied { result, hand_back }))
-            .await;
+    spawn_job(app, tx, move |home, agent| {
+        let result = mur_exe().and_then(|exe| front::apply_for(home, agent, &a, exe));
+        CardMsg::Applied {
+            result,
+            card,
+            approval: Box::new(a),
+        }
     });
 }
 
-fn run_apply(home: &Path, agent: &str, a: &Approval) -> Result<Applied, String> {
-    let exe = std::env::current_exe()
+fn mur_exe() -> Result<std::path::PathBuf, String> {
+    std::env::current_exe()
         .map(super::multiplex::canonical_mur_exe)
-        .map_err(|e| format!("could not locate the mur executable: {e}"))?;
-    front::apply_for(home, agent, a, exe)
+        .map_err(|e| format!("could not locate the mur executable: {e}"))
 }
 
 /// A `CardMsg` arrived.
@@ -320,24 +450,76 @@ pub fn on_msg(app: &mut App, msg: CardMsg, tx: &mpsc::Sender<StreamMsg>) {
         CardMsg::Applied { result: Err(e), .. } => app.push_error(format!("/ssh: {e}")),
         CardMsg::Applied {
             result: Ok(applied),
-            hand_back,
+            mut card,
+            approval,
         } => {
-            let ready = applied.restart == crate::cmd::agent::ssh::setup::apply::Restart::Restarted;
             for l in report::lines(&app.agent, &applied) {
                 app.push_system(l);
             }
-            // Spec "Error handling": a runtime that did not come up gets no
-            // hand-back; the card already said why.
-            if ready && let Some(text) = hand_back {
-                // The restart ended any turn still in flight.
-                if app.streaming {
-                    app.drop_dead_turn();
-                }
-                super::turn::start_turn(app, text, tx);
+            let held = applied.restart == Restart::HeldForInstall;
+            let hand_back = card.origin.hand_back();
+            if card.after_apply(*approval, held) {
+                app.ssh.card = Some(card);
+            }
+            if applied.restart == Restart::Restarted {
+                hand_back_to_agent(app, hand_back, tx);
+            }
+        }
+        CardMsg::Generated(Ok(g)) => match app.ssh.card.as_mut() {
+            Some(c) => c.generated(g.dedicated, g.loaded, g.unloaded, &g.key.fingerprint),
+            None => app.push_system(format!(
+                "/ssh: dedicated key {} is ready; reopen /ssh to use it",
+                g.key.fingerprint
+            )),
+        },
+        CardMsg::Generated(Err(e)) => match app.ssh.card.as_mut() {
+            Some(c) => c.note = Some(e),
+            None => app.push_error(format!("/ssh: {e}")),
+        },
+        CardMsg::Finished {
+            result: Err(e),
+            card,
+        } => {
+            app.push_error(format!("/ssh: {e}"));
+            app.ssh.card = Some(card);
+        }
+        CardMsg::Finished {
+            result: Ok(f),
+            card,
+        } => {
+            for l in report::finish_lines(&app.agent, &f) {
+                app.push_system(l);
+            }
+            match f.restart {
+                // The install failed again: the card stays on the held step.
+                Restart::HeldForInstall => app.ssh.card = Some(card),
+                Restart::Restarted => hand_back_to_agent(app, card.origin.hand_back(), tx),
+                _ => {}
+            }
+        }
+        CardMsg::Advisory(r) => {
+            let text = r.text();
+            match app.ssh.card.as_mut() {
+                Some(c) => c.note = Some(text),
+                None => app.push_system(format!("/ssh: {text}")),
             }
         }
     }
 }
 
+/// Spec "Error handling": only a runtime that came up gets the hand-back;
+/// the report lines already said why otherwise.
+fn hand_back_to_agent(app: &mut App, hand_back: Option<String>, tx: &mpsc::Sender<StreamMsg>) {
+    if let Some(text) = hand_back {
+        // The restart ended any turn still in flight.
+        if app.streaming {
+            app.drop_dead_turn();
+        }
+        super::turn::start_turn(app, text, tx);
+    }
+}
+
+#[cfg(test)]
+mod dedicated_tests;
 #[cfg(test)]
 mod tests;

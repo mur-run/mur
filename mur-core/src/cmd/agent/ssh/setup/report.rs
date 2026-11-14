@@ -21,7 +21,6 @@ pub fn lines(agent: &str, a: &Applied) -> Vec<String> {
 
 /// After a retried install or a "restart anyway": the grant line was shown
 /// with the first attempt.
-#[allow(dead_code)] // The clients land in slice 6c.
 pub fn finish_lines(agent: &str, f: &Finished) -> Vec<String> {
     let mut out: Vec<String> = f.install.line().into_iter().collect();
     out.extend(f.preapproval.line());

@@ -31,7 +31,6 @@ pub enum AdvisoryResult {
 }
 
 impl AdvisoryResult {
-    #[allow(dead_code)] // The clients land in slice 6c.
     pub fn text(&self) -> String {
         match self {
             Self::Accepted => format!("the server accepted the key ({ADVISORY_NOTE})"),
