@@ -28,7 +28,7 @@ pub(crate) fn pausable(name: &str) -> bool {
 /// Hub, so `current_exe()` is wrong here. The bundled sibling comes first: it
 /// is the same build as the core this Hub links, so it knows `fleet resume`;
 /// a `mur` on PATH may be older.
-fn mur_binary() -> Result<PathBuf, String> {
+pub(crate) fn mur_binary() -> Result<PathBuf, String> {
     std::env::current_exe()
         .ok()
         .and_then(|exe| crate::cli_tools::bundled_mur_path(&exe))
