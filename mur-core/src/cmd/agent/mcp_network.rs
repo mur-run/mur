@@ -234,6 +234,7 @@ fn set_network_preview(
 /// host bound (the agent's `allow_hosts` does not reach a spawned server), so
 /// it is a widening and must be confirmed like any other grant.
 fn clear_network_preview(agent: &str, server_id: &str, before: &McpServerNetwork) -> String {
+    use crate::cmd::agent::cli::browser_live_preview::{Applies, will_save_line};
     let was = match before.mode {
         McpNetMode::Restricted => format!("only {}", before.allow_hosts.join(", ")),
         McpNetMode::Off => "no outbound access".to_string(),
@@ -243,8 +244,8 @@ fn clear_network_preview(agent: &str, server_id: &str, before: &McpServerNetwork
     format!(
         "`{server_id}` on agent `{agent}` will lose its egress policy (was: {was}).\n\
          It will then be bounded only by the OS sandbox, which restricts PORTS, not hosts — \
-         the agent's `allow_hosts` does NOT apply to it.\n\
-         Will be saved to the profile; takes effect after the agent restarts."
+         the agent's `allow_hosts` does NOT apply to it.\n{}",
+        will_save_line(Applies::AfterRestart)
     )
 }
 
