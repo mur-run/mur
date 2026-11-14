@@ -140,6 +140,9 @@ pub use ssh::{
     AllowArgs as SshAllowArgs, RevokeArgs as SshRevokeArgs, cmd_ssh_allow, cmd_ssh_list,
     cmd_ssh_revoke,
 };
+/// The SSH setup implementation the Hub calls (SSH setup spec, Goal 6).
+#[allow(unused_imports)] // Read by mur-hub-gui, not the bin crate.
+pub use ssh::{setup as ssh_setup, status as ssh_status};
 // Only `cli::perm_hint_tests` (bin crate) reads it.
 #[allow(unused_imports)]
 pub(crate) use perm::reseal_summary;

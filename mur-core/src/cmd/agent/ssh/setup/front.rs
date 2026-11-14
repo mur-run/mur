@@ -16,6 +16,7 @@ use super::probe::{Probe, System};
 use super::{Applied, Approval, SetupPlan, apply_and_restart, plan};
 
 /// Validate a typed `host` / `port` with the request validator.
+#[allow(dead_code)] // Hub-only (mur-hub-gui ssh_admin); the bin crate does not call it.
 pub fn parse_target(host: &str, port: Option<u16>) -> Result<RequestHost, String> {
     RequestHost::parse(host, port).map_err(|e| e.to_string())
 }
@@ -60,6 +61,7 @@ pub fn apply_for(
 }
 
 /// Everything a status view shows for one agent.
+#[allow(dead_code)] // Hub-only (mur-hub-gui ssh_admin); the bin crate does not call it.
 #[derive(Debug, Clone)]
 pub struct Overview {
     pub ssh: SshEntitlement,
@@ -71,6 +73,7 @@ pub struct Overview {
     pub loaded: Vec<String>,
 }
 
+#[allow(dead_code)] // Hub-only (mur-hub-gui ssh_admin); the bin crate does not call it.
 pub fn overview(probe: &dyn Probe, mur_home: &Path, agent: &str) -> Result<Overview> {
     let (_, p) = crate::cmd::agent::load_profile_for_edit(agent)?;
     let ssh = p.entitlements.ssh;

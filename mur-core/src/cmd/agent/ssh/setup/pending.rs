@@ -63,6 +63,7 @@ pub fn still_open(
 /// Every agent's open, not-yet-granted requests, for an inbox. An agent with
 /// no request file is skipped before its profile or channel is read, so a
 /// poll over many agents stays a directory listing each.
+#[allow(dead_code)] // Hub-only (mur-hub-gui ssh_admin); the bin crate does not call it.
 pub fn open_everywhere(mur_home: &Path) -> Vec<(String, OpenRequest)> {
     let now = Utc::now();
     let mut out = Vec::new();
@@ -82,6 +83,7 @@ pub fn open_everywhere(mur_home: &Path) -> Vec<(String, OpenRequest)> {
 
 /// Remove the request for `target`, if one is pending. `Ok(false)`: there was
 /// none. Deletes only through `mur_ssh_request::remove`.
+#[allow(dead_code)] // Hub-only (mur-hub-gui ssh_admin); the bin crate does not call it.
 pub fn dismiss(mur_home: &Path, agent: &str, target: &RequestHost) -> std::io::Result<bool> {
     let home = mur_home.join("agents").join(agent);
     match read_pending(&home, Utc::now())
@@ -104,6 +106,7 @@ pub fn hand_back_text(r: &PendingRequest) -> String {
 }
 
 /// What resumes the agent after a setup the user started (Hub "Add host").
+#[allow(dead_code)] // Hub-only (mur-hub-gui ssh_admin); the bin crate does not call it.
 pub fn direct_hand_back_text(t: &RequestHost) -> String {
     format!(
         "SSH access to {} is set up. Run one test connection and report the result.",

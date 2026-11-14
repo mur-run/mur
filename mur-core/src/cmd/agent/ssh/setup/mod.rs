@@ -13,6 +13,7 @@ pub mod probe;
 pub mod report;
 pub mod verdict;
 
+#[allow(unused_imports)] // Hub-only re-export.
 pub use super::resolve::ScannedKey;
 pub use apply::{Applied, Approval, apply_and_restart};
 pub use plan::{SetupPlan, SpawnChange, plan};
