@@ -4,15 +4,19 @@
 use std::io::Write;
 
 use anyhow::{Result, bail};
-use mur_ssh_request::RequestHost;
+use mur_agent_runtime::sandbox::policy::ExecBackend;
+use mur_ssh_request::{RequestHost, validate_user};
 
 use super::edit::{AllowOutcome, HostGrant};
 use super::resolve::{self, KeyRef};
+use super::setup::apply::{InstallOutcome, InstallTarget, Restart};
+use super::setup::dedicated::{self, dedicated_for};
+use super::setup::install::SshInstaller;
 use super::setup::probe::System;
 use super::setup::verdict::{self, HostChoice};
 use super::setup::{
-    Applied, Approval, SetupPlan, SpawnChange, Verdict, apply_and_restart, life::AgentLifecycle,
-    plan,
+    Applied, Approval, SetupPlan, SpawnChange, Verdict, apply_and_restart, front,
+    life::AgentLifecycle, plan,
 };
 use super::spawn_grant::manual_command;
 use super::{AllowArgs, canonical_agent, check_yes_contract, checked_fp, load_profile_for_edit};
@@ -48,8 +52,13 @@ pub fn cmd_ssh_allow(a: &AllowArgs) -> Result<()> {
         .parent()
         .map(std::path::Path::to_path_buf)
         .unwrap_or_default();
-    let key = resolve::resolve_key(a.key)?;
-    let hosts = host_grants(a, &agent, &agent_home, &profile.entitlements)?;
+    let home = super::resolve_mur_home()?;
+    if let Some(u) = a.user {
+        validate_user(u).map_err(|e| anyhow::anyhow!("{e}. Nothing was changed."))?;
+    }
+    let key = chosen_key(a, &home, &agent)?;
+    let hosts = host_grants(a, &home, &agent, &agent_home, &profile.entitlements)?;
+    let install = install_choice(a, &home, &agent, &key, &hosts)?;
 
     // `none` is not switched here: that needs the card's separate consent.
     // `--yes` never adds a spawn grant (it covers the signing grant only).
@@ -61,11 +70,19 @@ pub fn cmd_ssh_allow(a: &AllowArgs) -> Result<()> {
 
     let mut err = std::io::stderr();
     print_preview(&mut err, &agent, &key, a.label, &hosts, spawn, a.no_restart)?;
+    if let Some((target, line)) = &install {
+        write!(err, "{}", install_preview(target, line))?;
+    }
     if consent == Consent::Ask && !literal_yes(&mut std::io::stdin().lock(), &mut err)? {
+        if a.generate {
+            bail!(
+                "cancelled. No access was granted. The dedicated key of '{agent}' is kept and \
+                 offered again next time; `mur agent remove {agent} --purge` deletes it."
+            );
+        }
         bail!("cancelled — nothing was changed");
     }
 
-    let home = super::resolve_mur_home()?;
     let approval = Approval {
         key_fp: key.fingerprint().to_string(),
         key_label: a.label.map(str::to_string),
@@ -73,6 +90,7 @@ pub fn cmd_ssh_allow(a: &AllowArgs) -> Result<()> {
         spawn,
         spawn_consented: false,
         restart: !a.no_restart,
+        install: install.map(|(target, _)| target),
     };
     let mut life = AgentLifecycle::new(&agent, &home);
     let applied = apply_and_restart(
@@ -81,15 +99,76 @@ pub fn cmd_ssh_allow(a: &AllowArgs) -> Result<()> {
         profile.identity.key_version,
         &approval,
         &mut life,
+        &SshInstaller::for_agent(&home, &agent),
     )?;
     report(&agent, &approval, &hosts, needed, &applied);
     Ok(())
+}
+
+/// `--generate`: the agent's dedicated key, made now if it has none. This
+/// runs before the confirmation because the preview shows the public key;
+/// a key file grants nothing until the profile lists it.
+fn chosen_key(a: &AllowArgs, home: &std::path::Path, agent: &str) -> Result<KeyRef> {
+    if !a.generate {
+        let Some(key) = a.key else {
+            bail!("pass --key <SHA256:...> or --generate. Nothing was changed.");
+        };
+        return resolve::resolve_key(key);
+    }
+    let key = front::generate_for(home, agent).map_err(anyhow::Error::msg)?;
+    Ok(KeyRef::Fingerprint(key.fingerprint))
+}
+
+/// `--install`: where the dedicated public key goes, and the line itself for
+/// the preview. Only the dedicated key is ever installed.
+fn install_choice(
+    a: &AllowArgs,
+    home: &std::path::Path,
+    agent: &str,
+    key: &KeyRef,
+    hosts: &Hosts,
+) -> Result<Option<(InstallTarget, String)>> {
+    if !a.install {
+        return Ok(None);
+    }
+    let (Some(user), Some(plan)) = (a.user, &hosts.plan) else {
+        bail!("--install needs --user <name> and --host <name>. Nothing was changed.");
+    };
+    if let super::setup::plan::Dedicated::Off(off) = &plan.dedicated {
+        bail!(
+            "--install is not available: {}. Nothing was changed.",
+            off.reason()
+        );
+    }
+    let stored = dedicated::stored(home, agent).map_err(anyhow::Error::msg)?;
+    let Some(stored) = stored.filter(|k| k.fingerprint == key.fingerprint()) else {
+        bail!(
+            "--install only installs the dedicated key of '{agent}': use --generate, or pass \
+             that key's fingerprint as --key. Nothing was changed."
+        );
+    };
+    let target = InstallTarget {
+        user: user.to_string(),
+        host: plan.host.clone(),
+    };
+    Ok(Some((target, stored.public_line)))
+}
+
+/// What `--install` will do, shown before the literal `yes`.
+pub(super) fn install_preview(target: &InstallTarget, public_line: &str) -> String {
+    format!(
+        "  install   add this line to ~/.ssh/authorized_keys of {}@{}, logging in with your \
+         own keys:\n    {public_line}\n",
+        target.user,
+        target.host.canonical()
+    )
 }
 
 /// The host keys to grant. With `--host`: plan, verdict, then the verdict
 /// table decides which scanned keys (`--host-key` plays the paste).
 fn host_grants(
     a: &AllowArgs,
+    home: &std::path::Path,
     agent: &str,
     agent_home: &std::path::Path,
     ent: &mur_common::agent::Entitlements,
@@ -116,7 +195,14 @@ fn host_grants(
         });
     };
     let target = RequestHost::parse(host, a.port).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let p = plan(&System, agent, agent_home, ent, target, None)?;
+    let dedicated = dedicated_for(
+        home,
+        agent,
+        ent,
+        front::generate_key_enabled(home),
+        ExecBackend::current(),
+    );
+    let p = plan(&System, agent, agent_home, ent, target, None, dedicated)?;
     // At a terminal, confirming the listed keys is the CLI's "I compared
     // this" for each of them; the card ticks keys one by one.
     let choice = HostChoice {
@@ -262,6 +348,17 @@ fn report(
             manual_command(agent)
         ),
         _ => {}
+    }
+    if let Some(l) = applied.install.line() {
+        println!("{l}");
+    }
+    if matches!(applied.install, InstallOutcome::Failed(_))
+        && applied.restart == Restart::HeldForInstall
+    {
+        println!(
+            "Run the same command again to retry the install, or `mur agent restart {agent}` \
+             to use the grant without it (the first signature will then ask you once)."
+        );
     }
     if let Some(l) = applied.preapproval.line() {
         println!("{l}");
