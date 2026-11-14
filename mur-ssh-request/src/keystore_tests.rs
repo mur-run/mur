@@ -90,11 +90,30 @@ fn sweep_removes_a_partial_generation_and_keeps_the_key() {
     fs::create_dir(&outside).unwrap();
     symlink(&outside, dir.join(format!("{PARTIAL_PREFIX}link"))).unwrap();
 
-    sweep_partial(home.path(), AGENT);
+    sweep_partial_older_than(home.path(), AGENT, Duration::ZERO);
 
     assert!(!partial.exists());
     assert!(outside.is_dir());
     assert_eq!(stored(home.path(), AGENT).unwrap(), Some(key));
+}
+
+/// Two setup cards open for one agent: the second card's sweep must not
+/// delete the directory the first card's `ssh-keygen` is still writing into.
+#[test]
+fn sweep_leaves_a_generation_that_may_still_be_running() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = key_dir(home.path(), AGENT).unwrap();
+    create_private_dir(&dir).unwrap();
+    let live = dir.join(format!("{PARTIAL_PREFIX}live"));
+    fs::create_dir(&live).unwrap();
+    fs::write(live.join(KEY_FILE), b"half").unwrap();
+
+    sweep_partial(home.path(), AGENT);
+
+    assert!(live.join(KEY_FILE).exists(), "a fresh partial was swept");
+    // Control: the same directory goes once it is older than the minimum age.
+    sweep_partial_older_than(home.path(), AGENT, Duration::ZERO);
+    assert!(!live.exists());
 }
 
 #[test]

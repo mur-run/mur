@@ -16,7 +16,7 @@ use std::io::{self, Read as _, Write as _};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use mur_common::agent::fingerprint_of_base64;
 use mur_common::hitl::approval_token::{SECRETS_DIR, create_private_dir};
@@ -38,6 +38,11 @@ pub const PARTIAL_PREFIX: &str = ".gen-";
 pub const COMMENT_PREFIX: &str = "mur-agent-";
 /// `ssh-add` / `ssh-keygen` are local and prompt for nothing here.
 pub const TOOL_TIMEOUT: Duration = Duration::from_secs(10);
+/// A temporary generation directory younger than this may belong to a
+/// [`generate`] that is still running, so [`sweep_partial`] leaves it. One
+/// generation is a single `ssh-keygen` bounded by [`TOOL_TIMEOUT`]; this is
+/// several times that.
+pub const PARTIAL_MIN_AGE: Duration = Duration::from_secs(60);
 /// A public key line is far below this; anything larger is not one.
 pub const MAX_PUB_BYTES: u64 = 4 * 1024;
 
@@ -177,21 +182,41 @@ pub fn generate(mur_home: &Path, agent: &str) -> Result<StoredKey, KeystoreError
 }
 
 /// Remove what an interrupted [`generate`] left behind. Never touches a key.
-/// Do not call it while another process may be generating for this agent.
+/// Safe to call while another process is generating for this agent: a
+/// directory younger than [`PARTIAL_MIN_AGE`] is left alone.
 pub fn sweep_partial(mur_home: &Path, agent: &str) {
+    sweep_partial_older_than(mur_home, agent, PARTIAL_MIN_AGE);
+}
+
+/// [`sweep_partial`] with the minimum age given. Age is the temporary
+/// directory's own mtime, set when `generate` created it.
+pub fn sweep_partial_older_than(mur_home: &Path, agent: &str, min_age: Duration) {
     let Ok(dir) = key_dir(mur_home, agent) else {
         return;
     };
     let Ok(entries) = fs::read_dir(&dir) else {
         return;
     };
+    let now = SystemTime::now();
     for entry in entries.flatten() {
         let is_partial = entry
             .file_name()
             .to_str()
             .is_some_and(|n| n.starts_with(PARTIAL_PREFIX));
-        // `file_type` does not follow a link, so a link is left alone.
-        if is_partial && entry.file_type().is_ok_and(|t| t.is_dir()) {
+        // `DirEntry::metadata` does not follow a link, so a link is left alone.
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !is_partial || !meta.is_dir() {
+            continue;
+        }
+        // An unreadable or future mtime counts as new: keep it.
+        let age = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .unwrap_or(Duration::ZERO);
+        if age >= min_age {
             let _ = fs::remove_dir_all(entry.path());
         }
     }

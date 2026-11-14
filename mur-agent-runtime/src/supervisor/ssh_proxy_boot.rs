@@ -28,10 +28,10 @@ use crate::ssh_proxy::refusal::RefusalSink;
 
 /// Status code: the proxy socket path does not fit `sun_path`.
 pub(super) const OFF_SOCKET_PATH_TOO_LONG: &str = "socket_path_too_long";
-/// How a log line names the dedicated key when its rule has no label.
-const DEDICATED_KEY_LABEL: &str = "dedicated key";
 /// Status code: binding the proxy socket failed.
 pub(super) const OFF_SOCKET_BIND_FAILED: &str = "socket_bind_failed";
+/// How a log line names the dedicated key when its rule has no label.
+const DEDICATED_KEY_LABEL: &str = "dedicated key";
 
 /// What [`load_dedicated_before_seal`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
