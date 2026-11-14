@@ -83,3 +83,111 @@ async fn a_normal_home_listens_in_the_agent_home() {
     assert_eq!(sock, home.path().join(listener::SSH_PROXY_SOCKET_NAME));
     assert!(tokio::net::UnixStream::connect(&sock).await.is_ok());
 }
+
+const AGENT: &str = "demo";
+
+/// A home with a real dedicated key, or `None` (printed) without ssh-keygen.
+fn home_with_key() -> Option<(tempfile::TempDir, StoredKey)> {
+    let home = tempfile::tempdir().unwrap();
+    match keystore::generate(home.path(), AGENT) {
+        Ok(key) => Some((home, key)),
+        Err(KeystoreError::Spawn { tool, .. }) => {
+            eprintln!("SKIPPED: {tool} is not on PATH");
+            None
+        }
+        Err(e) => panic!("generate: {e}"),
+    }
+}
+
+fn granting(fingerprint: &str) -> SshEntitlement {
+    let mut ent = one_key();
+    ent.keys[0].fingerprint = fingerprint.to_string();
+    ent
+}
+
+/// A loader that counts its calls and returns `result`.
+fn counting(
+    result: Result<(), KeystoreError>,
+) -> (
+    Arc<std::sync::atomic::AtomicUsize>,
+    impl FnOnce(&StoredKey) -> Result<(), KeystoreError> + Send + 'static,
+) {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = calls.clone();
+    (calls, move |_: &StoredKey| {
+        seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        result
+    })
+}
+
+fn count(calls: &std::sync::atomic::AtomicUsize) -> usize {
+    calls.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[tokio::test]
+async fn no_grant_never_reads_the_key_store() {
+    let Some((home, _)) = home_with_key() else {
+        return;
+    };
+    let (calls, loader) = counting(Ok(()));
+    let got = load_dedicated_with(home.path(), AGENT, &SshEntitlement::default(), loader).await;
+    assert_eq!(got, DedicatedLoad::NoGrant);
+    assert_eq!(count(&calls), 0);
+}
+
+#[tokio::test]
+async fn a_grant_with_no_stored_key_loads_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let (calls, loader) = counting(Ok(()));
+    let got = load_dedicated_with(home.path(), AGENT, &one_key(), loader).await;
+    assert_eq!(got, DedicatedLoad::NoKey);
+    assert_eq!(count(&calls), 0);
+}
+
+#[tokio::test]
+async fn a_stored_key_the_profile_does_not_grant_is_not_loaded() {
+    let Some((home, _)) = home_with_key() else {
+        return;
+    };
+    let (calls, loader) = counting(Ok(()));
+    // `one_key` grants some other fingerprint.
+    let got = load_dedicated_with(home.path(), AGENT, &one_key(), loader).await;
+    assert_eq!(got, DedicatedLoad::NotGranted);
+    assert_eq!(count(&calls), 0);
+}
+
+#[tokio::test]
+async fn a_granted_stored_key_is_loaded_once() {
+    let Some((home, key)) = home_with_key() else {
+        return;
+    };
+    let (calls, loader) = counting(Ok(()));
+    let got = load_dedicated_with(home.path(), AGENT, &granting(&key.fingerprint), loader).await;
+    assert_eq!(got, DedicatedLoad::Loaded);
+    assert_eq!(count(&calls), 1);
+}
+
+#[tokio::test]
+async fn a_loader_error_is_reported_and_does_not_panic() {
+    let Some((home, key)) = home_with_key() else {
+        return;
+    };
+    let (calls, loader) = counting(Err(KeystoreError::Timeout { tool: "ssh-add" }));
+    let got = load_dedicated_with(home.path(), AGENT, &granting(&key.fingerprint), loader).await;
+    assert_eq!(got, DedicatedLoad::Failed);
+    assert_eq!(count(&calls), 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unusable_stored_key_is_not_loaded() {
+    let Some((home, key)) = home_with_key() else {
+        return;
+    };
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(&key.private, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let (calls, loader) = counting(Ok(()));
+    let got = load_dedicated_with(home.path(), AGENT, &granting(&key.fingerprint), loader).await;
+    assert_eq!(got, DedicatedLoad::Failed);
+    assert_eq!(count(&calls), 0);
+}

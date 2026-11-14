@@ -360,6 +360,15 @@ pub(super) async fn prepare_and_seal(
             &extra_write_paths,
         ),
     );
+    // The agent's dedicated key lives in `secrets/`, unreadable after the
+    // seal. Add it to ssh-agent first, so the connection below sees it.
+    #[cfg(unix)]
+    super::ssh_proxy_boot::load_dedicated_before_seal(
+        mur_home,
+        &profile.inner.name,
+        &profile.inner.entitlements.ssh,
+    )
+    .await;
     // ssh-agent proxy, O7 option A: the one upstream connection is made now,
     // while the upstream is still reachable; the seal below makes a new
     // connect impossible on a boundary platform. Never gates start.
