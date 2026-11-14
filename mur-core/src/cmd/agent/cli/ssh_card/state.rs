@@ -54,12 +54,9 @@ impl Origin {
             Self::Tool {
                 resend: Some(t), ..
             } => Some(t.clone()),
-            Self::Pending(r) | Self::Tool { request: r, .. } => Some(format!(
-                "SSH access to {} is set up (you asked: \"{}\"). Run one test connection and \
-                 report the result.",
-                r.target.canonical(),
-                r.reason
-            )),
+            Self::Pending(r) | Self::Tool { request: r, .. } => {
+                Some(crate::cmd::agent::ssh::setup::pending::hand_back_text(r))
+            }
         }
     }
 }

@@ -10,19 +10,15 @@ pub mod state;
 
 use std::path::Path;
 
-use chrono::Utc;
+use mur_ssh_request::PendingRequest;
 use mur_ssh_request::RequestHost;
-use mur_ssh_request::{PendingRequest, read_pending};
-
-use crate::cmd::agent::ssh::status::{PairState, RequestStatus};
 use tokio::sync::mpsc;
 
 use super::app::{App, HandoverRequest};
 use super::stream::StreamMsg;
-use crate::cmd::agent::ssh::setup::life::AgentLifecycle;
 use crate::cmd::agent::ssh::setup::plan::split_keys;
 use crate::cmd::agent::ssh::setup::probe::System;
-use crate::cmd::agent::ssh::setup::{Applied, Approval, apply_and_restart, plan};
+use crate::cmd::agent::ssh::setup::{Applied, Approval, front, pending, report};
 use crate::cmd::agent::ssh::view;
 use state::{CardState, KeyAction, Origin};
 
@@ -63,10 +59,6 @@ pub enum CardMsg {
         result: Result<Applied, String>,
         hand_back: Option<String>,
     },
-}
-
-fn agent_home(app: &App) -> std::path::PathBuf {
-    app.home.join("agents").join(&app.agent)
 }
 
 /// `/ssh` with its arguments.
@@ -116,55 +108,8 @@ fn split_port(s: &str) -> (&str, Option<u16>) {
     }
 }
 
-/// A pending request that is still open, and whether its host already has a
-/// live grant (approved or signed) so the card has nothing left to do.
-#[derive(Debug, Clone)]
-pub struct OpenRequest {
-    pub request: PendingRequest,
-    pub granted: bool,
-}
-
-/// The pending requests a signing mark has not cleared yet. A cleared one is
-/// removed on the way (spec: "a signing mark ... remove[s] through it"). With
-/// no readable profile there are no grants, so every request stays open.
-fn open_requests(app: &App) -> Vec<OpenRequest> {
-    let home = agent_home(app);
-    let Ok((_, p)) = crate::cmd::agent::load_profile_for_edit(&app.agent) else {
-        return read_pending(&home, Utc::now())
-            .into_iter()
-            .map(|request| OpenRequest {
-                request,
-                granted: false,
-            })
-            .collect();
-    };
-    let st = crate::cmd::agent::ssh::status::status(&app.home, &app.agent, &p.entitlements.ssh);
-    still_open(&home, &st.pairs, st.requests)
-}
-
-fn still_open(
-    agent_home: &Path,
-    pairs: &[crate::cmd::agent::ssh::status::PairStatus],
-    requests: Vec<RequestStatus>,
-) -> Vec<OpenRequest> {
-    let mut out = Vec::new();
-    for r in requests {
-        if r.cleared(pairs) {
-            if let Err(e) = mur_ssh_request::remove(agent_home, &r.request) {
-                tracing::debug!("ssh request cleanup: {e}");
-            }
-            continue;
-        }
-        let granted = r
-            .pairs
-            .iter()
-            .any(|&i| !matches!(pairs[i].state, PairState::NotApproved));
-        out.push(OpenRequest {
-            request: r.request,
-            granted,
-        });
-    }
-    out
+fn open_requests(app: &App) -> Vec<pending::OpenRequest> {
+    pending::open_requests(&app.home, &app.agent)
 }
 
 /// Bare `/ssh`: the grants, their status, and numbered pending requests. A
@@ -292,22 +237,7 @@ fn build(
     user: Option<String>,
     origin: Origin,
 ) -> Result<Box<CardState>, String> {
-    let (path, profile) =
-        crate::cmd::agent::load_profile_for_edit(agent).map_err(|e| format!("{e:#}"))?;
-    let agent_home = path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| home.join("agents").join(agent));
-    let p = plan(
-        &System,
-        agent,
-        &agent_home,
-        &profile.entitlements,
-        target,
-        user,
-    )
-    .map_err(|e| format!("{e:#}"))?;
-    Ok(Box::new(CardState::new(p, origin)))
+    front::plan_for(home, agent, target, user).map(|p| Box::new(CardState::new(p, origin)))
 }
 
 /// A terminal handover just ended (the card's own `ssh-add`): re-read which
@@ -372,14 +302,10 @@ fn approve(app: &mut App, a: Approval, tx: &mpsc::Sender<StreamMsg>) {
 }
 
 fn run_apply(home: &Path, agent: &str, a: &Approval) -> Result<Applied, String> {
-    let (_, profile) =
-        crate::cmd::agent::load_profile_for_edit(agent).map_err(|e| format!("{e:#}"))?;
     let exe = std::env::current_exe()
         .map(super::multiplex::canonical_mur_exe)
         .map_err(|e| format!("could not locate the mur executable: {e}"))?;
-    let mut life = AgentLifecycle::quiet(agent, home, exe);
-    apply_and_restart(home, agent, profile.identity.key_version, a, &mut life)
-        .map_err(|e| format!("{e:#}"))
+    front::apply_for(home, agent, a, exe)
 }
 
 /// A `CardMsg` arrived.
@@ -397,7 +323,7 @@ pub fn on_msg(app: &mut App, msg: CardMsg, tx: &mpsc::Sender<StreamMsg>) {
             hand_back,
         } => {
             let ready = applied.restart == crate::cmd::agent::ssh::setup::apply::Restart::Restarted;
-            for l in report(&app.agent, &applied) {
+            for l in report::lines(&app.agent, &applied) {
                 app.push_system(l);
             }
             // Spec "Error handling": a runtime that did not come up gets no
@@ -411,21 +337,6 @@ pub fn on_msg(app: &mut App, msg: CardMsg, tx: &mpsc::Sender<StreamMsg>) {
             }
         }
     }
-}
-
-/// The lines after Approve, in order.
-pub fn report(agent: &str, a: &Applied) -> Vec<String> {
-    use crate::cmd::agent::ssh::edit::AllowOutcome;
-    let mut out = vec![match a.outcome {
-        AllowOutcome::Added => format!("✓ ssh access written for '{agent}'"),
-        AllowOutcome::Updated => format!("✓ already allowed for '{agent}' (labels refreshed)"),
-    }];
-    if a.spawn.is_some() {
-        out.push("`ssh` added to the spawn allowlist".into());
-    }
-    out.extend(a.preapproval.line());
-    out.extend(a.restart.line(agent));
-    out
 }
 
 #[cfg(test)]

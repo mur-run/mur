@@ -338,52 +338,6 @@ fn host_port_split() {
     assert_eq!(RequestHost::parse(h, p).unwrap().port(), 2222);
 }
 
-fn pair(
-    state: crate::cmd::agent::ssh::status::PairState,
-) -> crate::cmd::agent::ssh::status::PairStatus {
-    crate::cmd::agent::ssh::status::PairStatus {
-        key_fp: fp('K'),
-        host_key_fp: fp('H'),
-        host_names: vec!["gh.example".into()],
-        action_hash: "h".into(),
-        state,
-        last_expired_mark: None,
-    }
-}
-
-/// #2370 review: a signed request is deleted and never listed; an approved
-/// one stays but is marked granted, so it neither reopens a card nor shows
-/// on attach; a host with no grant stays open.
-#[test]
-fn cleared_requests_are_removed_and_granted_ones_do_not_reopen() {
-    use crate::cmd::agent::ssh::status::{PairState, RequestStatus};
-    let dir = tempfile::tempdir().unwrap();
-    let t = RequestHost::parse("gh.example", None).unwrap();
-    let req = SshRequest::new(&t, Some("git"), "deploy", Utc::now()).unwrap();
-    mur_ssh_request::write(dir.path(), &req).unwrap();
-    let r = || mur_ssh_request::read_pending(dir.path(), Utc::now()).remove(0);
-    let reqs = |pairs: Vec<usize>| {
-        vec![RequestStatus {
-            request: r(),
-            pairs,
-        }]
-    };
-
-    let open = still_open(dir.path(), &[], reqs(vec![]));
-    assert!(matches!(open.as_slice(), [o] if !o.granted));
-
-    let approved = [pair(PairState::Approved)];
-    let open = still_open(dir.path(), &approved, reqs(vec![0]));
-    assert!(matches!(open.as_slice(), [o] if o.granted));
-
-    let signed = [pair(PairState::Signed { at: Utc::now() })];
-    assert!(still_open(dir.path(), &signed, reqs(vec![0])).is_empty());
-    assert!(
-        mur_ssh_request::read_pending(dir.path(), Utc::now()).is_empty(),
-        "a signing mark removes the request file"
-    );
-}
-
 /// #2370 review: the card's rows count wrapped lines, and a short band
 /// drops from the top so the consent box and Approve note stay visible.
 #[test]

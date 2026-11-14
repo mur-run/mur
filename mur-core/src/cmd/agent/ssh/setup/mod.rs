@@ -3,12 +3,16 @@
 //! `status` (in `super::status`).
 
 pub mod apply;
+pub mod front;
 pub mod life;
+pub mod pending;
 pub mod plan;
 pub mod preapprove;
 pub mod probe;
+pub mod report;
 pub mod verdict;
 
+pub use super::resolve::ScannedKey;
 pub use apply::{Applied, Approval, apply_and_restart};
 pub use plan::{SetupPlan, SpawnChange, plan};
 pub use verdict::Verdict;
@@ -16,3 +20,7 @@ pub use verdict::Verdict;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pending_tests.rs"]
+mod pending_tests;
