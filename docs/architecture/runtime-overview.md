@@ -51,10 +51,10 @@ One agent asks another a question and gets an answer that can draw only on
 files *both* could read. Spec:
 `docs/superpowers/specs/2026-09-26-channel-consult-design.md`.
 
-**Status:** readers ship first; the writer is off. `tools::ask::ENABLED` is
-`false` (`mur-agent-runtime/src/tools/ask/mod.rs`), so no runtime registers the
-`ask` tool and nothing emits an `Ask` yet. `channel/consult` is served but has
-nothing to answer until the gate is lifted one release later.
+**Status:** on. Readers shipped in v2.99.0; the `ask` tool
+(`mur-agent-runtime/src/tools/ask/mod.rs`) is registered for every agent whose
+profile does not deny it, on the platforms where `channel/consult` answers
+(macOS today; see Platforms below).
 
 **Event kinds** (`mur-common/src/channel.rs`): `EventKind::Ask` carries
 `AskPayload { to, question, expires_at_ms, nonce }`; `EventKind::AskReply`

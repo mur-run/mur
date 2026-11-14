@@ -53,12 +53,6 @@ impl World {
     }
 }
 
-#[test]
-fn the_gate_is_off_in_this_release() {
-    // D3: readers ship one release before writers (§D7). E7 flips this.
-    const { assert!(!ENABLED) };
-}
-
 // R1 · Asker's runtime writes the Ask.
 #[test]
 fn askers_runtime_writes_the_ask() {

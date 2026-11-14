@@ -6,9 +6,9 @@
 //! the answer. The dial carries no scope: the answerer derives it from this
 //! agent's own profile.
 //!
-//! **Gated off in release N (D3).** Readers of the `Ask` kind ship one release
-//! before any writer (§D7), so [`ENABLED`] is `false` and the provider never
-//! registers the tool. E7 flips it in release N+1.
+//! Readers of the `Ask` kind shipped in v2.99.0, one release before this
+//! writer (§D7): a binary older than that reuses an `Ask`'s `seq` on its next
+//! append.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -22,10 +22,6 @@ use serde_json::{Value, json};
 use super::{ToolDef, ToolError, ToolExecutor, ToolOutput};
 
 pub const ASK: &str = "ask";
-
-/// D3: whether this release writes `Ask` events at all. `false` in release N
-/// (readers only); E7 sets it `true` in release N+1.
-pub const ENABLED: bool = false;
 
 /// Marker file in the agent home naming the channel this agent's `Ask`s go
 /// to. Created on first use and remembered, like the schedule channel, so

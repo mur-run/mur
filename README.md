@@ -1102,6 +1102,19 @@ Agent** wizard offers the same catalog as a source.
   Only agents in `parallel_jobs.targets` can be named; set
   `parallel_jobs.requesters` in `~/.mur/config.yaml` to limit who may ask
   (empty = any agent). An agent's `yes: true` is ignored: approvals go to you.
+- **One agent can ask another a question** — the `ask` tool posts a signed
+  `Ask` to a channel and the other agent answers in a restricted turn: it has
+  `read_file` and nothing else, and it can read only the paths **both** agents
+  may read, so asking never widens what the asker can see. The answer is
+  posted to the same channel, signed by the agent that wrote it. Who may be
+  asked follows `communication.sends_to`; deny the `ask` tool in a profile to
+  turn it off for that agent. Two limits: the answerer's **memory is not
+  scoped** (an answer can reflect what it remembers, whatever the file scope),
+  and it is **macOS only** for now, and an agent running on a CLI backend
+  refuses to answer. `consult.ask_expiry_secs`
+  (default 600) sets how long an `Ask` stays answerable. Upgrade every MUR
+  binary first: one older than v2.99.0 can drop its own next event after an
+  `Ask`.
 - **Long work returns a handle; liveness is a heartbeat** — `fleet_run` and
   `parallel_jobs` answer `{run_id, status: dispatched}` within a second and
   you poll `mur_job_status <run_id>` (or `mur fleet status`); the result lands
