@@ -8,6 +8,8 @@ import type {
   RawCompanionEvent,
   RawBlockedItem,
 } from "./useInbox";
+import { SshInboxCard } from "../ssh/SshInboxCard";
+import type { PendingView } from "../ssh/sshApi";
 
 interface Props {
   /** Already filtered by the caller's dismissed-set (single source of truth). */
@@ -71,6 +73,16 @@ export function NeedsYou({ items, onRefresh, onDismiss, onPeekAgent }: Props) {
                   item={it}
                   raw={it.payload as RawBlockedItem}
                   onKeep={() => onDismiss(it)}
+                />
+              );
+            case "ssh_request":
+              return (
+                <SshInboxCard
+                  key={`ssh:${it.id}`}
+                  item={it}
+                  raw={it.payload as PendingView}
+                  onResolved={onRefresh}
+                  onPeekAgent={onPeekAgent}
                 />
               );
             default:

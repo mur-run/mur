@@ -4,6 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { useAgents } from "../../context/AgentContext";
 import { translate, useT } from "../../i18n";
 import { mergeInbox, type InboxItem } from "./inbox";
+import { SSH_REQUEST_EVENT, type PendingView, sshApi } from "../ssh/sshApi";
+import { pendingToItem } from "../ssh/sshModel";
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -160,8 +162,8 @@ function filterNulls<T>(items: (T | null)[]): T[] {
 }
 
 /**
- * Aggregates the four inbox sources (HITL approvals, install requests,
- * companion bridge messages, blocked skill upgrades) into one sorted,
+ * Aggregates the five inbox sources (HITL approvals, install requests,
+ * companion bridge messages, blocked skill upgrades, SSH requests) into one sorted,
  * deduplicated `InboxItem[]`. Per-source failures are swallowed so one
  * broken source doesn't blank the others.
  */
@@ -172,6 +174,7 @@ export function useInbox(): { items: InboxItem[]; refresh: () => void } {
   const [installItems, setInstallItems] = useState<InboxItem[]>([]);
   const [companionItems, setCompanionItems] = useState<InboxItem[]>([]);
   const [blockedItems, setBlockedItems] = useState<InboxItem[]>([]);
+  const [sshItems, setSshItems] = useState<InboxItem[]>([]);
   const agentNamesRef = useRef<string[]>([]);
   agentNamesRef.current = agents.map((a) => a.name);
 
@@ -209,23 +212,34 @@ export function useInbox(): { items: InboxItem[]; refresh: () => void } {
       .catch(() => {});
   }, [lang]);
 
+  const refreshSsh = useCallback(() => {
+    sshApi
+      .pendingAll()
+      .then((raw: PendingView[]) => setSshItems(filterNulls(raw.map((r) => pendingToItem(r, lang)))))
+      .catch(() => {});
+  }, [lang]);
+
   const refresh = useCallback(() => {
     refreshHitl();
     refreshInstall();
     refreshCompanion();
     refreshBlocked();
-  }, [refreshHitl, refreshInstall, refreshCompanion, refreshBlocked]);
+    refreshSsh();
+  }, [refreshHitl, refreshInstall, refreshCompanion, refreshBlocked, refreshSsh]);
 
   useEffect(() => {
     // No initial refresh() here — the [lang] effect below covers mount too.
     const unlistenHitl = listen("hitl-approval-needed", () => refreshHitl());
+    const unlistenSsh = listen(SSH_REQUEST_EVENT, () => refreshSsh());
     const interval = setInterval(() => {
       refreshInstall();
       refreshBlocked();
+      refreshSsh();
     }, POLL_INTERVAL_MS);
 
     return () => {
       unlistenHitl.then((fn) => fn()).catch(() => {});
+      unlistenSsh.then((fn) => fn()).catch(() => {});
       clearInterval(interval);
     };
     // Re-subscribe on a language switch: the listener and the interval close
@@ -249,7 +263,7 @@ export function useInbox(): { items: InboxItem[]; refresh: () => void } {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentIdentityKey]);
 
-  const items = mergeInbox([hitlItems, installItems, companionItems, blockedItems]);
+  const items = mergeInbox([hitlItems, installItems, companionItems, blockedItems, sshItems]);
 
   return { items, refresh };
 }
