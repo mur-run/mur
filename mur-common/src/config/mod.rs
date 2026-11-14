@@ -10,6 +10,7 @@ mod ops;
 mod scratch;
 mod search;
 mod skills;
+mod ssh_setup;
 mod turn_track;
 
 pub use attribution::*;
@@ -21,6 +22,7 @@ pub use ops::*;
 pub use scratch::*;
 pub use search::*;
 pub use skills::*;
+pub use ssh_setup::*;
 pub use turn_track::*;
 
 use ops::{
@@ -361,6 +363,10 @@ pub struct Config {
     /// Channel consult (`consult:`): how long an `Ask` stays answerable.
     #[serde(default)]
     pub consult: ConsultConfig,
+
+    /// SSH setup journey switches (`ssh_setup:`).
+    #[serde(default)]
+    pub ssh_setup: SshSetupConfig,
 
     /// Per-turn copy-on-write track tuning (`turn_track:`).
     #[serde(default)]
