@@ -306,3 +306,105 @@ fn revoke_view_carries_restart_needed_beside_the_overview() {
     assert_eq!(j["restart_needed"], true);
     assert!(j["overview"]["keys"].is_array());
 }
+
+/// What Approve wrote; the store never looks inside it.
+fn written_approval() -> mur_core::cmd::agent::ssh_setup::Approval {
+    mur_core::cmd::agent::ssh_setup::Approval {
+        key_fp: fp('K'),
+        key_label: None,
+        hosts: vec![],
+        spawn: None,
+        spawn_consented: false,
+        restart: true,
+        install: None,
+    }
+}
+
+#[test]
+fn a_held_plan_finishes_once_and_never_applies_again() {
+    let plans = SshPlans::default();
+    let id = plans.put(plan(Verdict::Trusted, None), None, "x".into());
+    let h = plans.take(&id).unwrap();
+    plans.keep_written(id.clone(), h, written_approval(), true);
+
+    let e = plans
+        .take(&id)
+        .err()
+        .expect("a written plan is not applied twice");
+    assert!(e.contains("already wrote"), "{e}");
+    assert!(
+        plans.take_written("another-id").is_err(),
+        "a different plan_id is refused"
+    );
+
+    let h = plans.take_written(&id).expect("retry or finish works once");
+    assert!(
+        plans.take_written(&id).is_err(),
+        "the second finish finds nothing in flight"
+    );
+
+    // The install failed again: put back held, so retry is offered again.
+    plans.put_back(id.clone(), h);
+    let h = plans.take_written(&id).unwrap();
+    // Restarted: kept for the advisory test only.
+    plans.keep_written(id.clone(), h, written_approval(), false);
+    let e = plans.take_written(&id).err().expect("no held restart left");
+    assert!(e.contains("no held restart"), "{e}");
+}
+
+#[test]
+fn a_plan_not_yet_written_has_nothing_to_finish() {
+    let plans = SshPlans::default();
+    let id = plans.put(plan(Verdict::Trusted, None), None, "x".into());
+    assert!(plans.take_written(&id).is_err());
+    assert!(plans.take(&id).is_ok(), "it can still be applied");
+}
+
+#[test]
+fn the_plan_view_names_the_dedicated_state_and_line() {
+    use mur_core::cmd::agent::ssh_setup::plan::DedicatedOff;
+    let mut p = plan(Verdict::Trusted, None);
+    assert_eq!(plan_view("i", &p, None).dedicated.state, "offer");
+    p.dedicated = Dedicated::Off(DedicatedOff::SwitchOff);
+    let v = plan_view("i", &p, None).dedicated;
+    assert_eq!(v.state, "off");
+    assert!(v.reason.unwrap().contains("generate_key"));
+    p.dedicated = Dedicated::Stored {
+        fingerprint: fp('D'),
+        public_line: "ssh-ed25519 AAAA mur".into(),
+    };
+    let v = plan_view("i", &p, None).dedicated;
+    assert_eq!(v.state, "stored");
+    assert_eq!(v.line.as_deref(), Some("ssh-ed25519 AAAA mur"));
+    assert_eq!(
+        super::view::dedicated_line(&p, &fp('D')).as_deref(),
+        Some("ssh-ed25519 AAAA mur")
+    );
+    assert_eq!(
+        super::view::dedicated_line(&p, &fp('K')),
+        None,
+        "only for the dedicated key"
+    );
+}
+
+#[test]
+fn a_held_apply_view_offers_the_held_actions() {
+    use mur_core::cmd::agent::ssh_setup::apply::{InstallOutcome, Restart};
+    let v = super::view::apply_view(
+        vec![],
+        &Restart::HeldForInstall,
+        &InstallOutcome::Failed("no shell".into()),
+        Some("ssh-ed25519 AAAA mur".into()),
+        "go".into(),
+    );
+    assert!(v.held && !v.restarted && v.hand_back.is_none());
+    assert_eq!(v.install.state, "failed");
+    let v = super::view::apply_view(
+        vec![],
+        &Restart::Restarted,
+        &InstallOutcome::NotChosen,
+        None,
+        "go".into(),
+    );
+    assert!(!v.held && !v.advisory && v.hand_back.as_deref() == Some("go"));
+}
