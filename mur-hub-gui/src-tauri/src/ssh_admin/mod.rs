@@ -125,7 +125,7 @@ pub fn is_ssh_request_done(seen: &mut HashSet<String>, step: &StepEvent) -> bool
 pub async fn agent_ssh_overview(name: String) -> Result<OverviewView, String> {
     let name = canonical(&name);
     blocking(move || {
-        let ov = front::overview(&System, &home(), &name).map_err(|e| format!("{e:#}"))?;
+        let ov = front::overview(&System, &home(), &name)?;
         Ok(view::overview_view(&name, &ov))
     })
     .await
@@ -239,7 +239,7 @@ pub async fn agent_ssh_revoke(
             yes: true,
         })
         .map_err(|e| format!("{e:#}"))?;
-        let ov = front::overview(&System, &home(), &name).map_err(|e| format!("{e:#}"))?;
+        let ov = front::overview(&System, &home(), &name)?;
         Ok(view::overview_view(&name, &ov))
     })
     .await
