@@ -17,6 +17,8 @@ use sha2::{Digest, Sha256};
 
 use mur_common::agent::{ProcessesEntitlement, SpawnMode};
 
+#[cfg(unix)]
+pub mod keystore;
 mod mark;
 mod pinned;
 mod store;
