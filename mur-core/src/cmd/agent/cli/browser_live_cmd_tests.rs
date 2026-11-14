@@ -537,6 +537,9 @@ fn a_host_edit_applies_next_turn_and_says_the_tab_closes() {
     );
     assert!(text.contains("Restart the agent"), "{text}");
     assert!(text.contains("after the agent restarts"), "{text}");
+    // After a real write the past tense is true (#2406).
+    assert!(text.contains("Saved to the profile"), "{text}");
+    assert!(!text.contains("Will be saved"), "{text}");
 
     let (text, chip) = run("bob", &s(&["--yes", "b.example.com"]), true, &mut f).unwrap();
     assert!(chip.is_none(), "{text}");
@@ -583,6 +586,9 @@ fn the_preview_says_when_the_write_will_apply() {
     };
     let (text, _) = run("bob", &s(&["b.example.com"]), true, &mut f).unwrap();
     assert!(text.contains("the agent's next turn uses it"), "{text}");
+    // #2406: the confirm preview has written nothing yet.
+    assert!(!text.contains("Saved to the profile"), "{text}");
+    assert!(text.contains("Will be saved to the profile"), "{text}");
     let (text, _) = run("bob", &s(&["--research"]), true, &mut f).unwrap();
     assert!(text.contains("after the agent restarts"), "{text}");
     let mut f = Fake::default();

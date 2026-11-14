@@ -5,6 +5,7 @@
 //! old one (spec 2026-10-25 D1). Creating the entry, a new grant, or switching
 //! research mode on or off is cold and still needs a restart (D3, §4).
 
+use crate::cmd::agent::cli::browser_live_preview::Applies;
 use mur_common::agent::McpNetMode;
 
 /// When the write reaches the running agent.
@@ -47,11 +48,11 @@ impl Effect {
         }
     }
 
-    /// The preview's last line.
-    pub(crate) fn preview_line(self) -> &'static str {
+    /// When it applies, for the preview's last line.
+    pub(crate) fn applies(self) -> Applies {
         match self {
-            Effect::NextTurn => "Saved to the profile; the agent's next turn uses it.",
-            Effect::Restart => "Saved to the profile; takes effect after the agent restarts.",
+            Effect::NextTurn => Applies::NextTurn,
+            Effect::Restart => Applies::AfterRestart,
         }
     }
 

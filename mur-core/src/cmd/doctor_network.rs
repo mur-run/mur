@@ -5,6 +5,7 @@
 //! `+ / -` shape every other egress writer shows (spec Part 2). A
 //! `Restricted` server left with no hosts is flagged, never re-moded.
 
+use crate::cmd::agent::cli::browser_live_preview::{Applies, will_save_line};
 use std::path::Path;
 
 use anyhow::Result;
@@ -76,7 +77,8 @@ pub(crate) fn fix_preview(agent: &str, repair: &HostRepair) -> String {
              name its sites with `/browser live <host>` or `mur agent mcp set-network`."
         ));
     }
-    out.push("Saved to the profile; takes effect after the agent restarts.".into());
+    // Printed before "Apply this fix?": nothing is saved yet (#2406).
+    out.push(will_save_line(Applies::AfterRestart));
     out.join("\n")
 }
 
@@ -158,6 +160,8 @@ mod tests {
             "{preview}"
         );
         assert!(!preview.contains("api.example.com"), "{preview}");
+        // #2406: shown before "Apply this fix?", so nothing is saved yet.
+        assert!(!preview.contains("Saved to the profile"), "{preview}");
     }
 
     #[test]
