@@ -92,4 +92,5 @@ custom-protocol = ["tauri/custom-protocol"]
 macos-un-notifications = ["dep:notify-rust", "notify-rust/preview-macos-un"]
 
 [dev-dependencies]
+mur-ssh-request = { path = "../../mur-ssh-request" }
 tempfile = "3"
