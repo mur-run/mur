@@ -167,6 +167,8 @@ impl CardState {
             ticked: self.ticked.clone(),
             spawn_consented: self.spawn_consented,
             user: self.user.clone(),
+            // The card's install step lands in slice 6c.
+            install: false,
         };
         build_approval(&self.plan, &choices).map_err(|e| match e {
             NotReady::NoKey => "no key to grant: load one with ssh-add, then reopen /ssh".into(),
@@ -174,7 +176,7 @@ impl CardState {
                 "the chosen key is not loaded in ssh-agent; go back and load it".into()
             }
             NotReady::SpawnConsent => "tick the process-permission consent (c) first".into(),
-            NotReady::Host(s) | NotReady::User(s) => s,
+            NotReady::Host(s) | NotReady::User(s) | NotReady::Install(s) => s,
         })
     }
 

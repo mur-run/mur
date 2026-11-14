@@ -2,9 +2,12 @@
 //! `mur-core` — `cmd/agent/ssh/setup/`): `plan`, `apply_and_restart`, and
 //! `status` (in `super::status`).
 
+pub mod advisory;
 pub mod apply;
 pub mod choices;
+pub mod dedicated;
 pub mod front;
+pub mod install;
 pub mod life;
 pub mod pending;
 pub mod plan;
@@ -30,3 +33,15 @@ mod pending_tests;
 #[cfg(test)]
 #[path = "choices_tests.rs"]
 mod choices_tests;
+
+#[cfg(all(test, unix))]
+#[path = "dedicated_tests.rs"]
+mod dedicated_tests;
+
+#[cfg(all(test, unix))]
+#[path = "install_tests.rs"]
+mod install_tests;
+
+#[cfg(all(test, unix))]
+#[path = "install_apply_tests.rs"]
+mod install_apply_tests;
