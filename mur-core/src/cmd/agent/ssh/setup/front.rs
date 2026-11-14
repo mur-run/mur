@@ -2,10 +2,12 @@
 //! approval, read the overview. murmur and Hub share them so the two cannot
 //! drift (SSH setup spec, Goal 6). `plan_for` / `apply_for` are murmur's
 //! `ssh_card::{build, run_apply}` (#2370) without the TUI.
+//!
+//! Every call reads the agent from the `mur_home` it is given, never from
+//! `MUR_HOME`, and every error is a `String` a client can show as is.
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
 use mur_common::agent::SshEntitlement;
 use mur_ssh_request::RequestHost;
 
@@ -14,6 +16,7 @@ use super::life::AgentLifecycle;
 use super::pending::{OpenRequest, still_open};
 use super::probe::{Probe, System};
 use super::{Applied, Approval, SetupPlan, apply_and_restart, plan};
+use crate::cmd::agent::load_profile_at;
 
 /// Validate a typed `host` / `port` with the request validator.
 #[allow(dead_code)] // Hub-only (mur-hub-gui ssh_admin); the bin crate does not call it.
@@ -28,12 +31,8 @@ pub fn plan_for(
     target: RequestHost,
     user: Option<String>,
 ) -> Result<SetupPlan, String> {
-    let (path, profile) =
-        crate::cmd::agent::load_profile_for_edit(agent).map_err(|e| format!("{e:#}"))?;
-    let agent_home = path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| mur_home.join("agents").join(agent));
+    let (_, profile) = load_profile_at(mur_home, agent).map_err(|e| format!("{e:#}"))?;
+    let agent_home = mur_home.join("agents").join(agent);
     plan(
         &System,
         agent,
@@ -53,8 +52,7 @@ pub fn apply_for(
     a: &Approval,
     mur_exe: PathBuf,
 ) -> Result<Applied, String> {
-    let (_, profile) =
-        crate::cmd::agent::load_profile_for_edit(agent).map_err(|e| format!("{e:#}"))?;
+    let (_, profile) = load_profile_at(mur_home, agent).map_err(|e| format!("{e:#}"))?;
     let mut life = AgentLifecycle::quiet(agent, mur_home, mur_exe);
     apply_and_restart(mur_home, agent, profile.identity.key_version, a, &mut life)
         .map_err(|e| format!("{e:#}"))
@@ -74,8 +72,8 @@ pub struct Overview {
 }
 
 #[allow(dead_code)] // Hub-only (mur-hub-gui ssh_admin); the bin crate does not call it.
-pub fn overview(probe: &dyn Probe, mur_home: &Path, agent: &str) -> Result<Overview> {
-    let (_, p) = crate::cmd::agent::load_profile_for_edit(agent)?;
+pub fn overview(probe: &dyn Probe, mur_home: &Path, agent: &str) -> Result<Overview, String> {
+    let (_, p) = load_profile_at(mur_home, agent).map_err(|e| format!("{e:#}"))?;
     let ssh = p.entitlements.ssh;
     let st = status::status(mur_home, agent, &ssh);
     let open = still_open(

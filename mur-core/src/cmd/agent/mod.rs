@@ -267,7 +267,12 @@ pub(super) fn pid_alive(pid: u32) -> bool {
 }
 
 pub(crate) fn load_profile_for_edit(name: &str) -> Result<(PathBuf, _AgentProfile)> {
-    let mur_home = resolve_mur_home()?;
+    load_profile_at(&resolve_mur_home()?, name)
+}
+
+/// `load_profile_for_edit` under an explicit MUR home, for callers that were
+/// handed one (Hub's SSH commands) and must not read `MUR_HOME` instead.
+pub(crate) fn load_profile_at(mur_home: &Path, name: &str) -> Result<(PathBuf, _AgentProfile)> {
     let path = mur_home.join("agents").join(name).join("profile.yaml");
     if !path.exists() {
         bail!("agent '{name}' not found");

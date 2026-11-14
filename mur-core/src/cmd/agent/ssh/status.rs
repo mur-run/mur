@@ -60,7 +60,8 @@ impl RequestStatus {
     pub fn cleared(&self, pairs: &[PairStatus]) -> bool {
         self.pairs
             .iter()
-            .any(|&i| matches!(pairs[i].state, PairState::Signed { .. }))
+            .filter_map(|&i| pairs.get(i))
+            .any(|p| matches!(p.state, PairState::Signed { .. }))
     }
 }
 

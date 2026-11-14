@@ -22,7 +22,7 @@ pub struct OpenRequest {
 /// no readable profile there are no grants, so every request stays open.
 pub fn open_requests(mur_home: &Path, agent: &str) -> Vec<OpenRequest> {
     let home = mur_home.join("agents").join(agent);
-    let Ok((_, p)) = crate::cmd::agent::load_profile_for_edit(agent) else {
+    let Ok((_, p)) = crate::cmd::agent::load_profile_at(mur_home, agent) else {
         return read_pending(&home, Utc::now())
             .into_iter()
             .map(|request| OpenRequest {
@@ -35,6 +35,8 @@ pub fn open_requests(mur_home: &Path, agent: &str) -> Vec<OpenRequest> {
     still_open(&home, &st.pairs, st.requests)
 }
 
+/// An index in a request's `pairs` that is not in `pairs` (a status built
+/// for another profile) counts as no grant.
 pub fn still_open(
     agent_home: &Path,
     pairs: &[PairStatus],
@@ -51,7 +53,8 @@ pub fn still_open(
         let granted = r
             .pairs
             .iter()
-            .any(|&i| !matches!(pairs[i].state, PairState::NotApproved));
+            .filter_map(|&i| pairs.get(i))
+            .any(|p| !matches!(p.state, PairState::NotApproved));
         out.push(OpenRequest {
             request: r.request,
             granted,

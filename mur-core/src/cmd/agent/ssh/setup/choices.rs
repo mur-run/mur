@@ -10,7 +10,8 @@ use super::super::edit::HostGrant;
 use super::verdict::{self, HostChoice};
 use super::{Approval, SetupPlan, SpawnChange};
 
-/// What the user picked. Every field but `key_fp` may be left out.
+/// What the user picked. Every field may be left out; a missing `key_fp`
+/// reads as `NotReady::NoKey`, and an empty `user` as "not given".
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct Choices {
     pub key_fp: Option<String>,
