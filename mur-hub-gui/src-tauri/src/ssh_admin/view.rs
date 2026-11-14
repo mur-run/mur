@@ -5,6 +5,7 @@ use mur_core::cmd::agent::ssh_setup::choices::NotReady;
 use mur_core::cmd::agent::ssh_setup::front::Overview;
 use mur_core::cmd::agent::ssh_setup::pending::OpenRequest;
 use mur_core::cmd::agent::ssh_setup::probe::{AgentKey, private_key_of};
+use mur_core::cmd::agent::ssh_setup::verdict::forget_cmd;
 use mur_core::cmd::agent::ssh_setup::{Approval, SetupPlan, SpawnChange, Verdict};
 use mur_core::cmd::agent::ssh_status::PairState;
 use serde::Serialize;
@@ -113,8 +114,7 @@ pub fn plan_view(id: &str, p: &SetupPlan, reason: Option<&str>) -> PlanView {
         consent_text: (p.spawn == Some(SpawnChange::NoneToStrict))
             .then(|| p.exec_surface.as_ref().map(|e| e.consent_text()))
             .flatten(),
-        differs_cmd: (p.verdict == Verdict::Differs)
-            .then(|| format!("ssh-keygen -R {}", p.host.host())),
+        differs_cmd: (p.verdict == Verdict::Differs).then(|| forget_cmd(&p.host)),
     }
 }
 
@@ -129,6 +129,20 @@ pub struct ReadyView {
 pub struct CheckView {
     pub ready: Option<ReadyView>,
     pub not_ready: Option<NotReady>,
+}
+
+/// Why Approve is unavailable, as words. The card asks `agent_ssh_check`
+/// first and gets the structured `NotReady`; this is for an apply that races
+/// a stale card.
+pub fn not_ready_text(e: &NotReady) -> String {
+    match e {
+        NotReady::NoKey => "choose a key to grant first".into(),
+        NotReady::KeyNotLoaded => {
+            "the chosen key is not loaded in ssh-agent: load it, then refresh the keys".into()
+        }
+        NotReady::SpawnConsent => "tick the process-permission consent first".into(),
+        NotReady::Host(s) | NotReady::User(s) => s.clone(),
+    }
 }
 
 pub fn check_view(r: Result<Approval, NotReady>) -> CheckView {
@@ -196,6 +210,14 @@ pub struct OverviewView {
     pub decisions_unverified: Option<String>,
 }
 
+/// After a revoke. `restart_needed`: the runtime is up and still holds the
+/// profile it started with, so the revoke binds only after a restart.
+#[derive(Debug, Serialize)]
+pub struct RevokeView {
+    pub overview: OverviewView,
+    pub restart_needed: bool,
+}
+
 pub fn pending_view(agent: &str, o: &OpenRequest) -> PendingView {
     let r = &o.request;
     PendingView {
@@ -231,7 +253,7 @@ pub fn overview_view(agent: &str, ov: &Overview) -> OverviewView {
                     let (state, signed_at) = match pair.map(|p| &p.state) {
                         Some(PairState::Signed { at }) => ("signed", Some(at.to_rfc3339())),
                         Some(PairState::Approved) => ("approved", None),
-                        _ => ("not_approved", None),
+                        Some(PairState::NotApproved) | None => ("not_approved", None),
                     };
                     let names = pair
                         .map(|p| p.host_names.clone())

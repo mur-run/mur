@@ -22,6 +22,10 @@ use mur_agent_runtime::sandbox::policy::ExecBackend;
 const AGENT: &str = "bot";
 const HOST: &str = "gh.example";
 
+fn target() -> mur_ssh_request::RequestHost {
+    mur_ssh_request::RequestHost::parse(HOST, None).unwrap()
+}
+
 fn scanned(c: char) -> ScannedKey {
     ScannedKey {
         fingerprint: fp(c),
@@ -61,11 +65,11 @@ fn select_never_grants_more_than_the_table_allows() {
     let none = HostChoice::default();
     let unknown = Verdict::Unknown { downgraded: false };
 
-    let got = select(HOST, &scan, &Verdict::Trusted, &[fp('A')], &none).unwrap();
+    let got = select(&target(), &scan, &Verdict::Trusted, &[fp('A')], &none).unwrap();
     assert_eq!(got, vec![scanned('A')]);
 
     assert!(
-        select(HOST, &scan, &unknown, &[], &none).is_err(),
+        select(&target(), &scan, &unknown, &[], &none).is_err(),
         "nothing vouched"
     );
     let tick = HostChoice {
@@ -73,7 +77,7 @@ fn select_never_grants_more_than_the_table_allows() {
         ticked: vec![fp('B'), fp('Q')],
     };
     assert_eq!(
-        select(HOST, &scan, &unknown, &[], &tick).unwrap(),
+        select(&target(), &scan, &unknown, &[], &tick).unwrap(),
         vec![scanned('B')],
         "a ticked fingerprint the host never offered is ignored"
     );
@@ -82,18 +86,18 @@ fn select_never_grants_more_than_the_table_allows() {
         pasted: Some(fp('Q')),
         ticked: vec![],
     };
-    let e = select(HOST, &scan, &unknown, &[], &paste_missing).unwrap_err();
+    let e = select(&target(), &scan, &unknown, &[], &paste_missing).unwrap_err();
     assert!(e.to_string().contains("did not offer"), "{e}");
 
     // Differs: only the operator's fingerprint gets through.
-    let e = select(HOST, &scan, &Verdict::Differs, &[], &tick).unwrap_err();
-    assert!(e.to_string().contains("ssh-keygen -R"), "{e}");
+    let e = select(&target(), &scan, &Verdict::Differs, &[], &tick).unwrap_err();
+    assert!(e.to_string().contains("`ssh-keygen -R gh.example`"), "{e}");
     let paste = HostChoice {
         pasted: Some(fp('A')),
         ticked: vec![],
     };
     assert_eq!(
-        select(HOST, &scan, &Verdict::Differs, &[], &paste).unwrap(),
+        select(&target(), &scan, &Verdict::Differs, &[], &paste).unwrap(),
         vec![scanned('A')]
     );
 }
@@ -353,7 +357,7 @@ fn a_match_an_unsealed_agent_could_have_written_still_needs_verifying() {
     assert_eq!(p.verdict, Verdict::Unknown { downgraded: true });
     assert!(
         select(
-            HOST,
+            &target(),
             &p.scanned,
             &p.verdict,
             &p.matched,
@@ -502,4 +506,22 @@ fn plan_reads_keys_scan_and_spawn_without_writing() {
         0,
         "plan never writes"
     );
+}
+
+#[test]
+fn the_forget_command_names_the_entry_known_hosts_stores() {
+    use super::verdict::{differs_text, forget_cmd};
+    use mur_ssh_request::RequestHost;
+    let on = |h: &str, p: Option<u16>| forget_cmd(&RequestHost::parse(h, p).unwrap());
+    assert_eq!(on("gh.example", None), "ssh-keygen -R gh.example");
+    // `[gh.example]:2222` is what `known_hosts` stores for a non-default
+    // port; quoted, because `[` is a shell glob.
+    assert_eq!(
+        on("gh.example", Some(2222)),
+        "ssh-keygen -R '[gh.example]:2222'"
+    );
+    assert_eq!(on("::1", Some(2222)), "ssh-keygen -R '[::1]:2222'");
+    let t = differs_text(&RequestHost::parse("gh.example", Some(2222)).unwrap());
+    assert!(t.contains("for gh.example:2222:"), "{t}");
+    assert!(t.contains("`ssh-keygen -R '[gh.example]:2222'`"), "{t}");
 }

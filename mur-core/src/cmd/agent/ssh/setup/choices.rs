@@ -53,7 +53,7 @@ pub fn build_approval(plan: &SetupPlan, c: &Choices) -> Result<Approval, NotRead
         ticked: c.ticked.clone(),
     };
     let keep = verdict::select(
-        plan.host.host(),
+        &plan.host,
         &plan.scanned,
         &plan.verdict,
         &plan.matched,
