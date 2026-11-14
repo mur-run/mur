@@ -253,6 +253,30 @@ pub fn unload_and_delete(mur_home: &Path, agent: &str) -> Result<Removal, Keysto
     Ok(Removal::Removed { unloaded })
 }
 
+/// Move `old`'s key directory to `new` when the agent is renamed. `Ok(false)`
+/// when `old` has none. Refuses when `new` already has a directory, so a key
+/// is never replaced. The key's comment keeps the old name; it is display only.
+///
+/// Without this a rename would strand the key, and a later agent created under
+/// the old name would find it as its own.
+pub fn rename(mur_home: &Path, old: &str, new: &str) -> Result<bool, KeystoreError> {
+    let (from, to) = (key_dir(mur_home, old)?, key_dir(mur_home, new)?);
+    match fs::symlink_metadata(&from) {
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    }
+    if fs::symlink_metadata(&to).is_ok() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("{} already exists", to.display()),
+        )
+        .into());
+    }
+    fs::rename(&from, &to)?;
+    Ok(true)
+}
+
 fn unusable(path: &Path, reason: &'static str) -> KeystoreError {
     KeystoreError::Unusable {
         path: path.to_path_buf(),
@@ -287,8 +311,9 @@ fn read_pub(public: &Path) -> Result<Option<String>, KeystoreError> {
     Ok(Some(buf.trim().to_string()))
 }
 
-/// Fingerprint of a `<type> <base64> [comment]` line of [`KEY_TYPE`].
-fn parse_pub(line: &str) -> Option<String> {
+/// Fingerprint of a `<type> <base64> [comment]` line of [`KEY_TYPE`]: the
+/// one shape this store reads back, and the only line setup installs on a host.
+pub fn parse_pub(line: &str) -> Option<String> {
     if line.contains(['\n', '\r']) {
         return None;
     }

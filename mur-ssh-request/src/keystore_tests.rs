@@ -277,3 +277,30 @@ fn a_failed_tool_does_not_put_stderr_in_its_message() {
         other => panic!("expected a failure, got {other:?}"),
     }
 }
+
+#[test]
+fn rename_moves_the_key_and_never_replaces_one() {
+    if keygen_missing() {
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    assert!(!rename(home.path(), AGENT, "other").unwrap(), "no key yet");
+    let key = generate(home.path(), AGENT).unwrap();
+    assert!(rename(home.path(), AGENT, "other").unwrap());
+    assert_eq!(stored(home.path(), AGENT).unwrap(), None);
+    let moved = stored(home.path(), "other").unwrap().unwrap();
+    assert_eq!(moved.fingerprint, key.fingerprint);
+
+    // A second agent's key is not overwritten by a rename onto its name.
+    let fresh = generate(home.path(), AGENT).unwrap();
+    assert!(rename(home.path(), AGENT, "other").is_err());
+    assert_eq!(
+        stored(home.path(), AGENT).unwrap().unwrap().fingerprint,
+        fresh.fingerprint
+    );
+    assert_eq!(
+        stored(home.path(), "other").unwrap().unwrap().fingerprint,
+        key.fingerprint
+    );
+    assert!(rename(home.path(), "../x", "other").is_err());
+}
