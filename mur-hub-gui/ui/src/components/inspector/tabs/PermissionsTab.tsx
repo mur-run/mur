@@ -8,6 +8,7 @@ import {
   SpawnSelect,
   usePermWrite, type PermWrite,
 } from "./PermissionEditors";
+import { SshBlock } from "../../ssh/SshBlock";
 
 /** Spec 2026-09-07 §1.3 + §P2: enforcement first, runtime traffic and MCP
  *  servers as two blocks, then filesystem / processes / tools / LLM / limits.
@@ -77,6 +78,10 @@ export function PermissionsTab({
         <p className="field-muted perm__muted">{t("perm.spawn.dirs")}</p>
         <Paths list={v.processes.allowed_dirs} onRemove={(dir) => void write.run("agent_perm_deny_spawn_dir", { dir })} write={write} />
         <AddDir write={write} />
+      </Block>
+
+      <Block title={t("perm.ssh")} cmd={cmd.ssh}>
+        <SshBlock agent={detail.agent_name} />
       </Block>
 
       <Block title={t("perm.tools")} cmd={cmd.tools}>
