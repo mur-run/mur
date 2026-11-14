@@ -42,8 +42,10 @@ impl LiveOps for ProfileOps<'_> {
         let command = live_command(std::env::current_exe());
         let browsers = mur_browser::chromium::system_browsers_dir();
         let spawn_dirs: Vec<String> = live_spawn_dir(browsers.as_deref()).into_iter().collect();
+        let spawn = live_spawn();
         let policy = manage::Policy {
             fs: &fs,
+            spawn: &spawn,
             spawn_dirs: &spawn_dirs,
         };
         Ok(
@@ -81,6 +83,14 @@ impl LiveOps for ProfileOps<'_> {
     }
 }
 
+/// What the live server execs besides itself and the browser build dir: the
+/// interpreter `mur browser record` launches the Playwright server with. The
+/// install probe runs unsealed and cannot see this missing; the sealed agent
+/// then fails the exec with EPERM and the browser tools never list (#2400).
+fn live_spawn() -> Vec<String> {
+    vec![crate::cmd::browser::perms::NODE.to_string()]
+}
+
 /// Re-pin the live entry onto this binary and backfill its fs/spawn grants on
 /// `profile` in memory. Returns whether `servers` differ from the profile's,
 /// and one note per repair. Shared by `save` and `pending_repairs` so the
@@ -107,19 +117,34 @@ fn apply_repairs(
     profile.mcp_servers = servers;
     notes.extend(manage::merge_fs(&mut profile.entitlements.filesystem, fs));
     if let Some(command) = spawn_command {
-        notes.extend(ensure_spawn_allowed(
-            &mut profile.entitlements.processes.spawn.allowed,
-            &command,
-        ));
         let browsers = mur_browser::chromium::system_browsers_dir();
-        if let Some(dir) = live_spawn_dir(browsers.as_deref()) {
-            notes.extend(ensure_spawn_dir(
-                &mut profile.entitlements.processes.spawn.allowed_dirs,
-                &dir,
-            ));
-        }
+        notes.extend(backfill_spawn(
+            &mut profile.entitlements.processes.spawn,
+            &command,
+            live_spawn_dir(browsers.as_deref()).as_deref(),
+        ));
     }
     Ok((servers_changed, notes))
+}
+
+/// Grant everything the live server execs: its own `command`, the
+/// interpreter it launches (#2400), and the headless-shell build `dir`
+/// (#1639). One note per new grant; a second call adds nothing.
+///
+/// `command` goes in verbatim: the runtime resolves a bare name through its
+/// search dirs, so a re-pinned absolute `command` needs its own literal entry
+/// or the seal denies the exec (EPERM) even though `mur` is allowlisted.
+fn backfill_spawn(
+    spawn: &mut mur_common::agent::SpawnEntitlement,
+    command: &str,
+    dir: Option<&str>,
+) -> Vec<String> {
+    let mut programs = vec![command.to_string()];
+    programs.extend(live_spawn());
+    let mut notes = manage::merge_spawn(&mut spawn.allowed, &programs);
+    let dirs: Vec<String> = dir.into_iter().map(str::to_string).collect();
+    notes.extend(manage::merge_spawn_dirs(&mut spawn.allowed_dirs, &dirs));
+    notes
 }
 
 impl ProfileOps<'_> {
@@ -199,4 +224,89 @@ fn lock_profile(agent_dir: &std::path::Path) -> anyhow::Result<std::fs::File> {
     f.lock_exclusive()
         .with_context(|| format!("lock {}", path.display()))?;
     Ok(f)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mur_common::agent::SpawnEntitlement;
+
+    fn profile() -> mur_common::AgentProfile {
+        serde_yaml::from_str(include_str!(
+            "../../../../../mur-common/tests/fixtures/minimal_profile.yaml"
+        ))
+        .unwrap()
+    }
+
+    /// The fixture's spawn policy with the given programs and no dirs.
+    fn spawn(allowed: &[&str]) -> SpawnEntitlement {
+        SpawnEntitlement {
+            allowed: allowed.iter().map(|a| a.to_string()).collect(),
+            allowed_dirs: Vec::new(),
+            ..profile().entitlements.processes.spawn
+        }
+    }
+
+    const MUR: &str = "/opt/mur/bin/mur";
+    const SHELL: &str = "/browsers/chromium_headless_shell-1246";
+
+    /// #2400: the sealed live server execs `node`; without the grant the exec
+    /// fails with EPERM and the browser tools never list. The backfill adds
+    /// it with the server's own command and build dir, exactly once.
+    #[test]
+    fn backfill_grants_the_interpreter_the_live_server_execs() {
+        let node = crate::cmd::browser::perms::NODE.to_string();
+        let mut spawn = spawn(&[]);
+
+        let notes = backfill_spawn(&mut spawn, MUR, Some(SHELL));
+        assert_eq!(spawn.allowed, vec![MUR.to_string(), node.clone()]);
+        assert_eq!(spawn.allowed_dirs, vec![SHELL.to_string()]);
+        assert!(
+            notes.iter().any(|n| n == "allowed spawn of node"),
+            "{notes:?}"
+        );
+
+        let again = backfill_spawn(&mut spawn, MUR, Some(SHELL));
+        assert!(again.is_empty(), "{again:?}");
+        assert_eq!(spawn.allowed.iter().filter(|a| **a == node).count(), 1);
+    }
+
+    /// A profile that already allows `node` (e.g. after `mur browser setup`)
+    /// gets no duplicate and no note for it.
+    #[test]
+    fn backfill_keeps_an_existing_node_grant() {
+        let node = crate::cmd::browser::perms::NODE.to_string();
+        let mut spawn = spawn(&[&node]);
+        let notes = backfill_spawn(&mut spawn, MUR, None);
+        assert_eq!(spawn.allowed, vec![node, MUR.to_string()]);
+        assert!(!notes.iter().any(|n| n.contains("node")), "{notes:?}");
+        assert!(spawn.allowed_dirs.is_empty());
+    }
+
+    /// A bare `mur` entry does not cover a re-pinned absolute command: the
+    /// literal path is added once, alongside the bare name.
+    #[test]
+    fn backfill_adds_the_absolute_command_beside_a_bare_name() {
+        let mut spawn = spawn(&["mur"]);
+        let notes = backfill_spawn(&mut spawn, MUR, None);
+        assert_eq!(&spawn.allowed[..2], &["mur".to_string(), MUR.to_string()]);
+        assert!(notes.iter().any(|n| n.contains(MUR)), "{notes:?}");
+        assert!(backfill_spawn(&mut spawn, MUR, None).is_empty());
+    }
+
+    /// No live entry, no grant: saving other servers must not widen spawn.
+    /// This path never hashes, so it stays cheap to run on the real profile.
+    #[test]
+    fn repairs_without_a_live_entry_grant_no_spawn() {
+        let mut p = profile();
+        let before = p.entitlements.processes.spawn.clone();
+        let fs = FilesystemEntitlement::default();
+        let (_, notes) = apply_repairs(&mut p, Vec::new(), &fs).unwrap();
+        assert_eq!(p.entitlements.processes.spawn.allowed, before.allowed);
+        assert_eq!(
+            p.entitlements.processes.spawn.allowed_dirs,
+            before.allowed_dirs
+        );
+        assert!(notes.is_empty(), "{notes:?}");
+    }
 }
