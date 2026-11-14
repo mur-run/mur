@@ -3,6 +3,7 @@
 //! "Step 2: host", verdict table).
 
 use anyhow::{Result, bail};
+use mur_ssh_request::RequestHost;
 
 use super::super::resolve::ScannedKey;
 
@@ -52,12 +53,13 @@ pub struct HostChoice {
 /// The scanned keys `choice` grants under `verdict`. Never more than the
 /// table allows; an empty grant is an error, not a no-op.
 pub fn select(
-    host: &str,
+    target: &RequestHost,
     scanned: &[ScannedKey],
     verdict: &Verdict,
     matched: &[String],
     choice: &HostChoice,
 ) -> Result<Vec<ScannedKey>> {
+    let host = target.canonical();
     let pick = |fps: &[String]| -> Vec<ScannedKey> {
         scanned
             .iter()
@@ -90,14 +92,14 @@ pub fn select(
         }
         Verdict::Differs => {
             if !choice.ticked.is_empty() {
-                bail!("{}", differs_text(host));
+                bail!("{}", differs_text(target));
             }
             pasted.into_iter().collect()
         }
     };
     if chosen.is_empty() {
         match verdict {
-            Verdict::Differs => bail!("{}", differs_text(host)),
+            Verdict::Differs => bail!("{}", differs_text(target)),
             _ => bail!(
                 "no host key of {host} was confirmed: paste the fingerprint the operator \
                  published (--host-key), or compare a scanned key yourself. Nothing was changed."
@@ -107,12 +109,24 @@ pub fn select(
     Ok(pick(&chosen))
 }
 
+/// The command that drops `target`'s stored keys from the user's
+/// `known_hosts`. It names the entry the way `known_hosts` stores it, so a
+/// non-default port reads `[host]:port`, quoted for the shell (`[` is a glob).
+pub fn forget_cmd(target: &RequestHost) -> String {
+    format!(
+        "ssh-keygen -R {}",
+        shell_words::quote(&target.known_hosts_name())
+    )
+}
+
 /// The refusal on `differs`, naming both exits.
-pub fn differs_text(host: &str) -> String {
+pub fn differs_text(target: &RequestHost) -> String {
+    let host = target.canonical();
+    let forget = forget_cmd(target);
     format!(
         "your ~/.ssh/known_hosts stores a different key for {host}: the host was rebuilt, or \
          the connection is intercepted. Either pass the fingerprint the operator published \
-         with --host-key, or update ~/.ssh/known_hosts yourself (`ssh-keygen -R {host}`) and \
-         try again. Nothing was changed."
+         with --host-key, or update ~/.ssh/known_hosts yourself (`{forget}`) and try again. \
+         Nothing was changed."
     )
 }
