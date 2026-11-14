@@ -4,7 +4,11 @@
 use mur_common::agent::SshKnownHost;
 
 use super::super::tests::fp;
-use super::choices::{Choices, NotReady, build_approval};
+use super::choices::{
+    Choices, INSTALL_NEEDS_USER, INSTALL_ONLY_DEDICATED, NotReady, build_approval,
+};
+use super::plan::Dedicated;
+use super::plan::DedicatedOff;
 use super::probe::AgentKey;
 use super::{ScannedKey, SetupPlan, SpawnChange, Verdict};
 
@@ -44,6 +48,7 @@ fn plan(verdict: Verdict, spawn: Option<SpawnChange>) -> SetupPlan {
         matched,
         spawn,
         exec_surface: None,
+        dedicated: Dedicated::Offer,
     }
 }
 
@@ -170,4 +175,63 @@ fn not_ready_serializes_for_the_hub() {
         serde_json::to_value(NotReady::Host("x".into())).unwrap(),
         serde_json::json!({ "kind": "host", "detail": "x" })
     );
+}
+
+fn installing(user: &str) -> Choices {
+    Choices {
+        install: true,
+        user: user.into(),
+        ..with_key('K')
+    }
+}
+
+fn plan_with(dedicated: Dedicated) -> SetupPlan {
+    SetupPlan {
+        dedicated,
+        ..plan(Verdict::Trusted, None)
+    }
+}
+
+#[test]
+fn install_targets_the_host_with_the_dedicated_key() {
+    let p = plan_with(Dedicated::Stored {
+        fingerprint: fp('K'),
+    });
+    let a = build_approval(&p, &installing("git")).unwrap();
+    let t = a.install.expect("an install target");
+    assert_eq!(t.user, "git");
+    assert_eq!(t.host, p.host);
+
+    assert!(
+        build_approval(&p, &with_key('K'))
+            .unwrap()
+            .install
+            .is_none()
+    );
+    assert_eq!(
+        build_approval(&p, &installing("")).unwrap_err(),
+        NotReady::User(INSTALL_NEEDS_USER.into())
+    );
+}
+
+#[test]
+fn install_is_refused_for_any_key_but_the_dedicated_one() {
+    let other = plan_with(Dedicated::Stored {
+        fingerprint: fp('D'),
+    });
+    assert_eq!(
+        build_approval(&other, &installing("git")).unwrap_err(),
+        NotReady::Install(INSTALL_ONLY_DEDICATED.into())
+    );
+    assert_eq!(
+        build_approval(&plan_with(Dedicated::Offer), &installing("git")).unwrap_err(),
+        NotReady::Install(INSTALL_ONLY_DEDICATED.into())
+    );
+    for off in [DedicatedOff::SwitchOff, DedicatedOff::NotSealedEveryRun] {
+        assert_eq!(
+            build_approval(&plan_with(Dedicated::Off(off.clone())), &installing("git"))
+                .unwrap_err(),
+            NotReady::Install(off.reason())
+        );
+    }
 }
