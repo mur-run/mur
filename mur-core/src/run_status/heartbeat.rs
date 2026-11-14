@@ -140,6 +140,43 @@ mod tests {
         .unwrap();
     }
 
+    /// How long a test waits for the ticker's first beat before giving up.
+    /// Generous on purpose: this bounds a hung test, it is not the expected
+    /// wait. A healthy ticker beats within one interval.
+    const FIRST_BEAT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+    /// How often `wait_for_first_beat` re-reads the record.
+    const FIRST_BEAT_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+
+    /// Wait until the spawned ticker has stamped `last_heartbeat_at`, then
+    /// return that record.
+    ///
+    /// The tests below used to sleep a fixed 120ms and assert a beat had
+    /// landed. On a loaded runner the ticker task may not be scheduled in
+    /// that window, which fails the test's precondition rather than the
+    /// property it checks (#2408). Polling to a deadline keeps the
+    /// precondition and drops the guess about scheduling.
+    ///
+    /// A read error is retried: the beat replaces the record by rename, and a
+    /// reader can collide with that on some platforms. The last error is in
+    /// the panic message so a timeout says which of the two it was.
+    async fn wait_for_first_beat(mur_home: &std::path::Path, run_id: &str) -> RunState {
+        let started = std::time::Instant::now();
+        let mut last_read = String::from("no read attempted");
+        while started.elapsed() < FIRST_BEAT_DEADLINE {
+            match store::load(mur_home, run_id) {
+                Ok(Some(rec)) if rec.last_heartbeat_at.is_some() => return rec,
+                Ok(Some(_)) => last_read = "record present, no heartbeat yet".into(),
+                Ok(None) => last_read = "record missing".into(),
+                Err(e) => last_read = format!("read failed: {e:#}"),
+            }
+            tokio::time::sleep(FIRST_BEAT_POLL).await;
+        }
+        panic!(
+            "ticker never beat within {FIRST_BEAT_DEADLINE:?} (last read: {last_read}) \
+             — the test cannot check anything without a first beat"
+        );
+    }
+
     #[test]
     fn beat_once_stamps_the_heartbeat_and_touches_nothing_else() {
         let tmp = tempfile::tempdir().unwrap();
@@ -275,12 +312,7 @@ mod tests {
             "r".into(),
             std::time::Duration::from_millis(20),
         );
-        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-        let while_running = store::load(tmp.path(), "r").unwrap().unwrap();
-        assert!(
-            while_running.last_heartbeat_at.is_some(),
-            "ticker never beat"
-        );
+        wait_for_first_beat(tmp.path(), "r").await;
 
         hb.stop().await;
         tokio::time::sleep(std::time::Duration::from_millis(60)).await;
@@ -310,12 +342,7 @@ mod tests {
                 "r".into(),
                 std::time::Duration::from_millis(20),
             );
-            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-            let while_running = store::load(tmp.path(), "r").unwrap().unwrap();
-            assert!(
-                while_running.last_heartbeat_at.is_some(),
-                "ticker never beat"
-            );
+            wait_for_first_beat(tmp.path(), "r").await;
         } // dropped here — no `stop().await`
 
         // `Drop` cannot await, so a beat already in flight may still land.
@@ -354,13 +381,9 @@ mod tests {
         let interval = std::time::Duration::from_millis(20);
         let hb = Heartbeat::spawn(tmp.path().to_path_buf(), "r".into(), interval);
 
-        // Let it beat at least once before stopping.
-        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-        let beat_at_least_once = store::load(tmp.path(), "r").unwrap().unwrap();
-        assert!(
-            beat_at_least_once.last_heartbeat_at.is_some(),
-            "ticker never beat — this test can't prove anything about the race"
-        );
+        // Let it beat at least once before stopping: without a beat the
+        // test cannot say anything about the race.
+        wait_for_first_beat(tmp.path(), "r").await;
 
         hb.stop().await;
 
