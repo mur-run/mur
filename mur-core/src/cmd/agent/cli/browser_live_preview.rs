@@ -35,7 +35,39 @@ pub(crate) fn host_diff(before: &[String], after: &[String], notes: &[String]) -
     out
 }
 
+/// When a profile write reaches the running agent: the tense-free half of
+/// the preview's last line. Callers pick it; nothing rewrites rendered text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Applies {
+    AfterRestart,
+    NextTurn,
+    Immediately,
+}
+
+impl Applies {
+    fn clause(self) -> &'static str {
+        match self {
+            Applies::AfterRestart => "; takes effect after the agent restarts.",
+            Applies::NextTurn => "; the agent's next turn uses it.",
+            Applies::Immediately => " and applied to the running agent immediately.",
+        }
+    }
+}
+
+/// The tail for a preview shown BEFORE the write (#2406): future tense,
+/// because the user can still decline.
+pub(crate) fn will_save_line(a: Applies) -> String {
+    format!("Will be saved to the profile{}", a.clause())
+}
+
+/// The tail once the write has actually happened.
+pub(crate) fn saved_line(a: Applies) -> String {
+    format!("Saved to the profile{}", a.clause())
+}
+
 /// Render the before → after picture of one MCP server's network policy.
+/// No tail: the caller appends [`will_save_line`] or [`saved_line`], since
+/// only it knows whether the write has happened and when it applies.
 pub(crate) fn render_preview(
     agent: &str,
     server: &str,
@@ -67,7 +99,6 @@ pub(crate) fn render_preview(
                 .into(),
         );
     }
-    out.push("Saved to the profile; takes effect after the agent restarts.".into());
     out.join("\n")
 }
 
@@ -81,6 +112,25 @@ mod tests {
             allow_hosts: hosts.iter().map(|h| (*h).to_owned()).collect(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn tails_differ_only_in_tense() {
+        for a in [
+            Applies::AfterRestart,
+            Applies::NextTurn,
+            Applies::Immediately,
+        ] {
+            let (will, done) = (will_save_line(a), saved_line(a));
+            assert!(will.starts_with("Will be saved to the profile"), "{will}");
+            assert!(done.starts_with("Saved to the profile"), "{done}");
+            assert_eq!(
+                will.trim_start_matches("Will be saved"),
+                done.trim_start_matches("Saved")
+            );
+        }
+        assert!(will_save_line(Applies::AfterRestart).contains("after the agent restarts"));
+        assert!(will_save_line(Applies::Immediately).contains("running agent immediately"));
     }
 
     #[test]
@@ -106,7 +156,9 @@ mod tests {
             "{p}"
         );
         assert!(p.contains("https://new.com/x"), "{p}");
-        assert!(p.contains("agent `mur`") && p.contains("restart"), "{p}");
+        assert!(p.contains("agent `mur`"), "{p}");
+        // The tail is the caller's: tense depends on whether it wrote (#2406).
+        assert!(!p.contains("Saved") && !p.contains("Will be saved"), "{p}");
         assert!(!p.contains("research"), "{p}");
     }
 

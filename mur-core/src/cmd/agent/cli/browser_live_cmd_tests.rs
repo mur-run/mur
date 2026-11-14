@@ -509,17 +509,6 @@ fn repin_refreshes_hash_after_rebuild() {
     assert_eq!(e.binary_sha256.as_deref(), Some("new"));
 }
 
-#[test]
-fn spawn_allowlist_gets_absolute_command_once() {
-    let abs = "/opt/x/target/debug/mur";
-    let mut allowed = vec!["mur".to_string()];
-    let note = ensure_spawn_allowed(&mut allowed, abs);
-    assert_eq!(allowed, vec!["mur".to_string(), abs.to_string()]);
-    assert!(note.unwrap().contains(abs));
-    assert_eq!(ensure_spawn_allowed(&mut allowed, abs), None);
-    assert_eq!(allowed.len(), 2);
-}
-
 // Rerun with the same hosts and nothing for `save` to fix: no restart chip,
 // and the reply says so instead of "profile updated".
 #[test]
@@ -548,6 +537,9 @@ fn a_host_edit_applies_next_turn_and_says_the_tab_closes() {
     );
     assert!(text.contains("Restart the agent"), "{text}");
     assert!(text.contains("after the agent restarts"), "{text}");
+    // After a real write the past tense is true (#2406).
+    assert!(text.contains("Saved to the profile"), "{text}");
+    assert!(!text.contains("Will be saved"), "{text}");
 
     let (text, chip) = run("bob", &s(&["--yes", "b.example.com"]), true, &mut f).unwrap();
     assert!(chip.is_none(), "{text}");
@@ -594,6 +586,9 @@ fn the_preview_says_when_the_write_will_apply() {
     };
     let (text, _) = run("bob", &s(&["b.example.com"]), true, &mut f).unwrap();
     assert!(text.contains("the agent's next turn uses it"), "{text}");
+    // #2406: the confirm preview has written nothing yet.
+    assert!(!text.contains("Saved to the profile"), "{text}");
+    assert!(text.contains("Will be saved to the profile"), "{text}");
     let (text, _) = run("bob", &s(&["--research"]), true, &mut f).unwrap();
     assert!(text.contains("after the agent restarts"), "{text}");
     let mut f = Fake::default();
@@ -633,15 +628,6 @@ fn live_spawn_dir_is_none_without_a_shell() {
     let d = tempfile::tempdir().unwrap();
     assert_eq!(live_spawn_dir(Some(d.path())), None);
     assert_eq!(live_spawn_dir(None), None);
-}
-
-#[test]
-fn spawn_dir_is_granted_once_with_a_note() {
-    let mut dirs = vec!["/keep".to_string()];
-    let note = ensure_spawn_dir(&mut dirs, "/b/shell-1246");
-    assert_eq!(dirs, s(&["/keep", "/b/shell-1246"]));
-    assert!(note.unwrap().contains("/b/shell-1246"));
-    assert_eq!(ensure_spawn_dir(&mut dirs, "/b/shell-1246"), None);
 }
 
 // #1905 Part 2: the first call only previews; nothing is written until `--yes`.

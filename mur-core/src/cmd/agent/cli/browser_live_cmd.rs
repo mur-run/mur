@@ -21,7 +21,7 @@ use mur_common::proposal::Proposal;
 
 use super::browser_live_effect::Effect;
 pub(crate) use super::browser_live_ops::ProfileOps;
-use super::browser_live_preview::render_preview;
+use super::browser_live_preview::{render_preview, saved_line, will_save_line};
 #[cfg(test)]
 use super::manage;
 use super::manage::Managed;
@@ -464,18 +464,6 @@ pub(super) fn repin_command(
     Some(note)
 }
 
-/// Add `command` to the spawn allowlist if it is not there verbatim. The
-/// runtime resolves a bare name through its search dirs, so a re-pinned
-/// absolute `command` needs its own literal entry or the seal denies the exec
-/// (EPERM) even though `mur` is allowlisted. Existing entries are kept.
-pub(super) fn ensure_spawn_allowed(allowed: &mut Vec<String>, command: &str) -> Option<String> {
-    if allowed.iter().any(|a| a == command) {
-        return None;
-    }
-    allowed.push(command.to_string());
-    Some(format!("allowed spawn of {command}"))
-}
-
 /// The build dir of the newest complete headless shell under `browsers`
 /// (#1639). The sealed live server execs that binary, which no allowlisted
 /// program covers, so the grant is the build dir — the same lane `perm
@@ -485,15 +473,6 @@ pub(super) fn live_spawn_dir(browsers: Option<&Path>) -> Option<String> {
     let exe = mur_browser::chromium::headless_shell_exe(dir)?;
     let build = exe.strip_prefix(dir).ok()?.components().next()?;
     Some(dir.join(build).to_string_lossy().into_owned())
-}
-
-/// Add `dir` to the spawn-dir allowlist if absent; one note when it changed.
-pub(super) fn ensure_spawn_dir(dirs: &mut Vec<String>, dir: &str) -> Option<String> {
-    if dirs.iter().any(|d| d == dir) {
-        return None;
-    }
-    dirs.push(dir.to_string());
-    Some(format!("allowed spawn under {dir}"))
 }
 
 /// Reply when a rerun changes nothing: no restart, nothing written.
@@ -646,7 +625,7 @@ pub(super) fn run(
             after.mode,
             !repairs.is_empty(),
         );
-        let preview = with_effect_line(&preview, effect);
+        let preview = format!("{preview}\n{}", will_save_line(effect.applies()));
         let preview = if repairs.is_empty() {
             preview
         } else {
@@ -696,7 +675,7 @@ pub(super) fn run(
         (Vec::new(), Effect::Restart)
     };
     // The preview was rendered before the write; say what the write did.
-    notes[0] = with_effect_line(&notes[0], effect);
+    notes[0] = format!("{}\n{}", notes[0], saved_line(effect.applies()));
     if flags.research {
         notes.push("browser live mode may reach: any host (research mode, audited)".to_owned());
         // Telemetry must not undo a write that already succeeded.
@@ -748,17 +727,6 @@ pub(super) fn run(
         Effect::NextTurn => (text, None),
         Effect::Restart => (text, Some(Proposal::restart(RESTART_LABEL))),
     })
-}
-
-/// `preview` with its "takes effect" line replaced by `effect`'s. The preview
-/// is shared with `/browser allow` and `mcp-network`, which keep theirs.
-fn with_effect_line(preview: &str, effect: Effect) -> String {
-    let cold = Effect::Restart.preview_line();
-    if preview.contains(cold) {
-        preview.replacen(cold, effect.preview_line(), 1)
-    } else {
-        preview.to_owned()
-    }
 }
 
 /// `mur browser setup`: ensure the agent HAS the `browser` entry at all, so

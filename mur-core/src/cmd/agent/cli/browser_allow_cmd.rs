@@ -15,7 +15,7 @@ use mur_common::host_pattern::normalize_host_pattern;
 use mur_common::proposal::Proposal;
 
 use super::browser_live_cmd::LIVE_ENTRY;
-use super::browser_live_preview::render_preview;
+use super::browser_live_preview::{Applies, render_preview, will_save_line};
 use super::browser_profile_hint::{self as profile_hint, SavedProfile};
 use super::manage::Managed;
 
@@ -142,18 +142,18 @@ pub(super) fn run_allow(
     }
     let mut after = before.clone();
     after.allow_hosts.push(a.host.clone());
-    let preview = render_preview(
-        agent,
-        LIVE_ENTRY,
-        Some(&before),
-        &after,
-        &[],
-        DENY_OVERLAY_ENFORCEMENT,
-    )
-    // A live grant takes effect now; the generic tail says "after restart".
-    .replace(
-        "Saved to the profile; takes effect after the agent restarts.",
-        "Saved to the profile and applied to the running agent now.",
+    // A live grant takes effect now, not after a restart.
+    let preview = format!(
+        "{}\n{}",
+        render_preview(
+            agent,
+            LIVE_ENTRY,
+            Some(&before),
+            &after,
+            &[],
+            DENY_OVERLAY_ENFORCEMENT,
+        ),
+        will_save_line(Applies::Immediately)
     );
     if !a.yes {
         return Ok(match confirm_chip(&a.host) {
