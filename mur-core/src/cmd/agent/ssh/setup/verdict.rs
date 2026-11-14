@@ -113,10 +113,19 @@ pub fn select(
 /// `known_hosts`. It names the entry the way `known_hosts` stores it, so a
 /// non-default port reads `[host]:port`, quoted for the shell (`[` is a glob).
 pub fn forget_cmd(target: &RequestHost) -> String {
-    format!(
-        "ssh-keygen -R {}",
-        shell_words::quote(&target.known_hosts_name())
-    )
+    format!("ssh-keygen -R {}", sh_quote(&target.known_hosts_name()))
+}
+
+/// POSIX single-quoting, left bare when every byte is shell-inert.
+fn sh_quote(s: &str) -> String {
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-:@/".contains(c))
+    {
+        s.to_owned()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
 }
 
 /// The refusal on `differs`, naming both exits.
