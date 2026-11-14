@@ -3,6 +3,7 @@
 //! `status` (in `super::status`).
 
 pub mod apply;
+pub mod choices;
 pub mod front;
 pub mod life;
 pub mod pending;
@@ -24,3 +25,7 @@ mod tests;
 #[cfg(test)]
 #[path = "pending_tests.rs"]
 mod pending_tests;
+
+#[cfg(test)]
+#[path = "choices_tests.rs"]
+mod choices_tests;
