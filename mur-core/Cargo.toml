@@ -100,6 +100,7 @@ hostname = "0.4.2"
 dotenvy = "0.15"
 getrandom = "0.2"
 shellexpand = "3"
+shell-words = "1"
 urlencoding = "2"
 url = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -157,7 +158,6 @@ qdrant = ["dep:qdrant-client"]
 [dev-dependencies]
 mur-test-log = { path = "../mur-test-log" }
 tempfile = "3"
-shell-words = "1"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 wiremock = "0.6"
