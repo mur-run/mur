@@ -48,6 +48,7 @@ pub mod proposal_chip;
 pub mod seed_mur;
 pub mod session_allow;
 pub mod skills_installed;
+pub mod ssh_admin;
 pub mod upgrade_status;
 pub mod work;
 pub mod workflows_list;
@@ -174,6 +175,7 @@ pub fn run() {
         .manage(EventBusState(EventBus::new(256)))
         .manage(BridgeState::default())
         .manage(panel::PanelState::default())
+        .manage(ssh_admin::SshPlans::default())
         .manage(panel::preview::PreviewWatch::default())
         .manage(panel::follow::FollowState::default())
         // OS file-drop onto a desktop pet (`pet-<agent>` window) → forward the
@@ -662,6 +664,14 @@ pub fn run() {
             perm_admin::agent_perm_set_tool,
             perm_admin::agent_perm_clear_tool,
             perm_admin::agent_perm_set_intent_check,
+            ssh_admin::agent_ssh_overview,
+            ssh_admin::agent_ssh_plan,
+            ssh_admin::agent_ssh_refresh_keys,
+            ssh_admin::agent_ssh_check,
+            ssh_admin::agent_ssh_apply,
+            ssh_admin::agent_ssh_revoke,
+            ssh_admin::agent_ssh_dismiss,
+            ssh_admin::ssh_pending_all,
             mcp_skills::agent_skill_toggle,
             mcp_skills::agent_mcp_toggle,
             mcp_skills::agent_addon_import,
