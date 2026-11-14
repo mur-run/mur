@@ -11,8 +11,7 @@ use mur_ssh_request::RequestHost;
 
 use super::super::resolve::{self, SSH_ADD_BIN, ScannedKey, parse_keyscan};
 
-/// Looks up the user's own `known_hosts` entries.
-pub const KEYGEN_BIN: &str = "ssh-keygen";
+pub use mur_ssh_request::KEYGEN_BIN;
 /// Where the user's own ssh client files live, under `$HOME`.
 const USER_SSH_DIR: &str = ".ssh";
 const USER_KNOWN_HOSTS: &str = "known_hosts";

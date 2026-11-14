@@ -1,6 +1,9 @@
-//! Start the ssh-agent proxy (plan Task 2.3, O7 option A) in two halves
-//! around the seal:
+//! Start the ssh-agent proxy (plan Task 2.3, O7 option A) around the seal:
 //!
+//! - [`load_dedicated_before_seal`]: add the agent's dedicated key to the
+//!   upstream ssh-agent, while `secrets/` is still readable. Every start path
+//!   goes through here, including a service-manager start that runs no `mur`
+//!   code. Only a key the profile grants. Failure warns; it never blocks start.
 //! - [`connect_before_seal`]: the one upstream connection, made while the
 //!   upstream socket is still reachable. Only when `entitlements.ssh` has
 //!   keys. Failure warns; it never blocks start.
@@ -16,6 +19,7 @@ use std::sync::Arc;
 
 use mur_common::agent::SshEntitlement;
 use mur_common::ssh_proxy_status::{self, SshProxyState, SshProxyStatus};
+use mur_ssh_request::keystore::{self, KeystoreError, StoredKey};
 
 use crate::ssh_proxy::gate::GateSlot;
 use crate::ssh_proxy::listener::{self, HeldUpstream, Proxy};
@@ -26,6 +30,89 @@ use crate::ssh_proxy::refusal::RefusalSink;
 pub(super) const OFF_SOCKET_PATH_TOO_LONG: &str = "socket_path_too_long";
 /// Status code: binding the proxy socket failed.
 pub(super) const OFF_SOCKET_BIND_FAILED: &str = "socket_bind_failed";
+/// How a log line names the dedicated key when its rule has no label.
+const DEDICATED_KEY_LABEL: &str = "dedicated key";
+
+/// What [`load_dedicated_before_seal`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DedicatedLoad {
+    /// The profile grants no ssh key at all; the key store was not read.
+    NoGrant,
+    /// The agent has no dedicated key.
+    NoKey,
+    /// A key is stored but the profile does not grant it: left alone.
+    NotGranted,
+    Loaded,
+    /// Reading or loading failed; already warned.
+    Failed,
+}
+
+/// Add the agent's dedicated key to the upstream ssh-agent, before the seal.
+///
+/// The profile is the authority: a key file that appears in the directory is
+/// never loaded unless `ent` grants its fingerprint. Never gates start.
+pub(super) async fn load_dedicated_before_seal(
+    mur_home: &Path,
+    agent: &str,
+    ent: &SshEntitlement,
+) -> DedicatedLoad {
+    load_dedicated_with(mur_home, agent, ent, keystore::load).await
+}
+
+async fn load_dedicated_with<F>(
+    mur_home: &Path,
+    agent: &str,
+    ent: &SshEntitlement,
+    loader: F,
+) -> DedicatedLoad
+where
+    F: FnOnce(&StoredKey) -> Result<(), KeystoreError> + Send + 'static,
+{
+    if ent.is_empty() {
+        return DedicatedLoad::NoGrant;
+    }
+    let granted: Vec<(String, Option<String>)> = ent
+        .keys
+        .iter()
+        .map(|k| (k.fingerprint.clone(), k.label.clone()))
+        .collect();
+    let (home, name) = (mur_home.to_path_buf(), agent.to_string());
+    // `stored` may run ssh-keygen and `load` runs ssh-add: both block.
+    let joined = tokio::task::spawn_blocking(move || {
+        let key = match keystore::stored(&home, &name) {
+            Ok(Some(k)) => k,
+            Ok(None) => return DedicatedLoad::NoKey,
+            Err(e) => {
+                // The path stays out of the log; `mur agent ssh` names it.
+                let reason = match &e {
+                    KeystoreError::Unusable { reason, .. } => (*reason).to_string(),
+                    other => other.to_string(),
+                };
+                tracing::warn!(%reason, "ssh-agent proxy: the dedicated key is unusable and was not loaded");
+                return DedicatedLoad::Failed;
+            }
+        };
+        let Some((_, label)) = granted.iter().find(|(fp, _)| *fp == key.fingerprint) else {
+            return DedicatedLoad::NotGranted;
+        };
+        match loader(&key) {
+            Ok(()) => DedicatedLoad::Loaded,
+            Err(e) => {
+                tracing::warn!(
+                    key = label.as_deref().unwrap_or(DEDICATED_KEY_LABEL),
+                    error = %e,
+                    "ssh-agent proxy: could not add the dedicated key to ssh-agent; requests for it will be refused until it is loaded"
+                );
+                DedicatedLoad::Failed
+            }
+        }
+    })
+    .await;
+    joined.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "ssh-agent proxy: loading the dedicated key did not finish");
+        DedicatedLoad::Failed
+    })
+}
 
 /// Connect to the upstream agent now, before the seal. `None` when the agent
 /// holds no ssh keys (no proxy at all). `Some(disconnected)` when the
