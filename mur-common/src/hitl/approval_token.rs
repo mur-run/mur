@@ -112,7 +112,9 @@ fn parse(raw: &str, p: &Path) -> io::Result<String> {
     }
 }
 
-fn create_private_dir(dir: &Path) -> io::Result<()> {
+/// Create `dir` (and missing parents) readable by the owner only. The mode
+/// rule for everything under [`SECRETS_DIR`].
+pub fn create_private_dir(dir: &Path) -> io::Result<()> {
     let mut b = std::fs::DirBuilder::new();
     b.recursive(true);
     #[cfg(unix)]
