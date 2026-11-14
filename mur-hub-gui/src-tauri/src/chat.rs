@@ -123,6 +123,8 @@ pub async fn agent_chat_send(
         let agent = name.clone();
         let app2 = app.clone();
         let app3 = app.clone();
+        let app4 = app.clone();
+        let mut ssh_steps = std::collections::HashSet::new();
         // Stream over the running agent's socket; fall back to a one-shot
         // ephemeral dial if it isn't running.
         match dial_message_streaming(
@@ -144,6 +146,9 @@ pub async fn agent_chat_send(
             |step| {
                 if let Some(chip) = crate::proposal_chip::chip_from_step(&agent, &step) {
                     let _ = app3.emit(crate::proposal_chip::PROPOSAL_EVENT, chip);
+                }
+                if crate::ssh_admin::is_ssh_request_done(&mut ssh_steps, &step) {
+                    let _ = app4.emit(crate::ssh_admin::SSH_REQUEST_EVENT, agent.clone());
                 }
             },
         ) {
