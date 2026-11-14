@@ -643,6 +643,10 @@ Agent** wizard offers the same catalog as a source.
   and Approve writes the grant and restarts the agent once. When the agent
   calls `ssh_request` the card opens by itself and resumes its work after;
   bare `/ssh` lists the grants and the requests still waiting.
+  In MUR Hub the agent's Permissions tab has an SSH block: grants with their
+  signing state, the agent's pending `ssh_request`s in its own words, and
+  "Add host", which opens the same key → host → summary card as murmur's
+  `/ssh`. A pending request also shows in "Needs you".
 - **Grant a host when it is blocked** — when the browser is refused a host, the
   chat shows *this time* / *always* / *no* choices after the turn. *This time*
   lets it through until the agent restarts and writes nothing; *always* shows
