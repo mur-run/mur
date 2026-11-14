@@ -475,15 +475,6 @@ pub(super) fn live_spawn_dir(browsers: Option<&Path>) -> Option<String> {
     Some(dir.join(build).to_string_lossy().into_owned())
 }
 
-/// Add `dir` to the spawn-dir allowlist if absent; one note when it changed.
-pub(super) fn ensure_spawn_dir(dirs: &mut Vec<String>, dir: &str) -> Option<String> {
-    if dirs.iter().any(|d| d == dir) {
-        return None;
-    }
-    dirs.push(dir.to_string());
-    Some(format!("allowed spawn under {dir}"))
-}
-
 /// Reply when a rerun changes nothing: no restart, nothing written.
 pub(super) fn unchanged_text(hosts: &[String]) -> String {
     format!(

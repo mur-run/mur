@@ -142,9 +142,8 @@ fn backfill_spawn(
     let mut programs = vec![command.to_string()];
     programs.extend(live_spawn());
     let mut notes = manage::merge_spawn(&mut spawn.allowed, &programs);
-    if let Some(dir) = dir {
-        notes.extend(ensure_spawn_dir(&mut spawn.allowed_dirs, dir));
-    }
+    let dirs: Vec<String> = dir.into_iter().map(str::to_string).collect();
+    notes.extend(manage::merge_spawn_dirs(&mut spawn.allowed_dirs, &dirs));
     notes
 }
 

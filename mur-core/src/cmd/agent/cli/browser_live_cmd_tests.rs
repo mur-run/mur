@@ -624,15 +624,6 @@ fn live_spawn_dir_is_none_without_a_shell() {
     assert_eq!(live_spawn_dir(None), None);
 }
 
-#[test]
-fn spawn_dir_is_granted_once_with_a_note() {
-    let mut dirs = vec!["/keep".to_string()];
-    let note = ensure_spawn_dir(&mut dirs, "/b/shell-1246");
-    assert_eq!(dirs, s(&["/keep", "/b/shell-1246"]));
-    assert!(note.unwrap().contains("/b/shell-1246"));
-    assert_eq!(ensure_spawn_dir(&mut dirs, "/b/shell-1246"), None);
-}
-
 // #1905 Part 2: the first call only previews; nothing is written until `--yes`.
 #[test]
 fn first_call_previews_and_writes_nothing() {
