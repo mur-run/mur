@@ -23,6 +23,16 @@ use super::{ToolDef, ToolError, ToolExecutor, ToolOutput};
 
 pub const ASK: &str = "ask";
 
+/// Whether `ask` is registered at boot. Not where `channel/consult` refuses
+/// every Ask (R6): a consult is same-machine, so the asker's platform is the
+/// answerer's. An explicit profile `deny` wins everywhere.
+pub fn offered(
+    platform: Option<&crate::protocol::methods::channel_consult::checks::Refusal>,
+    policy: mur_common::agent::ToolPolicy,
+) -> bool {
+    platform.is_none() && policy != mur_common::agent::ToolPolicy::Deny
+}
+
 /// Marker file in the agent home naming the channel this agent's `Ask`s go
 /// to. Created on first use and remembered, like the schedule channel, so
 /// every question an agent asks is in one findable place.

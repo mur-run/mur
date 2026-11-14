@@ -270,16 +270,15 @@ pub async fn build_provider_runner(
             session_cwd: Some(session_cwd.clone()),
         },
     );
-    // Channel consult, asker side. An explicit Deny in the profile wins. Not
-    // offered where `channel/consult` refuses every Ask (R6): a consult is
-    // same-machine, so the asker's platform is the answerer's.
+    // Channel consult, asker side; the rule is `tools::ask::offered`.
     {
         use crate::protocol::methods::channel_consult::checks::platform_refusal;
-        use crate::tools::ask::{ASK, AskTool};
-        use mur_common::agent::{ToolPolicy, resolve_tool_policy};
-        if platform_refusal().is_none()
-            && resolve_tool_policy(&tools_policy, ASK) != ToolPolicy::Deny
-        {
+        use crate::tools::ask::{ASK, AskTool, offered};
+        use mur_common::agent::resolve_tool_policy;
+        if offered(
+            platform_refusal().as_ref(),
+            resolve_tool_policy(&tools_policy, ASK),
+        ) {
             tool_map.insert(
                 ASK.to_string(),
                 Arc::new(AskTool {
