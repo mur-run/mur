@@ -1,5 +1,6 @@
 use mur_common::agent::SshKnownHost;
 use mur_core::a2a_dial::StepEvent;
+use mur_core::cmd::agent::ssh_setup::plan::Dedicated;
 use mur_core::cmd::agent::ssh_setup::probe::AgentKey;
 use mur_core::cmd::agent::ssh_setup::{ScannedKey, SetupPlan, SpawnChange, Verdict, front};
 use std::collections::HashSet;
@@ -38,6 +39,7 @@ fn plan(verdict: Verdict, spawn: Option<SpawnChange>) -> SetupPlan {
         matched: vec![],
         spawn,
         exec_surface: None,
+        dedicated: Dedicated::Offer,
     }
 }
 

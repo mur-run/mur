@@ -141,7 +141,7 @@ pub fn not_ready_text(e: &NotReady) -> String {
             "the chosen key is not loaded in ssh-agent: load it, then refresh the keys".into()
         }
         NotReady::SpawnConsent => "tick the process-permission consent first".into(),
-        NotReady::Host(s) | NotReady::User(s) => s.clone(),
+        NotReady::Host(s) | NotReady::User(s) | NotReady::Install(s) => s.clone(),
     }
 }
 
