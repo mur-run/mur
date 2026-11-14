@@ -130,15 +130,18 @@ fn apply_repairs(
 /// Grant everything the live server execs: its own `command`, the
 /// interpreter it launches (#2400), and the headless-shell build `dir`
 /// (#1639). One note per new grant; a second call adds nothing.
+///
+/// `command` goes in verbatim: the runtime resolves a bare name through its
+/// search dirs, so a re-pinned absolute `command` needs its own literal entry
+/// or the seal denies the exec (EPERM) even though `mur` is allowlisted.
 fn backfill_spawn(
     spawn: &mut mur_common::agent::SpawnEntitlement,
     command: &str,
     dir: Option<&str>,
 ) -> Vec<String> {
-    let mut notes: Vec<String> = ensure_spawn_allowed(&mut spawn.allowed, command)
-        .into_iter()
-        .collect();
-    notes.extend(manage::merge_spawn(&mut spawn.allowed, &live_spawn()));
+    let mut programs = vec![command.to_string()];
+    programs.extend(live_spawn());
+    let mut notes = manage::merge_spawn(&mut spawn.allowed, &programs);
     if let Some(dir) = dir {
         notes.extend(ensure_spawn_dir(&mut spawn.allowed_dirs, dir));
     }
@@ -279,6 +282,17 @@ mod tests {
         assert_eq!(spawn.allowed, vec![node, MUR.to_string()]);
         assert!(!notes.iter().any(|n| n.contains("node")), "{notes:?}");
         assert!(spawn.allowed_dirs.is_empty());
+    }
+
+    /// A bare `mur` entry does not cover a re-pinned absolute command: the
+    /// literal path is added once, alongside the bare name.
+    #[test]
+    fn backfill_adds_the_absolute_command_beside_a_bare_name() {
+        let mut spawn = spawn(&["mur"]);
+        let notes = backfill_spawn(&mut spawn, MUR, None);
+        assert_eq!(&spawn.allowed[..2], &["mur".to_string(), MUR.to_string()]);
+        assert!(notes.iter().any(|n| n.contains(MUR)), "{notes:?}");
+        assert!(backfill_spawn(&mut spawn, MUR, None).is_empty());
     }
 
     /// No live entry, no grant: saving other servers must not widen spawn.

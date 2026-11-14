@@ -464,18 +464,6 @@ pub(super) fn repin_command(
     Some(note)
 }
 
-/// Add `command` to the spawn allowlist if it is not there verbatim. The
-/// runtime resolves a bare name through its search dirs, so a re-pinned
-/// absolute `command` needs its own literal entry or the seal denies the exec
-/// (EPERM) even though `mur` is allowlisted. Existing entries are kept.
-pub(super) fn ensure_spawn_allowed(allowed: &mut Vec<String>, command: &str) -> Option<String> {
-    if allowed.iter().any(|a| a == command) {
-        return None;
-    }
-    allowed.push(command.to_string());
-    Some(format!("allowed spawn of {command}"))
-}
-
 /// The build dir of the newest complete headless shell under `browsers`
 /// (#1639). The sealed live server execs that binary, which no allowlisted
 /// program covers, so the grant is the build dir — the same lane `perm

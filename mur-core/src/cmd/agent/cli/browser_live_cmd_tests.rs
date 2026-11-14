@@ -509,17 +509,6 @@ fn repin_refreshes_hash_after_rebuild() {
     assert_eq!(e.binary_sha256.as_deref(), Some("new"));
 }
 
-#[test]
-fn spawn_allowlist_gets_absolute_command_once() {
-    let abs = "/opt/x/target/debug/mur";
-    let mut allowed = vec!["mur".to_string()];
-    let note = ensure_spawn_allowed(&mut allowed, abs);
-    assert_eq!(allowed, vec!["mur".to_string(), abs.to_string()]);
-    assert!(note.unwrap().contains(abs));
-    assert_eq!(ensure_spawn_allowed(&mut allowed, abs), None);
-    assert_eq!(allowed.len(), 2);
-}
-
 // Rerun with the same hosts and nothing for `save` to fix: no restart chip,
 // and the reply says so instead of "profile updated".
 #[test]
