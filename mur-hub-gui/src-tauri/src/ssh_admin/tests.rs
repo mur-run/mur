@@ -307,7 +307,15 @@ fn revoke_view_carries_restart_needed_beside_the_overview() {
     assert!(j["overview"]["keys"].is_array());
 }
 
-/// What Approve wrote; the store never looks inside it.
+/// What Approve wrote; the store never looks inside the approval.
+fn written(held: bool) -> super::Written {
+    super::Written {
+        approval: written_approval(),
+        user: "git".into(),
+        held,
+    }
+}
+
 fn written_approval() -> mur_core::cmd::agent::ssh_setup::Approval {
     mur_core::cmd::agent::ssh_setup::Approval {
         key_fp: fp('K'),
@@ -325,7 +333,7 @@ fn a_held_plan_finishes_once_and_never_applies_again() {
     let plans = SshPlans::default();
     let id = plans.put(plan(Verdict::Trusted, None), None, "x".into());
     let h = plans.take(&id).unwrap();
-    plans.keep_written(id.clone(), h, written_approval(), true);
+    plans.keep_written(id.clone(), h, written(true));
 
     let e = plans
         .take(&id)
@@ -347,7 +355,7 @@ fn a_held_plan_finishes_once_and_never_applies_again() {
     plans.put_back(id.clone(), h);
     let h = plans.take_written(&id).unwrap();
     // Restarted: kept for the advisory test only.
-    plans.keep_written(id.clone(), h, written_approval(), false);
+    plans.keep_written(id.clone(), h, written(false));
     let e = plans.take_written(&id).err().expect("no held restart left");
     assert!(e.contains("no held restart"), "{e}");
 }

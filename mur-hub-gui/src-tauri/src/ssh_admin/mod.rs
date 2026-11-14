@@ -43,7 +43,7 @@ pub(crate) const PLAN_TTL: Duration = Duration::from_secs(10 * 60);
 /// Open cards held at once; the oldest goes first.
 pub(crate) const MAX_PLANS: usize = 16;
 
-struct HeldPlan {
+pub(crate) struct HeldPlan {
     plan: SetupPlan,
     reason: Option<String>,
     hand_back: String,
@@ -55,11 +55,13 @@ struct HeldPlan {
 }
 
 #[derive(Clone)]
-struct Written {
-    approval: Approval,
+pub(crate) struct Written {
+    pub(crate) approval: Approval,
+    /// The login typed on the card, for the advisory test.
+    pub(crate) user: String,
     /// The restart is held for a failed install: Retry install and Restart
     /// anyway are offered. False after a restart: only the advisory test.
-    held: bool,
+    pub(crate) held: bool,
 }
 
 #[derive(Default)]
@@ -136,13 +138,13 @@ impl SshPlans {
 
     /// Take a plan not yet written, so a second Approve on the same card
     /// finds nothing.
-    fn take(&self, id: &str) -> Result<HeldPlan, String> {
+    pub(crate) fn take(&self, id: &str) -> Result<HeldPlan, String> {
         self.take_where(id, false)
     }
 
     /// Take a written plan, for Retry install or Restart anyway: used once,
     /// put back only when the install failed again.
-    fn take_written(&self, id: &str) -> Result<HeldPlan, String> {
+    pub(crate) fn take_written(&self, id: &str) -> Result<HeldPlan, String> {
         self.take_where(id, true)
     }
 
@@ -165,8 +167,8 @@ impl SshPlans {
     }
 
     /// Keep a plan after its write (see `HeldPlan::written`).
-    fn keep_written(&self, id: String, mut h: HeldPlan, approval: Approval, held: bool) {
-        h.written = Some(Written { approval, held });
+    pub(crate) fn keep_written(&self, id: String, mut h: HeldPlan, w: Written) {
+        h.written = Some(w);
         self.held().plans.insert(id, h);
     }
 
@@ -352,8 +354,12 @@ pub async fn agent_ssh_apply(
         held.hand_back.clone(),
     );
     if v.held || line.is_some() {
-        let is_held = v.held;
-        plans.keep_written(plan_id, held, applied_approval, is_held);
+        let w = Written {
+            approval: applied_approval,
+            user: choices.user.trim().to_string(),
+            held: v.held,
+        };
+        plans.keep_written(plan_id, held, w);
     }
     Ok(v)
 }
@@ -400,7 +406,8 @@ async fn finish_written(
     retry: bool,
 ) -> Result<ApplyView, String> {
     let held = plans.take_written(&plan_id)?;
-    let a = held.written.clone().expect("taken as written").approval;
+    let w = held.written.clone().expect("taken as written");
+    let a = w.approval.clone();
     let agent = held.plan.agent.clone();
     let ready = plans
         .claim(&agent)
@@ -439,8 +446,8 @@ async fn finish_written(
     // Held again: the card keeps Retry install and Restart anyway. Restarted:
     // only the advisory test is left, so a second finish is refused.
     if v.held || v.advisory {
-        let is_held = v.held;
-        plans.keep_written(plan_id, held, a, is_held);
+        let w = Written { held: v.held, ..w };
+        plans.keep_written(plan_id, held, w);
     }
     Ok(v)
 }
@@ -469,18 +476,15 @@ pub async fn agent_ssh_advisory_test(
     plan_id: String,
 ) -> Result<AdvisoryView, String> {
     let (agent, host, user, known_hosts) = plans.with(&plan_id, |h| {
-        let a = &h
+        let w = h
             .written
             .as_ref()
-            .ok_or_else(|| "nothing was written from this card yet".to_string())?
-            .approval;
-        let user = h.plan.user.clone().unwrap_or_default();
-        let user = a.install.as_ref().map(|t| t.user.clone()).unwrap_or(user);
+            .ok_or_else(|| "nothing was written from this card yet".to_string())?;
         Ok::<_, String>((
             h.plan.agent.clone(),
             h.plan.host.clone(),
-            user,
-            approved_known_hosts(a),
+            w.user.clone(),
+            approved_known_hosts(&w.approval),
         ))
     })??;
     if user.is_empty() {
