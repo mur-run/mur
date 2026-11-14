@@ -1,4 +1,4 @@
-export type InboxKind = "hitl" | "install" | "companion" | "upgrade_blocked";
+export type InboxKind = "hitl" | "install" | "companion" | "upgrade_blocked" | "ssh_request";
 
 export interface InboxItem {
   kind: InboxKind;

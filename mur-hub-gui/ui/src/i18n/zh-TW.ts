@@ -1,6 +1,8 @@
 import type { Table } from "./types";
+import { sshZhTW } from "./ssh";
 
 export const zhTW: Table = {
+  ...sshZhTW,
   "app.newAgent": "新增 Agent",
   "app.importAgent": "匯入 Agent",
   "app.importAgentTooltip": "從已簽署的 .muragent 套件安裝 agent",

@@ -20,6 +20,7 @@ export function permCommands(agent: string) {
     tools: `mur agent perm set-tool ${agent} <tool> allow|ask|deny`,
     mcp: `mur agent mcp set-network ${agent} <server> --allow-host <host>`,
     intent: `mur agent perm intent-check ${agent} <model_ref>|--off`,
+    ssh: `mur agent ssh list ${agent}`,
   };
 }
 

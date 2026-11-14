@@ -20,6 +20,7 @@ describe("permCommands", () => {
     expect(c.tools).toBe("mur agent perm set-tool aura <tool> allow|ask|deny");
     expect(c.mcp).toBe("mur agent mcp set-network aura <server> --allow-host <host>");
     expect(c.intent).toBe("mur agent perm intent-check aura <model_ref>|--off");
+    expect(c.ssh).toBe("mur agent ssh list aura");
   });
 });
 
