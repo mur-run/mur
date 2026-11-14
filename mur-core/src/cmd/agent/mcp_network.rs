@@ -217,14 +217,17 @@ fn set_network_preview(
     before: Option<&McpServerNetwork>,
     after: &McpServerNetwork,
 ) -> String {
-    crate::cmd::agent::cli::browser_live_preview::render_preview(
+    use crate::cmd::agent::cli::browser_live_preview::{Applies, render_preview, will_save_line};
+    let body = render_preview(
         agent,
         server_id,
         before,
         after,
         &[],
         mur_agent_runtime::sandbox::egress_proxy::DENY_OVERLAY_ENFORCEMENT,
-    )
+    );
+    // Printed before the [y/N] prompt: nothing is saved yet (#2406).
+    format!("{body}\n{}", will_save_line(Applies::AfterRestart))
 }
 
 /// Preview for clearing a server's policy back to `Inherit`. Clearing LIFTS a
@@ -241,7 +244,7 @@ fn clear_network_preview(agent: &str, server_id: &str, before: &McpServerNetwork
         "`{server_id}` on agent `{agent}` will lose its egress policy (was: {was}).\n\
          It will then be bounded only by the OS sandbox, which restricts PORTS, not hosts — \
          the agent's `allow_hosts` does NOT apply to it.\n\
-         Saved to the profile; takes effect after the agent restarts."
+         Will be saved to the profile; takes effect after the agent restarts."
     )
 }
 
@@ -494,6 +497,9 @@ mod tests {
             p.contains("  keep.com") && p.contains("`browser` on agent `a1`"),
             "{p}"
         );
+        // #2406: shown before the [y/N] prompt, so nothing is saved yet.
+        assert!(!p.contains("Saved to the profile"), "{p}");
+        assert!(p.contains("Will be saved to the profile"), "{p}");
     }
 
     #[test]
@@ -506,6 +512,7 @@ mod tests {
             "{p}"
         );
         assert!(p.contains("does NOT apply"), "{p}");
+        assert!(!p.contains("Saved to the profile"), "{p}");
         // Already clear and no ports: nothing widens, nothing to confirm.
         assert!(set_network_confirm_preview("a1", "browser", None, None, None).is_none());
         // --off narrows: no confirmation.

@@ -67,7 +67,12 @@ fn permanent_without_yes_previews_and_writes_nothing() {
     let (text, chip) = run_allow("mur", &s(&["img.shop.example.com"]), &mut f).unwrap();
     assert!(text.contains("+ img.shop.example.com"), "{text}");
     assert!(text.contains("  shop.example.com"), "{text}");
-    assert!(text.contains("applied to the running agent now"), "{text}");
+    // #2406: nothing is written yet, so the preview must not say it was.
+    assert!(!text.contains("Saved to the profile"), "{text}");
+    assert!(
+        text.contains("Will be saved to the profile and applied to the running agent"),
+        "{text}"
+    );
     assert!(f.saved.is_none() && f.live.is_empty());
     let chip = chip.expect("confirm chip");
     assert!(format!("{chip:?}").contains("browser allow --yes img.shop.example.com"));

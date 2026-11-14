@@ -21,7 +21,7 @@ use mur_common::proposal::Proposal;
 
 use super::browser_live_effect::Effect;
 pub(crate) use super::browser_live_ops::ProfileOps;
-use super::browser_live_preview::render_preview;
+use super::browser_live_preview::{render_preview, saved_line, will_save_line};
 #[cfg(test)]
 use super::manage;
 use super::manage::Managed;
@@ -625,7 +625,7 @@ pub(super) fn run(
             after.mode,
             !repairs.is_empty(),
         );
-        let preview = with_effect_line(&preview, effect);
+        let preview = format!("{preview}\n{}", will_save_line(effect.applies()));
         let preview = if repairs.is_empty() {
             preview
         } else {
@@ -675,7 +675,7 @@ pub(super) fn run(
         (Vec::new(), Effect::Restart)
     };
     // The preview was rendered before the write; say what the write did.
-    notes[0] = with_effect_line(&notes[0], effect);
+    notes[0] = format!("{}\n{}", notes[0], saved_line(effect.applies()));
     if flags.research {
         notes.push("browser live mode may reach: any host (research mode, audited)".to_owned());
         // Telemetry must not undo a write that already succeeded.
@@ -727,17 +727,6 @@ pub(super) fn run(
         Effect::NextTurn => (text, None),
         Effect::Restart => (text, Some(Proposal::restart(RESTART_LABEL))),
     })
-}
-
-/// `preview` with its "takes effect" line replaced by `effect`'s. The preview
-/// is shared with `/browser allow` and `mcp-network`, which keep theirs.
-fn with_effect_line(preview: &str, effect: Effect) -> String {
-    let cold = Effect::Restart.preview_line();
-    if preview.contains(cold) {
-        preview.replacen(cold, effect.preview_line(), 1)
-    } else {
-        preview.to_owned()
-    }
 }
 
 /// `mur browser setup`: ensure the agent HAS the `browser` entry at all, so
