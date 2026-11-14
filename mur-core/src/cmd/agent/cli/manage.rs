@@ -85,6 +85,7 @@ pub fn mcp_add_with_network(
         network,
         &Policy {
             fs: &FilesystemEntitlement::default(),
+            spawn: &[],
             spawn_dirs: &[],
         },
     )
@@ -95,12 +96,15 @@ pub fn mcp_add_with_network(
 pub struct Policy<'a> {
     /// Filesystem grants (vetted and created by the caller).
     pub fs: &'a FilesystemEntitlement,
+    /// Programs the server itself execs (#2400). The entry's own command is
+    /// granted separately; this is for what that command launches in turn.
+    pub spawn: &'a [String],
     /// Build-lane dirs whose executables the server may spawn (#1639).
     pub spawn_dirs: &'a [String],
 }
 
-/// [`mcp_add_with_network`] that also merges filesystem grants the server
-/// needs — before the probe, since the probe is sealed from these same
+/// [`mcp_add_with_network`] that also merges the [`Policy`] grants the server
+/// needs (filesystem, spawn programs, spawn dirs) — before the probe, since the probe is sealed from these same
 /// entitlements, and in the same atomic save as the entry. Callers vet the
 /// paths (`perm::reject_ungrantable_path`) and create them first: the sandbox
 /// drops entitlement paths that do not exist when it seals.
@@ -117,14 +121,7 @@ pub fn mcp_add_with_policy(
         bail!("MCP server '{server_id}' already exists on '{agent}'");
     }
 
-    let mut notes = merge_fs(&mut profile.entitlements.filesystem, policy.fs);
-    let dirs = &mut profile.entitlements.processes.spawn.allowed_dirs;
-    for d in policy.spawn_dirs {
-        if !dirs.contains(d) {
-            dirs.push(d.clone());
-            notes.push(format!("allowed spawn under {d}"));
-        }
-    }
+    let mut notes = merge_policy(&mut profile, policy);
     let (binary_sha256, resolved_path) =
         match crate::cmd::agent_mcp_pin::resolve_mcp_launch(command) {
             Ok(p) => {
@@ -201,6 +198,48 @@ pub fn mcp_add_with_policy(
         out.push_str(&format!("\n  {n}"));
     }
     Ok(applied(&out))
+}
+
+/// Merge every grant in `policy` into `profile`'s entitlements. One note per
+/// new grant; a second call with the same policy adds nothing.
+pub(super) fn merge_policy(
+    profile: &mut mur_common::AgentProfile,
+    policy: &Policy<'_>,
+) -> Vec<String> {
+    let ent = &mut profile.entitlements;
+    let mut notes = merge_fs(&mut ent.filesystem, policy.fs);
+    notes.extend(merge_spawn_dirs(
+        &mut ent.processes.spawn.allowed_dirs,
+        policy.spawn_dirs,
+    ));
+    notes.extend(merge_spawn(&mut ent.processes.spawn.allowed, policy.spawn));
+    notes
+}
+
+/// Add each dir in `add` that the spawn-dir allowlist `dst` lacks (exact
+/// match, like `perm allow-spawn-dir`). Returns one note per new grant.
+pub(super) fn merge_spawn_dirs(dst: &mut Vec<String>, add: &[String]) -> Vec<String> {
+    let mut notes = Vec::new();
+    for dir in add {
+        if !dst.contains(dir) {
+            dst.push(dir.clone());
+            notes.push(format!("allowed spawn under {dir}"));
+        }
+    }
+    notes
+}
+
+/// Add each program in `add` that the spawn allowlist `dst` lacks (exact
+/// match, like `perm allow-spawn`). Returns one note per new grant.
+pub(super) fn merge_spawn(dst: &mut Vec<String>, add: &[String]) -> Vec<String> {
+    let mut notes = Vec::new();
+    for program in add {
+        if !dst.contains(program) {
+            dst.push(program.clone());
+            notes.push(format!("allowed spawn of {program}"));
+        }
+    }
+    notes
 }
 
 /// Add each path in `add` that `dst` lacks (exact match, like `perm`).
@@ -291,6 +330,61 @@ mod tests {
         let (text, chip) = applied("removed skill 'x'");
         assert!(text.ends_with(RESTART_HINT), "{text}");
         assert!(chip.is_some_and(|p| p.kind == mur_common::proposal::ProposalKind::Restart));
+    }
+
+    /// The fixture profile with an empty spawn policy.
+    fn bare_profile() -> mur_common::AgentProfile {
+        let mut p: mur_common::AgentProfile = serde_yaml::from_str(include_str!(
+            "../../../../../mur-common/tests/fixtures/minimal_profile.yaml"
+        ))
+        .unwrap();
+        p.entitlements.processes.spawn.allowed.clear();
+        p.entitlements.processes.spawn.allowed_dirs.clear();
+        p
+    }
+
+    /// #2400: the first-add path must carry `Policy.spawn` into the profile.
+    /// Dropping that merge would bring the EPERM back for new agents while
+    /// every repair-path test still passed.
+    #[test]
+    fn merge_policy_grants_spawn_and_dirs_once() {
+        let mut p = bare_profile();
+        let fs = FilesystemEntitlement::default();
+        let spawn = vec!["node".to_string()];
+        let dirs = vec!["/b/shell-1246".to_string()];
+        let policy = Policy {
+            fs: &fs,
+            spawn: &spawn,
+            spawn_dirs: &dirs,
+        };
+
+        let notes = merge_policy(&mut p, &policy);
+        let got = &p.entitlements.processes.spawn;
+        assert_eq!(got.allowed, spawn);
+        assert_eq!(got.allowed_dirs, dirs);
+        assert!(
+            notes.iter().any(|n| n == "allowed spawn of node"),
+            "{notes:?}"
+        );
+        assert!(
+            notes
+                .iter()
+                .any(|n| n == "allowed spawn under /b/shell-1246"),
+            "{notes:?}"
+        );
+
+        let again = merge_policy(&mut p, &policy);
+        assert!(again.is_empty(), "{again:?}");
+    }
+
+    #[test]
+    fn spawn_dir_is_granted_once_with_a_note() {
+        let mut dirs = vec!["/keep".to_string()];
+        let add = vec!["/b/shell-1246".to_string()];
+        let notes = merge_spawn_dirs(&mut dirs, &add);
+        assert_eq!(dirs, vec!["/keep".to_string(), "/b/shell-1246".to_string()]);
+        assert_eq!(notes, vec!["allowed spawn under /b/shell-1246".to_string()]);
+        assert!(merge_spawn_dirs(&mut dirs, &add).is_empty());
     }
 
     #[test]

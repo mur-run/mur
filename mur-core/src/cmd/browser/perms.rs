@@ -34,8 +34,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+/// The interpreter the MCP server is launched with (`node <install>/…/cli.js`).
+/// A bare name on purpose: the runtime resolves it through its own search
+/// dirs and grants the symlink and its target both, so a Homebrew `node`
+/// (`/opt/homebrew/bin/node` → `Cellar/…`) is covered whichever the seal sees.
+pub const NODE: &str = "node";
+
 /// Binaries `mur browser` must be allowed to spawn.
-pub const REQUIRED_BINARIES: [&str; 2] = ["node", "chrome-headless-shell"];
+pub const REQUIRED_BINARIES: [&str; 2] = [NODE, "chrome-headless-shell"];
 
 /// `<mur_home>/artifacts/<agent>/shim/probe` — the exec lane for the probe.
 pub fn probe_dir(mur_home: &Path, agent: &str) -> PathBuf {
