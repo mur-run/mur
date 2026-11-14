@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../i18n";
 import { newTaskId } from "../ChatTab";
 import { type ApplyView, type CheckView, type Choices, type PlanView, sshApi } from "./sshApi";
+import { SshCardResult } from "./SshCardResult";
 import { initialChoices, notReadyText, verdictKey } from "./sshModel";
 
 type Step = "key" | "host" | "summary" | "done";
@@ -234,16 +235,7 @@ export function SshCard({ target, onClose }: { target: SshTarget; onClose: (chan
             </>
           )}
 
-          {step === "done" && result && (
-            <>
-              <ul className="perm__list">
-                {result.lines.map((l) => (
-                  <li key={l} className="perm__row">{l}</li>
-                ))}
-              </ul>
-              {note && <p className="field-muted">{note}</p>}
-            </>
-          )}
+          {step === "done" && result && <SshCardResult result={result} note={note} />}
         </div>
         <div className="modal__footer ssh-card__footer">
           {error && !plan && (
