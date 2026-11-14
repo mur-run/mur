@@ -92,6 +92,13 @@ export interface OverviewView {
   decisions_unverified: string | null;
 }
 
+/** After a revoke. `restart_needed`: the running agent still holds the old
+ * grant until it restarts. */
+export interface RevokeView {
+  overview: OverviewView;
+  restart_needed: boolean;
+}
+
 export const sshApi = {
   overview: (name: string) => invoke<OverviewView>("agent_ssh_overview", { name }),
   plan: (name: string, host: string, port: number | null, user: string | null) =>
@@ -100,7 +107,7 @@ export const sshApi = {
   check: (planId: string, choices: Choices) => invoke<CheckView>("agent_ssh_check", { planId, choices }),
   apply: (planId: string, choices: Choices) => invoke<ApplyView>("agent_ssh_apply", { planId, choices }),
   revoke: (name: string, keyFp: string, hostKeyFp: string | null) =>
-    invoke<OverviewView>("agent_ssh_revoke", { name, keyFp, hostKeyFp }),
+    invoke<RevokeView>("agent_ssh_revoke", { name, keyFp, hostKeyFp }),
   dismiss: (name: string, host: string, port: number) => invoke<void>("agent_ssh_dismiss", { name, host, port }),
   pendingAll: () => invoke<PendingView[]>("ssh_pending_all"),
 };

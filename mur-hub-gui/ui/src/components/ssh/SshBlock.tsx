@@ -15,6 +15,7 @@ export function SshBlock({ agent }: { agent: string }) {
   const [error, setError] = useState<string | null>(null);
   const [card, setCard] = useState<SshTarget | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
+  const [restartNeeded, setRestartNeeded] = useState(false);
   const [host, setHost] = useState("");
   const [port, setPort] = useState("");
   const [user, setUser] = useState("");
@@ -47,8 +48,9 @@ export function SshBlock({ agent }: { agent: string }) {
     }
     sshApi
       .revoke(agent, keyFp, hostKeyFp)
-      .then((o) => {
-        setOv(o);
+      .then((r) => {
+        setOv(r.overview);
+        setRestartNeeded(r.restart_needed);
         setConfirm(null);
       })
       .catch((e) => setError(String(e)));
@@ -68,6 +70,7 @@ export function SshBlock({ agent }: { agent: string }) {
   return (
     <div className="ssh-block">
       {error && <p className="save-error">{error}</p>}
+      {restartNeeded && <p className="perm__note perm__note--attention">{t("ssh.revokedRestart", { agent })}</p>}
       {ov?.decisions_unverified && (
         <p className="perm__note perm__note--attention">{t("ssh.unverified", { why: ov.decisions_unverified })}</p>
       )}
