@@ -8,7 +8,8 @@
 //!
 //! Readers of the `Ask` kind shipped in v2.99.0, one release before this
 //! writer (§D7): a binary older than that reuses an `Ask`'s `seq` on its next
-//! append.
+//! append. See `docs/superpowers/specs/2026-09-26-channel-consult-design.md`
+//! D7 ("Mixed versions: an older writer can reuse a `seq`").
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

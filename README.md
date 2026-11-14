@@ -1106,12 +1106,14 @@ Agent** wizard offers the same catalog as a source.
   `Ask` to a channel and the other agent answers in a restricted turn: it has
   `read_file` and nothing else, and it can read only the paths **both** agents
   may read, so asking never widens what the asker can see. The answer is
-  posted to the same channel, signed by the agent that wrote it. Who may be
-  asked follows `communication.sends_to`; deny the `ask` tool in a profile to
-  turn it off for that agent. Two limits: the answerer's **memory is not
-  scoped** (an answer can reflect what it remembers, whatever the file scope),
-  and it is **macOS only** for now, and an agent running on a CLI backend
-  refuses to answer. `consult.ask_expiry_secs`
+  posted to the same channel, signed by the agent that wrote it. Both sides
+  must allow it: the asker may address only agents in its
+  `communication.sends_to`, and the answerer accepts the dial only from agents
+  in its `communication.accepts_from`. Deny the `ask` tool in a profile to
+  turn it off for that agent. Three limits: the answerer's **memory is not
+  scoped** (an answer can reflect what it remembers, whatever the file scope);
+  it is **macOS only** for now; and an agent running on a CLI backend refuses
+  to answer. `consult.ask_expiry_secs`
   (default 600) sets how long an `Ask` stays answerable. Upgrade every MUR
   binary first: one older than v2.99.0 can drop its own next event after an
   `Ask`.
