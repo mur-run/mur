@@ -62,6 +62,11 @@ mod sys {
         keystore::stored(mur_home, agent).map_err(|e| e.to_string())
     }
 
+    /// The stored public line, read only: never rebuilds a missing `.pub`.
+    pub fn stored_public(mur_home: &Path, agent: &str) -> Option<String> {
+        keystore::stored_public_line(mur_home, agent)
+    }
+
     pub fn generate(mur_home: &Path, agent: &str) -> Result<StoredKey, String> {
         keystore::generate(mur_home, agent).map_err(|e| e.to_string())
     }
@@ -154,6 +159,9 @@ mod sys {
 
     pub fn stored(_: &Path, _: &str) -> Result<Option<StoredKey>, String> {
         Ok(None)
+    }
+    pub fn stored_public(_: &Path, _: &str) -> Option<String> {
+        None
     }
     pub fn generate(_: &Path, _: &str) -> Result<StoredKey, String> {
         Err(UNIX_ONLY.into())

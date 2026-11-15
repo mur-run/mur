@@ -5,33 +5,31 @@
 //! itself `ssh` offers them all, and past the server's `MaxAuthTries` the host
 //! refuses with "Too many authentication failures" before the user's key is
 //! tried. So the install runs with `IdentitiesOnly=yes` and one `-i` per key
-//! this module keeps.
+//! this module keeps. Which agent and which files are "the user's" comes from
+//! `ssh -G` ([`super::ssh_config`]), not from a guess.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, SystemTime};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use mur_ssh_request::{KEY_COMMENT_PREFIX, SSH_ADD_BIN};
 
 use super::dedicated;
+use super::ssh_config::{AgentSocket, Expand, Resolved, existing_files};
 
-/// `ssh`'s own default identity files, in `~/.ssh`. Once any `-i` is given it
-/// stops adding these, so the ones that exist are passed explicitly.
-pub const DEFAULT_IDENTITY_FILES: &[&str] = &[
-    "id_rsa",
-    "id_ecdsa",
-    "id_ecdsa_sk",
-    "id_ed25519",
-    "id_ed25519_sk",
-];
+/// The environment variable `ssh-add` finds its agent by.
+const AUTH_SOCK_ENV: &str = "SSH_AUTH_SOCK";
 /// `ssh-add -L` exit status when the agent holds no key.
 const SSH_ADD_NO_IDENTITIES: i32 = 1;
-/// Printed when nothing is left to log in with.
-pub const NO_OWN_KEY: &str = "no SSH key of yours to log in with; add one to ssh-agent \
-                              (`ssh-add`) or create ~/.ssh/id_ed25519; nothing was sent";
+/// Prefix of one run's private directory of `-i` files in the key directory.
+pub const RUN_DIR_PREFIX: &str = ".ids-";
+/// A run directory older than this was left by a run that died; the next
+/// install sweeps it. Far past the install's own timeout.
+pub const RUN_DIR_STALE_AFTER: Duration = Duration::from_secs(10 * 60);
 
 /// What the user's ssh-agent said when asked for its keys.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,14 +38,22 @@ pub enum AgentListing {
     Keys(String),
     /// The agent runs but holds no key (`ssh-add -L` exit 1).
     Empty,
-    /// No agent to ask, or asking failed. Only on-disk defaults are used.
+    /// No agent to ask, or asking failed. Only identity files are used.
     Unavailable,
 }
 
-/// Ask the user's ssh-agent (the inherited `SSH_AUTH_SOCK`) for its keys.
-pub fn list_agent() -> AgentListing {
+/// Ask the agent `ssh` itself would use for this host for its keys: the
+/// inherited `SSH_AUTH_SOCK`, or the `IdentityAgent` from the user's config.
+pub fn list_agent(socket: &AgentSocket) -> AgentListing {
     let mut cmd = Command::new(SSH_ADD_BIN);
     cmd.arg("-L");
+    match socket {
+        AgentSocket::Disabled => return AgentListing::Unavailable,
+        AgentSocket::Path(p) => {
+            cmd.env(AUTH_SOCK_ENV, p);
+        }
+        AgentSocket::Inherited => {}
+    }
     let Ok(out) = super::install::run_tool(cmd, SSH_ADD_BIN) else {
         return AgentListing::Unavailable;
     };
@@ -64,8 +70,9 @@ fn blob_of(line: &str) -> Option<&str> {
 }
 
 /// Blobs of every dedicated key in the key store, whichever agent owns it.
-/// A directory whose key is unusable contributes nothing; the comment check
-/// in [`own_agent_keys`] still catches its key.
+/// Read only: a missing `.pub` is not rebuilt here, since other agents' key
+/// directories are not this run's to write. Such a key is still caught by
+/// the comment check in [`own_agent_keys`].
 pub fn dedicated_blobs(mur_home: &Path) -> HashSet<String> {
     let Some(Ok(entries)) = dedicated::keys_root(mur_home).map(std::fs::read_dir) else {
         return HashSet::new();
@@ -73,8 +80,9 @@ pub fn dedicated_blobs(mur_home: &Path) -> HashSet<String> {
     entries
         .flatten()
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter_map(|agent| dedicated::stored(mur_home, &agent).ok().flatten())
-        .filter_map(|k| blob_of(&k.public_line).map(str::to_string))
+        .filter(|name| !name.starts_with('.'))
+        .filter_map(|agent| dedicated::stored_public(mur_home, &agent))
+        .filter_map(|line| blob_of(&line).map(str::to_string))
         .collect()
 }
 
@@ -98,57 +106,124 @@ pub fn own_agent_keys(listing: &AgentListing, dedicated: &HashSet<String>) -> Ve
         .collect()
 }
 
-/// The default identity files in `ssh_dir` that exist.
-pub fn default_identity_files(ssh_dir: &Path) -> Vec<PathBuf> {
-    DEFAULT_IDENTITY_FILES
-        .iter()
-        .map(|f| ssh_dir.join(f))
-        .filter(|p| p.is_file())
-        .collect()
+/// How the install connection picks its keys.
+pub enum Offer {
+    /// `IdentitiesOnly=yes` and exactly these `-i` files.
+    Only(Identities),
+    /// Nothing of the user's could be found, or `ssh -G` could not say:
+    /// leave the choice to `ssh`, as before K7. With many dedicated keys
+    /// loaded this can still hit `MaxAuthTries`, but it never refuses a
+    /// setup that used to work.
+    SshDefault,
+}
+
+impl Offer {
+    /// The `-i` files, or `None` for [`Offer::SshDefault`].
+    pub fn files(&self) -> Option<&[PathBuf]> {
+        match self {
+            Offer::Only(ids) => Some(ids.files()),
+            Offer::SshDefault => None,
+        }
+    }
+
+    /// Pick from what `ssh -G` resolved; `resolved` is `None` when it could
+    /// not be asked.
+    pub fn choose(
+        scratch: Option<&Path>,
+        resolved: Option<&Resolved>,
+        expand: &Expand,
+        mur_home: &Path,
+    ) -> Result<Self> {
+        let Some(r) = resolved else {
+            return Ok(Offer::SshDefault);
+        };
+        let files = existing_files(r, expand);
+        let own = own_agent_keys(&list_agent(&r.agent), &dedicated_blobs(mur_home));
+        Ok(match Identities::prepare(scratch, &files, &own)? {
+            Some(ids) => Offer::Only(ids),
+            None => {
+                tracing::warn!("no SSH key of the user's found; leaving the choice to ssh");
+                Offer::SshDefault
+            }
+        })
+    }
 }
 
 /// The `-i` files for one install run. Agent keys are written as `.pub`
-/// files (`ssh` signs those through the agent); they are removed when this
-/// is dropped, with the run's `known_hosts` file.
+/// files (`ssh` signs those through the agent) in a private directory that
+/// is removed when this is dropped; one left by a killed run is swept by
+/// the next.
 pub struct Identities {
     files: Vec<PathBuf>,
-    _temps: Vec<tempfile::NamedTempFile>,
+    _run_dir: Option<tempfile::TempDir>,
 }
 
 impl Identities {
-    /// Refuses with [`NO_OWN_KEY`] when there is nothing to offer, before any
-    /// connection is made.
+    /// Identity files first, in the order `ssh -G` gave them (a per-host
+    /// `IdentityFile` comes before the defaults, as in a plain `ssh`), then
+    /// the agent's keys. `None` when there is nothing to offer.
     pub fn prepare(
         scratch: Option<&Path>,
+        files: &[PathBuf],
         agent_keys: &[String],
-        defaults: Vec<PathBuf>,
-    ) -> Result<Self> {
-        if agent_keys.is_empty() && defaults.is_empty() {
-            bail!("{NO_OWN_KEY}");
+    ) -> Result<Option<Self>> {
+        if files.is_empty() && agent_keys.is_empty() {
+            return Ok(None);
         }
-        let mut temps = Vec::with_capacity(agent_keys.len());
+        let mut out = files.to_vec();
+        let mut run_dir = None;
         if !agent_keys.is_empty() {
             let dir = scratch.context("this agent has no key directory to work in")?;
-            for line in agent_keys {
-                let mut f = tempfile::Builder::new()
-                    .suffix(".pub")
-                    .tempfile_in(dir)
-                    .with_context(|| format!("create a temporary file in {}", dir.display()))?;
+            sweep_stale(dir, RUN_DIR_STALE_AFTER);
+            let tmp = tempfile::Builder::new()
+                .prefix(RUN_DIR_PREFIX)
+                .tempdir_in(dir)
+                .with_context(|| format!("create a temporary directory in {}", dir.display()))?;
+            for (n, line) in agent_keys.iter().enumerate() {
+                let path = tmp.path().join(format!("agent-{n}.pub"));
+                let mut f = std::fs::File::create(&path)
+                    .with_context(|| format!("write {}", path.display()))?;
                 writeln!(f, "{line}")?;
-                f.flush()?;
-                temps.push(f);
+                out.push(path);
             }
+            run_dir = Some(tmp);
         }
-        let mut files: Vec<PathBuf> = temps.iter().map(|t| t.path().to_path_buf()).collect();
-        files.extend(defaults);
-        Ok(Self {
-            files,
-            _temps: temps,
-        })
+        Ok(Some(Self {
+            files: out,
+            _run_dir: run_dir,
+        }))
     }
 
     pub fn files(&self) -> &[PathBuf] {
         &self.files
+    }
+}
+
+/// Remove run directories in `dir` older than `min_age`. A link, or a
+/// directory with an unreadable or future mtime, is left alone.
+pub fn sweep_stale(dir: &Path, min_age: Duration) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for e in entries.flatten() {
+        let ours = e
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with(RUN_DIR_PREFIX));
+        // `DirEntry::metadata` does not follow a link.
+        let Ok(meta) = e.metadata() else { continue };
+        if !ours || !meta.is_dir() {
+            continue;
+        }
+        let age = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .unwrap_or(Duration::ZERO);
+        if age >= min_age {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
     }
 }
 

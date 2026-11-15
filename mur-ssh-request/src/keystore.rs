@@ -137,6 +137,13 @@ pub fn stored(mur_home: &Path, agent: &str) -> Result<Option<StoredKey>, Keystor
     }))
 }
 
+/// The stored public line, read only: unlike [`stored`] nothing is checked
+/// and a missing `.pub` is not rebuilt. `None` when there is none to read.
+pub fn stored_public_line(mur_home: &Path, agent: &str) -> Option<String> {
+    let dir = key_dir(mur_home, agent).ok()?;
+    read_pub(&pub_path(&dir.join(KEY_FILE))).ok().flatten()
+}
+
 /// The agent's key, generating it first if it has none. Never overwrites:
 /// two callers racing both end up holding the winner's key.
 pub fn generate(mur_home: &Path, agent: &str) -> Result<StoredKey, KeystoreError> {

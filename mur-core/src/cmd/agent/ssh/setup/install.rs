@@ -16,7 +16,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use mur_ssh_request::{RequestHost, SSH_BINARY, validate_user};
 
 use super::dedicated;
-use super::identities::{self, Identities};
+use super::identities::{self, Offer};
+use super::ssh_config::{self, Expand};
 
 /// `ssh -o ConnectTimeout`, in seconds.
 pub const CONNECT_TIMEOUT_SECS: u64 = 10;
@@ -29,10 +30,10 @@ const ERR_TAIL_LINES: usize = 6;
 pub const MARK_ADDED: &str = "mur-key-added";
 /// What [`REMOTE_SCRIPT`] prints when the line was already there.
 pub const MARK_PRESENT: &str = "mur-key-present";
+/// The local login name `%u` in an `IdentityFile` expands to.
+const LOCAL_USER_ENV: &str = "USER";
 /// Stands in for the system-wide `known_hosts`: only the approved keys count.
 const NULL_DEVICE: &str = "/dev/null";
-/// The user's ssh directory, under their home.
-const USER_SSH_DIR: &str = ".ssh";
 
 /// Reads one line from stdin; appends it to `authorized_keys` unless an
 /// identical line is there. Prints which. A last line with no newline gets
@@ -87,26 +88,38 @@ impl SshInstaller {
         }
     }
 
-    /// The user's own keys only: the agent's listing minus every dedicated
-    /// key, plus the default files in `~/.ssh` that exist.
-    fn identities(&self) -> Result<Identities> {
-        let listing = identities::list_agent();
-        let own =
-            identities::own_agent_keys(&listing, &identities::dedicated_blobs(&self.mur_home));
-        let defaults = dirs::home_dir()
-            .map(|h| identities::default_identity_files(&h.join(USER_SSH_DIR)))
-            .unwrap_or_default();
-        Identities::prepare(self.scratch.as_deref(), &own, defaults)
+    /// The user's own keys only, as `ssh -G` resolves them for this host:
+    /// its identity files and its agent's keys minus every dedicated key.
+    /// Falls back to `ssh`'s own choice when none can be found.
+    fn offer(&self, r: &InstallRequest) -> Result<Offer> {
+        let Some(home) = dirs::home_dir() else {
+            return Ok(Offer::SshDefault);
+        };
+        let local_user = std::env::var(LOCAL_USER_ENV).ok();
+        let expand = Expand {
+            home: &home,
+            local_user: local_user.as_deref(),
+            host: r.host.connect_host(),
+            remote_user: r.user,
+            port: r.host.port(),
+        };
+        let resolved = ssh_config::query(r.host, r.user);
+        Offer::choose(
+            self.scratch.as_deref(),
+            resolved.as_ref(),
+            &expand,
+            &self.mur_home,
+        )
     }
 }
 
 impl Installer for SshInstaller {
     fn install(&self, r: &InstallRequest) -> Result<Installed> {
         check(r)?;
-        let ids = self.identities()?;
+        let offer = self.offer(r)?;
         let kh = known_hosts_file(self.scratch.as_deref(), r.known_hosts)?;
         let mut cmd = Command::new(SSH_BINARY);
-        cmd.args(install_argv(r, kh.path(), ids.files())?);
+        cmd.args(install_argv(r, kh.path(), offer.files())?);
         let out = run(cmd, Some(r.public_line))?;
         parse_result(
             out.status.code(),
@@ -190,19 +203,19 @@ pub(super) fn target_args(host: &RequestHost, user: &str, remote: &str) -> Vec<O
     .collect()
 }
 
-/// `identity_files` are the user's own keys ([`Identities`]); with
-/// `IdentitiesOnly=yes` no other key is offered. The user's `~/.ssh/config`
-/// is still read: a `ProxyJump` there is theirs and stays.
+/// `identity_files` are the user's own keys ([`Offer`]); with
+/// `IdentitiesOnly=yes` no other key is offered. `None` leaves the choice to
+/// `ssh`. The user's `~/.ssh/config` is still read either way: a `ProxyJump`
+/// or `IdentityAgent` there is theirs and stays.
 pub fn install_argv(
     r: &InstallRequest,
     known_hosts_file: &Path,
-    identity_files: &[PathBuf],
+    identity_files: Option<&[PathBuf]>,
 ) -> Result<Vec<OsString>> {
-    if identity_files.is_empty() {
-        bail!("{}", identities::NO_OWN_KEY);
-    }
     let mut argv = checked_host_opts(known_hosts_file)?;
-    argv.extend(identities::identity_args(identity_files));
+    if let Some(files) = identity_files.filter(|f| !f.is_empty()) {
+        argv.extend(identities::identity_args(files));
+    }
     argv.extend(target_args(r.host, r.user, &remote_command()));
     Ok(argv)
 }
