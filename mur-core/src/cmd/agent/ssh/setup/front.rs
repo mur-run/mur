@@ -28,15 +28,19 @@ use super::probe::{AgentKey, Probe, System};
 use super::{Applied, Approval, SetupPlan, apply_and_restart, plan};
 use crate::cmd::agent::load_profile_at;
 
-/// The global config under `mur_home`, home of `ssh_setup.generate_key`.
-const CONFIG_FILE: &str = "config.yaml";
-
 /// `ssh_setup.generate_key`, read from disk on every call: a card that was
 /// open when the switch was turned off must not act on the old value.
+/// A config that does not parse reads as off, not as the default: the
+/// switch is how an install turns slice 6 off (K4), so a typo in it must not
+/// turn slice 6 back on. An absent file is the default.
 pub fn generate_key_enabled(mur_home: &Path) -> bool {
-    Config::load_or_default(&mur_home.join(CONFIG_FILE))
-        .ssh_setup
-        .generate_key
+    match Config::try_load(&mur_common::config::config_path(mur_home)) {
+        Ok(cfg) => cfg.ssh_setup.generate_key,
+        Err(e) => {
+            tracing::warn!("ssh_setup.generate_key read as off: {e}");
+            false
+        }
+    }
 }
 
 /// Validate a typed `host` / `port` with the request validator.

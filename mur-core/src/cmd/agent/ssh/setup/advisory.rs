@@ -17,6 +17,9 @@ use super::install::{checked_host_opts, err_tail, known_hosts_file, run, target_
 pub const SSH_OWN_FAILURE: i32 = 255;
 /// The remote command: does nothing, and exits 0 on a host with a shell.
 pub const REMOTE_NOOP: &str = "true";
+/// `ssh -F none`: read no ssh config file at all.
+const NO_CONFIG_FLAG: &str = "-F";
+const NO_CONFIG: &str = "none";
 /// Said with every result, so nobody reads it as the agent's own test.
 pub const ADVISORY_NOTE: &str = "advisory: run outside the agent's sandbox";
 
@@ -39,15 +42,21 @@ impl AdvisoryResult {
     }
 }
 
-/// `IdentitiesOnly` with `-i`: only the dedicated key is offered, never
-/// another key the user's ssh-agent holds.
+/// Only the dedicated key is offered. `IdentitiesOnly` with `-i` keeps out
+/// the keys the user's ssh-agent holds, but not an `IdentityFile` from the
+/// user's ssh config, which is added to `-i`; `-F none` drops the config, so
+/// a pass cannot come from one of the user's own keys. Cost: a host reached
+/// only through the config (`ProxyJump`, a `HostName` alias) reports "not
+/// accepted or unreachable". For an advisory test a false "no" is the safe
+/// side; the install itself keeps the user's config, since it logs in as them.
 pub fn advisory_argv(
     private: &Path,
     host: &RequestHost,
     user: &str,
     known_hosts_file: &Path,
 ) -> anyhow::Result<Vec<OsString>> {
-    let mut argv = checked_host_opts(known_hosts_file)?;
+    let mut argv: Vec<OsString> = [NO_CONFIG_FLAG, NO_CONFIG].map(OsString::from).into();
+    argv.extend(checked_host_opts(known_hosts_file)?);
     argv.extend(["-o", "IdentitiesOnly=yes", "-i"].map(OsString::from));
     argv.push(private.as_os_str().to_os_string());
     argv.extend(target_args(host, user, REMOTE_NOOP));

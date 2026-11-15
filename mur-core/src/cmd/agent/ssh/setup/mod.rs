@@ -36,7 +36,7 @@ mod choices_tests;
 
 #[cfg(all(test, unix))]
 #[path = "dedicated_tests.rs"]
-mod dedicated_tests;
+pub(crate) mod dedicated_tests;
 
 #[cfg(all(test, unix))]
 #[path = "install_tests.rs"]

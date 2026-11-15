@@ -233,6 +233,11 @@ fn the_advisory_test_offers_only_the_dedicated_key() {
     let argv =
         strs(&advisory_argv(Path::new("/s/id_ed25519"), &h, "git", Path::new("/k/known")).unwrap());
     assert_eq!(at(&argv, "IdentitiesOnly=yes").len(), 1);
+    // `IdentitiesOnly` stops ssh-agent keys, not an `IdentityFile` from the
+    // user's ssh config: only `-F none` keeps those from being offered too.
+    let f = at(&argv, "-F");
+    assert_eq!(f.len(), 1, "{argv:?}");
+    assert_eq!(argv[f[0] + 1], "none");
     let i = at(&argv, "-i");
     assert_eq!(argv[i[0] + 1], "/s/id_ed25519");
     let u = at(&argv, "git");
@@ -243,7 +248,7 @@ fn the_advisory_test_offers_only_the_dedicated_key() {
     assert_eq!(at(&argv, "BatchMode=yes").len(), 1);
     assert_eq!(at(&argv, "StrictHostKeyChecking=yes").len(), 1);
     assert!(
-        i[0] < hi[0] && u[0] < hi[0],
+        f[0] < hi[0] && i[0] < hi[0] && u[0] < hi[0],
         "options precede the separator"
     );
 }

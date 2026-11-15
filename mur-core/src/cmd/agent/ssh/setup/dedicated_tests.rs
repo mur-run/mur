@@ -23,7 +23,7 @@ const AGENT: &str = "bot";
 const SEALED: Option<ExecBackend> = Some(ExecBackend::Seatbelt);
 
 /// These tests run the real `ssh-keygen`. Without it they skip, loudly.
-pub(super) fn keygen_missing() -> bool {
+pub(crate) fn keygen_missing() -> bool {
     let missing = Command::new(KEYGEN_BIN)
         .arg("-?")
         .stdin(Stdio::null())
@@ -288,4 +288,41 @@ fn the_comment_is_the_third_field() {
         "two words"
     );
     assert_eq!(dedicated::comment_of("ssh-ed25519 AAAA"), "");
+}
+
+/// K4: the switch is how an install turns slice 6 off, so a config that does
+/// not parse must read as off, never as the default (on).
+#[test]
+fn the_switch_reads_off_when_the_config_does_not_parse() {
+    use super::front::generate_key_enabled;
+    use mur_common::config::config_path;
+    let home = tempfile::tempdir().unwrap();
+    assert!(
+        generate_key_enabled(home.path()),
+        "absent file: the default"
+    );
+
+    fs::write(
+        config_path(home.path()),
+        "ssh_setup:\n  generate_key: true\n",
+    )
+    .unwrap();
+    assert!(generate_key_enabled(home.path()));
+
+    fs::write(
+        config_path(home.path()),
+        "ssh_setup:\n  generate_key: false\n",
+    )
+    .unwrap();
+    assert!(!generate_key_enabled(home.path()));
+
+    fs::write(
+        config_path(home.path()),
+        "ssh_setup:\n  generate_key: [[[\n",
+    )
+    .unwrap();
+    assert!(
+        !generate_key_enabled(home.path()),
+        "a typo must not turn it on"
+    );
 }
