@@ -387,6 +387,23 @@ pub async fn build_provider_runner(
             );
         }
     }
+    // Built-in browser_request (#2360, Q1): the one route to a site the
+    // browser cannot use yet. For every agent, like ssh_request; it writes a
+    // request file nothing acts on until the user answers the card. An
+    // explicit Deny still wins, and then the prompt does not name it.
+    let browser_route = mur_common::agent::resolve_tool_policy(
+        &profile.inner.entitlements.tools,
+        crate::tools::browser_request::BROWSER_REQUEST,
+    ) != mur_common::agent::ToolPolicy::Deny;
+    if browser_route {
+        use crate::tools::browser_request::{BROWSER_REQUEST, BrowserRequestTool};
+        tool_map.insert(
+            BROWSER_REQUEST.to_string(),
+            Arc::new(BrowserRequestTool {
+                agent_home: agent_home.to_path_buf(),
+            }),
+        );
+    }
     // Built-in remember (memory federation P2a): proactive capture of durable
     // user preferences/facts as agent-local Draft notes. Gated on the global
     // `memory.capture` config; an explicit Deny in the profile still wins.
@@ -489,6 +506,15 @@ pub async fn build_provider_runner(
             &ssh_facts,
             proxy.as_ref(),
         ));
+        Some(p)
+    } else {
+        system_prompt_with_memory
+    };
+
+    // #2360: the browser route, only when the tool is registered (D4).
+    let system_prompt_with_memory = if browser_route {
+        let mut p = system_prompt_with_memory.unwrap_or_default();
+        p.push_str(&crate::tools::browser_request::prompt_section());
         Some(p)
     } else {
         system_prompt_with_memory

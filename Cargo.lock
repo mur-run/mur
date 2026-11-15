@@ -6480,6 +6480,7 @@ dependencies = [
  "libc",
  "mime_guess",
  "mur-browser",
+ "mur-browser-request",
  "mur-channel",
  "mur-common",
  "mur-compress",
