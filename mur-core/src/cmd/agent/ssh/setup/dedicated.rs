@@ -81,6 +81,15 @@ mod sys {
         keystore::key_dir(mur_home, agent).ok()
     }
 
+    /// The directory holding every agent's key directory.
+    pub fn keys_root(mur_home: &Path) -> Option<PathBuf> {
+        Some(
+            mur_home
+                .join(mur_common::hitl::approval_token::SECRETS_DIR)
+                .join(keystore::KEYS_SUBDIR),
+        )
+    }
+
     /// One public key line of the type this store generates.
     pub fn is_key_line(line: &str) -> bool {
         keystore::parse_pub(line).is_some()
@@ -154,6 +163,9 @@ mod sys {
     }
     pub fn sweep(_: &Path, _: &str) {}
     pub fn key_dir(_: &Path, _: &str) -> Option<PathBuf> {
+        None
+    }
+    pub fn keys_root(_: &Path) -> Option<PathBuf> {
         None
     }
     pub fn is_key_line(_: &str) -> bool {

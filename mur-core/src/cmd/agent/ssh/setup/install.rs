@@ -16,6 +16,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use mur_ssh_request::{RequestHost, SSH_BINARY, validate_user};
 
 use super::dedicated;
+use super::identities::{self, Identities};
 
 /// `ssh -o ConnectTimeout`, in seconds.
 pub const CONNECT_TIMEOUT_SECS: u64 = 10;
@@ -30,6 +31,8 @@ pub const MARK_ADDED: &str = "mur-key-added";
 pub const MARK_PRESENT: &str = "mur-key-present";
 /// Stands in for the system-wide `known_hosts`: only the approved keys count.
 const NULL_DEVICE: &str = "/dev/null";
+/// The user's ssh directory, under their home.
+const USER_SSH_DIR: &str = ".ssh";
 
 /// Reads one line from stdin; appends it to `authorized_keys` unless an
 /// identical line is there. Prints which. A last line with no newline gets
@@ -68,26 +71,42 @@ pub trait Installer {
 
 /// The real one: the user's own `ssh`.
 pub struct SshInstaller {
-    /// Where the one-run `known_hosts` file goes: the agent's key directory
-    /// under `secrets/`. Not `<agent_home>/ssh/`, which the agent can write,
-    /// while this connection carries the user's own keys.
+    /// Where the one-run `known_hosts` and `-i` files go: the agent's key
+    /// directory under `secrets/`. Not `<agent_home>/ssh/`, which the agent
+    /// can write, while this connection carries the user's own keys.
     scratch: Option<PathBuf>,
+    /// Read for the dedicated keys the connection must not offer (K7).
+    mur_home: PathBuf,
 }
 
 impl SshInstaller {
     pub fn for_agent(mur_home: &Path, agent: &str) -> Self {
         Self {
             scratch: dedicated::key_dir(mur_home, agent),
+            mur_home: mur_home.to_path_buf(),
         }
+    }
+
+    /// The user's own keys only: the agent's listing minus every dedicated
+    /// key, plus the default files in `~/.ssh` that exist.
+    fn identities(&self) -> Result<Identities> {
+        let listing = identities::list_agent();
+        let own =
+            identities::own_agent_keys(&listing, &identities::dedicated_blobs(&self.mur_home));
+        let defaults = dirs::home_dir()
+            .map(|h| identities::default_identity_files(&h.join(USER_SSH_DIR)))
+            .unwrap_or_default();
+        Identities::prepare(self.scratch.as_deref(), &own, defaults)
     }
 }
 
 impl Installer for SshInstaller {
     fn install(&self, r: &InstallRequest) -> Result<Installed> {
         check(r)?;
+        let ids = self.identities()?;
         let kh = known_hosts_file(self.scratch.as_deref(), r.known_hosts)?;
         let mut cmd = Command::new(SSH_BINARY);
-        cmd.args(install_argv(r, kh.path())?);
+        cmd.args(install_argv(r, kh.path(), ids.files())?);
         let out = run(cmd, Some(r.public_line))?;
         parse_result(
             out.status.code(),
@@ -171,8 +190,19 @@ pub(super) fn target_args(host: &RequestHost, user: &str, remote: &str) -> Vec<O
     .collect()
 }
 
-pub fn install_argv(r: &InstallRequest, known_hosts_file: &Path) -> Result<Vec<OsString>> {
+/// `identity_files` are the user's own keys ([`Identities`]); with
+/// `IdentitiesOnly=yes` no other key is offered. The user's `~/.ssh/config`
+/// is still read: a `ProxyJump` there is theirs and stays.
+pub fn install_argv(
+    r: &InstallRequest,
+    known_hosts_file: &Path,
+    identity_files: &[PathBuf],
+) -> Result<Vec<OsString>> {
+    if identity_files.is_empty() {
+        bail!("{}", identities::NO_OWN_KEY);
+    }
     let mut argv = checked_host_opts(known_hosts_file)?;
+    argv.extend(identities::identity_args(identity_files));
     argv.extend(target_args(r.host, r.user, &remote_command()));
     Ok(argv)
 }
@@ -212,7 +242,17 @@ pub(super) fn err_tail(stderr: &str) -> String {
 /// Run to completion with stdin either null or `line` plus a newline. Killed
 /// after [`RUN_TIMEOUT`]. The output is a mark or a few lines of error, far
 /// below a pipe buffer, so waiting before reading cannot block the child.
-pub(super) fn run(mut cmd: Command, line: Option<&str>) -> Result<Output> {
+pub(super) fn run(cmd: Command, line: Option<&str>) -> Result<Output> {
+    run_named(cmd, line, SSH_BINARY)
+}
+
+/// [`run`] for another local tool, stdin null. A non-zero exit is returned,
+/// not an error: the caller reads the status.
+pub(super) fn run_tool(cmd: Command, tool: &str) -> Result<Output> {
+    run_named(cmd, None, tool)
+}
+
+fn run_named(mut cmd: Command, line: Option<&str>, tool: &str) -> Result<Output> {
     cmd.stdin(if line.is_some() {
         Stdio::piped()
     } else {
@@ -222,7 +262,7 @@ pub(super) fn run(mut cmd: Command, line: Option<&str>) -> Result<Output> {
     .stderr(Stdio::piped());
     let mut child = cmd
         .spawn()
-        .with_context(|| format!("could not run {SSH_BINARY}"))?;
+        .with_context(|| format!("could not run {tool}"))?;
     if let (Some(line), Some(mut stdin)) = (line, child.stdin.take()) {
         // A child that exits before reading closes the pipe; its exit status
         // is the error worth reporting, not this write.
@@ -234,10 +274,7 @@ pub(super) fn run(mut cmd: Command, line: Option<&str>) -> Result<Output> {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            bail!(
-                "{SSH_BINARY} did not finish within {}s",
-                RUN_TIMEOUT.as_secs()
-            );
+            bail!("{tool} did not finish within {}s", RUN_TIMEOUT.as_secs());
         }
         std::thread::sleep(POLL);
     }
