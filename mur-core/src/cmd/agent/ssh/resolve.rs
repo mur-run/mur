@@ -10,8 +10,7 @@ use mur_common::agent::{SshKnownHost, fingerprint_of_base64, is_fingerprint};
 
 /// Host-key scanner. Ships with OpenSSH on macOS and every Linux distro.
 pub const KEYSCAN_BIN: &str = "ssh-keyscan";
-/// Lists the keys held by the user's ssh-agent.
-pub const SSH_ADD_BIN: &str = "ssh-add";
+pub use mur_ssh_request::SSH_ADD_BIN;
 /// Per-host connect timeout handed to `ssh-keyscan -T`.
 pub const KEYSCAN_TIMEOUT: Duration = Duration::from_secs(10);
 

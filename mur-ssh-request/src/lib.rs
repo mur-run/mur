@@ -17,6 +17,8 @@ use sha2::{Digest, Sha256};
 
 use mur_common::agent::{ProcessesEntitlement, SpawnMode};
 
+#[cfg(unix)]
+pub mod keystore;
 mod mark;
 mod pinned;
 mod store;
@@ -39,6 +41,10 @@ pub const EXPIRY_SECS: i64 = 7 * 24 * 60 * 60;
 pub const MAX_PENDING: usize = 8;
 /// The binary an agent needs to exec to use an SSH grant.
 pub const SSH_BINARY: &str = "ssh";
+/// Lists, adds and removes the keys held by the user's ssh-agent.
+pub const SSH_ADD_BIN: &str = "ssh-add";
+/// Generates keys and looks up the user's own `known_hosts` entries.
+pub const KEYGEN_BIN: &str = "ssh-keygen";
 
 const MAX_HOST_LEN: usize = 253;
 const MAX_LABEL_LEN: usize = 63;
