@@ -50,6 +50,8 @@ mod ssh_proxy_class;
 mod start_notice;
 mod startup_override;
 mod stop_budget;
+#[cfg(unix)]
+mod test_private_agent;
 pub use seal::extra_write_paths;
 mod test_bridge;
 
@@ -64,6 +66,8 @@ pub use identity::{ValidationError, grace_cleanup_if_expired, validate_tcp_entit
 pub use test_bridge::{
     BridgeTestHandle, spawn_bridge_for_test_with_id, spawn_telegram_bridge_for_test,
 };
+#[cfg(unix)]
+pub use test_private_agent::start_private_agent_for_test;
 
 // Drives the real unix-socket transport, which does not exist on Windows.
 #[cfg(all(test, unix))]
