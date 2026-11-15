@@ -44,6 +44,7 @@ pub(super) fn cache_before_seal(entries: &[McpServerEntry], agent_home: &Path, a
         return;
     }
     let (tx, rx) = std::sync::mpsc::channel();
+    // pre-seal leaf thread: must never spawn a child or a thread (not under Landlock; see supervisor::seal).
     std::thread::spawn(move || {
         let _ = tx.send(mur_common::secret::cache_before_seal(&keychain_ref()));
     });

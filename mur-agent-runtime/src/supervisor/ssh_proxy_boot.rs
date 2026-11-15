@@ -51,100 +51,118 @@ pub(super) enum DedicatedLoad {
 ///
 /// The profile is the authority: a key file that appears in the directory is
 /// never loaded unless `ent` grants its fingerprint. Never gates start.
-pub(super) async fn load_dedicated_before_seal(
+pub(super) fn load_dedicated_before_seal(
     mur_home: &Path,
     agent: &str,
     ent: &SshEntitlement,
 ) -> DedicatedLoad {
-    load_dedicated_with(mur_home, agent, ent, keystore::load).await
+    // The old `spawn_blocking` turned a panic in the keystore or the loader
+    // into a failed load; now that this runs on the main thread before the
+    // seal, catch it here so it still never gates start.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        load_dedicated_with(mur_home, agent, ent, keystore::load)
+    }))
+    .unwrap_or_else(|_| {
+        tracing::warn!("ssh-agent proxy: loading the dedicated key panicked; it was not loaded");
+        DedicatedLoad::Failed
+    })
 }
 
-async fn load_dedicated_with<F>(
+/// Blocking on purpose: this runs before the tokio runtime exists (see
+/// `supervisor::seal`), on the thread that is about to seal, so there is no
+/// executor to stall. `stored` may run ssh-keygen and `load` runs ssh-add.
+fn load_dedicated_with<F>(
     mur_home: &Path,
     agent: &str,
     ent: &SshEntitlement,
     loader: F,
 ) -> DedicatedLoad
 where
-    F: FnOnce(&StoredKey) -> Result<(), KeystoreError> + Send + 'static,
+    F: FnOnce(&StoredKey) -> Result<(), KeystoreError>,
 {
     if ent.is_empty() {
         return DedicatedLoad::NoGrant;
     }
-    let granted: Vec<(String, Option<String>)> = ent
-        .keys
-        .iter()
-        .map(|k| (k.fingerprint.clone(), k.label.clone()))
-        .collect();
-    let (home, name) = (mur_home.to_path_buf(), agent.to_string());
-    // `stored` may run ssh-keygen and `load` runs ssh-add: both block.
-    let joined = tokio::task::spawn_blocking(move || {
-        let key = match keystore::stored(&home, &name) {
-            Ok(Some(k)) => k,
-            Ok(None) => return DedicatedLoad::NoKey,
-            Err(e) => {
-                // The path stays out of the log; `mur agent ssh` names it.
-                let reason = match &e {
-                    KeystoreError::Unusable { reason, .. } => (*reason).to_string(),
-                    other => other.to_string(),
-                };
-                tracing::warn!(%reason, "ssh-agent proxy: the dedicated key is unusable and was not loaded");
-                return DedicatedLoad::Failed;
-            }
-        };
-        let Some((_, label)) = granted.iter().find(|(fp, _)| *fp == key.fingerprint) else {
-            return DedicatedLoad::NotGranted;
-        };
-        match loader(&key) {
-            Ok(()) => DedicatedLoad::Loaded,
-            Err(e) => {
-                tracing::warn!(
-                    key = label.as_deref().unwrap_or(DEDICATED_KEY_LABEL),
-                    error = %e,
-                    "ssh-agent proxy: could not add the dedicated key to ssh-agent; requests for it will be refused until it is loaded"
-                );
-                DedicatedLoad::Failed
-            }
+    let key = match keystore::stored(mur_home, agent) {
+        Ok(Some(k)) => k,
+        Ok(None) => return DedicatedLoad::NoKey,
+        Err(e) => {
+            // The path stays out of the log; `mur agent ssh` names it.
+            let reason = match &e {
+                KeystoreError::Unusable { reason, .. } => (*reason).to_string(),
+                other => other.to_string(),
+            };
+            tracing::warn!(%reason, "ssh-agent proxy: the dedicated key is unusable and was not loaded");
+            return DedicatedLoad::Failed;
         }
-    })
-    .await;
-    joined.unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "ssh-agent proxy: loading the dedicated key did not finish");
-        DedicatedLoad::Failed
-    })
+    };
+    let Some(rule) = ent.keys.iter().find(|k| k.fingerprint == key.fingerprint) else {
+        return DedicatedLoad::NotGranted;
+    };
+    match loader(&key) {
+        Ok(()) => DedicatedLoad::Loaded,
+        Err(e) => {
+            tracing::warn!(
+                key = rule.label.as_deref().unwrap_or(DEDICATED_KEY_LABEL),
+                error = %e,
+                "ssh-agent proxy: could not add the dedicated key to ssh-agent; requests for it will be refused until it is loaded"
+            );
+            DedicatedLoad::Failed
+        }
+    }
+}
+
+/// The pre-seal half of the upstream connection: a plain std stream, because
+/// the runtime that will drive it does not exist yet. Adopted into a
+/// [`HeldUpstream`] by [`PreSealUpstream::adopt`] after the seal.
+pub(super) struct PreSealUpstream(Option<std::os::unix::net::UnixStream>);
+
+impl PreSealUpstream {
+    /// Hand the stream to tokio. Must run inside the runtime. A stream that
+    /// cannot be registered degrades to disconnected, like a failed connect.
+    pub(super) fn adopt(self) -> Arc<HeldUpstream> {
+        let held = match self.0 {
+            None => HeldUpstream::disconnected(),
+            Some(s) => HeldUpstream::from_std(s).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "ssh-agent proxy: could not adopt the upstream connection; every ssh-agent request will be refused (upstream_unavailable)");
+                HeldUpstream::disconnected()
+            }),
+        };
+        Arc::new(held)
+    }
 }
 
 /// Connect to the upstream agent now, before the seal. `None` when the agent
-/// holds no ssh keys (no proxy at all). `Some(disconnected)` when the
-/// upstream is unset or unreachable: the proxy still runs and refuses
+/// holds no ssh keys (no proxy at all). Disconnected when the upstream is
+/// unset or unreachable: the proxy still runs and refuses
 /// `upstream_unavailable`, which names the problem where the user looks.
-pub(super) async fn connect_before_seal(
+pub(super) fn connect_before_seal(
     ent: &SshEntitlement,
     upstream: Option<&Path>,
-) -> Option<Arc<HeldUpstream>> {
+) -> Option<PreSealUpstream> {
     if ent.is_empty() {
         return None;
     }
-    let held = match upstream {
+    let stream = match upstream {
         None => {
             tracing::warn!(
                 "ssh-agent proxy: SSH_AUTH_SOCK is unset; every ssh-agent request will be refused (upstream_unavailable)"
             );
-            HeldUpstream::disconnected()
+            None
         }
-        Some(p) => match HeldUpstream::connect(p).await {
-            Ok(h) => h,
+        Some(p) => match HeldUpstream::connect_blocking(p) {
+            Ok(s) => Some(s),
             Err(e) => {
                 tracing::warn!(
                     upstream = %p.display(),
                     error = %e,
                     "ssh-agent proxy: upstream ssh-agent unreachable; every ssh-agent request will be refused (upstream_unavailable)"
                 );
-                HeldUpstream::disconnected()
+                None
             }
         },
     };
-    Some(Arc::new(held))
+    Some(PreSealUpstream(stream))
 }
 
 /// What the post-seal half needs.

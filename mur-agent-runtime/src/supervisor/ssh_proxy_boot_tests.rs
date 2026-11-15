@@ -15,26 +15,43 @@ fn one_key() -> SshEntitlement {
     }
 }
 
-#[tokio::test]
-async fn no_keys_means_no_proxy_and_no_connect() {
+#[test]
+fn no_keys_means_no_proxy_and_no_connect() {
     let dir = tempfile::tempdir().unwrap();
     // A path that would fail to connect; it must not even be tried.
     let up = dir.path().join("nope.sock");
-    assert!(
-        connect_before_seal(&SshEntitlement::default(), Some(&up))
-            .await
-            .is_none()
-    );
+    assert!(connect_before_seal(&SshEntitlement::default(), Some(&up)).is_none());
 }
 
-#[tokio::test]
-async fn unreachable_upstream_still_runs_the_proxy_disconnected() {
+/// Pre-seal runs with no runtime (GHSA-j8mv-27gx-x7xj), so the connect and
+/// the later adoption are separate steps: connect here, adopt inside tokio.
+#[test]
+fn unreachable_upstream_still_runs_the_proxy_disconnected() {
     let dir = tempfile::tempdir().unwrap();
     let up = dir.path().join("nope.sock");
-    let held = connect_before_seal(&one_key(), Some(&up)).await.unwrap();
-    assert!(!held.is_connected().await);
-    let held = connect_before_seal(&one_key(), None).await.unwrap();
-    assert!(!held.is_connected().await);
+    let missing = connect_before_seal(&one_key(), Some(&up)).unwrap();
+    let unset = connect_before_seal(&one_key(), None).unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        assert!(!missing.adopt().is_connected().await);
+        assert!(!unset.adopt().is_connected().await);
+    });
+}
+
+#[test]
+fn a_reachable_upstream_is_connected_before_any_runtime_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let up = dir.path().join("agent.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&up).unwrap();
+    let pre = connect_before_seal(&one_key(), Some(&up)).unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async { assert!(pre.adopt().is_connected().await) });
 }
 
 #[tokio::test]
@@ -124,70 +141,70 @@ fn count(calls: &std::sync::atomic::AtomicUsize) -> usize {
     calls.load(std::sync::atomic::Ordering::SeqCst)
 }
 
-#[tokio::test]
-async fn no_grant_never_reads_the_key_store() {
+#[test]
+fn no_grant_never_reads_the_key_store() {
     let Some((home, _)) = home_with_key() else {
         return;
     };
     let (calls, loader) = counting(Ok(()));
-    let got = load_dedicated_with(home.path(), AGENT, &SshEntitlement::default(), loader).await;
+    let got = load_dedicated_with(home.path(), AGENT, &SshEntitlement::default(), loader);
     assert_eq!(got, DedicatedLoad::NoGrant);
     assert_eq!(count(&calls), 0);
 }
 
-#[tokio::test]
-async fn a_grant_with_no_stored_key_loads_nothing() {
+#[test]
+fn a_grant_with_no_stored_key_loads_nothing() {
     let home = tempfile::tempdir().unwrap();
     let (calls, loader) = counting(Ok(()));
-    let got = load_dedicated_with(home.path(), AGENT, &one_key(), loader).await;
+    let got = load_dedicated_with(home.path(), AGENT, &one_key(), loader);
     assert_eq!(got, DedicatedLoad::NoKey);
     assert_eq!(count(&calls), 0);
 }
 
-#[tokio::test]
-async fn a_stored_key_the_profile_does_not_grant_is_not_loaded() {
+#[test]
+fn a_stored_key_the_profile_does_not_grant_is_not_loaded() {
     let Some((home, _)) = home_with_key() else {
         return;
     };
     let (calls, loader) = counting(Ok(()));
     // `one_key` grants some other fingerprint.
-    let got = load_dedicated_with(home.path(), AGENT, &one_key(), loader).await;
+    let got = load_dedicated_with(home.path(), AGENT, &one_key(), loader);
     assert_eq!(got, DedicatedLoad::NotGranted);
     assert_eq!(count(&calls), 0);
 }
 
-#[tokio::test]
-async fn a_granted_stored_key_is_loaded_once() {
+#[test]
+fn a_granted_stored_key_is_loaded_once() {
     let Some((home, key)) = home_with_key() else {
         return;
     };
     let (calls, loader) = counting(Ok(()));
-    let got = load_dedicated_with(home.path(), AGENT, &granting(&key.fingerprint), loader).await;
+    let got = load_dedicated_with(home.path(), AGENT, &granting(&key.fingerprint), loader);
     assert_eq!(got, DedicatedLoad::Loaded);
     assert_eq!(count(&calls), 1);
 }
 
-#[tokio::test]
-async fn a_loader_error_is_reported_and_does_not_panic() {
+#[test]
+fn a_loader_error_is_reported_and_does_not_panic() {
     let Some((home, key)) = home_with_key() else {
         return;
     };
     let (calls, loader) = counting(Err(KeystoreError::Timeout { tool: "ssh-add" }));
-    let got = load_dedicated_with(home.path(), AGENT, &granting(&key.fingerprint), loader).await;
+    let got = load_dedicated_with(home.path(), AGENT, &granting(&key.fingerprint), loader);
     assert_eq!(got, DedicatedLoad::Failed);
     assert_eq!(count(&calls), 1);
 }
 
 #[cfg(unix)]
-#[tokio::test]
-async fn an_unusable_stored_key_is_not_loaded() {
+#[test]
+fn an_unusable_stored_key_is_not_loaded() {
     let Some((home, key)) = home_with_key() else {
         return;
     };
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(&key.private, std::fs::Permissions::from_mode(0o644)).unwrap();
     let (calls, loader) = counting(Ok(()));
-    let got = load_dedicated_with(home.path(), AGENT, &granting(&key.fingerprint), loader).await;
+    let got = load_dedicated_with(home.path(), AGENT, &granting(&key.fingerprint), loader);
     assert_eq!(got, DedicatedLoad::Failed);
     assert_eq!(count(&calls), 0);
 }
