@@ -119,7 +119,7 @@ fn a_run_directory_left_by_a_killed_start_is_swept_and_a_link_not_followed() {
 #[test]
 fn a_run_directory_of_a_live_start_is_kept() {
     let tmp = tempfile::tempdir().unwrap();
-    // pid 1 is always alive (init / launchd), and is never this process.
+    // pid 1 (the init process) is always alive and is never this process.
     let live = tmp.path().join(format!("{RUN_DIR_PREFIX}1"));
     std::fs::create_dir(&live).unwrap();
     std::fs::create_dir(run_dir(tmp.path())).unwrap();

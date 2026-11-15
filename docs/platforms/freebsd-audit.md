@@ -194,6 +194,7 @@ The checker recomputes the same matches and fails for either missing or stale ro
 | `mur-agent-runtime/tests/b0_rule11_signability.rs` | `#[cfg(not(any(target_os = "macos", target_os = "windows")))]` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
 | `mur-agent-runtime/tests/b1_spawn_allowlist_enforce.rs` | `#![cfg(target_os = "macos")]` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
 | `mur-agent-runtime/tests/b1_spawn_prefix_home_child_enforce.rs` | `#![cfg(target_os = "macos")]` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
+| `mur-agent-runtime/tests/linux_seal_covers_bash_children.rs` | `#![cfg(target_os = "linux")]` | test-only | `portable` | Linux Landlock seal-order regression test (GHSA-j8mv-27gx-x7xj); compiled out on FreeBSD, no change needed. | GHSA-j8mv-27gx-x7xj |
 | `mur-agent-runtime/tests/sandbox_build_lane.rs` | `#[cfg(target_os = "macos")]` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
 | `mur-agent-runtime/tests/sandbox_build_lane.rs` | `#[cfg(target_os = "macos")]` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
 | `mur-agent-runtime/tests/sandbox_e2e.rs` | `#[cfg(target_os = "macos")]` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
