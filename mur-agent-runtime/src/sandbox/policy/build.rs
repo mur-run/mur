@@ -420,6 +420,10 @@ impl SandboxPolicy {
                 mur_home.join("compress.yaml"),
                 mur_home.join("compress"),
                 mur_home.join("fleets"),
+                // `skills/get` serves `<mur_home>/skills/<name>` to peers. It
+                // only worked while tokio workers ran unconfined; once the
+                // seal covered every thread (GHSA-j8mv-27gx-x7xj) it read EACCES.
+                mur_common::skill::global_skills_root(mur_home),
             ] {
                 if std::fs::metadata(&p).is_ok() && !fs_read.contains(&p) {
                     fs_read.push(p);

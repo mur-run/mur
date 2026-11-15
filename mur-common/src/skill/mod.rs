@@ -62,7 +62,9 @@ pub use publisher_trust::{
 pub use resolve::{Resolution, resolve_step};
 pub use sign::{SKILL_PAYLOAD_TYPE, SignError, sign_manifest, verify_manifest};
 pub use stats::{LifecycleState, SkillStats};
-pub use store::{StoreError, agent_skill_dir, global_skill_dir, read_from_dir, write_to_dir};
+pub use store::{
+    StoreError, agent_skill_dir, global_skill_dir, global_skills_root, read_from_dir, write_to_dir,
+};
 pub use types::*;
 pub use validate::{ValidationError, validate};
 pub use version::{SKILL_MANIFEST_SCHEMA_VERSION, is_supported};

@@ -34,6 +34,16 @@ fn locate_runtime_binary() -> Option<PathBuf> {
     }
 }
 
+/// Where `mur agent create` puts the socket: inside the agent's own home,
+/// the one dir the sealed runtime may still write. A socket at the root of
+/// `MUR_HOME` cannot be bound once every runtime thread is under Landlock
+/// (GHSA-j8mv-27gx-x7xj).
+fn agent_sock(home: &std::path::Path, name: &str) -> String {
+    let dir = home.join("agents").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("agent.sock").to_str().unwrap().to_string()
+}
+
 fn write_profile(
     home: &std::path::Path,
     name: &str,
@@ -145,7 +155,7 @@ fn wire_install_pulls_via_real_socket() {
     let runtime_str = runtime_bin.to_str().unwrap();
 
     let home = TempDir::new().unwrap();
-    let sock_path = home.path().join("alice.sock").to_str().unwrap().to_string();
+    let sock_path = agent_sock(home.path(), "alice");
 
     // Source agent "alice".
     write_profile(home.path(), "alice", Some(&sock_path));
@@ -256,7 +266,7 @@ fn wire_install_propagates_handler_error_for_missing_skill() {
     let runtime_str = runtime_bin.to_str().unwrap();
 
     let home = TempDir::new().unwrap();
-    let sock_path = home.path().join("eve.sock").to_str().unwrap().to_string();
+    let sock_path = agent_sock(home.path(), "eve");
     write_profile(home.path(), "eve", Some(&sock_path));
     let _eve = boot_runtime(home.path(), "eve", runtime_str, &sock_path);
 
