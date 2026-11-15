@@ -361,6 +361,23 @@ fn a_held_plan_finishes_once_and_never_applies_again() {
 }
 
 #[test]
+fn a_written_plan_gets_a_fresh_ttl_from_the_write() {
+    let plans = SshPlans::default();
+    let id = plans.put(plan(Verdict::Trusted, None), None, "x".into());
+    let mut h = plans.take(&id).unwrap();
+    // Scanned almost a full TTL ago, then written.
+    h.at = std::time::Instant::now()
+        .checked_sub(super::PLAN_TTL - std::time::Duration::from_secs(1))
+        .expect("monotonic clock far enough from boot");
+    plans.keep_written(id.clone(), h, written(true));
+    std::thread::sleep(std::time::Duration::from_millis(1_100));
+    assert!(
+        plans.take_written(&id).is_ok(),
+        "the held step is timed from the write, not the scan"
+    );
+}
+
+#[test]
 fn a_plan_not_yet_written_has_nothing_to_finish() {
     let plans = SshPlans::default();
     let id = plans.put(plan(Verdict::Trusted, None), None, "x".into());

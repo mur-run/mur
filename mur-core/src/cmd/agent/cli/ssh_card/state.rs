@@ -110,7 +110,13 @@ pub struct CardState {
 
 pub enum KeyAction {
     Nothing,
+    /// Close before anything was written.
     Close,
+    /// Close from the held or done step: the grant is already written.
+    /// `held` is the held step, where the agent was not restarted.
+    CloseWritten {
+        held: bool,
+    },
     /// Run `ssh-add <path>` with the terminal handed over; `path` is the
     /// private key, never the `.pub` the card lists.
     LoadKey(PathBuf),
@@ -338,12 +344,13 @@ impl CardState {
     /// Keys on the held and done steps. Esc on either closes: the grant is
     /// already written, so there is nothing to cancel.
     fn on_result_key(&mut self, code: KeyCode) -> KeyAction {
+        let held = self.step == Step::Held;
         let Some(a) = self.applied.clone() else {
-            return KeyAction::Close;
+            return KeyAction::CloseWritten { held };
         };
         let line = self.dedicated_line().map(str::to_string);
         match (self.step, code) {
-            (_, KeyCode::Esc) => KeyAction::Close,
+            (_, KeyCode::Esc) => KeyAction::CloseWritten { held },
             (_, KeyCode::Char('y')) => match line {
                 Some(l) => KeyAction::Copy(l),
                 None => KeyAction::Nothing,
@@ -355,7 +362,7 @@ impl CardState {
                 user: self.user.clone(),
                 known_hosts: approved_known_hosts(&a),
             },
-            (Step::Done, KeyCode::Enter) => KeyAction::Close,
+            (Step::Done, KeyCode::Enter) => KeyAction::CloseWritten { held: false },
             _ => KeyAction::Nothing,
         }
     }

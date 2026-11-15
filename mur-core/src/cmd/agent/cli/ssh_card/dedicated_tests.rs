@@ -7,6 +7,7 @@ use super::clip::osc52;
 use super::render;
 use super::state::{CardState, ExtraRow, KeyAction, Origin, Step};
 use super::tests::{fp, key, plan, press};
+use super::{CardMsg, close_written_note, on_key, on_msg};
 use crate::cmd::agent::cli::theme;
 use crate::cmd::agent::ssh::setup::plan::{Dedicated, DedicatedOff};
 use crate::cmd::agent::ssh::setup::{Approval, Verdict};
@@ -183,6 +184,79 @@ fn any_other_key_closes_the_card_after_apply() {
     let mut c = CardState::new(plan(Verdict::Trusted, None), Origin::Direct);
     let a = approved(&mut c);
     assert!(!c.after_apply(a, false));
+}
+
+#[test]
+fn closing_after_the_write_never_says_nothing_changed() {
+    let mut c = with_dedicated();
+    c.install = true;
+    let a = approved(&mut c);
+    assert!(c.after_apply(a, true));
+    assert!(matches!(
+        press(&mut c, KeyCode::Esc),
+        KeyAction::CloseWritten { held: true }
+    ));
+    let held = close_written_note("qa", true);
+    assert!(held.contains("grant is written"), "{held}");
+    assert!(held.contains("mur agent restart qa"), "{held}");
+    assert!(!held.contains("nothing was changed"), "{held}");
+
+    let mut c = with_dedicated();
+    let a = approved(&mut c);
+    assert!(c.after_apply(a, false));
+    assert!(matches!(
+        press(&mut c, KeyCode::Esc),
+        KeyAction::CloseWritten { held: false }
+    ));
+    assert!(matches!(
+        press(&mut c, KeyCode::Enter),
+        KeyAction::CloseWritten { held: false }
+    ));
+    let done = close_written_note("qa", false);
+    assert!(done.contains("grant is written"), "{done}");
+    assert!(!done.contains("nothing was changed"), "{done}");
+}
+
+#[test]
+fn esc_on_the_held_step_tells_the_transcript_the_grant_is_written() {
+    let mut app = crate::cmd::agent::cli::app::App::test_fixture();
+    let mut c = with_dedicated();
+    c.install = true;
+    let a = approved(&mut c);
+    assert!(c.after_apply(a, true));
+    app.ssh.card = Some(Box::new(c));
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    on_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
+        &tx,
+    );
+    assert!(app.ssh.card.is_none());
+    let last = &app.messages.last().expect("a notice").text;
+    assert!(last.contains("not restarted"), "{last}");
+    assert!(!last.contains("nothing was changed"), "{last}");
+}
+
+#[test]
+fn a_crashed_job_gives_the_held_card_back() {
+    let mut app = crate::cmd::agent::cli::app::App::test_fixture();
+    let mut c = with_dedicated();
+    c.install = true;
+    let a = approved(&mut c);
+    assert!(c.after_apply(a, true));
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    app.ssh.busy = true;
+    on_msg(
+        &mut app,
+        CardMsg::Crashed {
+            error: "task failed: boom".into(),
+            card: Some(Box::new(c)),
+        },
+        &tx,
+    );
+    assert!(!app.ssh.busy);
+    assert_eq!(app.ssh.card.as_ref().map(|c| c.step), Some(Step::Held));
+    assert!(app.messages.last().unwrap().text.contains("boom"));
 }
 
 #[test]

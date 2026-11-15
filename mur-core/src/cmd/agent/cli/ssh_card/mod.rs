@@ -74,6 +74,12 @@ pub enum CardMsg {
         card: Box<CardState>,
     },
     Advisory(AdvisoryResult),
+    /// The background job panicked. `card` is the card it carried, if any,
+    /// so a held step is not lost with it.
+    Crashed {
+        error: String,
+        card: Option<Box<CardState>>,
+    },
 }
 
 #[derive(Debug)]
@@ -286,6 +292,11 @@ pub fn on_key(app: &mut App, key: crossterm::event::KeyEvent, tx: &mpsc::Sender<
             app.ssh.card = None;
             app.push_system("/ssh: cancelled — nothing was changed");
         }
+        KeyAction::CloseWritten { held } => {
+            app.ssh.card = None;
+            let note = close_written_note(&app.agent, held);
+            app.push_system(note);
+        }
         KeyAction::LoadKey(path) => {
             app.pending_handover = Some(HandoverRequest {
                 pre: Vec::new(),
@@ -319,10 +330,25 @@ pub fn on_key(app: &mut App, key: crossterm::event::KeyEvent, tx: &mpsc::Sender<
     }
 }
 
-/// Run blocking `job` off the UI thread and send its message back.
+/// What the transcript says when the card closes after the write.
+pub(super) fn close_written_note(agent: &str, held: bool) -> String {
+    if held {
+        format!(
+            "/ssh: closed — the grant is written, but '{agent}' was not restarted; \
+             run `mur agent restart {agent}` for it to take effect"
+        )
+    } else {
+        "/ssh: closed — the grant is written".to_string()
+    }
+}
+
+/// Run blocking `job` off the UI thread and send its message back. `keep`
+/// is a copy of the card the job carries: if the job panics it comes back
+/// instead of vanishing with the job.
 fn spawn_job(
     app: &mut App,
     tx: &mpsc::Sender<StreamMsg>,
+    keep: Option<Box<CardState>>,
     job: impl FnOnce(&Path, &str) -> CardMsg + Send + 'static,
 ) {
     app.ssh.busy = true;
@@ -330,7 +356,10 @@ fn spawn_job(
     tokio::spawn(async move {
         let msg = tokio::task::spawn_blocking(move || job(&home, &agent))
             .await
-            .unwrap_or_else(|e| CardMsg::Planned(Err(format!("task failed: {e}"))));
+            .unwrap_or_else(|e| CardMsg::Crashed {
+                error: format!("task failed: {e}"),
+                card: keep,
+            });
         let _ = tx.send(StreamMsg::SshCard(msg)).await;
     });
 }
@@ -342,7 +371,7 @@ fn generate(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     if let Some(c) = app.ssh.card.as_mut() {
         c.note = Some("making the dedicated key…".into());
     }
-    spawn_job(app, tx, |home, agent| {
+    spawn_job(app, tx, None, |home, agent| {
         CardMsg::Generated(front::generate_for(home, agent).and_then(|key| {
             let dedicated = front::dedicated_state(home, agent)?;
             let (loaded, unloaded) = split_keys(&System);
@@ -369,7 +398,8 @@ fn finish(app: &mut App, a: Approval, retry: bool, tx: &mpsc::Sender<StreamMsg>)
     } else {
         format!("/ssh: restarting '{}' without the install…", app.agent)
     });
-    spawn_job(app, tx, move |home, agent| {
+    let keep = Some(card.clone());
+    spawn_job(app, tx, keep, move |home, agent| {
         let result = mur_exe().and_then(|exe| {
             if retry {
                 front::retry_install_for(home, agent, &a, exe)
@@ -401,7 +431,7 @@ fn advisory(
         "/ssh: advisory test of {user}@{}…",
         host.canonical()
     ));
-    spawn_job(app, tx, move |home, agent| {
+    spawn_job(app, tx, None, move |home, agent| {
         CardMsg::Advisory(front::advisory_test_for(
             home,
             agent,
@@ -422,7 +452,9 @@ fn approve(app: &mut App, a: Approval, tx: &mpsc::Sender<StreamMsg>) {
         card.plan.host.canonical(),
         app.agent
     ));
-    spawn_job(app, tx, move |home, agent| {
+    // No copy back on a panic: the write may be half done, so the summary
+    // step must not be offered again; a fresh /ssh re-reads the state.
+    spawn_job(app, tx, None, move |home, agent| {
         let result = mur_exe().and_then(|exe| front::apply_for(home, agent, &a, exe));
         CardMsg::Applied {
             result,
@@ -495,6 +527,12 @@ pub fn on_msg(app: &mut App, msg: CardMsg, tx: &mpsc::Sender<StreamMsg>) {
                 Restart::HeldForInstall => app.ssh.card = Some(card),
                 Restart::Restarted => hand_back_to_agent(app, card.origin.hand_back(), tx),
                 _ => {}
+            }
+        }
+        CardMsg::Crashed { error, card } => {
+            app.push_error(format!("/ssh: {error}"));
+            if card.is_some() {
+                app.ssh.card = card;
             }
         }
         CardMsg::Advisory(r) => {

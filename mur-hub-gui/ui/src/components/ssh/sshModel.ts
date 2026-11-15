@@ -80,6 +80,15 @@ export function dedicatedChosen(plan: PlanView, choices: Choices): boolean {
   return plan.dedicated.state === "stored" && plan.dedicated.fingerprint === choices.key_fp;
 }
 
+/** What Approve sends. The install tick is only honoured while its
+ * checkbox is shown (dedicated key chosen, its line known, a user typed):
+ * switching key or clearing the user hides the checkbox but leaves the tick
+ * in state, and a hidden tick must not reach the backend. */
+export function choicesToApply(plan: PlanView, choices: Choices): Choices {
+  const shown = dedicatedChosen(plan, choices) && !!plan.dedicated.line && !!choices.user;
+  return { ...choices, install: choices.install && shown };
+}
+
 /** After a generate: select the dedicated key. */
 export function selectDedicated(plan: PlanView, choices: Choices): Choices {
   const fp = plan.dedicated.fingerprint;

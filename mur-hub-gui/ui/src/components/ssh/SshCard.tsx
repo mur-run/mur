@@ -8,7 +8,7 @@ import { useT } from "../../i18n";
 import { newTaskId } from "../ChatTab";
 import { type ApplyView, type CheckView, type Choices, type PlanView, sshApi } from "./sshApi";
 import { SshCardResult } from "./SshCardResult";
-import { dedicatedChosen, initialChoices, notReadyText, resultState, selectDedicated, verdictKey } from "./sshModel";
+import { choicesToApply, dedicatedChosen, initialChoices, notReadyText, resultState, selectDedicated, verdictKey } from "./sshModel";
 
 type Step = "key" | "host" | "summary" | "done";
 
@@ -143,7 +143,7 @@ export function SshCard({ target, onClose }: { target: SshTarget; onClose: (chan
     setBusy(true);
     setError(null);
     try {
-      const r = await sshApi.apply(plan.plan_id, choices);
+      const r = await sshApi.apply(plan.plan_id, choicesToApply(plan, choices));
       setResult(r);
       setStep("done");
       if (r.hand_back) handBack(r.hand_back);

@@ -166,9 +166,13 @@ impl SshPlans {
         }
     }
 
-    /// Keep a plan after its write (see `HeldPlan::written`).
+    /// Keep a plan after its write (see `HeldPlan::written`). The clock
+    /// restarts here: a written plan can never be applied again, so the scan
+    /// age no longer matters, and the held step gets its own full TTL for
+    /// Retry install, Restart anyway and the advisory test.
     pub(crate) fn keep_written(&self, id: String, mut h: HeldPlan, w: Written) {
         h.written = Some(w);
+        h.at = Instant::now();
         self.held().plans.insert(id, h);
     }
 
@@ -381,14 +385,14 @@ pub async fn agent_ssh_generate(
             .then(|| h.plan.agent.clone())
             .ok_or_else(|| "this card already wrote its grant".to_string())
     })??;
-    let (key, dedicated, loaded, unloaded) = blocking(move || {
-        let key = front::generate_for(&home(), &agent)?;
+    // The fresh key itself is not needed: `dedicated_state` re-reads it.
+    let (dedicated, loaded, unloaded) = blocking(move || {
+        front::generate_for(&home(), &agent)?;
         let dedicated = front::dedicated_state(&home(), &agent)?;
         let (loaded, unloaded) = split_keys(&System);
-        Ok((key, dedicated, loaded, unloaded))
+        Ok((dedicated, loaded, unloaded))
     })
     .await?;
-    let _ = key;
     plans.with(&plan_id, |h| {
         h.plan.dedicated = dedicated;
         h.plan.keys_loaded = loaded;

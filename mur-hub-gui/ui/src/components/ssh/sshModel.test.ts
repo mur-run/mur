@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dedicatedChosen, initialChoices, notReadyText, pairStateText, pendingToItem, resultState, selectDedicated, verdictKey } from "./sshModel";
+import { choicesToApply, dedicatedChosen, initialChoices, notReadyText, pairStateText, pendingToItem, resultState, selectDedicated, verdictKey } from "./sshModel";
 import type { ApplyView, PendingView, PlanView } from "./sshApi";
 
 const pending: PendingView = {
@@ -80,6 +80,19 @@ describe("dedicated key", () => {
     expect(c.install).toBe(false);
     expect(dedicatedChosen(base, c)).toBe(false);
     expect(dedicatedChosen(base, selectDedicated(base, c))).toBe(true);
+  });
+  it("a hidden install tick is never sent", () => {
+    const ticked = { ...selectDedicated(base, initialChoices(base)), install: true };
+    expect(choicesToApply(base, ticked).install).toBe(true);
+    // Switched to another key: the checkbox is hidden, the tick stays in state.
+    expect(choicesToApply(base, { ...ticked, key_fp: "K" }).install).toBe(false);
+    // User cleared: the checkbox is disabled.
+    expect(choicesToApply(base, { ...ticked, user: "" }).install).toBe(false);
+    // No line to install.
+    const noLine = { ...base, dedicated: { ...base.dedicated, line: null } } as PlanView;
+    expect(choicesToApply(noLine, ticked).install).toBe(false);
+    // Everything else is passed through untouched.
+    expect(choicesToApply(base, { ...ticked, key_fp: "K" }).key_fp).toBe("K");
   });
   it("selects nothing that is not in the key list", () => {
     const p = { ...base, dedicated: { ...base.dedicated, fingerprint: "Z" } } as PlanView;
