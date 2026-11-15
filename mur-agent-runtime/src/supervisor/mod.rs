@@ -39,6 +39,8 @@ mod browser_key;
 mod dispatch;
 mod identity;
 mod pin;
+#[cfg(unix)]
+mod private_agent;
 mod seal;
 mod serve;
 mod ssh_gate_boot;
