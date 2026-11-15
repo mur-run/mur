@@ -656,8 +656,8 @@ Agent** wizard offers the same catalog as a source.
   the host's `authorized_keys` using your own login; if that fails, the grant
   is kept and the restart waits for Retry, Copy line, or Restart anyway.
   Offered only to agents sandboxed on every run; `ssh_setup.generate_key:
-  false` in `~/.mur/config.yaml` turns it off. `mur agent remove` deletes the
-  key with the agent.
+  false` in `~/.mur/config.yaml` turns it off. `mur agent remove --purge`
+  deletes the key with the agent; without `--purge` the key is kept with its data.
 - **Grant a host when it is blocked** — when the browser is refused a host, the
   chat shows *this time* / *always* / *no* choices after the turn. *This time*
   lets it through until the agent restarts and writes nothing; *always* shows

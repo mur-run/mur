@@ -645,7 +645,7 @@ outside the sandbox, with the line on stdin (`setup::install`); if it fails
 the restart is held (`Restart::HeldForInstall`) until the client retries or
 finishes. `ssh_setup.generate_key: false` stops new keys and installs; an
 existing key is still loaded and still removed with its agent by
-`mur agent remove`.
+`mur agent remove --purge` (plain `remove` keeps it, like the agent's data).
 
 Known limitations (v1):
 
