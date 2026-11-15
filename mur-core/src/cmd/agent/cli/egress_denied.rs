@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use mur_common::egress_event::EgressDenied;
+use mur_common::egress_event::{DenyReason, EgressDenied};
 
 use super::suggest::Suggestion;
 
@@ -30,7 +30,13 @@ pub struct EgressChips {
 impl EgressChips {
     /// True the first time this session sees `ev`'s (server, host) pair.
     pub fn first_notice(&mut self, ev: &EgressDenied) -> bool {
-        self.noticed.insert((ev.server.clone(), ev.host.clone()))
+        // A closed port is its own notice: the host may already have been
+        // noticed (and granted) without it (#2418).
+        let host = match (ev.reason, ev.port) {
+            (DenyReason::PortNotOpen, Some(p)) => format!("{}:{p}", ev.host),
+            _ => ev.host.clone(),
+        };
+        self.noticed.insert((ev.server.clone(), host))
     }
 
     /// The transcript was cleared (`/new`, channel switch): its notice lines
@@ -76,6 +82,15 @@ pub fn wildcard_suggestion(denied: &BTreeSet<String>, allow: &[String]) -> Optio
 
 /// The one-line notice every client shows.
 pub fn notice(ev: &EgressDenied) -> String {
+    if let (DenyReason::PortNotOpen, Some(port)) = (ev.reason, ev.port) {
+        // #2418: the host is fine; a host grant would not help.
+        return format!(
+            "`{}` is allowed, but port {port} is not open for `{}`. Fix: {}",
+            ev.host,
+            ev.agent,
+            mur_common::egress_event::port_fix(&ev.agent, port)
+        );
+    }
     if ev.grantable() {
         format!("`{}` was blocked for `{}`.", ev.host, ev.server)
     } else {
@@ -108,6 +123,11 @@ pub fn chips(
     state: &mut EgressChips,
     allow: &[String],
 ) -> Option<Vec<Suggestion>> {
+    // A closed port is not a host denial: no host chip, and the host must not
+    // count toward a wildcard suggestion (#2418).
+    if ev.reason == DenyReason::PortNotOpen {
+        return None;
+    }
     let seen = state.denied.entry(ev.server.clone()).or_default();
     seen.insert(ev.host.clone());
     if !ev.grantable()
@@ -176,6 +196,23 @@ mod tests {
                 "/browser allow --dismiss img.shop.example.com",
             ]
         );
+    }
+
+    #[test]
+    fn a_closed_port_names_the_port_and_offers_no_host_chip() {
+        let mut st = EgressChips::default();
+        let mut e = ev("live", "gitea.twdd.tw", DenyReason::PortNotOpen);
+        e.port = Some(3000);
+        let n = text_fallback(&e);
+        assert!(n.contains("port 3000"), "{n}");
+        assert!(n.contains("mur agent perm allow-port mur 3000"), "{n}");
+        assert!(!n.contains("/browser allow"), "{n}");
+        assert!(chips(&e, &mut st, &[]).is_none());
+        assert!(st.denied.is_empty(), "no wildcard bookkeeping for a port");
+        // Noticed separately from a plain host denial of the same host.
+        assert!(st.first_notice(&ev("live", "gitea.twdd.tw", DenyReason::NotAllowed)));
+        assert!(st.first_notice(&e));
+        assert!(!st.first_notice(&e));
     }
 
     #[test]

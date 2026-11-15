@@ -300,10 +300,8 @@ async fn handle_conn(
     let mut upstream = match TcpStream::connect(pinned).await {
         Ok(u) => u,
         Err(e) => {
-            match upstream_dial_hint(agent, &pinned.to_string(), &e) {
-                Some(hint) => tracing::warn!(host, %pinned, "{hint}"),
-                None => tracing::warn!(host, %pinned, "egress proxy upstream dial failed: {e}"),
-            }
+            let server = entry.as_ref().map(|e| e.server.as_str());
+            report_dial_failure(events, agent, server, host, pinned, &e);
             // Answer the request rather than hanging up, so the client
             // reports a proxy failure instead of a bare reset.
             client
@@ -325,6 +323,25 @@ async fn handle_conn(
     Ok(())
 }
 
+/// Log a failed upstream dial; when the seal refused it on the port (#2418),
+/// also raise it to the server's in-flight tool call and to clients, so the
+/// failure names the port instead of surfacing as a bare tunnel error.
+fn report_dial_failure(
+    events: &live::Events,
+    agent: &str,
+    server: Option<&str>,
+    host: &str,
+    pinned: SocketAddr,
+    err: &std::io::Error,
+) -> Option<mur_common::egress_event::EgressDenied> {
+    let Some(hint) = upstream_dial_hint(agent, &pinned.to_string(), err) else {
+        tracing::warn!(host, %pinned, "egress proxy upstream dial failed: {err}");
+        return None;
+    };
+    tracing::warn!(host, %pinned, "{hint}");
+    events.port_closed(server?, host, pinned.port(), std::time::Instant::now())
+}
+
 /// The actionable line for an upstream dial the seal refused, or `None` for
 /// any other failure.
 ///
@@ -337,11 +354,16 @@ fn upstream_dial_hint(agent: &str, addr: &str, err: &std::io::Error) -> Option<S
         return None;
     }
     let port = addr.rsplit_once(':').map(|(_, p)| p).unwrap_or(addr);
+    let fix = port
+        .parse()
+        .map(|p| mur_common::egress_event::port_fix(agent, p))
+        .unwrap_or_else(|_| {
+            format!("`mur agent perm allow-port {agent} {port}`, then restart the agent")
+        });
     Some(format!(
         "egress proxy: the sandbox refused the upstream dial to {addr} — port {port} \
          is not in this agent's outbound port set (the host is allowed; the port \
-         is a separate grant). Fix: `mur agent perm allow-port {agent} {port}`, \
-         then restart the agent"
+         is a separate grant). Fix: {fix}"
     ))
 }
 
@@ -396,6 +418,52 @@ mod tests {
         // IPv6 literal: the port is still the part after the last colon.
         let msg = upstream_dial_hint("shop", "[::1]:8000", &eperm).unwrap();
         assert!(msg.contains("allow-port shop 8000"), "{msg}");
+    }
+
+    /// #2418 acceptance: a live entry for `x.example.com` with no port, a
+    /// dial to `x.example.com:3000` the seal refuses → the tool call and the
+    /// client both get the port and the `allow-port` command.
+    #[test]
+    fn a_closed_port_on_an_allowed_host_reaches_the_call_and_the_client() {
+        use mur_common::egress_event::DenyReason;
+        let events = live::Events::new("gate");
+        let call = events.in_flight("live", "task-1");
+        let eperm = std::io::Error::from_raw_os_error(1);
+        let pinned: SocketAddr = "203.0.113.7:3000".parse().unwrap();
+        let ev = report_dial_failure(
+            &events,
+            "gate",
+            Some("live"),
+            "x.example.com",
+            pinned,
+            &eperm,
+        )
+        .expect("a seal-refused dial raises an event");
+        assert_eq!(ev.reason, DenyReason::PortNotOpen);
+        assert_eq!((ev.host.as_str(), ev.port), ("x.example.com", Some(3000)));
+        assert_eq!(ev.task_id.as_deref(), Some("task-1"));
+        let note = call.closed_port_note().expect("the call hears it");
+        assert!(note.contains("port 3000"), "{note}");
+        assert!(
+            note.contains("mur agent perm allow-port gate 3000"),
+            "{note}"
+        );
+
+        // A refused connection is not the seal: no event, no note.
+        let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        let other = events.in_flight("other", "task-2");
+        assert!(
+            report_dial_failure(
+                &events,
+                "gate",
+                Some("other"),
+                "y.example.com",
+                pinned,
+                &refused
+            )
+            .is_none()
+        );
+        assert!(other.closed_port_note().is_none());
     }
 
     #[test]

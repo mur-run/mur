@@ -179,6 +179,10 @@ impl ToolExecutor for McpToolExecutor {
         // An answer — a result or a JSON-RPC error — ends the call but not
         // what it started: an error can come after the tool already began a
         // navigation, so both keep this turn a suspect for the grace.
+        // #2418: read before the guard resolves. A navigate to an allowed host
+        // on a closed port comes back as a bare tunnel failure; the proxy
+        // knows why, and this call is the one that should hear it.
+        let closed_port_note = in_flight.as_ref().and_then(|g| g.closed_port_note());
         if let Some(g) = in_flight {
             match &result {
                 Ok(Ok(_)) => g.finish(),
@@ -208,6 +212,10 @@ impl ToolExecutor for McpToolExecutor {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let mut text = render_mcp_result(&result);
+        if let Some(note) = closed_port_note {
+            text.push_str("\n\n");
+            text.push_str(&note);
+        }
         if !is_error && let Some(note) = self.base_note() {
             text.push_str("\n\n");
             text.push_str(&note);
