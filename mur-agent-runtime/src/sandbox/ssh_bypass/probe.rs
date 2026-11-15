@@ -73,6 +73,8 @@ pub fn run_probe(exe: &Path, profile: &str, upstream: &Path, timeout: Duration) 
     // surfaces through the exit status, so it is ignored here.
     if let Some(mut stdin) = child.stdin.take() {
         let profile = profile.to_owned();
+        // Pre-seal leaf thread (via `classify_before_seal`): must never spawn
+        // a child or a thread (not under Landlock; see supervisor::seal).
         std::thread::spawn(move || {
             let _ = stdin.write_all(profile.as_bytes());
         });

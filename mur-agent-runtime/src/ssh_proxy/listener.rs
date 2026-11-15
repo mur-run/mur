@@ -102,6 +102,34 @@ impl HeldUpstream {
         Ok(Self::from_stream(s))
     }
 
+    /// Connect now with no runtime, for the pre-seal boot path (which runs
+    /// before tokio exists; see `supervisor::seal`). A unix connect only
+    /// blocks when the peer's backlog is full, so it runs on a helper thread
+    /// bounded by [`UPSTREAM_CONNECT_TIMEOUT`]; a timed-out helper is left
+    /// parked in `connect`, owns nothing, and spawns nothing.
+    pub fn connect_blocking(path: &Path) -> std::io::Result<std::os::unix::net::UnixStream> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let p = path.to_path_buf();
+        // pre-seal leaf thread: must never spawn a child or a thread (not under Landlock; see supervisor::seal).
+        std::thread::spawn(move || {
+            let _ = tx.send(std::os::unix::net::UnixStream::connect(p));
+        });
+        rx.recv_timeout(UPSTREAM_CONNECT_TIMEOUT)
+            .unwrap_or_else(|_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "timed out connecting to the upstream ssh-agent",
+                ))
+            })
+    }
+
+    /// Adopt a stream from [`Self::connect_blocking`]. Must run inside a
+    /// tokio runtime.
+    pub fn from_std(s: std::os::unix::net::UnixStream) -> std::io::Result<Self> {
+        s.set_nonblocking(true)?;
+        Ok(Self::from_stream(UnixStream::from_std(s)?))
+    }
+
     pub(crate) fn from_stream(s: UnixStream) -> Self {
         Self {
             stream: tokio::sync::Mutex::new(Some(s)),

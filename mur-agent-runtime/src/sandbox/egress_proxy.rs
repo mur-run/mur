@@ -115,17 +115,63 @@ impl EgressProxyHandle {
     }
 }
 
-/// Bind `127.0.0.1:0`, spawn the accept loop, and return the handle (with the
-/// chosen ephemeral port). Missing/unreadable connections are dropped.
+/// The bound-but-not-yet-serving half of the proxy: a std listener that
+/// [`EgressAcceptLoop::spawn`] hands to tokio. Split from the bind because the
+/// supervisor binds before the sandbox seals (so the port can be carved into
+/// the kernel profile) but must not start a tokio runtime until after it: on
+/// Linux the seal confines only the calling thread, so worker threads created
+/// earlier would stay unconfined (GHSA-j8mv-27gx-x7xj).
+pub struct EgressAcceptLoop {
+    listener: std::net::TcpListener,
+    agent: Arc<str>,
+    registry: Registry,
+    events: live::Events,
+}
+
+/// Bind `127.0.0.1:0` with no runtime and return the handle (with the chosen
+/// ephemeral port) plus the accept loop to start later. Connections that
+/// arrive in between wait in the kernel backlog.
 /// `agent` is only used to word the fix in a seal-denied dial's log line.
-pub async fn start_egress_proxy(agent: &str) -> std::io::Result<EgressProxyHandle> {
-    let agent: Arc<str> = Arc::from(agent);
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+pub fn bind_egress_proxy(agent: &str) -> std::io::Result<(EgressProxyHandle, EgressAcceptLoop)> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let addr = listener.local_addr()?;
     let registry: Registry = Arc::new(Mutex::new(HashMap::new()));
-    let events = live::Events::new(&agent);
-    let reg = registry.clone();
-    let ev = events.clone();
+    let events = live::Events::new(agent);
+    let handle = EgressProxyHandle {
+        addr,
+        registry: registry.clone(),
+        events: events.clone(),
+    };
+    let accept = EgressAcceptLoop {
+        listener,
+        agent: Arc::from(agent),
+        registry,
+        events,
+    };
+    Ok((handle, accept))
+}
+
+/// Bind, spawn the accept loop, and return the handle. Needs a runtime.
+/// Missing/unreadable connections are dropped.
+pub async fn start_egress_proxy(agent: &str) -> std::io::Result<EgressProxyHandle> {
+    let (handle, accept) = bind_egress_proxy(agent)?;
+    accept.spawn()?;
+    Ok(handle)
+}
+
+impl EgressAcceptLoop {
+    /// Start serving. Must run inside a tokio runtime.
+    pub fn spawn(self) -> std::io::Result<()> {
+        self.listener.set_nonblocking(true)?;
+        let listener = TcpListener::from_std(self.listener)?;
+        accept_loop(listener, self.registry, self.events, self.agent);
+        Ok(())
+    }
+}
+
+fn accept_loop(listener: TcpListener, registry: Registry, events: live::Events, agent: Arc<str>) {
+    let reg = registry;
+    let ev = events;
     tokio::spawn(async move {
         loop {
             let Ok((sock, _)) = listener.accept().await else {
@@ -141,11 +187,6 @@ pub async fn start_egress_proxy(agent: &str) -> std::io::Result<EgressProxyHandl
             });
         }
     });
-    Ok(EgressProxyHandle {
-        addr,
-        registry,
-        events,
-    })
 }
 
 async fn handle_conn(

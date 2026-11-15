@@ -26,38 +26,57 @@ use crate::ssh_proxy::refusal::RefusalSink;
 pub(super) const OFF_SOCKET_PATH_TOO_LONG: &str = "socket_path_too_long";
 /// Status code: binding the proxy socket failed.
 pub(super) const OFF_SOCKET_BIND_FAILED: &str = "socket_bind_failed";
+/// The pre-seal half of the upstream connection: a plain std stream, because
+/// the runtime that will drive it does not exist yet. Adopted into a
+/// [`HeldUpstream`] by [`PreSealUpstream::adopt`] after the seal.
+pub(super) struct PreSealUpstream(Option<std::os::unix::net::UnixStream>);
+
+impl PreSealUpstream {
+    /// Hand the stream to tokio. Must run inside the runtime. A stream that
+    /// cannot be registered degrades to disconnected, like a failed connect.
+    pub(super) fn adopt(self) -> Arc<HeldUpstream> {
+        let held = match self.0 {
+            None => HeldUpstream::disconnected(),
+            Some(s) => HeldUpstream::from_std(s).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "ssh-agent proxy: could not adopt the upstream connection; every ssh-agent request will be refused (upstream_unavailable)");
+                HeldUpstream::disconnected()
+            }),
+        };
+        Arc::new(held)
+    }
+}
 
 /// Connect to the upstream agent now, before the seal. `None` when the agent
-/// holds no ssh keys (no proxy at all). `Some(disconnected)` when the
-/// upstream is unset or unreachable: the proxy still runs and refuses
+/// holds no ssh keys (no proxy at all). Disconnected when the upstream is
+/// unset or unreachable: the proxy still runs and refuses
 /// `upstream_unavailable`, which names the problem where the user looks.
-pub(super) async fn connect_before_seal(
+pub(super) fn connect_before_seal(
     ent: &SshEntitlement,
     upstream: Option<&Path>,
-) -> Option<Arc<HeldUpstream>> {
+) -> Option<PreSealUpstream> {
     if ent.is_empty() {
         return None;
     }
-    let held = match upstream {
+    let stream = match upstream {
         None => {
             tracing::warn!(
                 "ssh-agent proxy: SSH_AUTH_SOCK is unset; every ssh-agent request will be refused (upstream_unavailable)"
             );
-            HeldUpstream::disconnected()
+            None
         }
-        Some(p) => match HeldUpstream::connect(p).await {
-            Ok(h) => h,
+        Some(p) => match HeldUpstream::connect_blocking(p) {
+            Ok(s) => Some(s),
             Err(e) => {
                 tracing::warn!(
                     upstream = %p.display(),
                     error = %e,
                     "ssh-agent proxy: upstream ssh-agent unreachable; every ssh-agent request will be refused (upstream_unavailable)"
                 );
-                HeldUpstream::disconnected()
+                None
             }
         },
     };
-    Some(Arc::new(held))
+    Some(PreSealUpstream(stream))
 }
 
 /// What the post-seal half needs.

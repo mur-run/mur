@@ -1,12 +1,43 @@
 //! Pre-seal setup: bundled MCP refresh, sandbox grants, egress proxy,
 //! secret resolution, and the B1 sandbox seal itself. Everything here must
 //! run while `~/.mur` is still reachable; the seal is the last step.
+//!
+//! Two halves, split by the tokio runtime (GHSA-j8mv-27gx-x7xj):
+//!
+//! - [`prepare_and_seal`] is synchronous and runs before `main` builds the
+//!   runtime. On Linux, Landlock's `restrict_self` confines only the calling
+//!   thread and its *future* children; a worker thread that already exists
+//!   stays unconfined, and so does every `bash` child it spawns. Sealing
+//!   first means every runtime thread is created by a sealed thread. Sockets
+//!   it needs open before the seal are opened with std, not tokio.
+//! - [`start_after_seal`] runs inside the runtime and turns those sockets
+//!   into served tokio listeners.
+//!
+//! Helper threads started here (bounded keychain probes) must stay leaf
+//! threads: they may block, but must never spawn a child or a thread, since
+//! they are not confined.
 
 use super::bootstrap::USER_SECRET_RESOLVE_TIMEOUT;
 use crate::profile::Profile;
 use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, warn};
+
+/// What the synchronous pre-seal phase hands to [`start_after_seal`]: the
+/// sockets it opened, not yet driven by any runtime.
+pub(super) struct PreSeal {
+    egress_proxy: Option<(
+        crate::sandbox::egress_proxy::EgressProxyHandle,
+        crate::sandbox::egress_proxy::EgressAcceptLoop,
+    )>,
+    secrets: Arc<crate::secrets::SecretVault>,
+    approval_token: Option<String>,
+    sandbox_record: Option<mur_common::agent::SandboxRecord>,
+    #[cfg(unix)]
+    ssh_upstream: Option<super::ssh_proxy_boot::PreSealUpstream>,
+    ssh_proxy: mur_common::ssh_proxy_status::SshProxyStatus,
+    pin_trust: crate::ssh_proxy::policy::PinTrust,
+}
 
 /// What the pre-seal phase hands back to `entrypoint`.
 pub(super) struct Sealed {
@@ -28,13 +59,14 @@ pub(super) struct SshGateSlot {
     pub(super) audit_only: bool,
 }
 
-pub(super) async fn prepare_and_seal(
+/// Everything up to and including the seal. Synchronous, and must run before
+/// any tokio runtime or other long-lived thread exists (module doc).
+pub(super) fn prepare_and_seal(
     profile: &Profile,
     agent_home: &Path,
     mur_home: &Path,
-    identity: &mur_common::identity::AgentIdentity,
     pin_trust: crate::ssh_proxy::policy::PinTrust,
-) -> anyhow::Result<Sealed> {
+) -> anyhow::Result<PreSeal> {
     // 3c. Self-heal MUR's own copy of the MCP server binary. When an enabled
     //     MCP server points at the bundled location (~/.mur/mcp-servers/...),
     //     refresh it from the mur-mcp-server shipped next to `mur` so it tracks
@@ -154,9 +186,9 @@ pub(super) async fn prepare_and_seal(
     // CONNECTs reached the proxy; standalone gateway fetch worked).
     let egress_proxy =
         if mur_common::agent::entries_need_egress(&profile.inner.enabled_mcp_servers()) {
-            match crate::sandbox::egress_proxy::start_egress_proxy(&profile.inner.name).await {
+            match crate::sandbox::egress_proxy::bind_egress_proxy(&profile.inner.name) {
                 Ok(h) => {
-                    tracing::info!(addr = %h.addr, "egress proxy started (pre-sandbox)");
+                    tracing::info!(addr = %h.0.addr, "egress proxy bound (pre-sandbox)");
                     Some(h)
                 }
                 Err(e) => {
@@ -268,6 +300,7 @@ pub(super) async fn prepare_and_seal(
             // comes up either way, one secret short until the next `/secret`.
             let (tx, rx) = std::sync::mpsc::channel();
             let probe = r.clone();
+            // pre-seal leaf thread: must never spawn a child or a thread (not under Landlock; see supervisor::seal).
             std::thread::spawn(move || {
                 let _ = tx.send(mur_common::secret::cache_before_seal(&probe));
             });
@@ -325,7 +358,7 @@ pub(super) async fn prepare_and_seal(
 
     let loopback_ports: Vec<u16> = egress_proxy
         .iter()
-        .map(|h| h.addr.port())
+        .map(|(h, _)| h.addr.port())
         .chain(llm_ports)
         .collect();
     let granted_digest =
@@ -357,8 +390,7 @@ pub(super) async fn prepare_and_seal(
         std::env::var_os(super::ssh_proxy_class::UPSTREAM_ENV)
             .map(std::path::PathBuf::from)
             .as_deref(),
-    )
-    .await;
+    );
     let sandbox_record = match crate::sandbox::apply(
         &profile.inner.entitlements,
         agent_home,
@@ -420,6 +452,54 @@ pub(super) async fn prepare_and_seal(
         }
     };
 
+    Ok(PreSeal {
+        egress_proxy,
+        secrets,
+        approval_token,
+        sandbox_record,
+        #[cfg(unix)]
+        ssh_upstream,
+        ssh_proxy,
+        pin_trust,
+    })
+}
+
+/// The post-seal half: inside the runtime, every thread of which was created
+/// by the sealed thread. Starts the listeners [`prepare_and_seal`] bound.
+pub(super) async fn start_after_seal(
+    pre: PreSeal,
+    profile: &Profile,
+    agent_home: &Path,
+    mur_home: &Path,
+    identity: &mur_common::identity::AgentIdentity,
+) -> anyhow::Result<Sealed> {
+    let PreSeal {
+        egress_proxy,
+        secrets,
+        approval_token,
+        sandbox_record,
+        #[cfg(unix)]
+        ssh_upstream,
+        ssh_proxy,
+        pin_trust,
+    } = pre;
+    let egress_proxy = match egress_proxy {
+        Some((handle, accept)) => match accept.spawn() {
+            Ok(()) => {
+                tracing::info!(addr = %handle.addr, "egress proxy serving");
+                Some(handle)
+            }
+            Err(e) => {
+                // The port is carved into the seal already; with no loop
+                // behind it, scoped servers' dials fail closed (refused).
+                tracing::warn!(
+                    "egress proxy failed to start serving; scoped MCP servers' network access will be refused: {e}"
+                );
+                None
+            }
+        },
+        None => None,
+    };
     // The probe proved its child was confined, not this process: settle the
     // classification against the sandbox we really got, then record it.
     let ssh_proxy = super::ssh_proxy_class::finalize(
@@ -454,7 +534,7 @@ pub(super) async fn prepare_and_seal(
                 agents_dir: mur_home.join("agents"),
                 ent: &profile.inner.entitlements.ssh,
                 pin_trust,
-                upstream,
+                upstream: upstream.adopt(),
                 sink,
                 approvals: slot.clone(),
             })

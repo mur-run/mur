@@ -182,7 +182,13 @@ fn apply_seccomp_denylist() -> anyhow::Result<()> {
     .context("build seccomp filter")?;
 
     let prog: BpfProgram = filter.try_into().context("compile BPF program")?;
-    seccompiler::apply_filter(&prog).context("apply seccomp filter")?;
+    // TSYNC: install on every thread of the process, not just this one, and
+    // set NO_NEW_PRIVS on each. The supervisor seals before it builds its
+    // runtime, so the only other threads here are leaf helpers (bounded
+    // keychain probes); TSYNC is the second line behind that ordering, so a
+    // thread started too early by a future change is still covered for the
+    // seccomp half (GHSA-j8mv-27gx-x7xj). Landlock 0.4 has no equivalent.
+    seccompiler::apply_filter_all_threads(&prog).context("apply seccomp filter")?;
 
     Ok(())
 }
