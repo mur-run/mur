@@ -59,10 +59,17 @@ fn the_runtimes_own_central_store_reads_are_granted() {
     std::fs::write(mur_home.join("compress.yaml"), "").unwrap();
     std::fs::create_dir_all(mur_home.join("compress")).unwrap();
     std::fs::create_dir_all(mur_home.join("fleets")).unwrap();
+    std::fs::create_dir_all(mur_home.join("skills")).unwrap();
 
     let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
 
-    for name in ["config.yaml", "compress.yaml", "compress", "fleets"] {
+    for name in [
+        "config.yaml",
+        "compress.yaml",
+        "compress",
+        "fleets",
+        "skills",
+    ] {
         assert!(
             policy.fs_read.contains(&mur_home.join(name)),
             "{name} must be readable or the runtime silently degrades: {:?}",
@@ -136,11 +143,17 @@ fn absent_central_store_paths_are_not_granted() {
     let mur_home = tmp.path();
     let agent_home = mur_home.join("agents").join("mur");
     std::fs::create_dir_all(&agent_home).unwrap();
-    // Nothing created: no config.yaml, no compress.yaml, no fleets/.
+    // Nothing created: no config.yaml, no compress.yaml, no fleets/, no skills/.
 
     let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
 
-    for name in ["config.yaml", "compress.yaml", "compress", "fleets"] {
+    for name in [
+        "config.yaml",
+        "compress.yaml",
+        "compress",
+        "fleets",
+        "skills",
+    ] {
         assert!(
             !policy.fs_read.contains(&mur_home.join(name)),
             "{name} does not exist and must not be granted"
