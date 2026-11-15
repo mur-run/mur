@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 use mur_common::agent::AgentProfile;
 use mur_common::skill::{
-    TrustLevel, content_hash_for_trust, global_skill_dir, parse_canonical, read_from_dir,
-    write_to_dir,
+    TrustLevel, content_hash_for_trust, global_skill_dir, global_skills_root, parse_canonical,
+    read_from_dir, write_to_dir,
 };
 use mur_common::trust::skills::SkillTrustStore;
 use mur_core::cmd::skill_install::cmd_install;
@@ -209,6 +209,61 @@ content:
     let bob: AgentProfile = serde_yaml_ng::from_str(&bob_yaml).unwrap();
     assert_eq!(bob.installed_skills.len(), 1);
     assert_eq!(bob.installed_skills[0].publisher, "human:alice");
+}
+
+/// The shared-store read grant is existence-checked at seal time, and a
+/// Landlock rule cannot be added afterwards. So a source agent that booted
+/// before the store existed must still serve the first skill ever installed,
+/// without a restart: the runtime creates the store before it seals.
+#[test]
+fn wire_install_serves_a_skill_installed_after_the_source_booted() {
+    let Some(runtime_bin) = locate_runtime_binary() else {
+        eprintln!("(skipping — mur-agent-runtime binary not present in target dir)");
+        return;
+    };
+    let runtime_str = runtime_bin.to_str().unwrap();
+
+    let home = TempDir::new().unwrap();
+    let sock_path = agent_sock(home.path(), "alice");
+    write_profile(home.path(), "alice", Some(&sock_path));
+    write_profile(home.path(), "bob", None);
+    assert!(
+        !global_skills_root(home.path()).exists(),
+        "precondition: a fresh install has no shared skill store yet"
+    );
+
+    let _alice = boot_runtime(home.path(), "alice", runtime_str, &sock_path);
+
+    // The first skill arrives only now, under an already sealed runtime.
+    let manifest = parse_canonical(
+        r#"
+name: late-skill
+version: 1.0.0
+publisher: human:alice
+description: Installed after the source agent started
+category: workflow
+content:
+  abstract: Late.
+  context: "Body."
+"#,
+    )
+    .unwrap();
+    write_to_dir(&global_skill_dir(home.path(), "late-skill"), &manifest).unwrap();
+
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_AGENT_NAME", "bob");
+    envg.set_var("MUR_AGENT_RUNTIME_BIN", runtime_str);
+    let result = cmd_install(
+        home.path(),
+        "https://example.com/registry",
+        "agent://alice/late-skill",
+    );
+    envg.unset_var("MUR_AGENT_NAME");
+    envg.unset_var("MUR_AGENT_RUNTIME_BIN");
+    result.expect("a skill installed after boot is readable without a restart");
+
+    let installed = read_from_dir(&global_skill_dir(home.path(), "late-skill")).unwrap();
+    assert_eq!(installed.transfer_chain, vec!["agent://alice"]);
 }
 
 #[test]
