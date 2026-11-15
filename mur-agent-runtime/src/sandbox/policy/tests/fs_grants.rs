@@ -43,6 +43,17 @@ fn own_profile_and_identity_key_always_denied() {
     assert!(policy.fs_write.contains(&agent_home));
 }
 
+/// The central-store entries the two tests below check, once granted and once
+/// absent. `skills` is the shared skill store: `skills/get`, the loader and
+/// the skill index all read it sealed (GHSA-j8mv-27gx-x7xj).
+const CENTRAL_STORE_READS: [&str; 5] = [
+    "config.yaml",
+    "compress.yaml",
+    "compress",
+    "fleets",
+    "skills",
+];
+
 /// The runtime reads `config.yaml` unconditionally (model switch, skills,
 /// remember, fleet_run). On Linux Landlock is deny-by-default, so without a
 /// read grant `Config::load_or_default` silently returns DEFAULTS and the
@@ -63,13 +74,7 @@ fn the_runtimes_own_central_store_reads_are_granted() {
 
     let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
 
-    for name in [
-        "config.yaml",
-        "compress.yaml",
-        "compress",
-        "fleets",
-        "skills",
-    ] {
+    for name in CENTRAL_STORE_READS {
         assert!(
             policy.fs_read.contains(&mur_home.join(name)),
             "{name} must be readable or the runtime silently degrades: {:?}",
@@ -147,13 +152,7 @@ fn absent_central_store_paths_are_not_granted() {
 
     let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
 
-    for name in [
-        "config.yaml",
-        "compress.yaml",
-        "compress",
-        "fleets",
-        "skills",
-    ] {
+    for name in CENTRAL_STORE_READS {
         assert!(
             !policy.fs_read.contains(&mur_home.join(name)),
             "{name} does not exist and must not be granted"

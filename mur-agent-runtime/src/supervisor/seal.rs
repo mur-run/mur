@@ -174,15 +174,7 @@ pub(super) fn prepare_and_seal(
             "B1 sandbox: allowing VLC HTTP port + runtime dir for co-watching"
         );
     }
-    // Global limits (#1794): the read grant on `<mur_home>/limits` is
-    // existence-checked, so create the directory first or a user who has not
-    // yet run `mur limits --global` would get no grant, and their first edit
-    // would be invisible until restart. Read-only to the agent; the CLI writes.
-    let _ = std::fs::create_dir_all(mur_common::limits::global_limits_dir(mur_home));
-    // Shared skill store: same existence-checked read grant, same reason. An
-    // agent that sealed before the first skill was ever installed would serve
-    // `skills/get` EACCES until restart. Read-only to the agent.
-    let _ = std::fs::create_dir_all(mur_common::skill::global_skills_root(mur_home));
+    ensure_read_grant_dirs(mur_home);
     let extra_write_paths = extra_write_paths(mur_home);
     if let Some(vlc) = &vlc {
         extra_ports.push(vlc.port);
@@ -636,6 +628,27 @@ pub fn extra_write_paths(mur_home: &Path) -> Vec<std::path::PathBuf> {
     paths
 }
 
+/// Central-store directories whose read grant is existence-checked
+/// (`SandboxPolicy::from_entitlements`) and which the CLI may create for the
+/// first time while the agent is already running. Landlock takes no new rule
+/// after the seal, so a directory that is missing now stays unreadable until
+/// restart. Create them first. The grant is read-only; the CLI writes.
+///
+/// - Global limits (#1794): otherwise a user who has not yet run
+///   `mur limits --global` gets no grant, and their first edit is invisible
+///   until restart.
+/// - The shared skill store: otherwise the first `mur skill install` on a
+///   machine that has never had a shared skill reads EACCES from `skills/get`
+///   until restart.
+fn ensure_read_grant_dirs(mur_home: &Path) {
+    for dir in [
+        mur_common::limits::global_limits_dir(mur_home),
+        mur_common::skill::global_skills_root(mur_home),
+    ] {
+        let _ = std::fs::create_dir_all(dir);
+    }
+}
+
 /// Create the agent's scratch dir and drop entries past `scratch.retention_days`.
 /// Skipped (already-logged helper error) when the path cannot be derived.
 fn prune_agent_scratch(agent_home: &Path, mur_home: &Path) {
@@ -657,3 +670,7 @@ fn prune_agent_scratch(agent_home: &Path, mur_home: &Path) {
         "scratch prune"
     );
 }
+
+#[cfg(test)]
+#[path = "seal_tests.rs"]
+mod tests;
