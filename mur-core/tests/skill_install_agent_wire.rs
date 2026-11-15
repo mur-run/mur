@@ -145,7 +145,12 @@ fn wire_install_pulls_via_real_socket() {
     let runtime_str = runtime_bin.to_str().unwrap();
 
     let home = TempDir::new().unwrap();
-    let sock_path = home.path().join("alice.sock").to_str().unwrap().to_string();
+    let sock_path = home
+        .path()
+        .join("agents/alice/agent.sock")
+        .to_str()
+        .unwrap()
+        .to_string();
 
     // Source agent "alice".
     write_profile(home.path(), "alice", Some(&sock_path));
@@ -256,7 +261,12 @@ fn wire_install_propagates_handler_error_for_missing_skill() {
     let runtime_str = runtime_bin.to_str().unwrap();
 
     let home = TempDir::new().unwrap();
-    let sock_path = home.path().join("eve.sock").to_str().unwrap().to_string();
+    let sock_path = home
+        .path()
+        .join("agents/eve/agent.sock")
+        .to_str()
+        .unwrap()
+        .to_string();
     write_profile(home.path(), "eve", Some(&sock_path));
     let _eve = boot_runtime(home.path(), "eve", runtime_str, &sock_path);
 

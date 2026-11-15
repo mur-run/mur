@@ -420,6 +420,11 @@ impl SandboxPolicy {
                 mur_home.join("compress.yaml"),
                 mur_home.join("compress"),
                 mur_home.join("fleets"),
+                // The global skill store: `skills/get` serves manifests from
+                // it and the skill index hashes it. Since the seal moved
+                // before the tokio runtime (GHSA-j8mv-27gx-x7xj) these reads
+                // run sealed, so without the grant they fail with EACCES.
+                mur_home.join("skills"),
             ] {
                 if std::fs::metadata(&p).is_ok() && !fs_read.contains(&p) {
                     fs_read.push(p);
