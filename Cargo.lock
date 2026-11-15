@@ -6554,6 +6554,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mur-browser-request"
+version = "2.101.1"
+dependencies = [
+ "chrono",
+ "hex",
+ "mur-common",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "url",
+]
+
+[[package]]
 name = "mur-channel"
 version = "2.101.1"
 dependencies = [
