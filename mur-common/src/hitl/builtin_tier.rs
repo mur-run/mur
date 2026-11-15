@@ -54,9 +54,20 @@ fn classify_browser(leaf: &str) -> Option<RiskTier> {
     Some(RiskTier::NetworkEgress)
 }
 
+/// The runtime's built-in `browser_request` (#2360). It shares the prefix but
+/// drives no page: it writes a request file the user answers on a card. Kept
+/// here, not imported, because the runtime sits above this crate.
+pub const BROWSER_REQUEST_TOOL: &str = "browser_request";
+
 /// The built-in tier of a browser tool, matched on the leaf so an MCP server
 /// cannot lower it by its prefix. `None` = not a browser tool.
+///
+/// The one exemption is the bare built-in name: `mcp__x__browser_request`
+/// still classifies by its leaf, so a server cannot borrow the name.
 pub fn browser_tier(tool_name: &str) -> Option<RiskTier> {
+    if tool_name == BROWSER_REQUEST_TOOL {
+        return None;
+    }
     classify_browser(tool_name.rsplit("__").next().unwrap_or(tool_name))
 }
 
@@ -161,6 +172,19 @@ mod tests {
         );
         assert_eq!(browser_tier("bash"), None);
         assert_eq!(browser_tier("mcp__browser__navigate"), None);
+    }
+
+    #[test]
+    fn the_built_in_request_tool_is_not_an_acting_browser_tool() {
+        // #2360: it only writes a request file; the `browser_` prefix must
+        // not lift it to NetworkEgress, which no session grant covers.
+        assert_eq!(browser_tier(BROWSER_REQUEST_TOOL), None);
+        // The exemption is the bare built-in only: an MCP server cannot
+        // borrow the name to drop an acting tool under the ceiling.
+        assert_eq!(
+            browser_tier("mcp__x__browser_request"),
+            Some(RiskTier::NetworkEgress)
+        );
     }
 
     #[test]

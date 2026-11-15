@@ -67,6 +67,18 @@ async fn bad_input_is_refused_and_nothing_is_written() {
 }
 
 #[test]
+fn the_tool_is_tiered_inside_the_auto_ceiling() {
+    // #2360 live check: the `browser_` prefix put it at NetworkEgress, so it
+    // asked on every call and a one-shot `mur agent send` could never use it.
+    let tier = mur_common::hitl::tool_tier::classify(BROWSER_REQUEST, None);
+    assert!(mur_common::hitl::tier_may_be_granted(tier), "{tier:?}");
+    assert_eq!(
+        crate::task_runner::call_floor(&[], BROWSER_REQUEST, None),
+        None
+    );
+}
+
+#[test]
 fn the_schema_never_offers_a_profile() {
     let def = tool(std::path::Path::new("/nonexistent")).def();
     let props = def.input_schema["properties"].as_object().unwrap();

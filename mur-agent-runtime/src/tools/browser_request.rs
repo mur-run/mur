@@ -14,7 +14,9 @@ use mur_browser_request::{BrowserRequest, Site};
 
 use crate::tools::{ToolDef, ToolError, ToolExecutor, ToolOutput};
 
-pub const BROWSER_REQUEST: &str = "browser_request";
+/// The same name `mur_common` exempts from the acting-browser tier: one
+/// constant, so a rename cannot leave the tool asking on every call.
+pub const BROWSER_REQUEST: &str = mur_common::hitl::builtin_tier::BROWSER_REQUEST_TOOL;
 
 /// What the agent is told about the route, in the prompt.
 const ROUTE: &str = "To use a website that needs the user's login, or that your browser tools \
