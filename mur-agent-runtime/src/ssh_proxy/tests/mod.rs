@@ -8,6 +8,7 @@ mod mark;
 mod rsa_vector;
 mod session;
 mod sign_binding;
+mod upstreams;
 
 use fixtures::*;
 

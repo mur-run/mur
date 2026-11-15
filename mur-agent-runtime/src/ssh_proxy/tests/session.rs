@@ -23,7 +23,7 @@ pub(super) struct FakeUpstream {
 }
 
 impl FakeUpstream {
-    fn new(keys: Vec<Vec<u8>>) -> Self {
+    pub(super) fn new(keys: Vec<Vec<u8>>) -> Self {
         Self {
             keys,
             up: true,
