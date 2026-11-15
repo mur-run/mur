@@ -44,6 +44,19 @@ fn key_part(line: &str) -> String {
         .join(" ")
 }
 
+/// Unix sockets cap the path at `sun_path` (104 bytes on macOS).
+const SHORT_TMP_ROOT: &str = "/tmp";
+
+/// A mur home short enough for the private socket: under [`SHORT_TMP_ROOT`]
+/// when it is writable, else inside `fallback` (fine where `$TMPDIR` is short).
+fn short_home(fallback: &Path) -> tempfile::TempDir {
+    let b = tempfile::Builder::new()
+        .prefix("m")
+        .tempdir_in(SHORT_TMP_ROOT);
+    b.or_else(|_| tempfile::Builder::new().prefix("m").tempdir_in(fallback))
+        .expect("short mur home")
+}
+
 fn rule(fp: String, host_fp: &str) -> SshKeyRule {
     SshKeyRule {
         fingerprint: fp,
@@ -73,10 +86,12 @@ async fn the_dedicated_key_signs_from_the_private_agent_and_leaves_the_users() {
     let rig = Rig::start(&sshd);
     let host_fp = fp_of(&rig.host_key);
 
-    // The dedicated key, generated where boot looks for it. The mur home is
-    // short-named inside the rig dir: the private socket path must fit.
-    let home = rig.dir.join("m");
-    std::fs::create_dir(&home).unwrap();
+    // The dedicated key, generated where boot looks for it. The private socket
+    // lands at `<home>/secrets/ssh/<agent>/run-<pid>/agent.sock`, ~48 bytes past
+    // the home; macOS's tempdir alone eats ~70 of the 104, so the home must be
+    // shorter than the rig dir.
+    let short = short_home(&rig.dir);
+    let home = short.path().to_path_buf();
     let key = keystore::generate(&home, AGENT).expect("generate dedicated key");
     let key_dir = keystore::key_dir(&home, AGENT).unwrap();
     let dedicated = key_part(&key.public_line);
