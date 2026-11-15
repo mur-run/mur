@@ -19,14 +19,15 @@ use super::verdict::{HostChoice, select, verdict};
 use super::*;
 use mur_agent_runtime::sandbox::policy::ExecBackend;
 
-const AGENT: &str = "bot";
-const HOST: &str = "gh.example";
+pub(super) const AGENT: &str = "bot";
+pub(super) const HOST: &str = "gh.example";
+const OFFER: plan::Dedicated = plan::Dedicated::Offer;
 
 fn target() -> mur_ssh_request::RequestHost {
     mur_ssh_request::RequestHost::parse(HOST, None).unwrap()
 }
 
-fn scanned(c: char) -> ScannedKey {
+pub(super) fn scanned(c: char) -> ScannedKey {
     ScannedKey {
         fingerprint: fp(c),
         entry: SshKnownHost {
@@ -193,16 +194,26 @@ fn approval(spawn: Option<SpawnChange>, consented: bool, restart: bool) -> Appro
         spawn,
         spawn_consented: consented,
         restart,
+        install: None,
     }
 }
 
-struct Home {
+/// For approvals with no install: reaching the installer is the failure.
+struct NeverInstall;
+
+impl super::install::Installer for NeverInstall {
+    fn install(&self, _: &super::install::InstallRequest) -> Result<super::install::Installed> {
+        panic!("no install was chosen")
+    }
+}
+
+pub(super) struct Home {
     _tmp: tempfile::TempDir,
     _env: mur_common::test_env::EnvGuard,
 }
 
 impl Home {
-    fn new() -> (Self, std::path::PathBuf) {
+    pub(super) fn new() -> (Self, std::path::PathBuf) {
         let mut env = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().to_path_buf();
@@ -240,6 +251,7 @@ fn none_to_strict_without_its_consent_writes_nothing() {
         0,
         &approval(Some(SpawnChange::NoneToStrict), false, true),
         &mut life,
+        &NeverInstall,
     )
     .unwrap_err();
     assert!(e.to_string().contains("own consent"), "{e}");
@@ -260,6 +272,7 @@ fn no_restart_writes_the_grant_and_touches_nothing_else() {
         0,
         &approval(Some(SpawnChange::AddSsh), false, false),
         &mut life,
+        &NeverInstall,
     )
     .unwrap();
     assert_eq!(a.outcome, AllowOutcome::Added);
@@ -280,7 +293,7 @@ fn no_restart_writes_the_grant_and_touches_nothing_else() {
 
 /// Spelled out per platform, not derived from `skip_reason`, so a change
 /// to the predicate cannot pass by changing the expectation with it.
-fn expect_preapproval(_home: &Path, got: &Preapproval) {
+pub(super) fn expect_preapproval(_home: &Path, got: &Preapproval) {
     if cfg!(target_os = "macos") {
         assert_eq!(
             got,
@@ -345,12 +358,12 @@ fn a_match_an_unsealed_agent_could_have_written_still_needs_verifying() {
         stored: vec![fp('H')],
         known_hosts: Some(user.path().join("known_hosts")),
     };
-    let p = plan(&probe, AGENT, home.path(), &ent, host.clone(), None).unwrap();
+    let p = plan(&probe, AGENT, home.path(), &ent, host.clone(), None, OFFER).unwrap();
     // Control: the same match with the seal enforced every run is trusted,
     // so the downgrade below comes from the unsealed posture alone.
     let mut sealed = ent.clone();
     sealed.fail_closed_on_sandbox_error = true;
-    let c = plan(&probe, AGENT, home.path(), &sealed, host, None).unwrap();
+    let c = plan(&probe, AGENT, home.path(), &sealed, host, None, OFFER).unwrap();
     if plan::sealed_every_run(&sealed, ExecBackend::current()) {
         assert_eq!(c.verdict, Verdict::Trusted);
     }
@@ -375,7 +388,15 @@ fn a_running_agent_is_stopped_preapproved_and_started() {
         pid: Some(42),
         ..Default::default()
     };
-    let a = apply_and_restart(&home, AGENT, 0, &approval(None, false, true), &mut life).unwrap();
+    let a = apply_and_restart(
+        &home,
+        AGENT,
+        0,
+        &approval(None, false, true),
+        &mut life,
+        &NeverInstall,
+    )
+    .unwrap();
     assert_eq!(life.calls, vec!["stop", "start"]);
     assert_eq!(a.restart, Restart::Restarted);
     assert!(a.restart.line(AGENT).is_none());
@@ -386,7 +407,15 @@ fn a_running_agent_is_stopped_preapproved_and_started() {
 fn a_stopped_agent_is_preapproved_and_left_stopped() {
     let (_h, home) = Home::new();
     let mut life = FakeLife::default();
-    let a = apply_and_restart(&home, AGENT, 0, &approval(None, false, true), &mut life).unwrap();
+    let a = apply_and_restart(
+        &home,
+        AGENT,
+        0,
+        &approval(None, false, true),
+        &mut life,
+        &NeverInstall,
+    )
+    .unwrap();
     assert!(life.calls.is_empty());
     assert_eq!(a.restart, Restart::WasStopped);
     expect_preapproval(&home, &a.preapproval);
@@ -400,7 +429,15 @@ fn a_stop_failure_keeps_the_grant_and_records_nothing() {
         fail_stop: true,
         ..Default::default()
     };
-    let a = apply_and_restart(&home, AGENT, 0, &approval(None, false, true), &mut life).unwrap();
+    let a = apply_and_restart(
+        &home,
+        AGENT,
+        0,
+        &approval(None, false, true),
+        &mut life,
+        &NeverInstall,
+    )
+    .unwrap();
     assert!(matches!(a.restart, Restart::StopFailed(_)));
     assert_eq!(a.preapproval, Preapproval::NotAttempted);
     assert_eq!(life.calls, vec!["stop"]);
@@ -415,7 +452,15 @@ fn a_start_failure_is_reported_not_rolled_back() {
         fail_start: true,
         ..Default::default()
     };
-    let a = apply_and_restart(&home, AGENT, 0, &approval(None, false, true), &mut life).unwrap();
+    let a = apply_and_restart(
+        &home,
+        AGENT,
+        0,
+        &approval(None, false, true),
+        &mut life,
+        &NeverInstall,
+    )
+    .unwrap();
     assert!(matches!(a.restart, Restart::StartFailed(_)));
     assert!(
         a.restart
@@ -474,6 +519,7 @@ fn plan_reads_keys_scan_and_spawn_without_writing() {
         &ent,
         host.clone(),
         Some("git".into()),
+        OFFER,
     )
     .unwrap();
     assert_eq!(p.agent, AGENT);

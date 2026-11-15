@@ -51,6 +51,43 @@ pub struct ExecSurface {
     pub reach: ExecReach,
 }
 
+/// Whether this agent can have a dedicated key (SSH setup spec, "Key
+/// generation").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Dedicated {
+    /// Not offered; the card shows the reason.
+    Off(DedicatedOff),
+    /// Offered; no key exists yet.
+    Offer,
+    /// The agent's key exists. Its fingerprint is also in `keys_loaded`
+    /// when it is loaded.
+    Stored { fingerprint: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DedicatedOff {
+    /// `ssh_setup.generate_key: false`.
+    SwitchOff,
+    /// Nothing keeps the agent from reading the key file (K3).
+    NotSealedEveryRun,
+    /// A file is where the key should be and is not a key this store wrote.
+    /// The text names the file to delete.
+    Unusable(String),
+}
+
+impl DedicatedOff {
+    /// Why the option is disabled, as the card shows it.
+    pub fn reason(&self) -> String {
+        match self {
+            Self::SwitchOff => "turned off by `ssh_setup.generate_key: false`".into(),
+            Self::NotSealedEveryRun => {
+                "this agent is not sandboxed on every run, so it could read the key file".into()
+            }
+            Self::Unusable(why) => why.clone(),
+        }
+    }
+}
+
 /// The CLI reads the host half; murmur's `/ssh` card (and Hub's, slice 5)
 /// reads all of it.
 #[derive(Debug, Clone)]
@@ -67,9 +104,11 @@ pub struct SetupPlan {
     pub spawn: Option<SpawnChange>,
     /// Present only with a spawn change.
     pub exec_surface: Option<ExecSurface>,
+    pub dedicated: Dedicated,
 }
 
-/// Build the plan for `agent` from its current entitlements.
+/// Build the plan for `agent` from its current entitlements. `dedicated`
+/// comes from [`super::dedicated::dedicated_for`]; `plan` reads no key store.
 pub fn plan(
     probe: &dyn Probe,
     agent: &str,
@@ -77,6 +116,7 @@ pub fn plan(
     ent: &Entitlements,
     host: RequestHost,
     user: Option<String>,
+    dedicated: Dedicated,
 ) -> Result<SetupPlan> {
     let scanned = probe.scan(&host)?;
     let stored = probe.stored_host_keys(&host);
@@ -102,6 +142,7 @@ pub fn plan(
         matched,
         spawn,
         exec_surface,
+        dedicated,
     })
 }
 

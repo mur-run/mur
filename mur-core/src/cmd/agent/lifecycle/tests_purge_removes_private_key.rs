@@ -44,3 +44,30 @@ fn purge_does_not_double_remove_a_non_agent_directory() {
     assert!(purge_agent_state(&stray).unwrap().is_none());
     assert!(!stray.exists());
 }
+
+/// Plan 10.3: `remove --purge` goes through `cmd_remove` end to end and
+/// leaves no `secrets/ssh/<agent>/` behind.
+#[cfg(unix)]
+#[test]
+fn purge_through_cmd_remove_leaves_no_dedicated_key() {
+    if crate::cmd::agent::ssh::setup::dedicated_tests::keygen_missing() {
+        return;
+    }
+    let tmp = TempDir::new().unwrap();
+    let bin = TempDir::new().unwrap();
+    let _env = mur_common::test_env::EnvGuard::set([
+        (mur_common::home::MUR_HOME_ENV, tmp.path().as_os_str()),
+        (mur_common::agent_bin::BIN_DIR_ENV, bin.path().as_os_str()),
+    ]);
+    // Unique, so `remove_service` finds no real service by this name.
+    let name = format!("purge-ssh-{}", std::process::id());
+    std::fs::create_dir_all(tmp.path().join("agents").join(&name)).unwrap();
+    crate::cmd::agent::ssh::setup::dedicated::generate(tmp.path(), &name).unwrap();
+    let key_dir = crate::cmd::agent::ssh::setup::dedicated::key_dir(tmp.path(), &name).unwrap();
+    assert!(key_dir.exists());
+
+    cmd_remove(&name, true, true).unwrap();
+
+    assert!(!tmp.path().join("agents").join(&name).exists());
+    assert!(!key_dir.exists(), "the dedicated key outlived its agent");
+}

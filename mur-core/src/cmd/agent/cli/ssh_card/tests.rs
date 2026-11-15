@@ -10,6 +10,7 @@ use super::state::{CardState, KeyAction, Origin, Step};
 use super::*;
 use crate::cmd::agent::cli::app::{App, SlashCmd};
 use crate::cmd::agent::ssh::resolve::ScannedKey;
+use crate::cmd::agent::ssh::setup::plan::Dedicated;
 use crate::cmd::agent::ssh::setup::probe::AgentKey;
 use crate::cmd::agent::ssh::setup::{SetupPlan, SpawnChange, Verdict};
 
@@ -55,6 +56,7 @@ fn plan(verdict: Verdict, spawn: Option<SpawnChange>) -> SetupPlan {
         matched,
         spawn,
         exec_surface: None,
+        dedicated: Dedicated::Offer,
     }
 }
 

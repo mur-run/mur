@@ -7,6 +7,8 @@ use mur_ssh_request::validate_user;
 use serde::{Deserialize, Serialize};
 
 use super::super::edit::HostGrant;
+use super::apply::InstallTarget;
+use super::plan::Dedicated;
 use super::verdict::{self, HostChoice};
 use super::{Approval, SetupPlan, SpawnChange};
 
@@ -21,9 +23,13 @@ pub struct Choices {
     pub ticked: Vec<String>,
     #[serde(default)]
     pub spawn_consented: bool,
-    /// Only for the test connection; empty means "not given".
+    /// The login for the test connection and for the install; empty means
+    /// "not given".
     #[serde(default)]
     pub user: String,
+    /// Install the dedicated public key on the host for `user`.
+    #[serde(default)]
+    pub install: bool,
 }
 
 /// Why Approve is unavailable. Checked in this order, so a client shows the
@@ -37,7 +43,14 @@ pub enum NotReady {
     Host(String),
     SpawnConsent,
     User(String),
+    /// The install cannot run for this choice; the text says why.
+    Install(String),
 }
+
+/// `NotReady::User` when the install is chosen with no login.
+pub const INSTALL_NEEDS_USER: &str = "installing the key needs the login name on the host";
+/// `NotReady::Install` when the chosen key is not the agent's own.
+pub const INSTALL_ONLY_DEDICATED: &str = "only this agent's dedicated key can be installed on the host; choose it, or turn the install off";
 
 pub fn build_approval(plan: &SetupPlan, c: &Choices) -> Result<Approval, NotReady> {
     let fp = c.key_fp.as_deref().ok_or(NotReady::NoKey)?;
@@ -66,6 +79,7 @@ pub fn build_approval(plan: &SetupPlan, c: &Choices) -> Result<Approval, NotRead
     if !c.user.is_empty() {
         validate_user(&c.user).map_err(|e| NotReady::User(e.to_string()))?;
     }
+    let install = install_target(plan, c, fp)?;
     let label = Some(plan.host.canonical());
     Ok(Approval {
         key_fp: key.fingerprint.clone(),
@@ -81,5 +95,27 @@ pub fn build_approval(plan: &SetupPlan, c: &Choices) -> Result<Approval, NotRead
         spawn: plan.spawn,
         spawn_consented: c.spawn_consented,
         restart: true,
+        install,
     })
+}
+
+fn install_target(
+    plan: &SetupPlan,
+    c: &Choices,
+    fp: &str,
+) -> Result<Option<InstallTarget>, NotReady> {
+    if !c.install {
+        return Ok(None);
+    }
+    if c.user.is_empty() {
+        return Err(NotReady::User(INSTALL_NEEDS_USER.into()));
+    }
+    match &plan.dedicated {
+        Dedicated::Stored { fingerprint } if fingerprint == fp => Ok(Some(InstallTarget {
+            user: c.user.clone(),
+            host: plan.host.clone(),
+        })),
+        Dedicated::Off(off) => Err(NotReady::Install(off.reason())),
+        _ => Err(NotReady::Install(INSTALL_ONLY_DEDICATED.into())),
+    }
 }

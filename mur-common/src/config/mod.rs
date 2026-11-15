@@ -377,6 +377,15 @@ pub struct Config {
     pub search: SearchConfig,
 }
 
+/// The user config under `mur_home`.
+pub const CONFIG_FILE: &str = "config.yaml";
+
+/// `<mur_home>/config.yaml`, for callers that are handed a MUR home rather
+/// than resolving one from the environment.
+pub fn config_path(mur_home: &std::path::Path) -> PathBuf {
+    mur_home.join(CONFIG_FILE)
+}
+
 impl Config {
     /// Read from disk, falling back to defaults. Legacy conversation model
     /// fields are migrated **in memory only** — this is called from agent

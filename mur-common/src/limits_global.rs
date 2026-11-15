@@ -25,7 +25,7 @@ pub const GLOBAL_LIMITS_DIR: &str = "limits";
 /// mapping, no `limits:` wrapper.
 pub const GLOBAL_LIMITS_FILE: &str = "global.yaml";
 /// The user config that carried the global scope before #1794.
-pub const LEGACY_CONFIG_FILE: &str = "config.yaml";
+pub const LEGACY_CONFIG_FILE: &str = crate::config::CONFIG_FILE;
 
 pub fn global_limits_dir(mur_home: &Path) -> PathBuf {
     mur_home.join(GLOBAL_LIMITS_DIR)

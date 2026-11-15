@@ -8,6 +8,9 @@ pub(super) fn dispatch(action: crate::cli::AgentSshAction) -> anyhow::Result<()>
         A::Allow {
             agent,
             key,
+            generate,
+            install,
+            user,
             label,
             host,
             port,
@@ -17,7 +20,10 @@ pub(super) fn dispatch(action: crate::cli::AgentSshAction) -> anyhow::Result<()>
             no_restart,
         } => cmd::agent::cmd_ssh_allow(&cmd::agent::SshAllowArgs {
             agent: &agent,
-            key: &key,
+            key: key.as_deref(),
+            generate,
+            install,
+            user: user.as_deref(),
             label: label.as_deref(),
             host: host.as_deref(),
             port,

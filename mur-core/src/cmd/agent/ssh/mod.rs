@@ -29,7 +29,13 @@ pub use view::cmd_ssh_list;
 /// Parsed `mur agent ssh allow` arguments.
 pub struct AllowArgs<'a> {
     pub agent: &'a str,
-    pub key: &'a str,
+    /// Absent only with `generate`.
+    pub key: Option<&'a str>,
+    /// Grant the agent's dedicated key, generating it first if needed.
+    pub generate: bool,
+    /// Install the dedicated public key on `host` for `user`.
+    pub install: bool,
+    pub user: Option<&'a str>,
     pub label: Option<&'a str>,
     pub host: Option<&'a str>,
     pub port: Option<u16>,
@@ -57,7 +63,7 @@ fn check_yes_contract(a: &AllowArgs) -> Result<()> {
     if a.host_key.is_none() {
         bail!("--yes needs --host-key <SHA256:...>: a key with no host signs for nothing");
     }
-    if !mur_common::agent::is_fingerprint(a.key) {
+    if !a.key.is_some_and(mur_common::agent::is_fingerprint) {
         bail!(
             "--yes needs --key as a SHA256: fingerprint; a key comment is a lookup that must \
              be confirmed at a terminal"

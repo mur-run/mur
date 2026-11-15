@@ -546,5 +546,9 @@ mod code_nav_tests;
 mod fleet_goal_tests;
 
 #[cfg(test)]
+#[path = "agent_ssh_tests.rs"]
+mod agent_ssh_tests;
+
+#[cfg(test)]
 #[path = "index_worker_flags_tests.rs"]
 mod index_worker_flags_tests;
