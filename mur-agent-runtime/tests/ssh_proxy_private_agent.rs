@@ -97,9 +97,8 @@ async fn the_dedicated_key_signs_from_the_private_agent_and_leaves_the_users() {
     );
 
     // Boot's pre-seal start, with the user's agent as the inherited one.
-    // Edition 2024 marks this unsafe: nothing else in this test binary reads
-    // SSH_AUTH_SOCK concurrently, and it is set before any task spawns.
-    unsafe { std::env::set_var("SSH_AUTH_SOCK", &rig.upstream_sock) };
+    // EnvGuard serializes the mutation and restores it when the test ends.
+    let _env = mur_common::test_env::EnvGuard::set([("SSH_AUTH_SOCK", &rig.upstream_sock)]);
     let ent = SshEntitlement {
         keys: vec![
             rule(key.fingerprint.clone(), &host_fp),
