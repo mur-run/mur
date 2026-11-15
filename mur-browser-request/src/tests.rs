@@ -93,3 +93,135 @@ fn a_request_carries_exactly_site_login_and_reason() {
     assert_eq!(v["site"], "http://gitea.twdd.tw:3000");
     assert_eq!(v["login"], true);
 }
+
+// ---- files ----
+
+use chrono::Duration;
+use std::path::Path;
+
+fn req(site: &str, at: DateTime<Utc>) -> BrowserRequest {
+    BrowserRequest::new(&Site::parse(site).unwrap(), true, "log in", at).unwrap()
+}
+
+fn put(home: &Path, id: &str, body: &str) {
+    let d = requests_dir(home);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join(format!("{id}.json")), body).unwrap();
+}
+
+#[test]
+fn a_written_request_reads_back_and_a_repeat_replaces_it() {
+    let home = tempfile::tempdir().unwrap();
+    let w = write(home.path(), &req("http://gitea.twdd.tw:3000/a", now())).unwrap();
+    assert!(!w.replaced);
+    assert_eq!(w.site.origin(), "http://gitea.twdd.tw:3000");
+    let w = write(home.path(), &req("http://GITEA.twdd.tw:3000/b", now())).unwrap();
+    assert!(w.replaced, "same origin, same file");
+    let p = read_pending(home.path(), now());
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].site.origin(), "http://gitea.twdd.tw:3000");
+    assert!(p[0].login);
+    assert_eq!(p[0].reason, "log in");
+}
+
+#[test]
+fn expired_unknown_schema_unknown_field_and_oversized_files_are_dropped() {
+    let home = tempfile::tempdir().unwrap();
+    write(
+        home.path(),
+        &req("old.example", now() - Duration::seconds(EXPIRY_SECS + 1)),
+    )
+    .unwrap();
+    let id = |s: &str| Site::parse(s).unwrap().id();
+    put(
+        home.path(),
+        &id("s.example"),
+        r#"{"schema":2,"site":"https://s.example","login":true,"reason":"r","requested_at":"2026-11-15T12:00:00Z"}"#,
+    );
+    put(
+        home.path(),
+        &id("f.example"),
+        r#"{"schema":1,"site":"https://f.example","login":true,"reason":"r","requested_at":"2026-11-15T12:00:00Z","profile":"work"}"#,
+    );
+    put(
+        home.path(),
+        &id("big.example"),
+        &format!(
+            r#"{{"schema":1,"site":"https://big.example","login":true,"reason":"{}","requested_at":"2026-11-15T12:00:00Z"}}"#,
+            "r".repeat(MAX_FILE_BYTES as usize)
+        ),
+    );
+    assert!(read_pending(home.path(), now()).is_empty());
+}
+
+#[test]
+fn a_site_not_in_canonical_form_or_under_another_id_is_dropped() {
+    let home = tempfile::tempdir().unwrap();
+    let id = |s: &str| Site::parse(s).unwrap().id();
+    // canonical would be "https://a.example"; the file carries a path
+    put(
+        home.path(),
+        &id("a.example"),
+        r#"{"schema":1,"site":"https://a.example/login","login":true,"reason":"r","requested_at":"2026-11-15T12:00:00Z"}"#,
+    );
+    // valid body filed under another origin's id
+    put(
+        home.path(),
+        &id("c.example"),
+        r#"{"schema":1,"site":"https://b.example","login":true,"reason":"r","requested_at":"2026-11-15T12:00:00Z"}"#,
+    );
+    // refused scheme, filed under the id its own string would hash to, so
+    // the scheme is the only thing wrong with it
+    put(
+        home.path(),
+        &hex::encode(Sha256::digest(b"file:///x")),
+        r#"{"schema":1,"site":"file:///x","login":true,"reason":"r","requested_at":"2026-11-15T12:00:00Z"}"#,
+    );
+    put(
+        home.path(),
+        "not-an-id",
+        r#"{"schema":1,"site":"https://d.example","login":true,"reason":"r","requested_at":"2026-11-15T12:00:00Z"}"#,
+    );
+    assert!(read_pending(home.path(), now()).is_empty());
+}
+
+#[test]
+fn only_the_newest_eight_are_returned() {
+    let home = tempfile::tempdir().unwrap();
+    for i in 0..(MAX_PENDING + 3) {
+        let at = now() - Duration::minutes(i as i64);
+        write(home.path(), &req(&format!("h{i}.example"), at)).unwrap();
+    }
+    let p = read_pending(home.path(), now());
+    assert_eq!(p.len(), MAX_PENDING);
+    assert_eq!(p[0].site.host(), "h0.example");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_requests_dir_is_not_followed() {
+    let home = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    write(outside.path(), &req("a.example", now())).unwrap();
+    std::os::unix::fs::symlink(requests_dir(outside.path()), requests_dir(home.path())).unwrap();
+    assert!(read_pending(home.path(), now()).is_empty());
+    let p = read_pending(outside.path(), now()).pop().unwrap();
+    assert!(remove(home.path(), &p).is_err());
+    assert_eq!(read_pending(outside.path(), now()).len(), 1);
+}
+
+#[test]
+fn remove_deletes_exactly_that_request_and_a_second_remove_is_fine() {
+    let home = tempfile::tempdir().unwrap();
+    write(home.path(), &req("a.example", now())).unwrap();
+    write(home.path(), &req("b.example", now())).unwrap();
+    let a = read_pending(home.path(), now())
+        .into_iter()
+        .find(|p| p.site.host() == "a.example")
+        .unwrap();
+    remove(home.path(), &a).unwrap();
+    remove(home.path(), &a).unwrap();
+    let left = read_pending(home.path(), now());
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].site.host(), "b.example");
+}
