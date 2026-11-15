@@ -20,7 +20,6 @@ use mur_common::agent::{ProcessesEntitlement, SpawnMode};
 #[cfg(unix)]
 pub mod keystore;
 mod mark;
-mod pinned;
 mod store;
 pub use mark::{SIGNING_MARK_NOTICE, SigningMark};
 pub use store::{PendingRequest, Written, read_pending, remove, requests_dir, write};

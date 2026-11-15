@@ -17,14 +17,14 @@ use std::io;
 use std::path::Path;
 
 #[cfg(unix)]
-pub(crate) struct PinnedDir {
+pub struct PinnedDir {
     fd: std::os::fd::OwnedFd,
 }
 
 #[cfg(unix)]
 impl PinnedDir {
     /// Open `dir` itself without following a symlink at it.
-    pub(crate) fn open(dir: &Path) -> io::Result<Self> {
+    pub fn open(dir: &Path) -> io::Result<Self> {
         use rustix::fs::{CWD, Mode, OFlags, openat};
         let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         let fd = openat(CWD, dir, flags, Mode::empty())?;
@@ -32,7 +32,7 @@ impl PinnedDir {
     }
 
     /// Entry names that are valid UTF-8; anything else cannot be an id.
-    pub(crate) fn names(&self) -> io::Result<Vec<String>> {
+    pub fn names(&self) -> io::Result<Vec<String>> {
         let mut out = Vec::new();
         for entry in rustix::fs::Dir::read_from(&self.fd)? {
             let entry = entry?;
@@ -45,7 +45,7 @@ impl PinnedDir {
 
     /// The entry `name` if it is a regular file; `None` for anything else
     /// (a link, a FIFO, a device, a directory). Never blocks on a FIFO.
-    pub(crate) fn open_regular(&self, name: &str) -> io::Result<Option<File>> {
+    pub fn open_regular(&self, name: &str) -> io::Result<Option<File>> {
         use rustix::fs::{FileType, Mode, OFlags, fstat, openat};
         let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
         let fd = openat(&self.fd, name, flags, Mode::empty())?;
@@ -56,7 +56,7 @@ impl PinnedDir {
     }
 
     /// Unlink the entry `name` itself, inside the pinned directory.
-    pub(crate) fn unlink(&self, name: &str) -> io::Result<()> {
+    pub fn unlink(&self, name: &str) -> io::Result<()> {
         rustix::fs::unlinkat(&self.fd, name, rustix::fs::AtFlags::empty())?;
         Ok(())
     }
@@ -65,13 +65,13 @@ impl PinnedDir {
 /// No `openat` family: check the path, then act on it. The window is the
 /// agent's own tree, as `mur_common::paths::open_no_follow` documents.
 #[cfg(not(unix))]
-pub(crate) struct PinnedDir {
+pub struct PinnedDir {
     path: std::path::PathBuf,
 }
 
 #[cfg(not(unix))]
 impl PinnedDir {
-    pub(crate) fn open(dir: &Path) -> io::Result<Self> {
+    pub fn open(dir: &Path) -> io::Result<Self> {
         if !std::fs::symlink_metadata(dir)?.is_dir() {
             return Err(io::Error::other(format!(
                 "{} is not a directory",
@@ -83,19 +83,19 @@ impl PinnedDir {
         })
     }
 
-    pub(crate) fn names(&self) -> io::Result<Vec<String>> {
+    pub fn names(&self) -> io::Result<Vec<String>> {
         Ok(std::fs::read_dir(&self.path)?
             .flatten()
             .filter_map(|e| e.file_name().to_str().map(str::to_owned))
             .collect())
     }
 
-    pub(crate) fn open_regular(&self, name: &str) -> io::Result<Option<File>> {
-        let f = mur_common::paths::open_no_follow(&self.path.join(name))?;
+    pub fn open_regular(&self, name: &str) -> io::Result<Option<File>> {
+        let f = crate::paths::open_no_follow(&self.path.join(name))?;
         Ok(f.metadata()?.is_file().then_some(f))
     }
 
-    pub(crate) fn unlink(&self, name: &str) -> io::Result<()> {
+    pub fn unlink(&self, name: &str) -> io::Result<()> {
         std::fs::remove_file(self.path.join(name))
     }
 }

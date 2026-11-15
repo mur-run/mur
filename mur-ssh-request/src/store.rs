@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 
-use super::pinned::PinnedDir;
 use super::{
     EXPIRY_SECS, MAX_FILE_BYTES, MAX_PENDING, REQUESTS_DIR, RequestHost, SCHEMA, SshRequest,
     sanitize_reason, validate_user,
 };
+use mur_common::pinned_dir::PinnedDir;
 
 /// A request [`read_pending`] accepted. Only it builds one, so [`remove`] can
 /// only ever name a validated id.
@@ -64,7 +64,7 @@ pub fn write(agent_home: &Path, req: &SshRequest) -> io::Result<Written> {
 /// Anything that fails a check is skipped silently: the files are the
 /// agent's, and a bad one must not hide the good ones.
 pub fn read_pending(agent_home: &Path, now: DateTime<Utc>) -> Vec<PendingRequest> {
-    // Pinned without following a link at it: see `pinned` for the swap race.
+    // Pinned without following a link at it: see `mur_common::pinned_dir` for the swap race.
     let Ok(dir) = PinnedDir::open(&requests_dir(agent_home)) else {
         return Vec::new();
     };
