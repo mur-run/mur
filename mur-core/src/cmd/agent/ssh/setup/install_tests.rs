@@ -51,8 +51,9 @@ fn at(argv: &[String], needle: &str) -> Vec<usize> {
 fn the_user_follows_dash_l_and_the_host_follows_the_separator() {
     let kh = Path::new("/k/known");
     let (h1, h2) = (host("gh.example", None), host("box.example", Some(2222)));
-    let a = strs(&install_argv(&req(&h1, "git", LINE), kh).unwrap());
-    let b = strs(&install_argv(&req(&h2, "deploy", LINE), kh).unwrap());
+    let ids = [std::path::PathBuf::from("/u/.ssh/id_ed25519")];
+    let a = strs(&install_argv(&req(&h1, "git", LINE), kh, Some(&ids)).unwrap());
+    let b = strs(&install_argv(&req(&h2, "deploy", LINE), kh, Some(&ids)).unwrap());
 
     for (argv, user, name, port) in [
         (&a, "git", "gh.example", "22"),

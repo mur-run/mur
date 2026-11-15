@@ -7,6 +7,7 @@ pub mod apply;
 pub mod choices;
 pub mod dedicated;
 pub mod front;
+pub mod identities;
 pub mod install;
 pub mod life;
 pub mod pending;
@@ -14,6 +15,7 @@ pub mod plan;
 pub mod preapprove;
 pub mod probe;
 pub mod report;
+pub mod ssh_config;
 pub mod verdict;
 
 #[allow(unused_imports)] // Hub-only re-export.
@@ -41,6 +43,14 @@ pub(crate) mod dedicated_tests;
 #[cfg(all(test, unix))]
 #[path = "install_tests.rs"]
 mod install_tests;
+
+#[cfg(all(test, unix))]
+#[path = "identities_tests.rs"]
+mod identities_tests;
+
+#[cfg(all(test, unix))]
+#[path = "ssh_config_tests.rs"]
+mod ssh_config_tests;
 
 #[cfg(all(test, unix))]
 #[path = "install_apply_tests.rs"]

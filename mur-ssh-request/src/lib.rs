@@ -45,6 +45,10 @@ pub const SSH_BINARY: &str = "ssh";
 pub const SSH_ADD_BIN: &str = "ssh-add";
 /// Generates keys and looks up the user's own `known_hosts` entries.
 pub const KEYGEN_BIN: &str = "ssh-keygen";
+/// Comment on every dedicated key: `mur-agent-<agent>`. Display only, but
+/// also how a dedicated key in someone's ssh-agent listing is recognised
+/// on platforms that cannot read the key store.
+pub const KEY_COMMENT_PREFIX: &str = "mur-agent-";
 
 const MAX_HOST_LEN: usize = 253;
 const MAX_LABEL_LEN: usize = 63;

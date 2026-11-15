@@ -35,7 +35,7 @@ pub const PUB_SUFFIX: &str = ".pub";
 /// Private temporary directory of a generation in progress.
 pub const PARTIAL_PREFIX: &str = ".gen-";
 /// Key comment: `mur-agent-<agent>`. Display only.
-pub const COMMENT_PREFIX: &str = "mur-agent-";
+pub use crate::KEY_COMMENT_PREFIX as COMMENT_PREFIX;
 /// `ssh-add` / `ssh-keygen` are local and prompt for nothing here.
 pub const TOOL_TIMEOUT: Duration = Duration::from_secs(10);
 /// A temporary generation directory younger than this may belong to a
@@ -135,6 +135,13 @@ pub fn stored(mur_home: &Path, agent: &str) -> Result<Option<StoredKey>, Keystor
         public_line: line,
         fingerprint,
     }))
+}
+
+/// The stored public line, read only: unlike [`stored`] nothing is checked
+/// and a missing `.pub` is not rebuilt. `None` when there is none to read.
+pub fn stored_public_line(mur_home: &Path, agent: &str) -> Option<String> {
+    let dir = key_dir(mur_home, agent).ok()?;
+    read_pub(&pub_path(&dir.join(KEY_FILE))).ok().flatten()
 }
 
 /// The agent's key, generating it first if it has none. Never overwrites:

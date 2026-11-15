@@ -62,6 +62,11 @@ mod sys {
         keystore::stored(mur_home, agent).map_err(|e| e.to_string())
     }
 
+    /// The stored public line, read only: never rebuilds a missing `.pub`.
+    pub fn stored_public(mur_home: &Path, agent: &str) -> Option<String> {
+        keystore::stored_public_line(mur_home, agent)
+    }
+
     pub fn generate(mur_home: &Path, agent: &str) -> Result<StoredKey, String> {
         keystore::generate(mur_home, agent).map_err(|e| e.to_string())
     }
@@ -79,6 +84,15 @@ mod sys {
     /// read or write.
     pub fn key_dir(mur_home: &Path, agent: &str) -> Option<PathBuf> {
         keystore::key_dir(mur_home, agent).ok()
+    }
+
+    /// The directory holding every agent's key directory.
+    pub fn keys_root(mur_home: &Path) -> Option<PathBuf> {
+        Some(
+            mur_home
+                .join(mur_common::hitl::approval_token::SECRETS_DIR)
+                .join(keystore::KEYS_SUBDIR),
+        )
     }
 
     /// One public key line of the type this store generates.
@@ -146,6 +160,9 @@ mod sys {
     pub fn stored(_: &Path, _: &str) -> Result<Option<StoredKey>, String> {
         Ok(None)
     }
+    pub fn stored_public(_: &Path, _: &str) -> Option<String> {
+        None
+    }
     pub fn generate(_: &Path, _: &str) -> Result<StoredKey, String> {
         Err(UNIX_ONLY.into())
     }
@@ -154,6 +171,9 @@ mod sys {
     }
     pub fn sweep(_: &Path, _: &str) {}
     pub fn key_dir(_: &Path, _: &str) -> Option<PathBuf> {
+        None
+    }
+    pub fn keys_root(_: &Path) -> Option<PathBuf> {
         None
     }
     pub fn is_key_line(_: &str) -> bool {
