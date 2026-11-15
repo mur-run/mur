@@ -62,7 +62,7 @@ fn the_no_model_notice_carries_the_cause_and_a_way_out() {
     assert!(!m.contains(UNRESOLVED_PROVIDER), "{m}");
 }
 
-use super::provider::{RefClientBuilder, chain_switch_handle};
+use super::chain_switch::{RefClientBuilder, chain_switch_handle};
 use super::*;
 use crate::llm::LlmClient;
 use crate::llm::{LlmError, LlmRequest, LlmResponse, RequestIntent, StopReason};
