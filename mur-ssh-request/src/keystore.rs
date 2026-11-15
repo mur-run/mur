@@ -236,6 +236,34 @@ pub fn load(key: &StoredKey) -> Result<(), KeystoreError> {
     run_ok(cmd, SSH_ADD_BIN).map(drop)
 }
 
+/// Add the key to the agent listening on `socket`, not the user's.
+pub fn load_into(key: &StoredKey, socket: &Path) -> Result<(), KeystoreError> {
+    let mut cmd = Command::new(SSH_ADD_BIN);
+    cmd.arg("-q").arg(&key.private).env("SSH_AUTH_SOCK", socket);
+    run_ok(cmd, SSH_ADD_BIN).map(drop)
+}
+
+/// Remove the key from the user's ssh-agent, where slice 6a used to load it.
+/// `Ok(false)` when it was not there or the agent cannot be reached or
+/// refuses: this is clean-up, never a reason to stop.
+pub fn unload_from_user(key: &StoredKey) -> Result<bool, KeystoreError> {
+    unload_via(key, None)
+}
+
+/// [`unload_from_user`] against `socket`, or the inherited `SSH_AUTH_SOCK`.
+pub fn unload_via(key: &StoredKey, socket: Option<&Path>) -> Result<bool, KeystoreError> {
+    let mut cmd = Command::new(SSH_ADD_BIN);
+    cmd.arg("-q").arg("-d").arg(&key.private);
+    if let Some(socket) = socket {
+        cmd.env("SSH_AUTH_SOCK", socket);
+    }
+    match run_ok(cmd, SSH_ADD_BIN) {
+        Ok(_) => Ok(true),
+        Err(KeystoreError::ToolFailed { .. }) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 /// Drop the key from ssh-agent and delete the agent's key directory.
 ///
 /// The directory is deleted even when ssh-agent cannot be reached: the file is
