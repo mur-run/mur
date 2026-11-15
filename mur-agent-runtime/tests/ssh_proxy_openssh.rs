@@ -425,6 +425,7 @@ async fn login_through_proxy(
     let proxy = Arc::new(Proxy {
         policy: Policy::build(&ent, PinTrust::Pinned, Policy::UNPINNED_IS_UNTRUSTED),
         upstream: Arc::new(upstream),
+        dedicated: None,
         sink: RefusalSink::new(Some(home.clone())),
         marks: Default::default(),
         // The production gate: `ssh` is this test process's child.

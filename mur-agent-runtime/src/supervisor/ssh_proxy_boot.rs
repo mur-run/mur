@@ -215,6 +215,7 @@ pub(super) async fn start_after_seal(a: StartArgs<'_>) -> Option<PathBuf> {
     let proxy = Arc::new(Proxy {
         policy,
         upstream: a.upstream,
+        dedicated: None,
         sink: a.sink,
         marks: a.marks,
         gate: listener::self_only_gate(std::process::id(), a.agents_dir),
@@ -237,7 +238,7 @@ async fn warn_at_start(policy: &Policy, upstream: &HeldUpstream) {
     if !upstream.is_connected().await {
         return; // already warned at connect time
     }
-    match listener::missing_upstream_keys(policy, upstream).await {
+    match listener::missing_upstream_keys(policy, upstream, None).await {
         Some(missing) => {
             for fp in missing {
                 tracing::warn!(key = %fp, "ssh-agent proxy: key listed in entitlements.ssh is not held by the upstream ssh-agent");

@@ -92,6 +92,7 @@ async fn rig_with(gate: PeerGate, approvals: Arc<dyn SignGate>) -> Rig {
             &fingerprint(&host.key_blob()),
         ),
         upstream: upstream.clone(),
+        dedicated: None,
         sink: RefusalSink::new(Some(home.path().to_path_buf())),
         marks: Default::default(),
         gate,
@@ -205,6 +206,7 @@ async fn upstream_that_was_never_reached_refuses_upstream_unavailable() {
             &fingerprint(&Ed::new().key_blob()),
         ),
         upstream: Arc::new(HeldUpstream::disconnected()),
+        dedicated: None,
         sink: RefusalSink::new(Some(home.path().to_path_buf())),
         marks: Default::default(),
         gate: admit_all(),
@@ -261,7 +263,7 @@ async fn missing_upstream_keys_names_listed_keys_the_agent_lacks() {
         &fingerprint(&r.host.key_blob()),
     );
     assert_eq!(
-        listener::missing_upstream_keys(&p, &r.upstream).await,
+        listener::missing_upstream_keys(&p, &r.upstream, None).await,
         Some(vec![fingerprint(&absent.key_blob())])
     );
     let held = policy_for(
@@ -269,7 +271,17 @@ async fn missing_upstream_keys_names_listed_keys_the_agent_lacks() {
         &fingerprint(&r.host.key_blob()),
     );
     assert_eq!(
-        listener::missing_upstream_keys(&held, &r.upstream).await,
+        listener::missing_upstream_keys(&held, &r.upstream, None).await,
+        Some(vec![])
+    );
+    // A key only the private agent holds is not missing.
+    let dedicated = listener::DedicatedUpstream::new(
+        HeldUpstream::disconnected(),
+        [absent.key_blob()].into_iter().collect(),
+        None,
+    );
+    assert_eq!(
+        listener::missing_upstream_keys(&p, &r.upstream, Some(&dedicated)).await,
         Some(vec![])
     );
 }

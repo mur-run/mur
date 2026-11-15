@@ -7,6 +7,7 @@
 //! platform, and a fallback that sometimes works is worse than none). No
 //! `/tmp` fallback for a long socket path: the proxy simply does not start.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -185,6 +186,42 @@ async fn exchange(s: &mut UnixStream, frame: &[u8]) -> std::io::Result<Vec<u8>> 
     }
 }
 
+/// The runtime-private ssh-agent holding the agent's dedicated key (D spec
+/// §"Proxy with two upstreams"): its held connection, the key blobs it
+/// answered at boot (fixed: nothing can add a key after the seal), and the
+/// process, killed when this is dropped.
+pub struct DedicatedUpstream {
+    pub(crate) held: HeldUpstream,
+    pub(crate) blobs: HashSet<Vec<u8>>,
+    _child: Option<tokio::process::Child>,
+}
+
+impl DedicatedUpstream {
+    pub fn new(
+        held: HeldUpstream,
+        blobs: HashSet<Vec<u8>>,
+        child: Option<tokio::process::Child>,
+    ) -> Self {
+        Self {
+            held,
+            blobs,
+            _child: child,
+        }
+    }
+}
+
+/// The key blobs `upstream` holds. `None` when it cannot be asked.
+pub async fn identity_blobs(upstream: &HeldUpstream) -> Option<HashSet<Vec<u8>>> {
+    let body = upstream
+        .roundtrip(wire::Request::RequestIdentities.encode())
+        .await
+        .ok()?;
+    let wire::Answer::Identities(ids) = wire::decode_answer(&body).ok()? else {
+        return None;
+    };
+    Some(ids.into_iter().map(|i| i.key_blob).collect())
+}
+
 /// Decides whether a connecting peer may use the proxy. `Err` says why not.
 pub type PeerGate = Arc<dyn Fn(Option<u32>) -> Result<(), String> + Send + Sync>;
 
@@ -211,6 +248,8 @@ pub fn self_only_gate(self_pid: u32, agents_dir: PathBuf) -> PeerGate {
 pub struct Proxy {
     pub policy: Policy,
     pub upstream: Arc<HeldUpstream>,
+    /// The runtime-private agent, when the dedicated key was started.
+    pub dedicated: Option<Arc<DedicatedUpstream>>,
     pub sink: RefusalSink,
     /// Where signing marks go.
     pub marks: MarkSink,
@@ -233,8 +272,11 @@ impl Proxy {
             );
             return;
         }
-        let session = Session::new(&self.policy, &*self.upstream, &self.sink, &*self.approvals)
+        let mut session = Session::new(&self.policy, &*self.upstream, &self.sink, &*self.approvals)
             .with_marks(&self.marks);
+        if let Some(d) = &self.dedicated {
+            session = session.with_dedicated(&d.held, &d.blobs);
+        }
         if let Err(e) = session.serve(stream).await {
             tracing::debug!(error = %e, "ssh-agent proxy client connection ended");
         }
@@ -257,27 +299,26 @@ pub async fn serve(listener: UnixListener, proxy: Arc<Proxy>) {
     }
 }
 
-/// Fingerprints listed in `policy` that the upstream does not hold, sorted.
-/// `None` when the upstream could not be asked (warned about separately).
+/// Fingerprints listed in `policy` that neither upstream holds, sorted.
+/// `None` when the user's upstream could not be asked (warned about
+/// separately).
 pub async fn missing_upstream_keys(
     policy: &Policy,
     upstream: &HeldUpstream,
+    dedicated: Option<&DedicatedUpstream>,
 ) -> Option<Vec<String>> {
     let listed = policy.key_fps();
     if listed.is_empty() {
         return Some(Vec::new());
     }
-    let body = upstream
-        .roundtrip(wire::Request::RequestIdentities.encode())
-        .await
-        .ok()?;
-    let wire::Answer::Identities(ids) = wire::decode_answer(&body).ok()? else {
-        return None;
-    };
-    let held: std::collections::HashSet<String> = ids
+    let mut held: HashSet<String> = identity_blobs(upstream)
+        .await?
         .iter()
-        .map(|i| super::keys::fingerprint(&i.key_blob))
+        .map(|b| super::keys::fingerprint(b))
         .collect();
+    if let Some(d) = dedicated {
+        held.extend(d.blobs.iter().map(|b| super::keys::fingerprint(b)));
+    }
     let mut out: Vec<String> = listed
         .into_iter()
         .filter(|fp| !held.contains(*fp))
