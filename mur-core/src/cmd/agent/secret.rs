@@ -9,7 +9,12 @@ pub(crate) const SECRET_SERVICE: &str = "mur-agent";
 /// Clears the "keychain prompt pending" markers for an agent (#1980), so its
 /// next start probes those secrets again. Best-effort; a stale marker only
 /// means one secret stays skipped until the next user action.
+///
+/// Every caller is a start a person asked for, so it also marks the start as
+/// attended: the runtime then waits long enough for a Keychain prompt to be
+/// answered instead of timing out in 3 s (#2369).
 pub(crate) fn clear_pending_keychain(agent_home: &std::path::Path) {
+    mur_common::secret::keychain_pending::mark_attended(agent_home);
     let n = mur_common::secret::keychain_pending::clear_all(agent_home);
     if n > 0 {
         tracing::debug!(cleared = n, "cleared pending keychain markers");

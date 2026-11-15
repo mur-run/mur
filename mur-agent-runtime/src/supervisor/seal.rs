@@ -17,7 +17,7 @@
 //! threads: they may block, but must never spawn a child or a thread, since
 //! they are not confined.
 
-use super::bootstrap::USER_SECRET_RESOLVE_TIMEOUT;
+use super::bootstrap::keychain_resolve_timeout;
 use crate::profile::Profile;
 use std::path::Path;
 use std::sync::Arc;
@@ -226,6 +226,12 @@ pub(super) fn prepare_and_seal(
     // and the later lookup fails exactly as it did before. Warn rather than
     // abort, because an agent with an unreachable secret still starts and its
     // other candidates may work.
+    // A person just ran `mur agent start|restart`: a Keychain prompt raised
+    // below can be answered, so wait for it longer (#2369). Taken once, so a
+    // crash-loop respawn after this start is back to the short wait.
+    let keychain_timeout = keychain_resolve_timeout(
+        mur_common::secret::keychain_pending::take_attended(agent_home),
+    );
     {
         let reg = mur_common::model::ModelRegistry::load_from(&mur_home.join("models.yaml"))
             .unwrap_or_default();
@@ -313,7 +319,7 @@ pub(super) fn prepare_and_seal(
             std::thread::spawn(move || {
                 let _ = tx.send(mur_common::secret::cache_before_seal(&probe));
             });
-            match rx.recv_timeout(USER_SECRET_RESOLVE_TIMEOUT) {
+            match rx.recv_timeout(keychain_timeout) {
                 Ok(Ok(())) => {
                     if let Some(v) = r.resolve_preseal_cached() {
                         use secrecy::ExposeSecret;
@@ -332,7 +338,7 @@ pub(super) fn prepare_and_seal(
                 Err(_) => {
                     warn!(
                         name,
-                        timeout_secs = USER_SECRET_RESOLVE_TIMEOUT.as_secs(),
+                        timeout_secs = keychain_timeout.as_secs(),
                         "keychain did not answer for this secret in time — most likely \
                          an authorisation prompt nobody is there to click. Starting \
                          without it, and later starts will not ask again until you \
@@ -358,6 +364,7 @@ pub(super) fn prepare_and_seal(
         &profile.inner.enabled_mcp_servers(),
         agent_home,
         &profile.inner.name,
+        keychain_timeout,
     );
 
     // The approval token lives in `secrets/`, which the seal below makes

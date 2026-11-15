@@ -188,7 +188,7 @@ pub const ENV_KEYCHAIN_ALLOW: &str = "MUR_KEYCHAIN_ALLOW";
 /// real `keychain:` ref (e.g. via the user's ~/.mur/config.yaml) rains
 /// password prompts on every run. nextest sets `NEXTEST=1` in each test
 /// process — treat that as "no real keychain" unless explicitly re-enabled.
-fn keychain_blocked() -> bool {
+pub(crate) fn keychain_blocked() -> bool {
     if std::env::var_os(ENV_KEYCHAIN_ALLOW).is_some() {
         return false;
     }

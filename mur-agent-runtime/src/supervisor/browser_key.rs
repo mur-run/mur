@@ -12,11 +12,11 @@
 //! timed-out prompt is recorded with `keychain_pending` so a crash loop does
 //! not raise it again on every start.
 
-use super::bootstrap::USER_SECRET_RESOLVE_TIMEOUT;
 use mur_common::agent::McpServerEntry;
 use mur_common::browser_state_key::{PENDING_NAME, is_live_browser, keychain_ref};
 use mur_common::secret::{SecretError, keychain_pending};
 use std::path::Path;
+use std::time::Duration;
 use tracing::{info, warn};
 
 /// Whether the key must be read before the seal: any enabled live browser,
@@ -29,8 +29,14 @@ fn needs_key(entries: &[McpServerEntry]) -> bool {
 
 /// Cache the key before the seal when [`needs_key`]. Never fails startup: a
 /// miss leaves the child to try the Keychain itself, which is exactly the
-/// behaviour before this existed.
-pub(super) fn cache_before_seal(entries: &[McpServerEntry], agent_home: &Path, agent: &str) {
+/// behaviour before this existed. `timeout` is the caller's: longer when a
+/// person just started the agent and can answer a prompt.
+pub(super) fn cache_before_seal(
+    entries: &[McpServerEntry],
+    agent_home: &Path,
+    agent: &str,
+    timeout: Duration,
+) {
     if !needs_key(entries) {
         return;
     }
@@ -48,7 +54,7 @@ pub(super) fn cache_before_seal(entries: &[McpServerEntry], agent_home: &Path, a
     std::thread::spawn(move || {
         let _ = tx.send(mur_common::secret::cache_before_seal(&keychain_ref()));
     });
-    match rx.recv_timeout(USER_SECRET_RESOLVE_TIMEOUT) {
+    match rx.recv_timeout(timeout) {
         Ok(Ok(())) => info!("browser state key resolved before sandbox seal"),
         Ok(Err(e)) if is_absent(&e) => info!(
             "no browser state key in the keychain yet: no profile has been saved on \
@@ -63,11 +69,12 @@ pub(super) fn cache_before_seal(entries: &[McpServerEntry], agent_home: &Path, a
         ),
         Err(_) => {
             warn!(
-                timeout_secs = USER_SECRET_RESOLVE_TIMEOUT.as_secs(),
+                timeout_secs = timeout.as_secs(),
                 agent,
                 "keychain did not answer for the browser state key in time — most likely \
-                 an authorisation prompt nobody is there to click. Choose Always Allow and \
-                 run `mur agent restart {agent}`"
+                 an authorisation prompt nobody is there to click. Run `mur agent \
+                 runtime-doctor --fix` once so the runtime stops needing that prompt, \
+                 then `mur agent restart {agent}`"
             );
             if let Err(e) = keychain_pending::mark(agent_home, PENDING_NAME) {
                 warn!(error = %e, "could not record the pending keychain prompt");
