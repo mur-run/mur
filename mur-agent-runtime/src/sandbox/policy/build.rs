@@ -383,7 +383,8 @@ impl SandboxPolicy {
         // an atomic temp+rename edit of a granted FILE is unreadable after
         // the seal. Granting the parent directory keeps replaced files
         // visible — the same reason `profile.yaml` reloads under agent_home.
-        // The supervisor creates it before the seal so the rule sticks.
+        // The supervisor creates it before the seal so the rule sticks; the
+        // skill store is created there too, for the same reason.
         if let Some(mur_home) = agent_home.parent().and_then(|p| p.parent()) {
             for p in [
                 mur_home.join("config.yaml"),
@@ -391,6 +392,10 @@ impl SandboxPolicy {
                 mur_home.join("compress.yaml"),
                 mur_home.join("compress"),
                 mur_home.join("fleets"),
+                // `skills/get` serves `<mur_home>/skills/<name>` to peers. It
+                // only worked while tokio workers ran unconfined; once the
+                // seal covered every thread (GHSA-j8mv-27gx-x7xj) it read EACCES.
+                mur_common::skill::global_skills_root(mur_home),
             ] {
                 if std::fs::metadata(&p).is_ok() && !fs_read.contains(&p) {
                     fs_read.push(p);
