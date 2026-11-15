@@ -7,6 +7,7 @@
 //!
 //! A key file grants nothing by itself: the profile's `entitlements.ssh` is
 //! the authority, and every caller that loads a key checks the grant first.
+//! The only agent a key is loaded into is the runtime-private one.
 //!
 //! Callers must not put the private path, the public line or the fingerprint
 //! in anything an agent reads (a tool reply, a prompt section, a hand-back).
@@ -229,14 +230,8 @@ pub fn sweep_partial_older_than(mur_home: &Path, agent: &str, min_age: Duration)
     }
 }
 
-/// Add the key to the user's ssh-agent. Adding a key twice is not an error.
-pub fn load(key: &StoredKey) -> Result<(), KeystoreError> {
-    let mut cmd = Command::new(SSH_ADD_BIN);
-    cmd.arg("-q").arg(&key.private);
-    run_ok(cmd, SSH_ADD_BIN).map(drop)
-}
-
-/// Add the key to the agent listening on `socket`, not the user's.
+/// Add the key to the agent listening on `socket`, never the user's: the
+/// dedicated key is only ever held by the runtime-private agent (K8).
 pub fn load_into(key: &StoredKey, socket: &Path) -> Result<(), KeystoreError> {
     let mut cmd = Command::new(SSH_ADD_BIN);
     cmd.arg("-q").arg(&key.private).env("SSH_AUTH_SOCK", socket);

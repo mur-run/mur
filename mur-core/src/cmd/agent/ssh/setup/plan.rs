@@ -59,9 +59,10 @@ pub enum Dedicated {
     Off(DedicatedOff),
     /// Offered; no key exists yet.
     Offer,
-    /// The agent's key exists. Its fingerprint is also in `keys_loaded`
-    /// when it is loaded. `public_line` is the exact `authorized_keys` line
-    /// the summary shows (K2); it is a public key, safe to show anywhere.
+    /// The agent's key exists. It is not in `keys_loaded` unless an older
+    /// MUR added it to the user's ssh-agent, which the runtime now undoes.
+    /// `public_line` is the exact `authorized_keys` line the summary shows
+    /// (K2); it is a public key, safe to show anywhere.
     Stored {
         fingerprint: String,
         public_line: String,

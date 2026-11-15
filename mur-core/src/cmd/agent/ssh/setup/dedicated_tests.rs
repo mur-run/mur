@@ -177,20 +177,19 @@ fn generate_refuses_on_a_stale_plan_and_makes_no_key() {
     let home = tempfile::tempdir().unwrap();
     write_agent(home.path(), AGENT);
     let before = profile_bytes(home.path());
-    let never = |_: &dedicated::StoredKey| -> Result<(), String> { panic!("nothing to load") };
 
     assert_eq!(
         generate_refusal(&ent(true), false, SEALED),
         Some(DedicatedOff::SwitchOff)
     );
-    let e = generate_with(home.path(), AGENT, &ent(true), false, SEALED, never).unwrap_err();
+    let e = generate_with(home.path(), AGENT, &ent(true), false, SEALED).unwrap_err();
     assert!(e.contains("ssh_setup.generate_key: false"), "{e}");
 
     assert_eq!(
         generate_refusal(&ent(false), true, SEALED),
         Some(DedicatedOff::NotSealedEveryRun)
     );
-    let e = generate_with(home.path(), AGENT, &ent(false), true, SEALED, never).unwrap_err();
+    let e = generate_with(home.path(), AGENT, &ent(false), true, SEALED).unwrap_err();
     assert!(e.contains("not sandboxed on every run"), "{e}");
 
     assert_eq!(dedicated::stored(home.path(), AGENT).unwrap(), None);
@@ -198,55 +197,24 @@ fn generate_refuses_on_a_stale_plan_and_makes_no_key() {
 }
 
 #[test]
-fn generate_loads_the_key_and_never_writes_the_profile() {
+fn generate_makes_the_key_and_never_writes_the_profile() {
     if keygen_missing() {
         return;
     }
     let home = tempfile::tempdir().unwrap();
     write_agent(home.path(), AGENT);
     let before = profile_bytes(home.path());
-    let loaded = std::cell::RefCell::new(Vec::new());
-
-    let key = generate_with(home.path(), AGENT, &ent(true), true, SEALED, |k| {
-        loaded.borrow_mut().push(k.fingerprint.clone());
-        Ok(())
-    })
-    .unwrap();
+    let key = generate_with(home.path(), AGENT, &ent(true), true, SEALED).unwrap();
 
     let stored = dedicated::stored(home.path(), AGENT).unwrap().unwrap();
     assert_eq!(key.fingerprint, stored.fingerprint);
     assert_eq!(key.comment, format!("mur-agent-{AGENT}"));
     assert_eq!(key.path, None, "the private key path is never handed out");
-    assert_eq!(*loaded.borrow(), vec![stored.fingerprint]);
     assert_eq!(
         profile_bytes(home.path()),
         before,
         "generating grants nothing"
     );
-}
-
-#[test]
-fn a_load_failure_says_the_key_exists() {
-    if keygen_missing() {
-        return;
-    }
-    let home = tempfile::tempdir().unwrap();
-    write_agent(home.path(), AGENT);
-    let before = profile_bytes(home.path());
-
-    let e = generate_with(home.path(), AGENT, &ent(true), true, SEALED, |_| {
-        Err("no agent".into())
-    })
-    .unwrap_err();
-
-    assert!(
-        e.contains("exists but could not be added to ssh-agent"),
-        "{e}"
-    );
-    assert!(e.contains("no agent"), "{e}");
-    assert!(!e.contains("  "), "a line continuation left a gap: {e:?}");
-    assert!(dedicated::stored(home.path(), AGENT).unwrap().is_some());
-    assert_eq!(profile_bytes(home.path()), before);
 }
 
 #[test]
