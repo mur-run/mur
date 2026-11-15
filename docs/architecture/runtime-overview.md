@@ -616,8 +616,9 @@ before the seal the runtime starts a runtime-private ssh-agent holding only
 that key, keeps one connection to it, and removes its socket, so nothing else
 can reach it. The proxy lists both agents' keys and routes each sign request
 by key to the agent that holds it. The private agent exits with the runtime.
-Start also removes a dedicated key an older MUR left in your ssh-agent. Each sign request is
-checked against the key, the host key the client verified with
+Start also removes a dedicated key an older MUR left in your ssh-agent.
+Each sign request is checked against the key, the host key the client
+verified with
 `session-bind`, and that bind's session ID, and then goes through HITL.
 Every error refuses the signature; there is no passthrough. The ssh client
 only sees `SSH_AGENT_FAILURE`, so the reason goes to the agent's channel and

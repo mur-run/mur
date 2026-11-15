@@ -632,10 +632,13 @@ Agent** wizard offers the same catalog as a source.
   SHA256:<fp> --yes` instead. `mur agent ssh list` (`--json`) shows the grants,
   `revoke` takes them back. `mur agent status` says whether the proxy is a
   real boundary for that agent (`ssh_proxy: boundary`) or audit-only, with
-  the reason. **Limits:** keys stay in your ssh-agent; unrestricted-network
-  agents and Linux are audit-only; on Windows the proxy does not start;
-  detection covers only the socket the proxy uses. Commit signing (SSHSIG),
-  `ssh -A`, and `ssh-add -h` keys are not supported. For git, HTTPS via
+  the reason. `--generate` grants the agent its own dedicated key instead:
+  it is kept where the agent cannot read it and never added to your
+  ssh-agent; the runtime holds it in a private ssh-agent that nothing else
+  can reach. **Limits:** a key of yours stays in your ssh-agent;
+  unrestricted-network agents and Linux are audit-only; on Windows the proxy
+  does not start; detection covers only the socket the proxy uses. Commit
+  signing (SSHSIG), `ssh -A`, and `ssh-add -h` keys are not supported. For git, HTTPS via
   `gh auth setup-git` is still the simpler path.
   In `mur agent cli`, `/ssh <host[:port]> [user]` does the same in a card:
   pick (or `ssh-add`) a key, compare the scanned host key against your own
