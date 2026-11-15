@@ -188,24 +188,24 @@ async fn exchange(s: &mut UnixStream, frame: &[u8]) -> std::io::Result<Vec<u8>> 
 
 /// The runtime-private ssh-agent holding the agent's dedicated key (D spec
 /// §"Proxy with two upstreams"): its held connection, the key blobs it
-/// answered at boot (fixed: nothing can add a key after the seal), and the
-/// process, killed when this is dropped.
+/// answered at boot (fixed: nothing can add a key after the seal), and a
+/// lifeline whose drop stops the agent process.
 pub struct DedicatedUpstream {
     pub(crate) held: HeldUpstream,
     pub(crate) blobs: HashSet<Vec<u8>>,
-    _child: Option<tokio::process::Child>,
+    _lifeline: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl DedicatedUpstream {
     pub fn new(
         held: HeldUpstream,
         blobs: HashSet<Vec<u8>>,
-        child: Option<tokio::process::Child>,
+        lifeline: Option<Box<dyn std::any::Any + Send + Sync>>,
     ) -> Self {
         Self {
             held,
             blobs,
-            _child: child,
+            _lifeline: lifeline,
         }
     }
 }

@@ -16,15 +16,15 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Child, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::ssh_proxy::listener::{self, DedicatedUpstream, HeldUpstream, UPSTREAM_IO_TIMEOUT};
+use crate::ssh_proxy::wire;
 use mur_common::hitl::approval_token::create_private_dir;
 use mur_ssh_request::keystore::{KeystoreError, StoredKey};
 use mur_ssh_request::{PRIVATE_AGENT_SOCKET_WAIT, SSH_AGENT_BIN};
-use tokio::process::Child;
-
-use crate::ssh_proxy::listener::{self, DedicatedUpstream, HeldUpstream};
 
 /// Prefix of the per-start directory under the agent's key directory.
 pub(super) const RUN_DIR_PREFIX: &str = "run-";
@@ -59,66 +59,144 @@ pub(super) enum StartError {
     Exited(std::process::ExitStatus),
 }
 
+/// The private agent as the pre-seal phase leaves it: a plain std stream,
+/// because the runtime that will drive it does not exist yet (see
+/// `supervisor::seal`). [`Self::adopt`] hands it to tokio after the seal.
+pub(crate) struct PreSealDedicated {
+    stream: std::os::unix::net::UnixStream,
+    blobs: HashSet<Vec<u8>>,
+    lifeline: Option<Lifeline>,
+}
+
+impl PreSealDedicated {
+    /// Must run inside the runtime. `None` (warned) when the stream cannot
+    /// be registered: requests for the key are then refused.
+    pub(crate) fn adopt(self) -> Option<Arc<DedicatedUpstream>> {
+        match HeldUpstream::from_std(self.stream) {
+            Ok(held) => Some(Arc::new(DedicatedUpstream::new(
+                held,
+                self.blobs,
+                self.lifeline
+                    .map(|l| Box::new(l) as Box<dyn std::any::Any + Send + Sync>),
+            ))),
+            Err(e) => {
+                tracing::warn!(error = %e, "ssh-agent proxy: could not adopt the private ssh-agent connection; requests for the dedicated key will be refused");
+                None
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn blobs(&self) -> &HashSet<Vec<u8>> {
+        &self.blobs
+    }
+
+    /// A handle with no agent behind it, for boot tests that count calls.
+    #[cfg(test)]
+    pub(super) fn detached() -> Self {
+        let (stream, _) = std::os::unix::net::UnixStream::pair().expect("socketpair");
+        Self {
+            stream,
+            blobs: HashSet::new(),
+            lifeline: None,
+        }
+    }
+}
+
+/// The lifeline shell. Dropping it closes the pipe, so the shell kills
+/// `ssh-agent`; the shell itself is then killed and reaped.
+pub(super) struct Lifeline(Child);
+
+impl Drop for Lifeline {
+    fn drop(&mut self) {
+        drop(self.0.stdin.take());
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// Start the private agent for `key`, whose directory is `key_dir`.
-pub(super) async fn start(
-    key_dir: &Path,
-    key: &StoredKey,
-) -> Result<DedicatedUpstream, StartError> {
+/// Blocking on purpose: it runs before the tokio runtime exists, on the
+/// thread that is about to seal.
+pub(super) fn start(key_dir: &Path, key: &StoredKey) -> Result<PreSealDedicated, StartError> {
     start_with(
         key_dir,
         key,
         spawn_agent,
         mur_ssh_request::keystore::load_into,
     )
-    .await
 }
 
 /// [`start`] with the spawner and loader given, so tests need no ssh-agent.
-pub(super) async fn start_with<S, L>(
+pub(super) fn start_with<S, L>(
     key_dir: &Path,
     key: &StoredKey,
     spawn: S,
     load: L,
-) -> Result<DedicatedUpstream, StartError>
+) -> Result<PreSealDedicated, StartError>
 where
     S: FnOnce(&Path) -> std::io::Result<Child>,
-    L: FnOnce(&StoredKey, &Path) -> Result<(), KeystoreError> + Send + 'static,
+    L: FnOnce(&StoredKey, &Path) -> Result<(), KeystoreError>,
 {
     sweep_runs(key_dir);
     let run = run_dir(key_dir);
     create_private_dir(&run)?;
-    let started = start_in(&run, key, spawn, load).await;
+    let started = start_in(&run, key, spawn, load);
     // Step 6, on success and failure alike: the socket and its directory go.
     let _ = std::fs::remove_dir_all(&run);
     started
 }
 
-async fn start_in<S, L>(
+fn start_in<S, L>(
     run: &Path,
     key: &StoredKey,
     spawn: S,
     load: L,
-) -> Result<DedicatedUpstream, StartError>
+) -> Result<PreSealDedicated, StartError>
 where
     S: FnOnce(&Path) -> std::io::Result<Child>,
-    L: FnOnce(&StoredKey, &Path) -> Result<(), KeystoreError> + Send + 'static,
+    L: FnOnce(&StoredKey, &Path) -> Result<(), KeystoreError>,
 {
     let sock = run.join(SOCKET_NAME);
     if !listener::socket_path_fits(&sock) {
         return Err(StartError::PathTooLong);
     }
-    // `kill_on_drop`: every early return below stops it.
-    let mut child = spawn(&sock)?;
-    wait_for_socket(&sock, &mut child).await?;
-    let (k, s) = (key.clone(), sock.clone());
-    tokio::task::spawn_blocking(move || load(&k, &s))
-        .await
-        .map_err(std::io::Error::other)??;
-    let held = HeldUpstream::connect(&sock).await?;
-    let blobs: HashSet<Vec<u8>> = listener::identity_blobs(&held)
-        .await
-        .ok_or(StartError::NoIdentities)?;
-    Ok(DedicatedUpstream::new(held, blobs, Some(child)))
+    // Every early return below drops the lifeline, which stops the agent.
+    let mut lifeline = Lifeline(spawn(&sock)?);
+    wait_for_socket(&sock, &mut lifeline.0)?;
+    load(key, &sock)?;
+    let mut stream = HeldUpstream::connect_blocking(&sock)?;
+    let blobs = identity_blobs_blocking(&mut stream)?.ok_or(StartError::NoIdentities)?;
+    Ok(PreSealDedicated {
+        stream,
+        blobs,
+        lifeline: Some(lifeline),
+    })
+}
+
+/// One `REQUEST_IDENTITIES` round trip on a std stream, bounded by
+/// [`UPSTREAM_IO_TIMEOUT`]. `None` when the answer is not a key list.
+fn identity_blobs_blocking(
+    s: &mut std::os::unix::net::UnixStream,
+) -> std::io::Result<Option<HashSet<Vec<u8>>>> {
+    use std::io::{Read, Write};
+    s.set_read_timeout(Some(UPSTREAM_IO_TIMEOUT))?;
+    s.set_write_timeout(Some(UPSTREAM_IO_TIMEOUT))?;
+    s.write_all(&wire::Request::RequestIdentities.encode())?;
+    let mut len = [0u8; 4];
+    s.read_exact(&mut len)?;
+    let Ok(n) = wire::check_len(u32::from_be_bytes(len)) else {
+        return Ok(None);
+    };
+    let mut body = vec![0u8; n];
+    s.read_exact(&mut body)?;
+    // Back to no timeouts: tokio sets the stream non-blocking on adoption.
+    s.set_read_timeout(None)?;
+    s.set_write_timeout(None)?;
+    Ok(match wire::decode_answer(&body) {
+        Ok(wire::Answer::Identities(ids)) => Some(ids.into_iter().map(|i| i.key_blob).collect()),
+        _ => None,
+    })
 }
 
 /// `<key_dir>/run-<pid>/`.
@@ -129,19 +207,18 @@ pub(super) fn run_dir(key_dir: &Path) -> PathBuf {
 /// The lifeline shell running `ssh-agent -D -a <sock>`, stdin a pipe this
 /// process holds (close-on-exec, so no child of the runtime keeps it open).
 pub(super) fn spawn_agent(sock: &Path) -> std::io::Result<Child> {
-    tokio::process::Command::new(LIFELINE_SHELL)
+    std::process::Command::new(LIFELINE_SHELL)
         .args(["-c", LIFELINE_SCRIPT, LIFELINE_NAME])
         .arg(sock)
         .arg(SSH_AGENT_BIN)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .kill_on_drop(true)
         .spawn()
 }
 
 /// Wait for the socket; give up at once if `ssh-agent` has already exited.
-async fn wait_for_socket(sock: &Path, child: &mut Child) -> Result<(), StartError> {
+pub(super) fn wait_for_socket(sock: &Path, child: &mut Child) -> Result<(), StartError> {
     let deadline = Instant::now() + PRIVATE_AGENT_SOCKET_WAIT;
     while !sock.exists() {
         if let Some(status) = child.try_wait()? {
@@ -150,15 +227,16 @@ async fn wait_for_socket(sock: &Path, child: &mut Child) -> Result<(), StartErro
         if Instant::now() >= deadline {
             return Err(StartError::NoSocket(PRIVATE_AGENT_SOCKET_WAIT));
         }
-        tokio::time::sleep(SOCKET_POLL).await;
+        std::thread::sleep(SOCKET_POLL);
     }
     Ok(())
 }
 
-/// Remove run directories a runtime killed mid-start left behind. A link is
-/// removed, never followed. `run-<pid>` of a process still alive is kept:
-/// another start of this agent (a restart overlapping the old runtime) may
-/// be using it right now.
+/// Remove run directories a runtime killed mid-start left behind.
+/// `run-<pid>` of a process still alive is kept: another start of this agent
+/// (a restart overlapping the old runtime) may be using it right now. A link
+/// is never a run directory (a start makes a real one), so it is always
+/// removed, whatever its name, and never followed.
 pub(super) fn sweep_runs(key_dir: &Path) {
     let Ok(entries) = std::fs::read_dir(key_dir) else {
         return;
@@ -166,17 +244,17 @@ pub(super) fn sweep_runs(key_dir: &Path) {
     // Our own pid's directory can only be one a dead process left (pid reuse).
     let own = std::process::id().to_string();
     for e in entries.flatten() {
-        let is_run = e
-            .file_name()
-            .to_str()
-            .and_then(|n| n.strip_prefix(RUN_DIR_PREFIX))
-            .is_some_and(|pid| pid == own || !owner_alive(pid));
+        let name = e.file_name();
+        let Some(pid) = name.to_str().and_then(|n| n.strip_prefix(RUN_DIR_PREFIX)) else {
+            continue;
+        };
+        // `DirEntry::metadata` does not follow a link.
         match e.metadata() {
-            Ok(m) if is_run && m.is_dir() => {
-                let _ = std::fs::remove_dir_all(e.path());
-            }
-            Ok(m) if is_run && m.is_symlink() => {
+            Ok(m) if m.is_symlink() => {
                 let _ = std::fs::remove_file(e.path());
+            }
+            Ok(m) if m.is_dir() && (pid == own || !owner_alive(pid)) => {
+                let _ = std::fs::remove_dir_all(e.path());
             }
             _ => {}
         }
