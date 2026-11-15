@@ -1,12 +1,17 @@
 //! Which keys the public-key install connection may offer (plan K7): the
 //! user's own, never a MUR dedicated key.
 //!
-//! Every dedicated key stays loaded in the user's ssh-agent (K1). Left to
-//! itself `ssh` offers them all, and past the server's `MaxAuthTries` the host
-//! refuses with "Too many authentication failures" before the user's key is
-//! tried. So the install runs with `IdentitiesOnly=yes` and one `-i` per key
-//! this module keeps. Which agent and which files are "the user's" comes from
-//! `ssh -G` ([`super::ssh_config`]), not from a guess.
+//! Left to itself `ssh` offers every key the user's ssh-agent holds, and past
+//! the server's `MaxAuthTries` the host refuses with "Too many authentication
+//! failures" before the right key is tried. So the install runs with
+//! `IdentitiesOnly=yes` and one `-i` per key this module keeps. Which agent
+//! and which files are "the user's" comes from `ssh -G`
+//! ([`super::ssh_config`]), not from a guess.
+//!
+//! Dedicated keys now live in a runtime-private ssh-agent (plan K8), not the
+//! user's, and start removes any an older MUR loaded there (K1). Filtering
+//! them out here is a second line of defence for a key left behind, e.g. by
+//! an agent that has not restarted since.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
