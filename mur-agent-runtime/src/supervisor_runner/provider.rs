@@ -388,13 +388,14 @@ pub async fn build_provider_runner(
         }
     }
     // Built-in browser_request (#2360, Q1): the one route to a site the
-    // browser cannot use yet. For every agent, like ssh_request; it writes a
-    // request file nothing acts on until the user answers the card. An
-    // explicit Deny still wins, and then the prompt does not name it.
-    let browser_route = mur_common::agent::resolve_tool_policy(
+    // browser cannot use yet. Off unless `browser_setup.request_route` is on:
+    // until a card can answer the request, the route is a dead end. When on,
+    // every agent gets it, like ssh_request; an explicit Deny still wins, and
+    // the prompt names it only when the tool is registered.
+    let browser_route = crate::tools::browser_request::route_enabled(
+        &boot_cfg.browser_setup,
         &profile.inner.entitlements.tools,
-        crate::tools::browser_request::BROWSER_REQUEST,
-    ) != mur_common::agent::ToolPolicy::Deny;
+    );
     if browser_route {
         use crate::tools::browser_request::{BROWSER_REQUEST, BrowserRequestTool};
         tool_map.insert(

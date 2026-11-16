@@ -18,6 +18,18 @@ use crate::tools::{ToolDef, ToolError, ToolExecutor, ToolOutput};
 /// constant, so a rename cannot leave the tool asking on every call.
 pub const BROWSER_REQUEST: &str = mur_common::hitl::builtin_tier::BROWSER_REQUEST_TOOL;
 
+/// Whether this agent gets the route: the `browser_setup.request_route`
+/// switch is on (off by default until a card can answer a request) and the
+/// profile does not explicitly deny the tool. One answer gates both the tool
+/// and its prompt section, so the prompt never names a tool that is absent.
+pub fn route_enabled(
+    setup: &mur_common::config::BrowserSetupConfig,
+    rules: &[mur_common::agent::ToolRule],
+) -> bool {
+    use mur_common::agent::{ToolPolicy, resolve_tool_policy};
+    setup.request_route && resolve_tool_policy(rules, BROWSER_REQUEST) != ToolPolicy::Deny
+}
+
 /// What the agent is told about the route, in the prompt.
 const ROUTE: &str = "To use a website that needs the user's login, or that your browser tools \
 cannot reach yet, call `browser_request` with the site, a one-line reason and whether login is \

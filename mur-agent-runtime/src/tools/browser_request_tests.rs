@@ -99,3 +99,30 @@ fn prompt_section_names_the_route_and_forbids_asking_for_commands() {
     assert!(s.contains("Never name a profile"));
     assert!(s.contains("Do not ask the user to run commands"));
 }
+
+fn rule(policy: &str) -> mur_common::agent::ToolRule {
+    serde_yaml_ng::from_str(&format!("pattern: {BROWSER_REQUEST}\npolicy: {policy}\n")).unwrap()
+}
+
+#[test]
+fn the_route_is_off_by_default() {
+    let setup = mur_common::config::BrowserSetupConfig::default();
+    assert!(!route_enabled(&setup, &[]));
+}
+
+#[test]
+fn the_switch_turns_the_route_on() {
+    let setup = mur_common::config::BrowserSetupConfig {
+        request_route: true,
+    };
+    assert!(route_enabled(&setup, &[]));
+    assert!(route_enabled(&setup, &[rule("allow")]));
+}
+
+#[test]
+fn an_explicit_deny_wins_over_the_switch() {
+    let setup = mur_common::config::BrowserSetupConfig {
+        request_route: true,
+    };
+    assert!(!route_enabled(&setup, &[rule("deny")]));
+}
