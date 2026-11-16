@@ -610,8 +610,15 @@ mur agent ssh revoke <agent> --key SHA256:<key-fp> --host-key SHA256:<host-fp>
 - Restart a running agent for the change to take effect.
 
 At start the supervisor connects to the upstream ssh-agent before the seal,
-then serves `<agent home>/ssh-agent.sock` to the agent. Each sign request is
-checked against the key, the host key the client verified with
+then serves `<agent home>/ssh-agent.sock` to the agent. An agent's dedicated
+key (`<mur_home>/secrets/ssh/<agent>/`) is never added to your ssh-agent:
+before the seal the runtime starts a runtime-private ssh-agent holding only
+that key, keeps one connection to it, and removes its socket, so nothing else
+can reach it. The proxy lists both agents' keys and routes each sign request
+by key to the agent that holds it. The private agent exits with the runtime.
+Start also removes a dedicated key an older MUR left in your ssh-agent.
+Each sign request is checked against the key, the host key the client
+verified with
 `session-bind`, and that bind's session ID, and then goes through HITL.
 Every error refuses the signature; there is no passthrough. The ssh client
 only sees `SSH_AGENT_FAILURE`, so the reason goes to the agent's channel and
@@ -649,8 +656,9 @@ existing key is still loaded and still removed with its agent by
 
 Known limitations (v1):
 
-- Keys stay in your existing ssh-agent. Key filtering is only as strong as
-  that socket's unreachability from the sandbox.
+- Your own keys stay in your existing ssh-agent. Key filtering for them is
+  only as strong as that socket's unreachability from the sandbox. The
+  dedicated key is not affected: its private agent has no socket after start.
 - Unrestricted-network agents: audit-only (`unrestricted_network`).
 - Linux: audit-only (`platform_no_unix_socket_control`).
 - Windows: the proxy does not start, and is never a boundary.

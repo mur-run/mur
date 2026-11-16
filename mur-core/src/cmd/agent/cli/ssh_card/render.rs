@@ -107,13 +107,6 @@ fn key_lines(c: &CardState, t: &'static Theme, out: &mut Vec<Line<'static>>) {
                 Span::styled("+ generate a dedicated key for this agent", style),
             ]));
         }
-        Some(ExtraRow::Load) => {
-            let (mark, style) = sel(on_extra, t);
-            out.push(Line::from(vec![
-                mark,
-                Span::styled("+ load this agent's dedicated key into ssh-agent", style),
-            ]));
-        }
         Some(ExtraRow::Off(why)) => out.push(Line::styled(
             format!("  dedicated key unavailable: {why}"),
             t.muted,

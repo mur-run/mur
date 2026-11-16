@@ -304,3 +304,100 @@ fn rename_moves_the_key_and_never_replaces_one() {
     );
     assert!(rename(home.path(), "../x", "other").is_err());
 }
+
+/// A throwaway `ssh-agent -D` on a private socket; killed on drop.
+struct TestAgent {
+    child: std::process::Child,
+    sock: PathBuf,
+    _dir: tempfile::TempDir,
+}
+
+impl TestAgent {
+    fn start() -> Option<Self> {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("agent.sock");
+        let child = Command::new(crate::SSH_AGENT_BIN)
+            .arg("-D")
+            .arg("-a")
+            .arg(&sock)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        let Ok(child) = child else {
+            eprintln!("SKIPPED: {} is not on PATH", crate::SSH_AGENT_BIN);
+            return None;
+        };
+        let deadline = Instant::now() + crate::PRIVATE_AGENT_SOCKET_WAIT;
+        while !sock.exists() {
+            assert!(Instant::now() < deadline, "ssh-agent socket never appeared");
+            std::thread::sleep(POLL);
+        }
+        Some(Self {
+            child,
+            sock,
+            _dir: dir,
+        })
+    }
+
+    fn listed(&self) -> String {
+        let out = Command::new(SSH_ADD_BIN)
+            .arg("-L")
+            .env("SSH_AUTH_SOCK", &self.sock)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+}
+
+impl Drop for TestAgent {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn load_into_puts_the_key_in_the_named_agent_only() {
+    if keygen_missing() {
+        return;
+    }
+    let Some(agent) = TestAgent::start() else {
+        return;
+    };
+    let home = tempfile::tempdir().unwrap();
+    let key = generate(home.path(), AGENT).unwrap();
+    load_into(&key, &agent.sock).unwrap();
+    load_into(&key, &agent.sock).unwrap(); // twice is fine
+    let blob = key.public_line.split_whitespace().nth(1).unwrap();
+    assert!(agent.listed().contains(blob));
+}
+
+#[test]
+fn unloading_removes_the_key_and_a_missing_key_is_not_an_error() {
+    if keygen_missing() {
+        return;
+    }
+    let Some(agent) = TestAgent::start() else {
+        return;
+    };
+    let home = tempfile::tempdir().unwrap();
+    let key = generate(home.path(), AGENT).unwrap();
+    load_into(&key, &agent.sock).unwrap();
+    assert!(unload_via(&key, Some(&agent.sock)).unwrap());
+    let blob = key.public_line.split_whitespace().nth(1).unwrap();
+    assert!(!agent.listed().contains(blob));
+    // Not loaded any more: refused by the agent, still Ok.
+    assert!(!unload_via(&key, Some(&agent.sock)).unwrap());
+}
+
+#[test]
+fn unloading_with_no_reachable_agent_is_not_an_error() {
+    if keygen_missing() {
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let key = generate(home.path(), AGENT).unwrap();
+    let nowhere = home.path().join("no-agent.sock");
+    assert!(!unload_via(&key, Some(&nowhere)).unwrap());
+}

@@ -1,9 +1,10 @@
 //! Start the ssh-agent proxy (plan Task 2.3, O7 option A) around the seal:
 //!
-//! - [`load_dedicated_before_seal`]: add the agent's dedicated key to the
-//!   upstream ssh-agent, while `secrets/` is still readable. Every start path
-//!   goes through here, including a service-manager start that runs no `mur`
-//!   code. Only a key the profile grants. Failure warns; it never blocks start.
+//! - [`start_private_before_seal`]: start a runtime-private ssh-agent holding
+//!   the agent's dedicated key, while `secrets/` is still readable, and hold
+//!   one connection to it. Every start path goes through here, including a
+//!   service-manager start that runs no `mur` code. Only a key the profile
+//!   grants. Failure warns; it never blocks start.
 //! - [`connect_before_seal`]: the one upstream connection, made while the
 //!   upstream socket is still reachable. Only when `entitlements.ssh` has
 //!   keys. Failure warns; it never blocks start.
@@ -21,8 +22,9 @@ use mur_common::agent::SshEntitlement;
 use mur_common::ssh_proxy_status::{self, SshProxyState, SshProxyStatus};
 use mur_ssh_request::keystore::{self, KeystoreError, StoredKey};
 
+use super::private_agent::{PreSealDedicated, StartError};
 use crate::ssh_proxy::gate::GateSlot;
-use crate::ssh_proxy::listener::{self, HeldUpstream, Proxy};
+use crate::ssh_proxy::listener::{self, DedicatedUpstream, HeldUpstream, Proxy};
 use crate::ssh_proxy::policy::{PinTrust, Policy};
 use crate::ssh_proxy::refusal::RefusalSink;
 
@@ -33,81 +35,122 @@ pub(super) const OFF_SOCKET_BIND_FAILED: &str = "socket_bind_failed";
 /// How a log line names the dedicated key when its rule has no label.
 const DEDICATED_KEY_LABEL: &str = "dedicated key";
 
-/// What [`load_dedicated_before_seal`] did.
+/// What [`start_private_before_seal`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DedicatedLoad {
     /// The profile grants no ssh key at all; the key store was not read.
     NoGrant,
     /// The agent has no dedicated key.
     NoKey,
-    /// A key is stored but the profile does not grant it: left alone.
+    /// A key is stored but the profile does not grant it: not started.
     NotGranted,
-    Loaded,
-    /// Reading or loading failed; already warned.
+    /// The private ssh-agent holds the key behind a held connection.
+    Started,
+    /// Reading the key or starting the private agent failed; already warned.
     Failed,
 }
 
-/// Add the agent's dedicated key to the upstream ssh-agent, before the seal.
+/// The outcome and, when [`DedicatedLoad::Started`], the private agent,
+/// adopted into tokio after the seal.
+pub(super) struct DedicatedStart {
+    pub outcome: DedicatedLoad,
+    pub pre: Option<PreSealDedicated>,
+}
+
+impl DedicatedStart {
+    fn none(outcome: DedicatedLoad) -> Self {
+        Self { outcome, pre: None }
+    }
+}
+
+/// Start the runtime-private ssh-agent holding the agent's dedicated key,
+/// before the seal (D spec §"Private agent lifecycle", plan Task 16.4).
 ///
 /// The profile is the authority: a key file that appears in the directory is
-/// never loaded unless `ent` grants its fingerprint. Never gates start.
-pub(super) fn load_dedicated_before_seal(
+/// never started unless `ent` grants its fingerprint. First, the key is
+/// removed from the user's ssh-agent, where slice 6a loaded it (D spec
+/// §"Clean-up"). Never gates start.
+pub(super) fn start_private_before_seal(
     mur_home: &Path,
     agent: &str,
     ent: &SshEntitlement,
-) -> DedicatedLoad {
-    // The old `spawn_blocking` turned a panic in the keystore or the loader
-    // into a failed load; now that this runs on the main thread before the
-    // seal, catch it here so it still never gates start.
+) -> DedicatedStart {
+    // Runs on the main thread before the seal: catch a panic in the keystore
+    // or the start so it still never gates start.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        load_dedicated_with(mur_home, agent, ent, keystore::load)
+        start_private_with(
+            mur_home,
+            agent,
+            ent,
+            keystore::unload_from_user,
+            super::private_agent::start,
+        )
     }))
     .unwrap_or_else(|_| {
-        tracing::warn!("ssh-agent proxy: loading the dedicated key panicked; it was not loaded");
-        DedicatedLoad::Failed
+        tracing::warn!(
+            "ssh-agent proxy: starting the private ssh-agent panicked; it was not started"
+        );
+        DedicatedStart::none(DedicatedLoad::Failed)
     })
 }
 
 /// Blocking on purpose: this runs before the tokio runtime exists (see
 /// `supervisor::seal`), on the thread that is about to seal, so there is no
-/// executor to stall. `stored` may run ssh-keygen and `load` runs ssh-add.
-fn load_dedicated_with<F>(
+/// executor to stall. `stored` may run ssh-keygen, `unload` runs ssh-add.
+fn start_private_with<U, S>(
     mur_home: &Path,
     agent: &str,
     ent: &SshEntitlement,
-    loader: F,
-) -> DedicatedLoad
+    unload: U,
+    start: S,
+) -> DedicatedStart
 where
-    F: FnOnce(&StoredKey) -> Result<(), KeystoreError>,
+    U: FnOnce(&StoredKey) -> Result<bool, KeystoreError>,
+    S: FnOnce(&Path, &StoredKey) -> Result<PreSealDedicated, StartError>,
 {
     if ent.is_empty() {
-        return DedicatedLoad::NoGrant;
+        return DedicatedStart::none(DedicatedLoad::NoGrant);
     }
     let key = match keystore::stored(mur_home, agent) {
         Ok(Some(k)) => k,
-        Ok(None) => return DedicatedLoad::NoKey,
+        Ok(None) => return DedicatedStart::none(DedicatedLoad::NoKey),
         Err(e) => {
             // The path stays out of the log; `mur agent ssh` names it.
             let reason = match &e {
                 KeystoreError::Unusable { reason, .. } => (*reason).to_string(),
                 other => other.to_string(),
             };
-            tracing::warn!(%reason, "ssh-agent proxy: the dedicated key is unusable and was not loaded");
-            return DedicatedLoad::Failed;
+            tracing::warn!(%reason, "ssh-agent proxy: the dedicated key is unusable and was not started");
+            return DedicatedStart::none(DedicatedLoad::Failed);
         }
     };
+    // Clean-up for every stored key, granted or not: 6a may have loaded it
+    // while it was granted. Failure is never a reason to stop.
+    if let Err(e) = unload(&key) {
+        tracing::debug!(error = %e, "ssh-agent proxy: could not remove the dedicated key from the user's ssh-agent");
+    }
     let Some(rule) = ent.keys.iter().find(|k| k.fingerprint == key.fingerprint) else {
-        return DedicatedLoad::NotGranted;
+        return DedicatedStart::none(DedicatedLoad::NotGranted);
     };
-    match loader(&key) {
-        Ok(()) => DedicatedLoad::Loaded,
+    let dir = match keystore::key_dir(mur_home, agent) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(error = %e, "ssh-agent proxy: the dedicated key directory is unusable");
+            return DedicatedStart::none(DedicatedLoad::Failed);
+        }
+    };
+    match start(&dir, &key) {
+        Ok(pre) => DedicatedStart {
+            outcome: DedicatedLoad::Started,
+            pre: Some(pre),
+        },
         Err(e) => {
             tracing::warn!(
                 key = rule.label.as_deref().unwrap_or(DEDICATED_KEY_LABEL),
                 error = %e,
-                "ssh-agent proxy: could not add the dedicated key to ssh-agent; requests for it will be refused until it is loaded"
+                "ssh-agent proxy: could not start the private ssh-agent for the dedicated key; requests for it will be refused (upstream_unavailable)"
             );
-            DedicatedLoad::Failed
+            DedicatedStart::none(DedicatedLoad::Failed)
         }
     }
 }
@@ -172,6 +215,8 @@ pub(super) struct StartArgs<'a> {
     pub ent: &'a SshEntitlement,
     pub pin_trust: PinTrust,
     pub upstream: Arc<HeldUpstream>,
+    /// The runtime-private agent, when the dedicated key was started.
+    pub dedicated: Option<Arc<DedicatedUpstream>>,
     pub sink: RefusalSink,
     pub marks: crate::ssh_proxy::mark::MarkSink,
     /// Filled by the supervisor once its approval channel exists; until then
@@ -211,10 +256,11 @@ pub(super) async fn start_after_seal(a: StartArgs<'_>) -> Option<PathBuf> {
         }
     };
     let policy = Policy::build(a.ent, a.pin_trust, Policy::UNPINNED_IS_UNTRUSTED);
-    warn_at_start(&policy, &a.upstream).await;
+    warn_at_start(&policy, &a.upstream, a.dedicated.as_deref()).await;
     let proxy = Arc::new(Proxy {
         policy,
         upstream: a.upstream,
+        dedicated: a.dedicated,
         sink: a.sink,
         marks: a.marks,
         gate: listener::self_only_gate(std::process::id(), a.agents_dir),
@@ -226,7 +272,11 @@ pub(super) async fn start_after_seal(a: StartArgs<'_>) -> Option<PathBuf> {
 }
 
 /// Start-time warnings. Neither blocks start.
-async fn warn_at_start(policy: &Policy, upstream: &HeldUpstream) {
+async fn warn_at_start(
+    policy: &Policy,
+    upstream: &HeldUpstream,
+    dedicated: Option<&DedicatedUpstream>,
+) {
     if let Policy::RefuseAll(code) = policy {
         tracing::warn!(
             code = code.as_str(),
@@ -237,7 +287,7 @@ async fn warn_at_start(policy: &Policy, upstream: &HeldUpstream) {
     if !upstream.is_connected().await {
         return; // already warned at connect time
     }
-    match listener::missing_upstream_keys(policy, upstream).await {
+    match listener::missing_upstream_keys(policy, upstream, dedicated).await {
         Some(missing) => {
             for fp in missing {
                 tracing::warn!(key = %fp, "ssh-agent proxy: key listed in entitlements.ssh is not held by the upstream ssh-agent");

@@ -35,6 +35,8 @@ pub(super) struct PreSeal {
     sandbox_record: Option<mur_common::agent::SandboxRecord>,
     #[cfg(unix)]
     ssh_upstream: Option<super::ssh_proxy_boot::PreSealUpstream>,
+    #[cfg(unix)]
+    ssh_dedicated: Option<super::private_agent::PreSealDedicated>,
     ssh_proxy: mur_common::ssh_proxy_status::SshProxyStatus,
     pin_trust: crate::ssh_proxy::policy::PinTrust,
 }
@@ -397,13 +399,15 @@ pub(super) fn prepare_and_seal(
         ),
     );
     // The agent's dedicated key lives in `secrets/`, unreadable after the
-    // seal. Add it to ssh-agent first, so the connection below sees it.
+    // seal. Its runtime-private ssh-agent starts now, reachable afterwards
+    // only through the held connection the proxy routes to.
     #[cfg(unix)]
-    super::ssh_proxy_boot::load_dedicated_before_seal(
+    let ssh_dedicated = super::ssh_proxy_boot::start_private_before_seal(
         mur_home,
         &profile.inner.name,
         &profile.inner.entitlements.ssh,
-    );
+    )
+    .pre;
     // ssh-agent proxy, O7 option A: the one upstream connection is made now,
     // while the upstream is still reachable; the seal below makes a new
     // connect impossible on a boundary platform. Never gates start.
@@ -482,6 +486,8 @@ pub(super) fn prepare_and_seal(
         sandbox_record,
         #[cfg(unix)]
         ssh_upstream,
+        #[cfg(unix)]
+        ssh_dedicated,
         ssh_proxy,
         pin_trust,
     })
@@ -503,6 +509,8 @@ pub(super) async fn start_after_seal(
         sandbox_record,
         #[cfg(unix)]
         ssh_upstream,
+        #[cfg(unix)]
+        ssh_dedicated,
         ssh_proxy,
         pin_trust,
     } = pre;
@@ -558,6 +566,7 @@ pub(super) async fn start_after_seal(
                 ent: &profile.inner.entitlements.ssh,
                 pin_trust,
                 upstream: upstream.adopt(),
+                dedicated: ssh_dedicated.and_then(|d| d.adopt()),
                 sink,
                 marks: crate::ssh_proxy::mark::MarkSink::new(super::start_notice::mark_poster(
                     &signer,

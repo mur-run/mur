@@ -222,12 +222,6 @@ export function SshCard({ target, onClose }: { target: SshTarget; onClose: (chan
               {t("ssh.dedicated.generate")}
             </button>
           )}
-          {plan && choices && step === "key" && plan.dedicated.state === "stored" &&
-            !plan.keys.some((k) => k.loaded && k.fingerprint === plan.dedicated.fingerprint) && (
-              <button type="button" className="btn btn--sm btn--secondary" onClick={generate} disabled={busy}>
-                {t("ssh.dedicated.load")}
-              </button>
-            )}
           {plan && choices && step === "key" && plan.dedicated.state === "off" && (
             <p className="field-muted">{t("ssh.dedicated.off", { why: plan.dedicated.reason ?? "" })}</p>
           )}

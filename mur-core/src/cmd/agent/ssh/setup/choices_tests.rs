@@ -237,3 +237,23 @@ fn install_is_refused_for_any_key_but_the_dedicated_one() {
         );
     }
 }
+
+/// The dedicated key is never in the user's ssh-agent (K8), so a key read of
+/// only the agent's keys must still leave it grantable, and a `.pub` copy in
+/// the unloaded list must not turn it back into "not loaded".
+#[test]
+fn a_stored_dedicated_key_is_ready_without_the_users_agent() {
+    let mut p = plan_with(Dedicated::Stored {
+        fingerprint: fp('D'),
+        public_line: "ssh-ed25519 AAAA mur-agent-qa".into(),
+    });
+    p.set_keys(vec![key('K')], vec![key('D')]);
+    assert_eq!(p.keys_loaded[0].fingerprint, fp('D'));
+    assert_eq!(p.keys_loaded[0].comment, "mur-agent-qa");
+    assert!(p.keys_unloaded.is_empty());
+    let c = Choices {
+        key_fp: Some(fp('D')),
+        ..with_key('K')
+    };
+    assert_eq!(build_approval(&p, &c).unwrap().key_fp, fp('D'));
+}

@@ -57,12 +57,47 @@ fn the_extra_row_follows_the_dedicated_state() {
     let off = card(Dedicated::Off(DedicatedOff::SwitchOff));
     assert!(matches!(off.extra_row(), Some(ExtraRow::Off(why)) if why.contains("generate_key")));
     assert_eq!(with_dedicated().extra_row(), None, "stored and loaded");
-    let unloaded = card(Dedicated::Stored {
+    // Not in the user's ssh-agent, yet listed first and ready (K8).
+    let mut stored = card(Dedicated::Stored {
         fingerprint: fp('D'),
         public_line: LINE.into(),
     });
-    assert_eq!(unloaded.extra_row(), Some(ExtraRow::Load));
+    let (loaded, unloaded) = (
+        stored.plan.keys_loaded.clone(),
+        stored.plan.keys_unloaded.clone(),
+    );
+    stored.refresh_keys(loaded, unloaded);
+    assert_eq!(stored.extra_row(), None);
+    let keys = stored.keys();
+    assert_eq!(
+        keys.first().map(|(k, l)| (k.fingerprint.clone(), *l)),
+        Some((fp('D'), true)),
+        "listed first, ready"
+    );
     assert!(text(&card(Dedicated::Offer)).contains("generate a dedicated key"));
+}
+
+/// The live path: the plan learns its keys through `set_keys` after the
+/// dedicated key is known, so a fresh card opens with `D` already chosen.
+#[test]
+fn a_fresh_card_opens_on_the_stored_dedicated_key() {
+    let mut p = plan(Verdict::Trusted, None);
+    p.dedicated = Dedicated::Stored {
+        fingerprint: fp('D'),
+        public_line: LINE.into(),
+    };
+    let (loaded, unloaded) = (p.keys_loaded.clone(), p.keys_unloaded.clone());
+    assert!(
+        !loaded.is_empty(),
+        "D must outrank a key that is already loaded"
+    );
+    p.set_keys(loaded, unloaded);
+    let c = CardState::new(p, Origin::Direct);
+    assert_eq!(
+        c.chosen_key().map(|(k, l)| (k.fingerprint.clone(), l)),
+        Some((fp('D'), true)),
+        "chosen on open, ready"
+    );
 }
 
 #[test]
