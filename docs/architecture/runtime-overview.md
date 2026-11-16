@@ -644,10 +644,14 @@ sealed agent cannot read `secrets/`, which is why the key is offered only to
 agents sandboxed on every run (`setup::plan::sealed_every_run`). Generation
 writes to a partial name and renames, and the next plan sweeps an interrupted
 one; nothing reaches the profile until Approve. At start, before the seal,
-the supervisor adds the key to the user's ssh-agent
-(`supervisor::ssh_proxy_boot::load_dedicated_before_seal`), so it signs
-through the same proxy, policy and HITL as any other key: purpose, not
-isolation. A requested public-key install runs after the profile write,
+the supervisor loads it into the runtime-private ssh-agent described above
+(`supervisor::ssh_proxy_boot::start_private_before_seal`,
+`supervisor::private_agent`), and only when the profile grants the key's
+fingerprint: a key file never starts on its own authority. Failure warns and
+never blocks start; the key's sign requests are then refused
+`upstream_unavailable`. It signs through the same proxy, policy and HITL as
+any other key. Unix only: off unix no key is offered. A requested public-key
+install runs after the profile write,
 outside the sandbox, with the line on stdin (`setup::install`); if it fails
 the restart is held (`Restart::HeldForInstall`) until the client retries or
 finishes. `ssh_setup.generate_key: false` stops new keys and installs; an
