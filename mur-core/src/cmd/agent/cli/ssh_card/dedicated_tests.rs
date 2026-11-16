@@ -68,9 +68,11 @@ fn the_extra_row_follows_the_dedicated_state() {
     );
     stored.refresh_keys(loaded, unloaded);
     assert_eq!(stored.extra_row(), None);
+    let keys = stored.keys();
     assert_eq!(
-        stored.chosen_key().map(|(k, l)| (k.fingerprint.clone(), l)),
-        Some((fp('D'), true))
+        keys.first().map(|(k, l)| (k.fingerprint.clone(), *l)),
+        Some((fp('D'), true)),
+        "listed first, ready"
     );
     assert!(text(&card(Dedicated::Offer)).contains("generate a dedicated key"));
 }
