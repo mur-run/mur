@@ -11,7 +11,7 @@ use super::fs_policy::SessionCwd;
 use super::{ToolError, ToolExecutor, ToolImage, ToolOutput};
 use crate::llm::ToolDef;
 use crate::mcp::pool::McpPool;
-use crate::protocol::mcp_client::McpClient;
+use crate::protocol::mcp_client::{McpClient, McpError};
 
 /// MCP tools that fan work out to other agents and therefore need to know
 /// WHERE the work is. For these, a missing `cwd` is filled from the session
@@ -51,6 +51,23 @@ pub const DEFAULT_MCP_TOOL_TIMEOUT_SECS: u64 = 120;
 pub const MCP_TOOL_TIMEOUT: Duration = Duration::from_secs(DEFAULT_MCP_TOOL_TIMEOUT_SECS);
 
 /// Convert an MCP `tools/call` result to a display string.
+/// Append `note` as its own paragraph, when there is one.
+fn append_note(text: &mut String, note: Option<&str>) {
+    if let Some(note) = note {
+        text.push_str("\n\n");
+        text.push_str(note);
+    }
+}
+
+/// A failed MCP call as a tool error. A server that reports the failed
+/// navigate as a JSON-RPC error (not an `isError` result) must still carry the
+/// closed-port note (#2418): that error is the bare tunnel failure it explains.
+fn call_error(e: &McpError, closed_port_note: Option<&str>) -> ToolError {
+    let mut msg = e.to_string();
+    append_note(&mut msg, closed_port_note);
+    ToolError::Execution(msg)
+}
+
 pub fn render_mcp_result(result: &Value) -> String {
     let Some(content) = result.get("content").and_then(|c| c.as_array()) else {
         return serde_json::to_string(result).unwrap_or_default();
@@ -191,7 +208,7 @@ impl ToolExecutor for McpToolExecutor {
             }
         }
         let result = result
-            .map(|r| r.map_err(|e| ToolError::Execution(e.to_string())))
+            .map(|r| r.map_err(|e| call_error(&e, closed_port_note.as_deref())))
             .map_err(|_| {
                 // A timeout says we stopped waiting — it does NOT say the call
                 // failed. MCP has no cancel: the server keeps running the tool.
@@ -212,10 +229,7 @@ impl ToolExecutor for McpToolExecutor {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let mut text = render_mcp_result(&result);
-        if let Some(note) = closed_port_note {
-            text.push_str("\n\n");
-            text.push_str(&note);
-        }
+        append_note(&mut text, closed_port_note.as_deref());
         if !is_error && let Some(note) = self.base_note() {
             text.push_str("\n\n");
             text.push_str(&note);
@@ -241,6 +255,22 @@ impl ToolExecutor for McpToolExecutor {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// #2418: the error branch carries the note too, not just `isError`.
+    #[test]
+    fn an_rpc_error_carries_the_closed_port_note() {
+        let e = McpError::Rpc("net::ERR_TUNNEL_CONNECTION_FAILED".into());
+        let note = "port 3000 is not open. Fix: `mur agent perm allow-port gate 3000`";
+        let ToolError::Execution(msg) = call_error(&e, Some(note)) else {
+            panic!("an rpc error is an execution failure");
+        };
+        assert!(msg.contains("ERR_TUNNEL_CONNECTION_FAILED"), "{msg}");
+        assert!(msg.ends_with(note), "{msg}");
+        let ToolError::Execution(bare) = call_error(&e, None) else {
+            panic!();
+        };
+        assert_eq!(bare, e.to_string());
+    }
 
     #[test]
     fn render_text_block() {

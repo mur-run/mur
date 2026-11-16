@@ -78,6 +78,12 @@ impl EventsInner {
     fn candidates(&mut self, server: &str, now: Instant) -> BTreeSet<String> {
         sweep(&mut self.abandoned, now);
         sweep(&mut self.finished, now);
+        // A server that hit one closed port and never another would otherwise
+        // keep that entry for the life of the process.
+        self.closed_ports.retain(|_, log| {
+            log.retain(|(t, _, _)| now.saturating_duration_since(*t) < ATTRIBUTION_GRACE);
+            !log.is_empty()
+        });
         let mut s: BTreeSet<String> = BTreeSet::new();
         let active = self.in_flight.get(server);
         s.extend(active.into_iter().flat_map(|t| t.keys().cloned()));
@@ -123,6 +129,10 @@ impl InFlight {
     /// call started, with the fix — or `None`. The browser only sees a bare
     /// tunnel failure (`ERR_TUNNEL_CONNECTION_FAILED`), so without this the
     /// agent and the user never learn the host was fine and the port was not.
+    ///
+    /// Keyed by server, not by turn: two turns calling the same server at once
+    /// both hear each other's ports. Requests carry no page owner, so this is
+    /// the same ambiguity under which [`Events::emit`] broadcasts.
     pub fn closed_port_note(&self) -> Option<String> {
         let g = self.events.inner.lock().unwrap();
         let mut seen: BTreeSet<(String, u16)> = BTreeSet::new();
@@ -429,6 +439,20 @@ mod tests {
         assert!(note.contains("x.example.com:3000"), "{note}");
         // Another server's call hears nothing.
         assert!(ev.in_flight("fetch", "t").closed_port_note().is_none());
+    }
+
+    #[test]
+    fn a_stale_closed_port_is_swept_by_any_later_event() {
+        let ev = Events::new("mur");
+        let t0 = Instant::now();
+        ev.port_closed("once", "x.example.com", 3000, t0);
+        ev.port_closed("other", "y.example.com", 4000, t0 + ATTRIBUTION_GRACE);
+        let g = ev.inner.lock().unwrap();
+        assert!(
+            !g.closed_ports.contains_key("once"),
+            "swept after the grace"
+        );
+        assert!(g.closed_ports.contains_key("other"));
     }
 
     #[test]

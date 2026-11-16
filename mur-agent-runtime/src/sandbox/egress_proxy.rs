@@ -334,7 +334,7 @@ fn report_dial_failure(
     pinned: SocketAddr,
     err: &std::io::Error,
 ) -> Option<mur_common::egress_event::EgressDenied> {
-    let Some(hint) = upstream_dial_hint(agent, &pinned.to_string(), err) else {
+    let Some(hint) = upstream_dial_hint(agent, pinned, err) else {
         tracing::warn!(host, %pinned, "egress proxy upstream dial failed: {err}");
         return None;
     };
@@ -349,17 +349,12 @@ fn report_dial_failure(
 /// Landlock port gate as everything else: `CONNECT ALLOW` for an allowed host
 /// on a port outside that set still ends in EPERM (os error 1). The bare OS
 /// error named neither the port nor the fix.
-fn upstream_dial_hint(agent: &str, addr: &str, err: &std::io::Error) -> Option<String> {
+fn upstream_dial_hint(agent: &str, addr: SocketAddr, err: &std::io::Error) -> Option<String> {
     if err.raw_os_error() != Some(1) {
         return None;
     }
-    let port = addr.rsplit_once(':').map(|(_, p)| p).unwrap_or(addr);
-    let fix = port
-        .parse()
-        .map(|p| mur_common::egress_event::port_fix(agent, p))
-        .unwrap_or_else(|_| {
-            format!("`mur agent perm allow-port {agent} {port}`, then restart the agent")
-        });
+    let port = addr.port();
+    let fix = mur_common::egress_event::port_fix(agent, port);
     Some(format!(
         "egress proxy: the sandbox refused the upstream dial to {addr} — port {port} \
          is not in this agent's outbound port set (the host is allowed; the port \
@@ -408,15 +403,15 @@ mod tests {
     #[test]
     fn a_seal_denied_dial_names_the_port_and_the_grant() {
         let eperm = std::io::Error::from_raw_os_error(1);
-        let msg = upstream_dial_hint("shop", "127.0.0.1:52489", &eperm)
+        let msg = upstream_dial_hint("shop", "127.0.0.1:52489".parse().unwrap(), &eperm)
             .expect("EPERM is the seal's port gate");
         assert!(msg.contains("port 52489"), "{msg}");
         assert!(
             msg.contains("mur agent perm allow-port shop 52489"),
             "{msg}"
         );
-        // IPv6 literal: the port is still the part after the last colon.
-        let msg = upstream_dial_hint("shop", "[::1]:8000", &eperm).unwrap();
+        // IPv6 literal: the port comes from the address, not the text.
+        let msg = upstream_dial_hint("shop", "[::1]:8000".parse().unwrap(), &eperm).unwrap();
         assert!(msg.contains("allow-port shop 8000"), "{msg}");
     }
 
@@ -469,7 +464,7 @@ mod tests {
     #[test]
     fn other_dial_failures_get_no_seal_hint() {
         let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
-        assert!(upstream_dial_hint("shop", "127.0.0.1:52489", &refused).is_none());
+        assert!(upstream_dial_hint("shop", "127.0.0.1:52489".parse().unwrap(), &refused).is_none());
     }
 
     #[tokio::test]
