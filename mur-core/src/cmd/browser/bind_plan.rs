@@ -76,6 +76,22 @@ pub(crate) fn plan_bind(
     bound: &BoundDomains<'_>,
     replace: bool,
 ) -> BindPlan {
+    plan_bind_for(entry, site, domains, &[], bound, replace)
+}
+
+/// [`plan_bind`], where the session must also reach `reach` (a browser
+/// request's host, #2360 D1). Those hosts are checked against the entry's
+/// policy like the profile's domains, but never against the bound profiles
+/// for overlap, so `Overlaps { domains }` stays the profile's own hosts.
+#[cfg_attr(not(test), allow(dead_code))] // caller lands in Task 5
+pub(crate) fn plan_bind_for(
+    entry: Option<&McpServerEntry>,
+    site: &str,
+    domains: &[String],
+    reach: &[String],
+    bound: &BoundDomains<'_>,
+    replace: bool,
+) -> BindPlan {
     let Some(entry) = entry else {
         return BindPlan::NoLiveEntry;
     };
@@ -85,7 +101,7 @@ pub(crate) fn plan_bind(
     // no longer covers would otherwise ride along unreachable. `--replace`
     // drops the others, so only the replacement is checked then. Unreadable
     // metadata contributes nothing here; `bind` refuses it as an overlap.
-    let checked: Vec<String> = if replace {
+    let mut checked: Vec<String> = if replace {
         domains.to_vec()
     } else {
         let mut all = domains.to_vec();
@@ -101,6 +117,11 @@ pub(crate) fn plan_bind(
         all.dedup();
         all
     };
+    for h in reach.iter().map(|h| norm(h)) {
+        if !checked.contains(&h) {
+            checked.push(h);
+        }
+    }
     let network = entry.network.as_ref();
     match network.map(|n| n.mode) {
         Some(McpNetMode::Restricted) => {
@@ -136,6 +157,20 @@ pub(crate) fn plan_bind(
             BindPlan::NotHostScoped { mode }
         }
     }
+}
+
+/// Whether `entry` reaches `host` on its own, for a request that needs no
+/// login (#2360 D7). Nothing is attached, so bound profiles are not checked.
+#[cfg_attr(not(test), allow(dead_code))] // caller lands in Task 5
+pub(crate) fn plan_reach(entry: Option<&McpServerEntry>, host: &str) -> BindPlan {
+    plan_bind_for(
+        entry,
+        "",
+        &[],
+        &[host.to_owned()],
+        &|_: &str| Some(Vec::new()),
+        true,
+    )
 }
 
 fn bind(

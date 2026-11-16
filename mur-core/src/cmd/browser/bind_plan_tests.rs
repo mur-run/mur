@@ -338,3 +338,66 @@ fn the_browser_export_and_write_back_fit_the_runtime_mcp_stop_slice() {
         mur_agent_runtime::mcp::pool::MCP_STOP_SLICE
     );
 }
+
+/// #2360 D1: the request's host must be reachable too, but it is not a
+/// profile domain, so it never shows up in an overlap.
+#[test]
+fn the_request_host_is_checked_for_coverage_but_not_for_overlap() {
+    let e = entry(Some(McpNetMode::Restricted), &["deepseek.com"], &[], None);
+    let host = d(&["chat.deepseek.com"]);
+    assert_eq!(
+        plan_bind_for(
+            Some(&e),
+            "ds",
+            &d(&["deepseek.com"]),
+            &host,
+            &disjoint,
+            false
+        ),
+        BindPlan::NeedsHosts {
+            current: d(&["deepseek.com"]),
+            missing: d(&["chat.deepseek.com"]),
+        }
+    );
+    let held = entry(Some(McpNetMode::BroadAudited), &[], &[], Some("old"));
+    let old = |n: &str| (n == "old").then(|| d(&["deepseek.com"]));
+    assert_eq!(
+        plan_bind_for(Some(&held), "ds", &d(&["deepseek.com"]), &host, &old, false),
+        BindPlan::Overlaps {
+            with: "old".into(),
+            domains: d(&["deepseek.com"]),
+        }
+    );
+    assert_eq!(
+        plan_bind_for(Some(&e), "ds", &d(&["deepseek.com"]), &[], &disjoint, false),
+        add(Some(&e), "ds", &d(&["deepseek.com"]))
+    );
+}
+
+#[test]
+fn reach_checks_the_host_alone() {
+    let e = entry(
+        Some(McpNetMode::Restricted),
+        &["gitea.example"],
+        &[],
+        Some("g"),
+    );
+    assert!(matches!(
+        plan_reach(Some(&e), "gitea.example"),
+        BindPlan::Bind { .. }
+    ));
+    assert_eq!(
+        plan_reach(Some(&e), "x.example"),
+        BindPlan::NeedsHosts {
+            current: d(&["gitea.example"]),
+            missing: d(&["x.example"]),
+        }
+    );
+    let off = entry(Some(McpNetMode::Off), &[], &[], None);
+    assert_eq!(
+        plan_reach(Some(&off), "x.example"),
+        BindPlan::NotHostScoped {
+            mode: Some(McpNetMode::Off)
+        }
+    );
+}
