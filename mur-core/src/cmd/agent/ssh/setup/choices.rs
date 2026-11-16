@@ -111,7 +111,7 @@ fn install_target(
         return Err(NotReady::User(INSTALL_NEEDS_USER.into()));
     }
     match &plan.dedicated {
-        Dedicated::Stored { fingerprint } if fingerprint == fp => Ok(Some(InstallTarget {
+        Dedicated::Stored { fingerprint, .. } if fingerprint == fp => Ok(Some(InstallTarget {
             user: c.user.clone(),
             host: plan.host.clone(),
         })),

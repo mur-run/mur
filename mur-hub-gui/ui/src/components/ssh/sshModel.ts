@@ -4,7 +4,7 @@
 import { translate } from "../../i18n";
 import type { TranslationKey } from "../../i18n/types";
 import type { InboxItem } from "../home/inbox";
-import type { Choices, HostRuleView, NotReady, PendingView, PlanView, VerdictName } from "./sshApi";
+import type { ApplyView, Choices, HostRuleView, NotReady, PendingView, PlanView, VerdictName } from "./sshApi";
 
 type T = (k: TranslationKey, v?: Record<string, string | number>) => string;
 
@@ -41,6 +41,7 @@ export function notReadyText(n: NotReady, t: T): string {
   switch (n.kind) {
     case "host":
     case "user":
+    case "install":
       return n.detail;
     default:
       return t(`ssh.notReady.${n.kind}`);
@@ -69,5 +70,35 @@ export function initialChoices(plan: PlanView): Choices {
     ticked: [],
     spawn_consented: false,
     user: plan.user ?? "",
+    install: false,
   };
+}
+
+/** Whether the dedicated key is the chosen one: the install toggle and the
+ * `authorized_keys` line are shown only then. */
+export function dedicatedChosen(plan: PlanView, choices: Choices): boolean {
+  return plan.dedicated.state === "stored" && plan.dedicated.fingerprint === choices.key_fp;
+}
+
+/** What Approve sends. The install tick is only honoured while its
+ * checkbox is shown (dedicated key chosen, its line known, a user typed):
+ * switching key or clearing the user hides the checkbox but leaves the tick
+ * in state, and a hidden tick must not reach the backend. */
+export function choicesToApply(plan: PlanView, choices: Choices): Choices {
+  const shown = dedicatedChosen(plan, choices) && !!plan.dedicated.line && !!choices.user;
+  return { ...choices, install: choices.install && shown };
+}
+
+/** After a generate: select the dedicated key. */
+export function selectDedicated(plan: PlanView, choices: Choices): Choices {
+  const fp = plan.dedicated.fingerprint;
+  return fp && plan.keys.some((k) => k.fingerprint === fp) ? { ...choices, key_fp: fp } : choices;
+}
+
+/** The card's state once an apply (or retry / finish) came back. */
+export type ResultState = "held" | "manual" | "closed";
+export function resultState(r: ApplyView): ResultState {
+  if (r.held) return "held";
+  if (r.advisory && r.install.state === "not_chosen") return "manual";
+  return "closed";
 }

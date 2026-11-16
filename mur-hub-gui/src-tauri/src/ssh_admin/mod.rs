@@ -15,16 +15,24 @@ use std::time::{Duration, Instant};
 
 use mur_agent_runtime::tools::ssh_request::SSH_REQUEST;
 use mur_core::a2a_dial::{StepEvent, canonicalize_agent_name};
-use mur_core::cmd::agent::ssh_setup::apply::{Lifecycle, Restart};
+use mur_core::cmd::agent::ssh_setup::advisory::AdvisoryResult;
+use mur_core::cmd::agent::ssh_setup::apply::{Lifecycle, approved_known_hosts};
 use mur_core::cmd::agent::ssh_setup::choices::{Choices, build_approval};
 use mur_core::cmd::agent::ssh_setup::life::AgentLifecycle;
 use mur_core::cmd::agent::ssh_setup::plan::split_keys;
 use mur_core::cmd::agent::ssh_setup::probe::System;
-use mur_core::cmd::agent::ssh_setup::{SetupPlan, front, pending, report};
+use mur_core::cmd::agent::ssh_setup::{Approval, SetupPlan, front, pending, report};
 use mur_core::cmd::agent::{SshRevokeArgs, cmd_ssh_revoke};
 use tauri::State;
 
 pub use view::{ApplyView, CheckView, OverviewView, PendingView, PlanView, RevokeView};
+
+/// The advisory test's answer, always labelled as advisory.
+#[derive(Debug, serde::Serialize)]
+pub struct AdvisoryView {
+    pub accepted: bool,
+    pub text: String,
+}
 
 /// Emitted when an agent's `ssh_request` tool call completes in a Hub chat
 /// (deviation H5). Payload: the agent name.
@@ -35,11 +43,25 @@ pub(crate) const PLAN_TTL: Duration = Duration::from_secs(10 * 60);
 /// Open cards held at once; the oldest goes first.
 pub(crate) const MAX_PLANS: usize = 16;
 
-struct HeldPlan {
+pub(crate) struct HeldPlan {
     plan: SetupPlan,
     reason: Option<String>,
     hand_back: String,
     at: Instant,
+    /// Set once Approve wrote the profile: the plan stays for Retry install,
+    /// Restart anyway and the advisory test, bound to what was written, and
+    /// can no longer be applied.
+    written: Option<Written>,
+}
+
+#[derive(Clone)]
+pub(crate) struct Written {
+    pub(crate) approval: Approval,
+    /// The login typed on the card, for the advisory test.
+    pub(crate) user: String,
+    /// The restart is held for a failed install: Retry install and Restart
+    /// anyway are offered. False after a restart: only the advisory test.
+    pub(crate) held: bool,
 }
 
 #[derive(Default)]
@@ -95,6 +117,7 @@ impl SshPlans {
                 reason,
                 hand_back,
                 at: Instant::now(),
+                written: None,
             },
         );
         id
@@ -113,13 +136,44 @@ impl SshPlans {
         }
     }
 
-    /// Take the plan out, so a second Approve on the same card finds nothing.
-    fn take(&self, id: &str) -> Result<HeldPlan, String> {
+    /// Take a plan not yet written, so a second Approve on the same card
+    /// finds nothing.
+    pub(crate) fn take(&self, id: &str) -> Result<HeldPlan, String> {
+        self.take_where(id, false)
+    }
+
+    /// Take a written plan, for Retry install or Restart anyway: used once,
+    /// put back only when the install failed again.
+    pub(crate) fn take_written(&self, id: &str) -> Result<HeldPlan, String> {
+        self.take_where(id, true)
+    }
+
+    fn take_where(&self, id: &str, written: bool) -> Result<HeldPlan, String> {
         let mut g = self.held();
-        match g.plans.remove(id) {
-            Some(h) if h.at.elapsed() < PLAN_TTL => Ok(h),
-            _ => Err(expired_text()),
+        match g.plans.get(id) {
+            Some(h) if h.at.elapsed() >= PLAN_TTL => {
+                g.plans.remove(id);
+                Err(expired_text())
+            }
+            Some(h) if !written && h.written.is_some() => {
+                Err("this card already wrote its grant".into())
+            }
+            Some(h) if written && !h.written.as_ref().is_some_and(|w| w.held) => {
+                Err("this card has no held restart to finish".into())
+            }
+            Some(_) => Ok(g.plans.remove(id).expect("present")),
+            None => Err(expired_text()),
         }
+    }
+
+    /// Keep a plan after its write (see `HeldPlan::written`). The clock
+    /// restarts here: a written plan can never be applied again, so the scan
+    /// age no longer matters, and the held step gets its own full TTL for
+    /// Retry install, Restart anyway and the advisory test.
+    pub(crate) fn keep_written(&self, id: String, mut h: HeldPlan, w: Written) {
+        h.written = Some(w);
+        h.at = Instant::now();
+        self.held().plans.insert(id, h);
     }
 
     /// Hand a taken plan back when nothing was written. It keeps its scan
@@ -283,6 +337,7 @@ pub async fn agent_ssh_apply(
         }
     };
     let run_agent = agent.clone();
+    let applied_approval = approval.clone();
     let applied =
         match blocking(move || front::apply_for(&home(), &run_agent, &approval, exe)).await {
             Ok(a) => a,
@@ -294,16 +349,164 @@ pub async fn agent_ssh_apply(
                 return Err(e);
             }
         };
-    let hand_back = held.hand_back;
-    let restarted = applied.restart == Restart::Restarted;
-    Ok(ApplyView {
-        lines: report::lines(&agent, &applied),
-        restarted,
-        can_restart: matches!(
-            applied.restart,
-            Restart::StopFailed(_) | Restart::StartFailed(_)
-        ),
-        hand_back: restarted.then_some(hand_back),
+    let line = view::dedicated_line(&held.plan, &approval_key(&choices));
+    let v = view::apply_view(
+        report::lines(&agent, &applied),
+        &applied.restart,
+        &applied.install,
+        line.clone(),
+        held.hand_back.clone(),
+    );
+    if v.held || line.is_some() {
+        let w = Written {
+            approval: applied_approval,
+            user: choices.user.trim().to_string(),
+            held: v.held,
+        };
+        plans.keep_written(plan_id, held, w);
+    }
+    Ok(v)
+}
+
+fn approval_key(c: &Choices) -> String {
+    c.key_fp.clone().unwrap_or_default()
+}
+
+/// Generate (or load) the agent's dedicated key, then refresh the held plan:
+/// its `dedicated` state and key lists. Writes nothing to the profile (K2).
+#[tauri::command]
+pub async fn agent_ssh_generate(
+    plans: State<'_, SshPlans>,
+    plan_id: String,
+) -> Result<PlanView, String> {
+    let agent = plans.with(&plan_id, |h| {
+        h.written
+            .is_none()
+            .then(|| h.plan.agent.clone())
+            .ok_or_else(|| "this card already wrote its grant".to_string())
+    })??;
+    // The fresh key itself is not needed: `dedicated_state` re-reads it.
+    let (dedicated, loaded, unloaded) = blocking(move || {
+        front::generate_for(&home(), &agent)?;
+        let dedicated = front::dedicated_state(&home(), &agent)?;
+        let (loaded, unloaded) = split_keys(&System);
+        Ok((dedicated, loaded, unloaded))
+    })
+    .await?;
+    plans.with(&plan_id, |h| {
+        h.plan.dedicated = dedicated;
+        h.plan.keys_loaded = loaded;
+        h.plan.keys_unloaded = unloaded;
+        view::plan_view(&plan_id, &h.plan, h.reason.as_deref())
+    })
+}
+
+/// Retry install (`retry`) or Restart anyway, on a card whose grant is
+/// written and whose restart is held. `Applying` guards both as it guards
+/// Approve.
+async fn finish_written(
+    plans: &SshPlans,
+    plan_id: String,
+    retry: bool,
+) -> Result<ApplyView, String> {
+    let held = plans.take_written(&plan_id)?;
+    let w = held.written.clone().expect("taken as written");
+    let a = w.approval.clone();
+    let agent = held.plan.agent.clone();
+    let ready = plans
+        .claim(&agent)
+        .and_then(|slot| crate::fleet_pause::mur_binary().map(|exe| (slot, exe)));
+    let (_slot, exe) = match ready {
+        Ok(r) => r,
+        Err(e) => {
+            plans.put_back(plan_id, held);
+            return Err(e);
+        }
+    };
+    let (run_agent, run_a) = (agent.clone(), a.clone());
+    let res = blocking(move || {
+        if retry {
+            front::retry_install_for(&home(), &run_agent, &run_a, exe)
+        } else {
+            front::finish_for(&home(), &run_agent, &run_a, exe)
+        }
+    })
+    .await;
+    let f = match res {
+        Ok(f) => f,
+        Err(e) => {
+            plans.put_back(plan_id, held);
+            return Err(e);
+        }
+    };
+    let line = view::dedicated_line(&held.plan, &a.key_fp);
+    let v = view::apply_view(
+        report::finish_lines(&agent, &f),
+        &f.restart,
+        &f.install,
+        line,
+        held.hand_back.clone(),
+    );
+    // Held again: the card keeps Retry install and Restart anyway. Restarted:
+    // only the advisory test is left, so a second finish is refused.
+    if v.held || v.advisory {
+        let w = Written { held: v.held, ..w };
+        plans.keep_written(plan_id, held, w);
+    }
+    Ok(v)
+}
+
+#[tauri::command]
+pub async fn agent_ssh_retry_install(
+    plans: State<'_, SshPlans>,
+    plan_id: String,
+) -> Result<ApplyView, String> {
+    finish_written(&plans, plan_id, true).await
+}
+
+#[tauri::command]
+pub async fn agent_ssh_finish(
+    plans: State<'_, SshPlans>,
+    plan_id: String,
+) -> Result<ApplyView, String> {
+    finish_written(&plans, plan_id, false).await
+}
+
+/// Does the server accept the dedicated key? Advisory: run outside the
+/// agent's sandbox, writes nothing, records no decision.
+#[tauri::command]
+pub async fn agent_ssh_advisory_test(
+    plans: State<'_, SshPlans>,
+    plan_id: String,
+) -> Result<AdvisoryView, String> {
+    let (agent, host, user, known_hosts) = plans.with(&plan_id, |h| {
+        let w = h
+            .written
+            .as_ref()
+            .ok_or_else(|| "nothing was written from this card yet".to_string())?;
+        Ok::<_, String>((
+            h.plan.agent.clone(),
+            h.plan.host.clone(),
+            w.user.clone(),
+            approved_known_hosts(&w.approval),
+        ))
+    })??;
+    if user.is_empty() {
+        return Err("the advisory test needs a login user".into());
+    }
+    let r = blocking(move || {
+        Ok(front::advisory_test_for(
+            &home(),
+            &agent,
+            &host,
+            &user,
+            &known_hosts,
+        ))
+    })
+    .await?;
+    Ok(AdvisoryView {
+        accepted: r == AdvisoryResult::Accepted,
+        text: r.text(),
     })
 }
 

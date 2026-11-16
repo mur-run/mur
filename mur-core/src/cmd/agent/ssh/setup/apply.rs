@@ -222,7 +222,7 @@ fn run_install(
 }
 
 /// The host keys approved on this card, as `known_hosts` lines.
-fn approved_known_hosts(a: &Approval) -> String {
+pub fn approved_known_hosts(a: &Approval) -> String {
     a.hosts
         .iter()
         .filter_map(|h| h.known_host.as_ref())

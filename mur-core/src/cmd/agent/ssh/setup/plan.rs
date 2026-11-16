@@ -60,8 +60,12 @@ pub enum Dedicated {
     /// Offered; no key exists yet.
     Offer,
     /// The agent's key exists. Its fingerprint is also in `keys_loaded`
-    /// when it is loaded.
-    Stored { fingerprint: String },
+    /// when it is loaded. `public_line` is the exact `authorized_keys` line
+    /// the summary shows (K2); it is a public key, safe to show anywhere.
+    Stored {
+        fingerprint: String,
+        public_line: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

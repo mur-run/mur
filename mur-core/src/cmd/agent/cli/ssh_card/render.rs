@@ -4,7 +4,7 @@
 use ratatui::text::{Line, Span};
 
 use super::super::theme::Theme;
-use super::state::{CardState, Step};
+use super::state::{CardState, ExtraRow, Step};
 use crate::cmd::agent::ssh::setup::verdict::forget_cmd;
 use crate::cmd::agent::ssh::setup::{SpawnChange, Verdict};
 
@@ -17,6 +17,9 @@ pub fn title(c: &CardState) -> String {
         Step::Key => 1,
         Step::Host => 2,
         Step::Summary => 3,
+        Step::Held | Step::Done => {
+            return format!(" SSH access · {} · written ", c.plan.host.canonical());
+        }
     };
     format!(" SSH access · {} · step {n}/3 ", c.plan.host.canonical())
 }
@@ -28,7 +31,12 @@ pub fn hint(c: &CardState) -> &'static str {
     match c.step {
         Step::Key => "↑↓ pick · Enter next · u user · Esc cancel",
         Step::Host => "↑↓ move · Space I compared this · paste a fingerprint · Enter next · ← back",
+        Step::Summary if c.dedicated_line().is_some() => {
+            "Enter approve · i install key · c consent · ← back · Esc cancel"
+        }
         Step::Summary => "Enter approve · c consent · ← back · Esc cancel",
+        Step::Held => "r retry install · y copy line · Enter restart anyway · Esc close",
+        Step::Done => "t advisory test · y copy line · Enter/Esc close",
     }
 }
 
@@ -57,6 +65,7 @@ pub fn lines(c: &CardState, t: &'static Theme) -> Vec<Line<'static>> {
         Step::Key => key_lines(c, t, &mut out),
         Step::Host => host_lines(c, t, &mut out),
         Step::Summary => summary_lines(c, t, &mut out),
+        Step::Held | Step::Done => result_lines(c, t, &mut out),
     }
     if let Some(n) = &c.note {
         out.push(Line::styled(n.clone(), t.warn));
@@ -88,6 +97,56 @@ fn key_lines(c: &CardState, t: &'static Theme, out: &mut Vec<Line<'static>>) {
             Span::styled(format!("{}  {}", k.fingerprint, k.comment), style),
             Span::styled(format!("  ({state})"), t.muted),
         ]));
+    }
+    let on_extra = c.key_idx == c.keys().len();
+    match c.extra_row() {
+        Some(ExtraRow::Generate) => {
+            let (mark, style) = sel(on_extra, t);
+            out.push(Line::from(vec![
+                mark,
+                Span::styled("+ generate a dedicated key for this agent", style),
+            ]));
+        }
+        Some(ExtraRow::Load) => {
+            let (mark, style) = sel(on_extra, t);
+            out.push(Line::from(vec![
+                mark,
+                Span::styled("+ load this agent's dedicated key into ssh-agent", style),
+            ]));
+        }
+        Some(ExtraRow::Off(why)) => out.push(Line::styled(
+            format!("  dedicated key unavailable: {why}"),
+            t.muted,
+        )),
+        None => {}
+    }
+}
+
+/// The exact `authorized_keys` line and how to use it.
+fn key_line(line: &str, t: &'static Theme, out: &mut Vec<Line<'static>>) {
+    out.push(Line::styled(
+        "  authorized_keys line (a public key):",
+        t.muted,
+    ));
+    out.push(Line::styled(format!("    {line}"), t.text));
+}
+
+fn result_lines(c: &CardState, t: &'static Theme, out: &mut Vec<Line<'static>>) {
+    match c.step {
+        Step::Held => out.push(Line::styled(
+            "Granted, key not installed — nothing was restarted.",
+            t.warn,
+        )),
+        _ => out.push(Line::styled(
+            format!(
+                "Granted. Add the key on {} yourself, then test it:",
+                c.plan.host.canonical()
+            ),
+            t.emphasis,
+        )),
+    }
+    if let Some(l) = c.dedicated_line() {
+        key_line(l, t, out);
     }
 }
 
@@ -176,6 +235,24 @@ fn summary_lines(c: &CardState, t: &'static Theme, out: &mut Vec<Line<'static>>)
             "  spawn     add `ssh` to the spawn allowlist",
             t.text,
         ));
+    }
+    if let Some(line) = c.dedicated_line() {
+        let label = if c.user.is_empty() {
+            "install the public key on the host — set a user first (u)".to_string()
+        } else {
+            format!(
+                "install the public key on {}@{} (i)",
+                c.user,
+                c.plan.host.canonical()
+            )
+        };
+        let mark = if c.install && !c.user.is_empty() {
+            MARK_ON
+        } else {
+            MARK_OFF
+        };
+        out.push(Line::styled(format!("{mark} {label}"), t.text));
+        key_line(line, t, out);
     }
     out.push(Line::styled(
         format!("  one restart of '{}'", c.plan.agent),
