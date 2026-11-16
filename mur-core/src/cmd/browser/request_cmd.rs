@@ -15,11 +15,13 @@ use super::request_card::{
 
 pub fn requests(agent: Option<&str>) -> Result<()> {
     let home = super::mur_home()?;
+    let all = crate::a2a_dial::agent_dir_names(&home);
     let mut agents = match agent {
-        Some(a) => vec![crate::a2a_dial::canonicalize_agent_name(&home, a)],
-        None => crate::a2a_dial::agent_dir_names(&home),
+        Some(a) => vec![one_agent(&all, a)?],
+        None => all,
     };
     agents.sort();
+    let entries = card::live_entries(&home);
     let mut out = std::io::stdout();
     let mut any = false;
     for a in agents {
@@ -27,7 +29,7 @@ pub fn requests(agent: Option<&str>) -> Result<()> {
             any = true;
             // Best-effort (council N9): one unreadable agent does not hide
             // every other agent's requests.
-            match card::card_for(&home, &a, &r) {
+            match card::card_for_in(&home, &entries, &a, &r) {
                 Ok((c, _)) => {
                     for line in render(&a, &r, &c) {
                         writeln!(out, "{line}")?;
@@ -41,6 +43,19 @@ pub fn requests(agent: Option<&str>) -> Result<()> {
         writeln!(out, "no browser requests waiting.")?;
     }
     Ok(())
+}
+
+/// `--agent`, resolved like every agent name (case-insensitive). A name
+/// that matches no agent is an error, not "no requests waiting".
+fn one_agent(all: &[String], typed: &str) -> Result<String> {
+    use crate::a2a_dial::{NameMatch, match_agent_name};
+    match match_agent_name(all, typed) {
+        NameMatch::Found(name) => Ok(name),
+        NameMatch::Missing => bail!("no agent named {typed:?} (see `mur agent list`)"),
+        NameMatch::Ambiguous(names) => {
+            bail!("{typed:?} matches several agents: {}", names.join(", "))
+        }
+    }
 }
 
 fn render(agent: &str, r: &PendingRequest, c: &Card) -> Vec<String> {
@@ -248,6 +263,7 @@ pub async fn answer(a: AnswerArgs<'_>) -> Result<()> {
             }
         }
         let engine = super::auth::card_browser(&home)?;
+        println!("opening {} for the login.", engine.playwright_name());
         card::login(
             &home,
             &plan,

@@ -128,9 +128,24 @@ fn id_of(name: &str) -> Option<&str> {
 
 /// Delete the file of a request [`read_pending`] returned. Unlinks the entry
 /// itself (never what a link points to); already gone is success.
+///
+/// Only if the file still holds `p`: [`write`] replaces a request for the
+/// same origin, so an agent that asked again while `p`'s card was open has
+/// a newer request under the same name, and answering `p` must not delete
+/// it unseen. The check reads at `p.requested_at`, so expiry cannot hide a
+/// match. (A write landing between the check and the unlink is still lost;
+/// that window is microseconds, the one this closes is a whole login.)
 pub fn remove(agent_home: &Path, p: &PendingRequest) -> io::Result<()> {
     let dir = PinnedDir::open(&requests_dir(agent_home))?;
-    match dir.unlink(&file_name(&p.site.id())) {
+    let name = file_name(&p.site.id());
+    match read_one(&dir, &name, p.requested_at) {
+        Some(on_disk) if on_disk == *p => {}
+        Some(_) => return Ok(()),
+        // Gone already, or no longer a valid request: deleting it is what
+        // the old behaviour did and loses nothing the user could see.
+        None => {}
+    }
+    match dir.unlink(&name) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         other => other,
     }

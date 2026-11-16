@@ -42,7 +42,11 @@ pub(crate) fn saved_profiles(home: &Path) -> Vec<Profile> {
     out
 }
 
-fn live_entries(home: &Path) -> Vec<(String, McpServerEntry)> {
+/// Every agent's live browser entry, by agent. One profile load per agent:
+/// build it once and pass it to [`card_for_in`] for many requests.
+pub(crate) type LiveEntries = Vec<(String, McpServerEntry)>;
+
+pub(crate) fn live_entries(home: &Path) -> LiveEntries {
     crate::a2a_dial::agent_dir_names(home)
         .into_iter()
         .filter_map(|agent| {
@@ -59,25 +63,32 @@ pub(crate) fn open_requests(home: &Path, agent: &str) -> Vec<PendingRequest> {
 
 /// Other agents whose live entry launches with `profile`.
 pub(crate) fn shared_with(home: &Path, agent: &str, profile: &str) -> Vec<String> {
-    live_entries(home)
-        .into_iter()
+    sharing(&live_entries(home), agent, profile)
+}
+
+fn sharing(entries: &[(String, McpServerEntry)], agent: &str, profile: &str) -> Vec<String> {
+    entries
+        .iter()
         .filter(|(a, e)| a != agent && attached_profiles(e).contains(&profile))
-        .map(|(a, _)| a)
+        .map(|(a, _)| a.clone())
         .collect()
 }
 
 pub(crate) fn card_for(home: &Path, agent: &str, r: &PendingRequest) -> Result<(Card, Snapshot)> {
+    card_for_in(home, &live_entries(home), agent, r)
+}
+
+/// [`card_for`] against already-loaded [`live_entries`].
+pub(crate) fn card_for_in(
+    home: &Path,
+    entries: &[(String, McpServerEntry)],
+    agent: &str,
+    r: &PendingRequest,
+) -> Result<(Card, Snapshot)> {
     let (_, profile) = crate::cmd::agent::load_profile_at(home, agent)?;
     let entry = profile.mcp_servers.iter().find(|e| e.name == LIVE_ENTRY);
     let out = &profile.entitlements.network.outbound;
-    let entries = live_entries(home);
-    let shared = |name: &str| -> Vec<String> {
-        entries
-            .iter()
-            .filter(|(a, e)| a != agent && attached_profiles(e).contains(&name))
-            .map(|(a, _)| a.clone())
-            .collect()
-    };
+    let shared = |name: &str| sharing(entries, agent, name);
     let profiles = saved_profiles(home);
     let bound = bound_domains(home);
     let name = default_name(&r.site);

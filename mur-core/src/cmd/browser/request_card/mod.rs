@@ -19,4 +19,4 @@ pub(crate) use login::{login, login_plan};
 
 mod ops;
 
-pub(crate) use ops::{AgentPorts, card_for, open_requests, shared_with};
+pub(crate) use ops::{AgentPorts, card_for, card_for_in, live_entries, open_requests, shared_with};

@@ -216,3 +216,11 @@ fn choose_refuses_a_bare_answer() {
         .is_err()
     );
 }
+
+#[test]
+fn an_unknown_agent_is_an_error_not_an_empty_list() {
+    let all = vec!["asker".to_string(), "Other".to_string()];
+    assert_eq!(one_agent(&all, "ASKER").unwrap(), "asker");
+    let err = one_agent(&all, "askr").unwrap_err().to_string();
+    assert!(err.contains("no agent named \"askr\""), "{err}");
+}
