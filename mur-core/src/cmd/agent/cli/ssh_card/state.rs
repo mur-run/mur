@@ -34,9 +34,6 @@ pub enum Step {
 pub enum ExtraRow {
     /// "generate a dedicated key for this agent".
     Generate,
-    /// The key exists but the ssh-agent does not hold it: the same call
-    /// loads it.
-    Load,
     /// Shown, not selectable, with the reason.
     Off(String),
 }
@@ -163,12 +160,8 @@ impl CardState {
         match &self.plan.dedicated {
             Dedicated::Offer => Some(ExtraRow::Generate),
             Dedicated::Off(off) => Some(ExtraRow::Off(off.reason())),
-            Dedicated::Stored { fingerprint, .. } => (!self
-                .plan
-                .keys_loaded
-                .iter()
-                .any(|k| k.fingerprint == *fingerprint))
-            .then_some(ExtraRow::Load),
+            // Listed first among the keys by `SetupPlan::set_keys`.
+            Dedicated::Stored { .. } => None,
         }
     }
 
@@ -189,7 +182,7 @@ impl CardState {
         }
     }
 
-    /// A key was generated or loaded: take the new plan state and key lists,
+    /// A key was generated: take the new plan state and key lists,
     /// with the selection on `fingerprint`. Grants nothing (K2).
     pub fn generated(
         &mut self,
@@ -199,14 +192,13 @@ impl CardState {
         fingerprint: &str,
     ) {
         self.plan.dedicated = dedicated;
-        self.plan.keys_loaded = loaded;
-        self.plan.keys_unloaded = unloaded;
+        self.plan.set_keys(loaded, unloaded);
         self.key_idx = self
             .keys()
             .iter()
             .position(|(k, _)| k.fingerprint == fingerprint)
             .unwrap_or(0);
-        self.note = Some("dedicated key ready and loaded; Enter to use it".into());
+        self.note = Some("dedicated key ready; Enter to use it".into());
     }
 
     /// Approve came back: stay open on `Held` or `Done`, or say the card is
@@ -241,8 +233,7 @@ impl CardState {
     /// unloaded tail to the loaded head, so its index changes.
     pub fn refresh_keys(&mut self, loaded: Vec<AgentKey>, unloaded: Vec<AgentKey>) {
         let chosen = self.chosen_key().map(|(k, _)| k.fingerprint.clone());
-        self.plan.keys_loaded = loaded;
-        self.plan.keys_unloaded = unloaded;
+        self.plan.set_keys(loaded, unloaded);
         let keys = self.keys();
         self.key_idx = chosen
             .and_then(|fp| keys.iter().position(|(k, _)| k.fingerprint == fp))
@@ -416,7 +407,7 @@ impl CardState {
             Step::Key => {
                 if self.key_idx == self.keys().len() {
                     return match self.extra_row() {
-                        Some(ExtraRow::Generate | ExtraRow::Load) => KeyAction::Generate,
+                        Some(ExtraRow::Generate) => KeyAction::Generate,
                         Some(ExtraRow::Off(why)) => {
                             self.note = Some(format!("no dedicated key: {why}"));
                             KeyAction::Nothing

@@ -57,11 +57,21 @@ fn the_extra_row_follows_the_dedicated_state() {
     let off = card(Dedicated::Off(DedicatedOff::SwitchOff));
     assert!(matches!(off.extra_row(), Some(ExtraRow::Off(why)) if why.contains("generate_key")));
     assert_eq!(with_dedicated().extra_row(), None, "stored and loaded");
-    let unloaded = card(Dedicated::Stored {
+    // Not in the user's ssh-agent, yet listed first and ready (K8).
+    let mut stored = card(Dedicated::Stored {
         fingerprint: fp('D'),
         public_line: LINE.into(),
     });
-    assert_eq!(unloaded.extra_row(), Some(ExtraRow::Load));
+    let (loaded, unloaded) = (
+        stored.plan.keys_loaded.clone(),
+        stored.plan.keys_unloaded.clone(),
+    );
+    stored.refresh_keys(loaded, unloaded);
+    assert_eq!(stored.extra_row(), None);
+    assert_eq!(
+        stored.chosen_key().map(|(k, l)| (k.fingerprint.clone(), l)),
+        Some((fp('D'), true))
+    );
     assert!(text(&card(Dedicated::Offer)).contains("generate a dedicated key"));
 }
 

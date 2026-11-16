@@ -59,8 +59,8 @@ pub enum Dedicated {
     Off(DedicatedOff),
     /// Offered; no key exists yet.
     Offer,
-    /// The agent's key exists. It is not in `keys_loaded` unless an older
-    /// MUR added it to the user's ssh-agent, which the runtime now undoes.
+    /// The agent's key exists. [`SetupPlan::set_keys`] puts it first in
+    /// `keys_loaded`: it is ready without being in the user's ssh-agent.
     /// `public_line` is the exact `authorized_keys` line the summary shows
     /// (K2); it is a public key, safe to show anywhere.
     Stored {
@@ -129,26 +129,55 @@ pub fn plan(
         .user_known_hosts()
         .is_some_and(|kh| may_write(ent, &quiet_policy(ent, agent_home), &kh));
     let (verdict, matched) = verdict(&scanned, &stored, writable);
-    let (loaded, unloaded) = split_keys(probe);
+    let (keys_loaded, keys_unloaded) = split_keys(probe);
     let spawn = SpawnChange::needed(&ent.processes);
     let exec_surface = spawn.and_then(|c| {
         let mut after = ent.clone();
         c.apply(&mut after.processes);
         exec_surface(&quiet_policy(&after, agent_home))
     });
-    Ok(SetupPlan {
+    let mut plan = SetupPlan {
         agent: agent.to_string(),
         host,
         user,
-        keys_loaded: loaded,
-        keys_unloaded: unloaded,
+        keys_loaded: Vec::new(),
+        keys_unloaded: Vec::new(),
         scanned,
         verdict,
         matched,
         spawn,
         exec_surface,
         dedicated,
-    })
+    };
+    plan.set_keys(keys_loaded, keys_unloaded);
+    Ok(plan)
+}
+
+impl SetupPlan {
+    /// Take fresh key lists, with the stored dedicated key counted as ready:
+    /// the runtime loads it into its own private agent at start (K8), so it
+    /// is never in the user's ssh-agent and never needs an `ssh-add`. Every
+    /// refresh goes through here so the key cannot drop back to "not loaded".
+    pub fn set_keys(&mut self, mut loaded: Vec<AgentKey>, mut unloaded: Vec<AgentKey>) {
+        if let Dedicated::Stored {
+            fingerprint,
+            public_line,
+        } = &self.dedicated
+        {
+            loaded.retain(|k| k.fingerprint != *fingerprint);
+            unloaded.retain(|k| k.fingerprint != *fingerprint);
+            loaded.insert(
+                0,
+                AgentKey {
+                    fingerprint: fingerprint.clone(),
+                    comment: super::dedicated::comment_of(public_line),
+                    path: None,
+                },
+            );
+        }
+        self.keys_loaded = loaded;
+        self.keys_unloaded = unloaded;
+    }
 }
 
 /// The user's ssh-agent keys, then the `~/.ssh/*.pub` files not among them.

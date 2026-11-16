@@ -295,8 +295,7 @@ pub async fn agent_ssh_refresh_keys(
 ) -> Result<PlanView, String> {
     let (loaded, unloaded) = blocking(|| Ok(split_keys(&System))).await?;
     plans.with(&plan_id, |h| {
-        h.plan.keys_loaded = loaded;
-        h.plan.keys_unloaded = unloaded;
+        h.plan.set_keys(loaded, unloaded);
         view::plan_view(&plan_id, &h.plan, h.reason.as_deref())
     })
 }
@@ -372,7 +371,7 @@ fn approval_key(c: &Choices) -> String {
     c.key_fp.clone().unwrap_or_default()
 }
 
-/// Generate (or load) the agent's dedicated key, then refresh the held plan:
+/// Generate the agent's dedicated key (or take the one it has), then refresh the held plan:
 /// its `dedicated` state and key lists. Writes nothing to the profile (K2).
 #[tauri::command]
 pub async fn agent_ssh_generate(
@@ -395,8 +394,7 @@ pub async fn agent_ssh_generate(
     .await?;
     plans.with(&plan_id, |h| {
         h.plan.dedicated = dedicated;
-        h.plan.keys_loaded = loaded;
-        h.plan.keys_unloaded = unloaded;
+        h.plan.set_keys(loaded, unloaded);
         view::plan_view(&plan_id, &h.plan, h.reason.as_deref())
     })
 }
