@@ -747,6 +747,28 @@ Agent** wizard offers the same catalog as a source.
   `--bind <agent>` does the same without asking, for scripts; when it is
   refused nothing is written, the command to run is printed, and it exits
   non-zero.
+- **Answer an agent's browser request** — when an agent asks for a site with
+  `browser_request`, `mur browser requests [--agent <agent>]` shows the card:
+  every saved login that covers the site (the host or a subdomain of one of
+  its domains), what picking each would do to the agent's live browser entry
+  (bind alongside, also allow missing hosts, only as a replacement that names
+  every profile it drops, or not available and why), a "log in again" line,
+  and the exact `mur browser answer` command for each choice.
+  `mur browser answer <agent> <site>` takes one of `--profile <row>` (it must
+  be a row on the card; `--replace` only for a replacement row), `--login`,
+  `--allow` (a request that needs no login), or `--dismiss`; a bare answer is
+  refused. `--login` opens a headed browser, saves the login when you press
+  Enter, then binds it. It saves under the host, plus the port when it is not
+  the default, or `--name`, and never replaces a saved login of that name
+  without `--reauth`, which keeps the old login's hosts. The binding is checked
+  before the browser opens. Every write is bounded by the card: if the agent's
+  browser entry changed since the card was read, nothing is written and the
+  request stays open. `--open-port` also opens a non-default port (to ANY
+  host, restart needed) through the same writer as
+  `mur agent perm allow-port`. A successful answer clears the request and
+  prints the text to send the agent; its first visit is the test, and what
+  it reports is the agent's own report, not a check by MUR.
+  `mur browser answer --login` needs a terminal.
   To unbind everything, rerun `/browser live <hosts> --no-profile`; to keep
   some, name only those (`--profile a --profile b`). The saved profiles stay
   on disk.
