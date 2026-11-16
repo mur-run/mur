@@ -273,6 +273,22 @@ fn esc_on_the_held_step_tells_the_transcript_the_grant_is_written() {
 }
 
 #[test]
+fn esc_before_approve_tells_the_transcript_nothing_changed() {
+    let mut app = crate::cmd::agent::cli::app::App::test_fixture();
+    app.ssh.card = Some(Box::new(with_dedicated()));
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    on_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
+        &tx,
+    );
+    assert!(app.ssh.card.is_none());
+    let last = &app.messages.last().expect("a notice").text;
+    assert!(last.contains("nothing was changed"), "{last}");
+    assert!(!last.contains("written"), "{last}");
+}
+
+#[test]
 fn a_crashed_job_gives_the_held_card_back() {
     let mut app = crate::cmd::agent::cli::app::App::test_fixture();
     let mut c = with_dedicated();
