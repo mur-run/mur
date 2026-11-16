@@ -300,10 +300,8 @@ async fn handle_conn(
     let mut upstream = match TcpStream::connect(pinned).await {
         Ok(u) => u,
         Err(e) => {
-            match upstream_dial_hint(agent, &pinned.to_string(), &e) {
-                Some(hint) => tracing::warn!(host, %pinned, "{hint}"),
-                None => tracing::warn!(host, %pinned, "egress proxy upstream dial failed: {e}"),
-            }
+            let server = entry.as_ref().map(|e| e.server.as_str());
+            report_dial_failure(events, agent, server, host, pinned, &e);
             // Answer the request rather than hanging up, so the client
             // reports a proxy failure instead of a bare reset.
             client
@@ -325,24 +323,56 @@ async fn handle_conn(
     Ok(())
 }
 
+/// Log a failed upstream dial; when the seal refused it on the port (#2418),
+/// also raise it to the server's in-flight tool call and to clients, so the
+/// failure names the port instead of surfacing as a bare tunnel error.
+fn report_dial_failure(
+    events: &live::Events,
+    agent: &str,
+    server: Option<&str>,
+    host: &str,
+    pinned: SocketAddr,
+    err: &std::io::Error,
+) -> Option<mur_common::egress_event::EgressDenied> {
+    let Some(hint) = upstream_dial_hint(agent, pinned, err) else {
+        tracing::warn!(host, %pinned, "egress proxy upstream dial failed: {err}");
+        return None;
+    };
+    tracing::warn!(host, %pinned, "{hint}");
+    events.port_closed(server?, host, pinned.port(), std::time::Instant::now())
+}
+
 /// The actionable line for an upstream dial the seal refused, or `None` for
 /// any other failure.
 ///
 /// The proxy runs inside the sealed runtime, so its dials face the same SBPL /
 /// Landlock port gate as everything else: `CONNECT ALLOW` for an allowed host
-/// on a port outside that set still ends in EPERM (os error 1). The bare OS
-/// error named neither the port nor the fix.
-fn upstream_dial_hint(agent: &str, addr: &str, err: &std::io::Error) -> Option<String> {
-    if err.raw_os_error() != Some(1) {
+/// on a port outside that set is still refused. The bare OS error named
+/// neither the port nor the fix.
+fn upstream_dial_hint(agent: &str, addr: SocketAddr, err: &std::io::Error) -> Option<String> {
+    if !is_seal_denial(err) {
         return None;
     }
-    let port = addr.rsplit_once(':').map(|(_, p)| p).unwrap_or(addr);
+    let port = addr.port();
+    let fix = mur_common::egress_event::port_fix(agent, port);
     Some(format!(
         "egress proxy: the sandbox refused the upstream dial to {addr} — port {port} \
          is not in this agent's outbound port set (the host is allowed; the port \
-         is a separate grant). Fix: `mur agent perm allow-port {agent} {port}`, \
-         then restart the agent"
+         is a separate grant). Fix: {fix}"
     ))
+}
+
+/// The errnos the seal's port gate answers with: SBPL (macOS) gives `EPERM`,
+/// Landlock's `ConnectTcp` (Linux) gives `EACCES`. Same pair as
+/// `ssh_bypass::probe`. Windows has no seal, so nothing there is one.
+#[cfg(unix)]
+fn is_seal_denial(err: &std::io::Error) -> bool {
+    matches!(err.raw_os_error(), Some(libc::EPERM | libc::EACCES))
+}
+
+#[cfg(not(unix))]
+fn is_seal_denial(_err: &std::io::Error) -> bool {
+    false
 }
 
 /// Decode `Basic base64(user:pass)` and return `user` (our token); the password
@@ -383,25 +413,90 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
+    /// Both seals' port-gate errnos: SBPL's EPERM and Landlock's EACCES.
+    #[cfg(unix)]
+    const SEAL_ERRNOS: [i32; 2] = [libc::EPERM, libc::EACCES];
+
+    #[cfg(unix)]
+    #[test]
+    fn landlock_eacces_is_a_seal_denial_too() {
+        for errno in SEAL_ERRNOS {
+            let err = std::io::Error::from_raw_os_error(errno);
+            let msg = upstream_dial_hint("shop", "127.0.0.1:3000".parse().unwrap(), &err)
+                .unwrap_or_else(|| panic!("errno {errno} is the seal's port gate"));
+            assert!(msg.contains("allow-port shop 3000"), "{msg}");
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn a_seal_denied_dial_names_the_port_and_the_grant() {
-        let eperm = std::io::Error::from_raw_os_error(1);
-        let msg = upstream_dial_hint("shop", "127.0.0.1:52489", &eperm)
+        let eperm = std::io::Error::from_raw_os_error(libc::EPERM);
+        let msg = upstream_dial_hint("shop", "127.0.0.1:52489".parse().unwrap(), &eperm)
             .expect("EPERM is the seal's port gate");
         assert!(msg.contains("port 52489"), "{msg}");
         assert!(
             msg.contains("mur agent perm allow-port shop 52489"),
             "{msg}"
         );
-        // IPv6 literal: the port is still the part after the last colon.
-        let msg = upstream_dial_hint("shop", "[::1]:8000", &eperm).unwrap();
+        // IPv6 literal: the port comes from the address, not the text.
+        let msg = upstream_dial_hint("shop", "[::1]:8000".parse().unwrap(), &eperm).unwrap();
         assert!(msg.contains("allow-port shop 8000"), "{msg}");
+    }
+
+    /// #2418 acceptance: a live entry for `x.example.com` with no port, a
+    /// dial to `x.example.com:3000` the seal refuses → the tool call and the
+    /// client both get the port and the `allow-port` command.
+    /// Run per errno: Linux (Landlock EACCES) must reach the call and the
+    /// client exactly like macOS (SBPL EPERM).
+    #[cfg(unix)]
+    #[test]
+    fn a_closed_port_on_an_allowed_host_reaches_the_call_and_the_client() {
+        use mur_common::egress_event::DenyReason;
+        let pinned: SocketAddr = "203.0.113.7:3000".parse().unwrap();
+        for errno in SEAL_ERRNOS {
+            // Fresh Events per errno: the per-host throttle would mute the 2nd.
+            let events = live::Events::new("gate");
+            let call = events.in_flight("live", "task-1");
+            let err = std::io::Error::from_raw_os_error(errno);
+            let ev =
+                report_dial_failure(&events, "gate", Some("live"), "x.example.com", pinned, &err)
+                    .unwrap_or_else(|| {
+                        panic!("errno {errno}: a seal-refused dial raises an event")
+                    });
+            assert_eq!(ev.reason, DenyReason::PortNotOpen);
+            assert_eq!((ev.host.as_str(), ev.port), ("x.example.com", Some(3000)));
+            assert_eq!(ev.task_id.as_deref(), Some("task-1"));
+            let note = call.closed_port_note().expect("the call hears it");
+            assert!(note.contains("port 3000"), "errno {errno}: {note}");
+            assert!(
+                note.contains("mur agent perm allow-port gate 3000"),
+                "{note}"
+            );
+        }
+        let events = live::Events::new("gate");
+
+        // A refused connection is not the seal: no event, no note.
+        let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        let other = events.in_flight("other", "task-2");
+        assert!(
+            report_dial_failure(
+                &events,
+                "gate",
+                Some("other"),
+                "y.example.com",
+                pinned,
+                &refused
+            )
+            .is_none()
+        );
+        assert!(other.closed_port_note().is_none());
     }
 
     #[test]
     fn other_dial_failures_get_no_seal_hint() {
         let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
-        assert!(upstream_dial_hint("shop", "127.0.0.1:52489", &refused).is_none());
+        assert!(upstream_dial_hint("shop", "127.0.0.1:52489".parse().unwrap(), &refused).is_none());
     }
 
     #[tokio::test]

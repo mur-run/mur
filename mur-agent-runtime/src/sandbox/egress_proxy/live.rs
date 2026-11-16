@@ -9,7 +9,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use mur_common::egress_event::{DENIED_EVENT_WINDOW_SECS, DENIED_METHOD, DenyReason, EgressDenied};
+use mur_common::egress_event::{
+    DENIED_EVENT_WINDOW_SECS, DENIED_METHOD, DenyReason, EgressDenied, port_fix,
+};
 use tokio::sync::mpsc;
 
 use super::{EgressProxyHandle, Registry};
@@ -52,6 +54,10 @@ struct EventsInner {
     /// and another turn starting a call does not stop that traffic, so they
     /// remain candidate owners until [`ATTRIBUTION_GRACE`] passes.
     finished: Recent,
+    /// `server → (when, host, port)` for upstream dials the seal refused on a
+    /// closed port (#2418), kept for [`ATTRIBUTION_GRACE`] so the tool call
+    /// that caused one can name the port in its own result.
+    closed_ports: HashMap<String, Vec<(Instant, String, u16)>>,
 }
 
 /// Forget entries older than the grace, and servers left with none.
@@ -72,6 +78,12 @@ impl EventsInner {
     fn candidates(&mut self, server: &str, now: Instant) -> BTreeSet<String> {
         sweep(&mut self.abandoned, now);
         sweep(&mut self.finished, now);
+        // A server that hit one closed port and never another would otherwise
+        // keep that entry for the life of the process.
+        self.closed_ports.retain(|_, log| {
+            log.retain(|(t, _, _)| now.saturating_duration_since(*t) < ATTRIBUTION_GRACE);
+            !log.is_empty()
+        });
         let mut s: BTreeSet<String> = BTreeSet::new();
         let active = self.in_flight.get(server);
         s.extend(active.into_iter().flat_map(|t| t.keys().cloned()));
@@ -109,9 +121,36 @@ pub struct InFlight {
     server: String,
     task: String,
     ending: Ending,
+    started: Instant,
 }
 
 impl InFlight {
+    /// A note naming every port the seal refused for this server since the
+    /// call started, with the fix — or `None`. The browser only sees a bare
+    /// tunnel failure (`ERR_TUNNEL_CONNECTION_FAILED`), so without this the
+    /// agent and the user never learn the host was fine and the port was not.
+    ///
+    /// Keyed by server, not by turn: two turns calling the same server at once
+    /// both hear each other's ports. Requests carry no page owner, so this is
+    /// the same ambiguity under which [`Events::emit`] broadcasts.
+    pub fn closed_port_note(&self) -> Option<String> {
+        let g = self.events.inner.lock().unwrap();
+        let mut seen: BTreeSet<(String, u16)> = BTreeSet::new();
+        for (at, host, port) in g.closed_ports.get(&self.server)? {
+            if *at >= self.started {
+                seen.insert((host.clone(), *port));
+            }
+        }
+        if seen.is_empty() {
+            return None;
+        }
+        let lines: Vec<String> = seen
+            .into_iter()
+            .map(|(host, port)| closed_port_line(&g.agent, &host, port))
+            .collect();
+        Some(lines.join("\n"))
+    }
+
     /// The server answered — a result (an `isError` one included) or a
     /// JSON-RPC error. The call is over, but work the tool started before
     /// answering — a page still loading — may not be: an error does not
@@ -179,7 +218,34 @@ impl Events {
             server: server.to_owned(),
             task: task.to_owned(),
             ending: Ending::Abandoned,
+            started: Instant::now(),
         }
+    }
+
+    /// The seal refused an upstream dial to an allowed `host` on `port`
+    /// (#2418). Remembered for in-flight tool calls, and raised as an
+    /// `egress/denied` with [`DenyReason::PortNotOpen`].
+    pub(super) fn port_closed(
+        &self,
+        server: &str,
+        host: &str,
+        port: u16,
+        now: Instant,
+    ) -> Option<EgressDenied> {
+        {
+            let mut g = self.inner.lock().unwrap();
+            let log = g.closed_ports.entry(server.to_owned()).or_default();
+            log.retain(|(t, _, _)| now.saturating_duration_since(*t) < ATTRIBUTION_GRACE);
+            log.push((now, host.to_owned(), port));
+        }
+        self.emit(
+            server,
+            host,
+            Some(port),
+            "restricted",
+            DenyReason::PortNotOpen,
+            now,
+        )
     }
 
     /// Emit at most one event per `(server, host, audience)` per window. Returns the
@@ -190,6 +256,23 @@ impl Events {
         host: &str,
         port: Option<u16>,
         broad: bool,
+        now: Instant,
+    ) -> Option<EgressDenied> {
+        let (mode, reason) = if broad {
+            ("broad_audited", DenyReason::DenyListed)
+        } else {
+            ("restricted", DenyReason::NotAllowed)
+        };
+        self.emit(server, host, port, mode, reason, now)
+    }
+
+    fn emit(
+        &self,
+        server: &str,
+        host: &str,
+        port: Option<u16>,
+        mode: &str,
+        reason: DenyReason,
         now: Instant,
     ) -> Option<EgressDenied> {
         let mut g = self.inner.lock().unwrap();
@@ -209,7 +292,13 @@ impl Events {
                 None
             }
         };
-        let key = (server.to_owned(), host.to_owned(), task_id.clone());
+        // A closed port on an allowed host is a different problem from the
+        // host itself being refused; neither may throttle the other.
+        let throttled_host = match (reason, port) {
+            (DenyReason::PortNotOpen, Some(p)) => format!("{host}:{p}"),
+            _ => host.to_owned(),
+        };
+        let key = (server.to_owned(), throttled_host, task_id.clone());
         let window = Duration::from_secs(DENIED_EVENT_WINDOW_SECS);
         // An entry outside its window suppresses nothing; drop it so per-turn
         // keys do not pile up for the runtime's life. The map only ever holds
@@ -224,12 +313,8 @@ impl Events {
             server: server.to_owned(),
             host: host.to_owned(),
             port,
-            mode: if broad { "broad_audited" } else { "restricted" }.to_owned(),
-            reason: if broad {
-                DenyReason::DenyListed
-            } else {
-                DenyReason::NotAllowed
-            },
+            mode: mode.to_owned(),
+            reason,
             at: chrono::Utc::now().to_rfc3339(),
             task_id,
         };
@@ -244,6 +329,17 @@ impl Events {
         }
         Some(ev)
     }
+}
+
+/// The one line naming a closed port and its fix, for the runtime log and
+/// the tool result alike.
+pub(super) fn closed_port_line(agent: &str, host: &str, port: u16) -> String {
+    format!(
+        "`{host}` is allowed, but port {port} is not open for this agent, so the \
+         connection to {host}:{port} was refused (a browser reports this as \
+         ERR_TUNNEL_CONNECTION_FAILED). Fix: {}",
+        port_fix(agent, port)
+    )
 }
 
 /// Why a runtime grant was refused. Text is user-facing.
@@ -324,6 +420,56 @@ fn grant_in(registry: &Registry, server: &str, host: &str) -> Result<(), GrantEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_closed_port_note_covers_only_dials_since_the_call_started() {
+        let ev = Events::new("mur");
+        let t0 = Instant::now() - Duration::from_secs(1);
+        ev.port_closed("live", "old.x", 8080, t0);
+        let call = ev.in_flight("live", "t");
+        assert!(
+            call.closed_port_note().is_none(),
+            "earlier dial is not this call's"
+        );
+        let later = Instant::now() + Duration::from_millis(1);
+        ev.port_closed("live", "x.example.com", 3000, later);
+        ev.port_closed("live", "x.example.com", 3000, later);
+        let note = call.closed_port_note().unwrap();
+        assert_eq!(note.lines().count(), 1, "deduped: {note}");
+        assert!(note.contains("x.example.com:3000"), "{note}");
+        // Another server's call hears nothing.
+        assert!(ev.in_flight("fetch", "t").closed_port_note().is_none());
+    }
+
+    #[test]
+    fn a_stale_closed_port_is_swept_by_any_later_event() {
+        let ev = Events::new("mur");
+        let t0 = Instant::now();
+        ev.port_closed("once", "x.example.com", 3000, t0);
+        ev.port_closed("other", "y.example.com", 4000, t0 + ATTRIBUTION_GRACE);
+        let g = ev.inner.lock().unwrap();
+        assert!(
+            !g.closed_ports.contains_key("once"),
+            "swept after the grace"
+        );
+        assert!(g.closed_ports.contains_key("other"));
+    }
+
+    #[test]
+    fn a_closed_port_does_not_throttle_a_host_denial() {
+        let ev = Events::new("mur");
+        let t = Instant::now();
+        assert!(ev.port_closed("live", "x.example.com", 3000, t).is_some());
+        assert!(
+            ev.denied("live", "x.example.com", Some(443), false, t)
+                .is_some()
+        );
+        assert!(
+            ev.port_closed("live", "x.example.com", 3000, t).is_none(),
+            "throttled"
+        );
+        assert!(ev.port_closed("live", "x.example.com", 8443, t).is_some());
+    }
 
     #[test]
     fn one_event_per_server_host_per_window() {
