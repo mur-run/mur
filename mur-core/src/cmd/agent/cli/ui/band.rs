@@ -119,6 +119,12 @@ pub(super) fn effective_skip(app: &App) -> usize {
     relocate_prefix(&m.text, &app.flushed_text).unwrap_or(0)
 }
 
+/// Reasoning of a continued message (`skip > 0`) not yet in scrollback.
+fn unflushed_thinking<'a>(app: &App, m: &'a ChatMsg, skip: usize) -> &'a str {
+    let from = if skip == 0 { 0 } else { app.flushed_thinking };
+    m.thinking.get(from..).unwrap_or("")
+}
+
 /// Byte offset in `text` just past the end of `prefix`, matching every
 /// non-whitespace char in order and skipping whitespace on both sides — or
 /// `None` when `text` does not start with `prefix` in that sense.
@@ -328,7 +334,9 @@ pub(super) fn push_live_inner(
         // Measuring a streaming turn: header + reasoning, then the settled body.
         push_agent_header(lines, m, app.spinner, app.theme, &app.agent_label);
     }
-    // Continuation of a partially-committed agent turn: body only, no header.
+    // Continuation of a partially-committed agent turn: no header; only the
+    // reasoning that arrived after the spill, then the body.
+    super::message::push_thinking(lines, unflushed_thinking(app, m, skip), app.theme);
     let rest = m.text.get(skip..).unwrap_or("");
     let mut rest = rest;
     if skip > 0 && app.flushed_raw && (!m.streaming || as_settled) {
@@ -509,6 +517,7 @@ pub fn flush_finished<B: Backend>(
         // forget it and let that message flush whole. A visible duplicate of
         // the partial text beats splicing a remainder onto the wrong body.
         app.flushed_bytes = 0;
+        app.flushed_thinking = 0;
         app.flushed_raw = false;
     }
 
@@ -592,6 +601,7 @@ pub fn flush_finished<B: Backend>(
         emit(terminal, lines, pad, width)?;
         app.flushed_upto = end;
         app.flushed_bytes = 0;
+        app.flushed_thinking = 0;
         app.flushed_raw = false;
         skip = 0;
     }
@@ -662,8 +672,10 @@ pub fn flush_finished<B: Backend>(
                 format!("● {}", app.agent_label),
                 theme.accent.add_modifier(Modifier::BOLD),
             )));
-            super::message::push_thinking(&mut lines, &m.thinking, theme);
         }
+        // Reasoning can keep arriving after the body began spilling; commit
+        // whatever of it has not gone up yet, ahead of this block.
+        super::message::push_thinking(&mut lines, unflushed_thinking(app, m, skip), theme);
         if raw {
             lines.extend(raw_body_lines(
                 chunk,
@@ -687,6 +699,7 @@ pub fn flush_finished<B: Backend>(
         skip += block_end;
         app.flushed_bytes = skip;
         app.flushed_text = app.messages[app.flushed_upto].text[..skip].to_string();
+        app.flushed_thinking = app.messages[app.flushed_upto].thinking.len();
         raw = !is_block_boundary(&app.messages[app.flushed_upto].text, skip);
         app.flushed_raw = raw;
 

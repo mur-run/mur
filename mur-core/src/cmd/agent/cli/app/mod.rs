@@ -253,6 +253,8 @@ pub struct App {
     /// what streamed, re-located — instead of splicing a remainder onto text
     /// that never had that prefix.
     pub flushed_text: String,
+    /// Bytes of that message's `thinking` already committed alongside it.
+    pub flushed_thinking: usize,
     /// The committed prefix of that message ended mid-block, as raw lines
     /// (a table or fence taller than the band). Its remainder then paints
     /// raw too — rendered as markdown from mid-table it would open torn.
@@ -508,6 +510,7 @@ impl App {
             flushed_upto: 0,
             flushed_bytes: 0,
             flushed_text: String::new(),
+            flushed_thinking: 0,
             flushed_raw: false,
             overlay_open: false,
             overlay_text: None,

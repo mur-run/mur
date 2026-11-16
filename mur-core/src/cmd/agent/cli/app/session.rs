@@ -22,6 +22,7 @@ impl App {
         self.messages.clear();
         self.flushed_upto = 0;
         self.flushed_bytes = 0;
+        self.flushed_thinking = 0;
         self.flushed_raw = false;
         self.needs_full_redraw = true;
         self.context_task_id = None;
@@ -50,6 +51,7 @@ impl App {
         self.messages.clear();
         self.flushed_upto = 0;
         self.flushed_bytes = 0;
+        self.flushed_thinking = 0;
         self.flushed_raw = false;
         self.context_task_id = None;
         self.current_task_id = None;

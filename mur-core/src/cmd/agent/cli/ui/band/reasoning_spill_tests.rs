@@ -132,3 +132,56 @@ fn reasoning_and_every_paragraph_land_exactly_once() {
         );
     }
 }
+
+/// Reasoning that arrives after the body has already started spilling must
+/// still reach the transcript. The spill only painted `thinking` on the first
+/// spill (`skip == 0`) and the band's continuation path paints body only, so
+/// a late reasoning delta landed in the message and was never drawn anywhere.
+#[test]
+fn reasoning_after_first_spill_lands_exactly_once() {
+    let viewport = crate::cmd::agent::cli::term::viewport_h_for(ROWS);
+    let mut app = App::test_fixture();
+    app.render_mode = RenderMode::Inline;
+    app.width = COLS;
+    let mut term = Terminal::with_options(
+        TestBackend::new(COLS, ROWS),
+        TerminalOptions {
+            viewport: Viewport::Inline(viewport),
+        },
+    )
+    .unwrap();
+    let step = |app: &mut App, term: &mut Terminal<TestBackend>| {
+        flush_finished(term, app, viewport).unwrap();
+        term.draw(|f| render(f, app)).unwrap();
+    };
+    app.begin_user_turn("q");
+    app.append_delta("EARLY-THINK first pass\n", true);
+    step(&mut app, &mut term);
+    let head: String = (1..=24)
+        .map(|n| format!("HEAD-{n:02} 段落。\n\n"))
+        .collect();
+    app.append_delta(&head, false);
+    step(&mut app, &mut term);
+    assert!(app.flushed_bytes > 0, "fixture must spill part of the body");
+
+    app.append_delta("LATE-THINK second pass\n", true);
+    step(&mut app, &mut term);
+    let live = rows_of(term.backend().buffer()).join("\n");
+    assert!(
+        everything(&term).contains("LATE-THINK"),
+        "late reasoning is neither in scrollback nor in the band while streaming\n{live}"
+    );
+
+    let tail: String = (1..=4).map(|n| format!("TAIL-{n:02} 收尾。\n\n")).collect();
+    app.append_delta(&tail, false);
+    step(&mut app, &mut term);
+    app.finish_agent_turn(format!("{head}{tail}"), None);
+    for _ in 0..3 {
+        step(&mut app, &mut term);
+    }
+    let all = everything(&term);
+    for marker in ["EARLY-THINK", "LATE-THINK", "HEAD-01", "HEAD-24", "TAIL-04"] {
+        let n = all.matches(marker).count();
+        assert_eq!(n, 1, "{marker} appeared {n}x\n{all}");
+    }
+}

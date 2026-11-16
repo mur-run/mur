@@ -34,6 +34,7 @@ pub fn flush_settled<B: Backend>(
         // Same rule as `flush_finished`: the committed prefix no longer
         // belongs to that message, so it flushes whole.
         app.flushed_bytes = 0;
+        app.flushed_thinking = 0;
         app.flushed_raw = false;
     }
     let start = app.flushed_upto.min(app.messages.len());
@@ -51,6 +52,7 @@ pub fn flush_settled<B: Backend>(
     emit(terminal, lines, pad, width)?;
     app.flushed_upto = end;
     app.flushed_bytes = 0;
+    app.flushed_thinking = 0;
     app.flushed_raw = false;
     Ok(())
 }
