@@ -38,6 +38,24 @@ pub async fn serve_unix(
     serve_unix_gated(dispatcher, path, notifications, None).await
 }
 
+/// [`serve_unix_gated`] for a caller that spawns the listener and never awaits
+/// it, as the supervisor does: an error (a refused bind most of all) becomes a
+/// warning naming the path instead of being dropped. Without it the runtime
+/// printed `ready` with no socket and the only symptom was a client timeout
+/// (#2422).
+pub async fn serve_unix_reporting(
+    dispatcher: Arc<Dispatcher>,
+    path: PathBuf,
+    notifications: mpsc::Receiver<Value>,
+    policy: Option<Arc<AcceptPolicy>>,
+) {
+    if let Err(e) = serve_unix_gated(dispatcher, path.clone(), notifications, policy).await {
+        let line = format!("unix socket transport failed at {}: {e}", path.display());
+        tracing::warn!("{line}");
+        eprintln!("warning: {line}");
+    }
+}
+
 /// `serve_unix` with the profile's `accepts_from` enforced per connection.
 /// A refused connection stays open and answers every request with
 /// `CommunicationDenied` (-32011), so the caller sees why instead of a hang

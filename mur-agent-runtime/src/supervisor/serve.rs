@@ -12,7 +12,7 @@ use crate::telemetry_writer::Event;
 use crate::transport::stdio::serve_stdio;
 use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
 #[cfg(unix)]
-use crate::transport::unix_socket::serve_unix_gated;
+use crate::transport::unix_socket::serve_unix_reporting;
 use crate::transport::webhook;
 use crate::watch_scheduler::WatchScheduler;
 use anyhow::Context;
@@ -225,7 +225,7 @@ pub(super) async fn serve(boot: boot::Boot) -> anyhow::Result<()> {
             self_pid: std::process::id(),
         });
         transport_tasks.push(tokio::spawn(async move {
-            let _ = serve_unix_gated(d, bind, sock_notif_rx, Some(policy)).await;
+            serve_unix_reporting(d, bind, sock_notif_rx, Some(policy)).await;
         }));
     }
     #[cfg(not(unix))]
