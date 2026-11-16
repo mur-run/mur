@@ -2,6 +2,7 @@ pub mod child;
 pub mod egress_proxy;
 pub mod launch_chain;
 pub mod policy;
+pub mod ppid_oracle;
 pub mod protected;
 pub mod reqwest_guard;
 pub mod search_dirs;
