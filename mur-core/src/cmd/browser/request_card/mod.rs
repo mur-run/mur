@@ -16,3 +16,7 @@ pub(crate) use model::{
     Card, Inputs, LoginAgain, Offer, Profile, ProfileRow, Reach, add_hosts, build, offer_for,
     port_step,
 };
+
+mod apply;
+
+pub(crate) use apply::{Answer, Answered, Choice, PortOps, answer, hand_back_text, use_offer};
