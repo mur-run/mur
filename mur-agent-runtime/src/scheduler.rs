@@ -21,6 +21,8 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+mod missed;
+
 /// Build the `TaskSpec` for a cron-fired injection. Extracted so the
 /// `Background(Scheduled)` tagging can be asserted in a unit test without
 /// driving the full async cron loop — nobody is synchronously waiting on a
@@ -362,6 +364,10 @@ async fn run_entry(
         }
     };
 
+    // Whether this loop has fired. A one-off that retires after firing here
+    // was delivered; one that retires before ever firing may have been missed
+    // while the runtime was down (#2436), and the channel is asked.
+    let mut fired_here = false;
     loop {
         let now = Local::now();
         let next = match schedule.upcoming(Local).next() {
@@ -378,6 +384,12 @@ async fn run_entry(
                 not_after = entry.not_after.as_deref().unwrap_or_default(),
                 "schedule retired — its last firing is past, so it will not repeat"
             );
+            if !fired_here
+                && let (Some(sink), Some(bound)) =
+                    (sink.as_deref(), parse_bound(entry.not_after.as_deref()))
+            {
+                missed::report_missed(sink, &entry, bound, Utc::now()).await;
+            }
             return;
         }
 
@@ -404,6 +416,7 @@ async fn run_entry(
             );
         }
 
+        fired_here = true;
         let outcome = runner.run_sync(scheduled_task_spec(&entry.message)).await;
 
         match &outcome {
