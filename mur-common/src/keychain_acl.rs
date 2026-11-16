@@ -41,6 +41,14 @@ pub enum AclError {
 
 /// What [`check`] decides from the decrypt ACLs it found. `None` is an ACL with
 /// no app list; `Some` holds each listed app's identifying bytes.
+///
+/// This is a path-based approximation: the bytes are what
+/// `SecTrustedApplicationCopyData` returns, which is the app's path. macOS
+/// itself may match a signed app by its code requirement instead, so the two
+/// can disagree. An ad-hoc-signed build rebuilt at the same path can read as
+/// `Trusted` while the prompt returns; a Developer ID build at a new,
+/// versioned path (Homebrew, after `canonicalize`) can read as `Missing`
+/// while macOS still trusts it. Not yet verified on a real keychain.
 #[cfg(any(target_os = "macos", test))]
 fn decide(acls: &[Option<Vec<Vec<u8>>>], target: &[u8]) -> Trust {
     let target = trim_nul(target);

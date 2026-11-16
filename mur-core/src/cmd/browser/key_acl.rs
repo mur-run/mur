@@ -63,9 +63,8 @@ pub fn grant() -> Result<Option<bool>, AclError> {
 /// After a profile is saved. Never fails the auth: the profile is already
 /// written, and a missing grant only costs a prompt at the next agent start.
 pub fn grant_after_auth(out: &mut dyn std::io::Write) {
-    if check() == KeyAccess::Ok {
-        return;
-    }
+    // No separate `check()` first: `grant` -> `keychain_acl::ensure` already
+    // checks, and an already-trusted key comes back as `Ok(Some(false))`.
     let _ = match grant() {
         Ok(Some(true)) => writeln!(
             out,

@@ -141,8 +141,9 @@ pub fn cmd_start(name: &str) -> Result<()> {
         }
         if Instant::now() >= deadline {
             println!(
-                "launching '{name}' (pid {pid}) — not confirmed within {}s; slow starts are normal.\nCheck `mur agent status {name}` or `tail {}`.\nUNSUPERVISED: no auto-restart on crash or login. For a persistent service run: mur agent install-service {name}",
+                "launching '{name}' (pid {pid}) — not confirmed within {}s; slow starts are normal.{}\nCheck `mur agent status {name}` or `tail {}`.\nUNSUPERVISED: no auto-restart on crash or login. For a persistent service run: mur agent install-service {name}",
                 CONFIRM_WINDOW.as_secs(),
+                KEYCHAIN_HINT,
                 stderr_log.display()
             );
             return Ok(());
@@ -254,6 +255,16 @@ pub(super) fn start_service_unit(
 const CONFIRM_WINDOW: Duration = Duration::from_secs(8);
 const CONFIRM_POLL: Duration = Duration::from_millis(250);
 
+/// Appended to the "not confirmed" lines. On macOS the runtime may be waiting
+/// on a Keychain prompt (up to `ATTENDED_SECRET_RESOLVE_TIMEOUT`, 30 s per
+/// item, in `mur-agent-runtime`), well past `CONFIRM_WINDOW`; say so, since
+/// nothing else tells the user a dialog is open (#2369).
+#[cfg(target_os = "macos")]
+const KEYCHAIN_HINT: &str =
+    "\nA Keychain \"allow access\" prompt may be waiting; choose Always Allow.";
+#[cfg(not(target_os = "macos"))]
+const KEYCHAIN_HINT: &str = "";
+
 /// The pid from a live `running.lock`, if the runtime has written one and
 /// that pid is still alive. Same check as cmd_start's "already running" leg.
 fn live_lock_pid(agent_home: &std::path::Path) -> Option<u32> {
@@ -314,8 +325,9 @@ fn confirm_startup(
                 );
             }
             println!(
-                "ℹ start not confirmed within {}s — slow starts are normal; check `mur agent status {name}` or {log_hint}",
-                CONFIRM_WINDOW.as_secs()
+                "ℹ start not confirmed within {}s — slow starts are normal; check `mur agent status {name}` or {log_hint}{}",
+                CONFIRM_WINDOW.as_secs(),
+                KEYCHAIN_HINT
             );
             return Ok(());
         }
