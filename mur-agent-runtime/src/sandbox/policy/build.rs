@@ -421,9 +421,20 @@ impl SandboxPolicy {
                 mur_home.join("compress.yaml"),
                 mur_home.join("compress"),
                 mur_home.join("fleets"),
-                // `skills/get` serves `<mur_home>/skills/<name>` to peers. It
-                // only worked while tokio workers ran unconfined; once the
-                // seal covered every thread (GHSA-j8mv-27gx-x7xj) it read EACCES.
+                // The shared skill store: `skills/get` serves manifests from
+                // it and the skill index hashes it. Since the seal moved
+                // before the tokio runtime (GHSA-j8mv-27gx-x7xj) these reads
+                // run sealed, so without the grant they fail with EACCES.
+                //
+                // Unlike its neighbours this one is not in audit §7.1, which
+                // lists `skills/` as unread by the runtime.
+                //
+                // The "not a widening" above also holds for the runtime only:
+                // Landlock is inherited, so every child the agent spawns
+                // (`bash`, MCP servers) can read the store too. It holds
+                // manifests and bundled scripts, no credentials; macOS has
+                // always allowed the read. The supervisor creates the
+                // directory before the seal, like the limits scope.
                 mur_common::skill::global_skills_root(mur_home),
             ] {
                 if std::fs::metadata(&p).is_ok() && !fs_read.contains(&p) {
