@@ -7,7 +7,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../i18n";
 import { newTaskId } from "../ChatTab";
 import { type ApplyView, type CheckView, type Choices, type PlanView, sshApi } from "./sshApi";
-import { initialChoices, notReadyText, verdictKey } from "./sshModel";
+import { SshCardResult } from "./SshCardResult";
+import { choicesToApply, dedicatedChosen, initialChoices, notReadyText, resultState, selectDedicated, verdictKey } from "./sshModel";
 
 type Step = "key" | "host" | "summary" | "done";
 
@@ -70,6 +71,67 @@ export function SshCard({ target, onClose }: { target: SshTarget; onClose: (chan
     sshApi.refreshKeys(plan.plan_id).then(setPlan).catch((e) => setError(String(e)));
   }
 
+  function generate() {
+    if (!plan || !choices) return;
+    setBusy(true);
+    setError(null);
+    sshApi
+      .generate(plan.plan_id)
+      .then((p) => {
+        setPlan(p);
+        setChoices(selectDedicated(p, choices));
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => setBusy(false));
+  }
+
+  /** Retry install, or Restart anyway, from the held state. */
+  async function finishHeld(retry: boolean) {
+    if (!plan) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = retry ? await sshApi.retryInstall(plan.plan_id) : await sshApi.finish(plan.plan_id);
+      setResult(r);
+      if (r.hand_back) handBack(r.hand_back);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function advisory() {
+    if (!plan) return;
+    setBusy(true);
+    sshApi
+      .advisoryTest(plan.plan_id)
+      .then((a) => setNote(a.text))
+      .catch((e) => setError(String(e)))
+      .finally(() => setBusy(false));
+  }
+
+  function copyLine(line: string) {
+    navigator.clipboard
+      .writeText(line)
+      .then(() => setNote(t("ssh.dedicated.copied")))
+      .catch((e) => setError(String(e)));
+  }
+
+  function handBack(text: string) {
+    if (!plan) return;
+    setNote(t("ssh.done.asking", { agent: plan.agent }));
+    invoke("agent_chat_send", {
+      name: plan.agent,
+      text,
+      taskId: newTaskId(),
+      contextTaskId: null,
+      channelId: null,
+    })
+      .then(() => setNote(t("ssh.done.handedBack", { agent: plan.agent })))
+      .catch((e) => setNote(t("ssh.done.handBackFailed", { agent: plan.agent, err: String(e) })));
+  }
+
   function toggle(fp: string) {
     if (!choices) return;
     const ticked = choices.ticked.includes(fp) ? choices.ticked.filter((x) => x !== fp) : [...choices.ticked, fp];
@@ -81,21 +143,10 @@ export function SshCard({ target, onClose }: { target: SshTarget; onClose: (chan
     setBusy(true);
     setError(null);
     try {
-      const r = await sshApi.apply(plan.plan_id, choices);
+      const r = await sshApi.apply(plan.plan_id, choicesToApply(plan, choices));
       setResult(r);
       setStep("done");
-      if (r.hand_back) {
-        setNote(t("ssh.done.asking", { agent: plan.agent }));
-        invoke("agent_chat_send", {
-          name: plan.agent,
-          text: r.hand_back,
-          taskId: newTaskId(),
-          contextTaskId: null,
-          channelId: null,
-        })
-          .then(() => setNote(t("ssh.done.handedBack", { agent: plan.agent })))
-          .catch((e) => setNote(t("ssh.done.handBackFailed", { agent: plan.agent, err: String(e) })));
-      }
+      if (r.hand_back) handBack(r.hand_back);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -104,6 +155,8 @@ export function SshCard({ target, onClose }: { target: SshTarget; onClose: (chan
   }
 
   const chosen = plan && choices ? plan.keys.find((k) => k.fingerprint === choices.key_fp) ?? null : null;
+  const dedicated = plan && choices ? dedicatedChosen(plan, choices) : false;
+  const rstate = result ? resultState(result) : "closed";
 
   return (
     <div className="modal__overlay">
@@ -164,6 +217,20 @@ export function SshCard({ target, onClose }: { target: SshTarget; onClose: (chan
               </ul>
             )
           )}
+          {plan && choices && step === "key" && plan.dedicated.state === "offer" && (
+            <button type="button" className="btn btn--sm btn--secondary" onClick={generate} disabled={busy}>
+              {t("ssh.dedicated.generate")}
+            </button>
+          )}
+          {plan && choices && step === "key" && plan.dedicated.state === "stored" &&
+            !plan.keys.some((k) => k.loaded && k.fingerprint === plan.dedicated.fingerprint) && (
+              <button type="button" className="btn btn--sm btn--secondary" onClick={generate} disabled={busy}>
+                {t("ssh.dedicated.load")}
+              </button>
+            )}
+          {plan && choices && step === "key" && plan.dedicated.state === "off" && (
+            <p className="field-muted">{t("ssh.dedicated.off", { why: plan.dedicated.reason ?? "" })}</p>
+          )}
 
           {plan && choices && step === "host" && (
             <>
@@ -216,6 +283,23 @@ export function SshCard({ target, onClose }: { target: SshTarget; onClose: (chan
                   <li className="perm__row">{t("ssh.summary.restart", { agent: plan.agent })}</li>
                 </ul>
               )}
+              {dedicated && plan.dedicated.line && (
+                <div className="ssh-card__consent">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={choices.install}
+                      disabled={!choices.user}
+                      onChange={() => setChoices({ ...choices, install: !choices.install })}
+                    />{" "}
+                    {choices.user
+                      ? t("ssh.dedicated.install", { user: choices.user, host: plan.host })
+                      : t("ssh.dedicated.installNeedsUser")}
+                  </label>
+                  <p className="field-muted">{t("ssh.dedicated.lineIntro")}</p>
+                  <code className="ssh-card__cmd">{plan.dedicated.line}</code>
+                </div>
+              )}
               {check?.not_ready && <p className="save-error">{notReadyText(check.not_ready, t)}</p>}
               {plan.spawn === "none_to_strict" && (
                 <div className="ssh-card__consent">
@@ -234,16 +318,7 @@ export function SshCard({ target, onClose }: { target: SshTarget; onClose: (chan
             </>
           )}
 
-          {step === "done" && result && (
-            <>
-              <ul className="perm__list">
-                {result.lines.map((l) => (
-                  <li key={l} className="perm__row">{l}</li>
-                ))}
-              </ul>
-              {note && <p className="field-muted">{note}</p>}
-            </>
-          )}
+          {step === "done" && result && <SshCardResult result={result} note={note} />}
         </div>
         <div className="modal__footer ssh-card__footer">
           {error && !plan && (
@@ -253,6 +328,26 @@ export function SshCard({ target, onClose }: { target: SshTarget; onClose: (chan
           )}
           {step === "done" ? (
             <>
+              {rstate === "held" && plan && (
+                <>
+                  <button type="button" className="btn btn--sm btn--secondary" onClick={() => void finishHeld(true)} disabled={busy}>
+                    {t("ssh.held.retry")}
+                  </button>
+                  <button type="button" className="btn btn--sm btn--secondary" onClick={() => void finishHeld(false)} disabled={busy}>
+                    {t("ssh.held.restartAnyway")}
+                  </button>
+                </>
+              )}
+              {rstate !== "closed" && result?.install.line && (
+                <button type="button" className="btn btn--sm btn--secondary" onClick={() => copyLine(result.install.line ?? "")}>
+                  {t("ssh.dedicated.copy")}
+                </button>
+              )}
+              {rstate === "manual" && (
+                <button type="button" className="btn btn--sm btn--secondary" onClick={advisory} disabled={busy}>
+                  {t("ssh.manual.advisory")}
+                </button>
+              )}
               {result?.can_restart && plan && (
                 <button
                   type="button"

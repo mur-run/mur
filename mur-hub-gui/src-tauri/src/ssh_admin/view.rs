@@ -1,9 +1,11 @@
 //! What the WebView sees. Names and display data only: every SSH rule ran
 //! in `mur_core::cmd::agent::ssh_setup` before a view is built.
 
+use mur_core::cmd::agent::ssh_setup::apply::{InstallOutcome, Restart};
 use mur_core::cmd::agent::ssh_setup::choices::NotReady;
 use mur_core::cmd::agent::ssh_setup::front::Overview;
 use mur_core::cmd::agent::ssh_setup::pending::OpenRequest;
+use mur_core::cmd::agent::ssh_setup::plan::Dedicated;
 use mur_core::cmd::agent::ssh_setup::probe::{AgentKey, private_key_of};
 use mur_core::cmd::agent::ssh_setup::verdict::forget_cmd;
 use mur_core::cmd::agent::ssh_setup::{Approval, SetupPlan, SpawnChange, Verdict};
@@ -41,6 +43,57 @@ pub struct PlanView {
     pub spawn: Option<&'static str>,
     pub consent_text: Option<String>,
     pub differs_cmd: Option<String>,
+    pub dedicated: DedicatedView,
+}
+
+/// The agent's dedicated key, as the key step shows it. `line` is the
+/// `authorized_keys` line: a public key, safe in the WebView. The private
+/// key's path never leaves Rust.
+#[derive(Debug, Serialize)]
+pub struct DedicatedView {
+    /// `offer` | `off` | `stored`.
+    pub state: &'static str,
+    /// Why it is `off`.
+    pub reason: Option<String>,
+    pub fingerprint: Option<String>,
+    pub line: Option<String>,
+}
+
+pub fn dedicated_view(d: &Dedicated) -> DedicatedView {
+    match d {
+        Dedicated::Offer => DedicatedView {
+            state: "offer",
+            reason: None,
+            fingerprint: None,
+            line: None,
+        },
+        Dedicated::Off(off) => DedicatedView {
+            state: "off",
+            reason: Some(off.reason()),
+            fingerprint: None,
+            line: None,
+        },
+        Dedicated::Stored {
+            fingerprint,
+            public_line,
+        } => DedicatedView {
+            state: "stored",
+            reason: None,
+            fingerprint: Some(fingerprint.clone()),
+            line: Some(public_line.clone()),
+        },
+    }
+}
+
+/// The dedicated key's line when `key_fp` is that key.
+pub fn dedicated_line(p: &SetupPlan, key_fp: &str) -> Option<String> {
+    match &p.dedicated {
+        Dedicated::Stored {
+            fingerprint,
+            public_line,
+        } if fingerprint == key_fp => Some(public_line.clone()),
+        _ => None,
+    }
 }
 
 /// Quote `s` for a POSIX shell unless it is plainly safe.
@@ -115,6 +168,7 @@ pub fn plan_view(id: &str, p: &SetupPlan, reason: Option<&str>) -> PlanView {
             .then(|| p.exec_surface.as_ref().map(|e| e.consent_text()))
             .flatten(),
         differs_cmd: (p.verdict == Verdict::Differs).then(|| forget_cmd(&p.host)),
+        dedicated: dedicated_view(&p.dedicated),
     }
 }
 
@@ -170,6 +224,47 @@ pub struct ApplyView {
     pub can_restart: bool,
     /// Sent to the agent by the UI only when `restarted`.
     pub hand_back: Option<String>,
+    pub install: InstallView,
+    /// Written, not restarted: the install failed. The card offers Retry
+    /// install, Copy line and Restart anyway.
+    pub held: bool,
+    /// The advisory test is offered (the grant used the dedicated key).
+    pub advisory: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InstallView {
+    /// `not_chosen` | `done` | `failed`.
+    pub state: &'static str,
+    /// The `authorized_keys` line, when the grant used the dedicated key.
+    pub line: Option<String>,
+}
+
+/// The view after an apply, a retried install or a restart anyway.
+pub fn apply_view(
+    lines: Vec<String>,
+    restart: &Restart,
+    install: &InstallOutcome,
+    line: Option<String>,
+    hand_back: String,
+) -> ApplyView {
+    let restarted = *restart == Restart::Restarted;
+    ApplyView {
+        lines,
+        restarted,
+        can_restart: matches!(restart, Restart::StopFailed(_) | Restart::StartFailed(_)),
+        hand_back: restarted.then_some(hand_back),
+        install: InstallView {
+            state: match install {
+                InstallOutcome::NotChosen => "not_chosen",
+                InstallOutcome::Done { .. } => "done",
+                InstallOutcome::Failed(_) => "failed",
+            },
+            line: line.clone(),
+        },
+        held: *restart == Restart::HeldForInstall,
+        advisory: line.is_some(),
+    }
 }
 
 #[derive(Debug, Serialize)]

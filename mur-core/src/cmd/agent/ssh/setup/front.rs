@@ -22,7 +22,7 @@ use super::dedicated::{self, dedicated_for};
 use super::install::{Installer, SshInstaller};
 use super::life::AgentLifecycle;
 use super::pending::{OpenRequest, still_open};
-use super::plan::{DedicatedOff, sealed_every_run};
+use super::plan::{Dedicated, DedicatedOff, sealed_every_run};
 use super::preapprove::Preapproval;
 use super::probe::{AgentKey, Probe, System};
 use super::{Applied, Approval, SetupPlan, apply_and_restart, plan};
@@ -58,13 +58,7 @@ pub fn plan_for(
 ) -> Result<SetupPlan, String> {
     let (_, profile) = load_profile_at(mur_home, agent).map_err(|e| format!("{e:#}"))?;
     let agent_home = mur_home.join("agents").join(agent);
-    let dedicated = dedicated_for(
-        mur_home,
-        agent,
-        &profile.entitlements,
-        generate_key_enabled(mur_home),
-        ExecBackend::current(),
-    );
+    let dedicated = dedicated_of(mur_home, agent, &profile.entitlements);
     plan(
         &System,
         agent,
@@ -75,6 +69,23 @@ pub fn plan_for(
         dedicated,
     )
     .map_err(|e| format!("{e:#}"))
+}
+
+fn dedicated_of(mur_home: &Path, agent: &str, ent: &Entitlements) -> Dedicated {
+    dedicated_for(
+        mur_home,
+        agent,
+        ent,
+        generate_key_enabled(mur_home),
+        ExecBackend::current(),
+    )
+}
+
+/// The plan's `dedicated` field read again, after a generate, so a client
+/// can refresh its card without a second `ssh-keyscan`.
+pub fn dedicated_state(mur_home: &Path, agent: &str) -> Result<Dedicated, String> {
+    let (_, profile) = load_profile_at(mur_home, agent).map_err(|e| format!("{e:#}"))?;
+    Ok(dedicated_of(mur_home, agent, &profile.entitlements))
 }
 
 /// Why a key may not be generated for an agent with these entitlements now.
@@ -154,7 +165,6 @@ pub fn apply_for(
 
 /// After a failed install: run it again, and on success stop, preapprove and
 /// start. The profile is not written again.
-#[allow(dead_code)] // The clients land in slice 6c.
 pub fn retry_install_for(
     mur_home: &Path,
     agent: &str,
@@ -194,7 +204,6 @@ pub(super) fn retry_install(
 
 /// "Restart anyway" after a failed install: no install, and the preapproval
 /// is still written, so the first signature does not ask.
-#[allow(dead_code)] // The clients land in slice 6c.
 pub fn finish_for(
     mur_home: &Path,
     agent: &str,
@@ -232,7 +241,6 @@ pub(super) fn finish_with(
 
 /// Does the server accept the agent's dedicated key? Advisory only: it runs
 /// outside the agent's sandbox, writes nothing and records no decision.
-#[allow(dead_code)] // The clients land in slice 6c.
 pub fn advisory_test_for(
     mur_home: &Path,
     agent: &str,

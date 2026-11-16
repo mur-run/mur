@@ -16,11 +16,11 @@ use crate::cmd::agent::ssh::setup::{SetupPlan, SpawnChange, Verdict};
 
 /// A well-formed fingerprint, distinct per `c` (a paste is checked with
 /// `is_fingerprint`, which a repeated letter does not pass).
-fn fp(c: char) -> String {
+pub(super) fn fp(c: char) -> String {
     mur_common::agent::fingerprint_of_blob(c.to_string().as_bytes())
 }
 
-fn scanned(c: char) -> ScannedKey {
+pub(super) fn scanned(c: char) -> ScannedKey {
     ScannedKey {
         fingerprint: fp(c),
         entry: SshKnownHost {
@@ -31,7 +31,7 @@ fn scanned(c: char) -> ScannedKey {
     }
 }
 
-fn key(c: char, path: Option<&str>) -> AgentKey {
+pub(super) fn key(c: char, path: Option<&str>) -> AgentKey {
     AgentKey {
         fingerprint: fp(c),
         comment: format!("me-{c}"),
@@ -39,7 +39,7 @@ fn key(c: char, path: Option<&str>) -> AgentKey {
     }
 }
 
-fn plan(verdict: Verdict, spawn: Option<SpawnChange>) -> SetupPlan {
+pub(super) fn plan(verdict: Verdict, spawn: Option<SpawnChange>) -> SetupPlan {
     let matched = if verdict == Verdict::Trusted {
         vec![fp('H')]
     } else {
@@ -60,7 +60,7 @@ fn plan(verdict: Verdict, spawn: Option<SpawnChange>) -> SetupPlan {
     }
 }
 
-fn press(c: &mut CardState, code: KeyCode) -> KeyAction {
+pub(super) fn press(c: &mut CardState, code: KeyCode) -> KeyAction {
     c.on_key(KeyEvent::new(code, KeyModifiers::NONE))
 }
 

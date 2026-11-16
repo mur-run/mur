@@ -630,6 +630,23 @@ or `probe_inconclusive`). The key and host filter and HITL still apply to
 requests sent through `SSH_AUTH_SOCK` as given, but direct access to the
 upstream may bypass them. There is no setting to silence it.
 
+**Dedicated keys.** SSH setup can generate an ed25519 key for one agent
+(`mur_ssh_request::keystore`). It lives at
+`<mur_home>/secrets/ssh/<agent>/id_ed25519` (0600, never overwritten); a
+sealed agent cannot read `secrets/`, which is why the key is offered only to
+agents sandboxed on every run (`setup::plan::sealed_every_run`). Generation
+writes to a partial name and renames, and the next plan sweeps an interrupted
+one; nothing reaches the profile until Approve. At start, before the seal,
+the supervisor adds the key to the user's ssh-agent
+(`supervisor::ssh_proxy_boot::load_dedicated_before_seal`), so it signs
+through the same proxy, policy and HITL as any other key: purpose, not
+isolation. A requested public-key install runs after the profile write,
+outside the sandbox, with the line on stdin (`setup::install`); if it fails
+the restart is held (`Restart::HeldForInstall`) until the client retries or
+finishes. `ssh_setup.generate_key: false` stops new keys and installs; an
+existing key is still loaded and still removed with its agent by
+`mur agent remove --purge` (plain `remove` keeps it, like the agent's data).
+
 Known limitations (v1):
 
 - Keys stay in your existing ssh-agent. Key filtering is only as strong as

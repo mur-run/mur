@@ -9,7 +9,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mur_common::agent::is_fingerprint;
 use mur_ssh_request::PendingRequest;
 
+use crate::cmd::agent::ssh::setup::apply::approved_known_hosts;
 use crate::cmd::agent::ssh::setup::choices::{Choices, NotReady, build_approval};
+use crate::cmd::agent::ssh::setup::plan::Dedicated;
 use crate::cmd::agent::ssh::setup::probe::{AgentKey, private_key_of};
 use crate::cmd::agent::ssh::setup::{Approval, SetupPlan, SpawnChange, Verdict};
 
@@ -18,6 +20,25 @@ pub enum Step {
     Key,
     Host,
     Summary,
+    /// Written, not restarted: the public-key install failed (Journey 4.3).
+    /// `r` retries it, `y` copies the line, Enter restarts anyway.
+    Held,
+    /// Written with the dedicated key and no install: the line to add by
+    /// hand, and `t` for the advisory test.
+    Done,
+}
+
+/// The row under the key list that is not a key (SSH setup spec, card
+/// step 1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtraRow {
+    /// "generate a dedicated key for this agent".
+    Generate,
+    /// The key exists but the ssh-agent does not hold it: the same call
+    /// loads it.
+    Load,
+    /// Shown, not selectable, with the reason.
+    Off(String),
 }
 
 /// How the card was opened, which decides what is handed back to the agent
@@ -81,15 +102,39 @@ pub struct CardState {
     pub loading: bool,
     /// A one-line hint from the last key press.
     pub note: Option<String>,
+    /// Install the dedicated public key on the host after the write (`i`).
+    pub install: bool,
+    /// What Approve wrote, kept for the held and done steps.
+    pub applied: Option<Approval>,
 }
 
 pub enum KeyAction {
     Nothing,
+    /// Close before anything was written.
     Close,
+    /// Close from the held or done step: the grant is already written.
+    /// `held` is the held step, where the agent was not restarted.
+    CloseWritten {
+        held: bool,
+    },
     /// Run `ssh-add <path>` with the terminal handed over; `path` is the
     /// private key, never the `.pub` the card lists.
     LoadKey(PathBuf),
     Approve(Approval),
+    /// Generate (or load) this agent's dedicated key off the UI thread.
+    Generate,
+    /// Held step: install again; on success, restart.
+    RetryInstall(Approval),
+    /// Held step: restart without the install.
+    Finish(Approval),
+    /// Copy the `authorized_keys` line to the terminal's clipboard.
+    Copy(String),
+    /// Done step: the advisory test, outside the agent's sandbox.
+    Advisory {
+        host: mur_ssh_request::RequestHost,
+        user: String,
+        known_hosts: String,
+    },
 }
 
 impl CardState {
@@ -108,7 +153,76 @@ impl CardState {
             editing_user: false,
             loading: false,
             note: None,
+            install: false,
+            applied: None,
         }
+    }
+
+    /// The row after the keys, if the plan has one.
+    pub fn extra_row(&self) -> Option<ExtraRow> {
+        match &self.plan.dedicated {
+            Dedicated::Offer => Some(ExtraRow::Generate),
+            Dedicated::Off(off) => Some(ExtraRow::Off(off.reason())),
+            Dedicated::Stored { fingerprint, .. } => (!self
+                .plan
+                .keys_loaded
+                .iter()
+                .any(|k| k.fingerprint == *fingerprint))
+            .then_some(ExtraRow::Load),
+        }
+    }
+
+    /// Keys plus the extra row: what ↑↓ moves over on the key step.
+    fn key_rows(&self) -> usize {
+        self.keys().len() + usize::from(self.extra_row().is_some())
+    }
+
+    /// The dedicated key's `authorized_keys` line, when it is the chosen key.
+    pub fn dedicated_line(&self) -> Option<&str> {
+        let (k, _) = self.chosen_key()?;
+        match &self.plan.dedicated {
+            Dedicated::Stored {
+                fingerprint,
+                public_line,
+            } if *fingerprint == k.fingerprint => Some(public_line),
+            _ => None,
+        }
+    }
+
+    /// A key was generated or loaded: take the new plan state and key lists,
+    /// with the selection on `fingerprint`. Grants nothing (K2).
+    pub fn generated(
+        &mut self,
+        dedicated: Dedicated,
+        loaded: Vec<AgentKey>,
+        unloaded: Vec<AgentKey>,
+        fingerprint: &str,
+    ) {
+        self.plan.dedicated = dedicated;
+        self.plan.keys_loaded = loaded;
+        self.plan.keys_unloaded = unloaded;
+        self.key_idx = self
+            .keys()
+            .iter()
+            .position(|(k, _)| k.fingerprint == fingerprint)
+            .unwrap_or(0);
+        self.note = Some("dedicated key ready and loaded; Enter to use it".into());
+    }
+
+    /// Approve came back: stay open on `Held` or `Done`, or say the card is
+    /// finished. `held` is `Restart::HeldForInstall`.
+    pub fn after_apply(&mut self, a: Approval, held: bool) -> bool {
+        let no_install = a.install.is_none();
+        self.applied = Some(a);
+        self.note = None;
+        if held {
+            self.step = Step::Held;
+        } else if no_install && self.dedicated_line().is_some() {
+            self.step = Step::Done;
+        } else {
+            return false;
+        }
+        true
     }
 
     /// Loaded keys first, then unloaded `.pub` files; `true` when loaded.
@@ -167,8 +281,8 @@ impl CardState {
             ticked: self.ticked.clone(),
             spawn_consented: self.spawn_consented,
             user: self.user.clone(),
-            // The card's install step lands in slice 6c.
-            install: false,
+            // A toggle left on while another key is chosen is not an install.
+            install: self.install && self.dedicated_line().is_some(),
         };
         build_approval(&self.plan, &choices).map_err(|e| match e {
             NotReady::NoKey => "no key to grant: load one with ssh-add, then reopen /ssh".into(),
@@ -195,6 +309,9 @@ impl CardState {
             return KeyAction::Nothing;
         }
         self.note = None;
+        if matches!(self.step, Step::Held | Step::Done) {
+            return self.on_result_key(key.code);
+        }
         match key.code {
             KeyCode::Esc => return KeyAction::Close,
             KeyCode::Char('u') => self.editing_user = true,
@@ -207,27 +324,65 @@ impl CardState {
                     self.spawn_consented = !self.spawn_consented;
                 }
             }
+            KeyCode::Char('i') if self.step == Step::Summary => self.toggle_install(),
             KeyCode::Enter | KeyCode::Right => return self.advance(key.code == KeyCode::Enter),
             _ => {}
         }
         KeyAction::Nothing
     }
 
+    fn toggle_install(&mut self) {
+        if self.dedicated_line().is_none() {
+            self.note = Some("only this agent's dedicated key can be installed".into());
+        } else if self.user.is_empty() {
+            self.note = Some("set a user first (u)".into());
+        } else {
+            self.install = !self.install;
+        }
+    }
+
+    /// Keys on the held and done steps. Esc on either closes: the grant is
+    /// already written, so there is nothing to cancel.
+    fn on_result_key(&mut self, code: KeyCode) -> KeyAction {
+        let held = self.step == Step::Held;
+        let Some(a) = self.applied.clone() else {
+            return KeyAction::CloseWritten { held };
+        };
+        let line = self.dedicated_line().map(str::to_string);
+        match (self.step, code) {
+            (_, KeyCode::Esc) => KeyAction::CloseWritten { held },
+            (_, KeyCode::Char('y')) => match line {
+                Some(l) => KeyAction::Copy(l),
+                None => KeyAction::Nothing,
+            },
+            (Step::Held, KeyCode::Char('r')) => KeyAction::RetryInstall(a),
+            (Step::Held, KeyCode::Enter) => KeyAction::Finish(a),
+            (Step::Done, KeyCode::Char('t')) => KeyAction::Advisory {
+                host: self.plan.host.clone(),
+                user: self.user.clone(),
+                known_hosts: approved_known_hosts(&a),
+            },
+            (Step::Done, KeyCode::Enter) => KeyAction::CloseWritten { held: false },
+            _ => KeyAction::Nothing,
+        }
+    }
+
     fn back(&mut self) {
         self.step = match self.step {
             Step::Key | Step::Host => Step::Key,
             Step::Summary => Step::Host,
+            s @ (Step::Held | Step::Done) => s,
         };
     }
 
     fn move_sel(&mut self, d: isize) {
         let (idx, len) = match self.step {
-            Step::Key => (
-                &mut self.key_idx,
-                self.plan.keys_loaded.len() + self.plan.keys_unloaded.len(),
-            ),
+            Step::Key => {
+                let n = self.key_rows();
+                (&mut self.key_idx, n)
+            }
             Step::Host => (&mut self.host_idx, self.plan.scanned.len()),
-            Step::Summary => return,
+            Step::Summary | Step::Held | Step::Done => return,
         };
         if len > 0 {
             *idx = (*idx as isize + d).clamp(0, len as isize - 1) as usize;
@@ -259,6 +414,16 @@ impl CardState {
     fn advance(&mut self, enter: bool) -> KeyAction {
         match self.step {
             Step::Key => {
+                if self.key_idx == self.keys().len() {
+                    return match self.extra_row() {
+                        Some(ExtraRow::Generate | ExtraRow::Load) => KeyAction::Generate,
+                        Some(ExtraRow::Off(why)) => {
+                            self.note = Some(format!("no dedicated key: {why}"));
+                            KeyAction::Nothing
+                        }
+                        None => KeyAction::Nothing,
+                    };
+                }
                 let Some((key, loaded)) = self.chosen_key() else {
                     self.note = Some("no key to choose".into());
                     return KeyAction::Nothing;
@@ -280,7 +445,7 @@ impl CardState {
                 Ok(a) => return KeyAction::Approve(a),
                 Err(e) => self.note = Some(e),
             },
-            Step::Summary => {}
+            Step::Summary | Step::Held | Step::Done => {}
         }
         KeyAction::Nothing
     }
