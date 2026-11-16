@@ -33,6 +33,15 @@ fn client_skips_noise_before_the_handshake_and_round_trips() {
 }
 
 #[test]
+fn handshake_sharing_a_line_with_unterminated_noise_is_found() {
+    let o = Oracle::spawn(shell_helper(&format!(
+        "printf 'test x ... '; echo {READY}; while read p; do echo $((p+1)); done"
+    )))
+    .unwrap();
+    assert_eq!(o.parent_of(1), Some(2));
+}
+
+#[test]
 fn unknown_answer_is_none() {
     let o = Oracle::spawn(shell_helper(&format!(
         "echo {READY}; while read p; do echo {UNKNOWN}; done"

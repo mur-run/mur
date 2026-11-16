@@ -107,7 +107,9 @@ impl Oracle {
                     "ppid oracle exited before its handshake",
                 ));
             }
-            if line.trim_end() == READY {
+            // Match the line's tail: output with no newline (libtest's
+            // `test name ... `) can share the handshake's line.
+            if line.trim_end().ends_with(READY) {
                 break;
             }
         }
