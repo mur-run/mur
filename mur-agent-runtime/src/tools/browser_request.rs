@@ -21,8 +21,8 @@ pub const BROWSER_REQUEST: &str = mur_common::hitl::builtin_tier::BROWSER_REQUES
 /// What the agent is told about the route, in the prompt.
 const ROUTE: &str = "To use a website that needs the user's login, or that your browser tools \
 cannot reach yet, call `browser_request` with the site, a one-line reason and whether login is \
-needed, then stop and tell the user you asked. Never name a profile: the user picks one on the \
-card MUR shows them. Do not ask the user to run commands (`mur browser auth`, `/browser live`, \
+needed, then stop and tell the user you asked. Never name a profile: the user picks which browser \
+profile to use. Do not ask the user to run commands (`mur browser auth`, `/browser live`, \
 `mur agent perm ...`), and do not try to read, copy or export cookies or browser profiles yourself.";
 
 /// The browser section of the system prompt; appended only when the tool is registered.
@@ -77,8 +77,8 @@ they finish is the test — report what you saw."
         let written = mur_browser_request::write(&self.agent_home, &req)
             .map_err(|e| ToolError::Execution(format!("record the browser request: {e}")))?;
         Ok(format!(
-            "Request recorded for {}{}. MUR lists it for the user in murmur and Hub; nothing is \
-             opened, bound or logged in until they act on it there. Stop now and tell the user \
+            "Request recorded for {}{}. MUR keeps it for the user to review; nothing is \
+             opened, bound or logged in until they act on it. Stop now and tell the user \
              which site you asked for and why. Do not ask them to run commands. Once they are \
              done, your first visit is the test: report what you saw, and do not call it verified.",
             written.site.origin(),
