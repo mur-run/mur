@@ -428,7 +428,8 @@ impl SandboxPolicy {
                 //
                 // Unlike its neighbours this one is not in audit §7.1, which
                 // lists `skills/` as unread by the runtime.
-                // And the "not a widening" above holds for the runtime only:
+                //
+                // The "not a widening" above also holds for the runtime only:
                 // Landlock is inherited, so every child the agent spawns
                 // (`bash`, MCP servers) can read the store too. It holds
                 // manifests and bundled scripts, no credentials; macOS has

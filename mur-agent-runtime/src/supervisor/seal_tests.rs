@@ -18,10 +18,14 @@ fn stores_the_cli_creates_later_are_readable_on_a_fresh_home() {
 
     let profile = mur_common::agent::AgentProfile::default_for_tests();
     let policy = SandboxPolicy::from_entitlements(&profile.entitlements, &agent_home);
-    for name in ["limits", "skills"] {
+    for dir in [
+        mur_common::limits::global_limits_dir(mur_home),
+        mur_common::skill::global_skills_root(mur_home),
+    ] {
         assert!(
-            policy.fs_read.contains(&mur_home.join(name)),
-            "{name} must be granted on a fresh home, or it is unreadable until restart: {:?}",
+            policy.fs_read.contains(&dir),
+            "{} must be granted on a fresh home, or it is unreadable until restart: {:?}",
+            dir.display(),
             policy.fs_read
         );
     }
