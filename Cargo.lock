@@ -6556,7 +6556,7 @@ dependencies = [
 
 [[package]]
 name = "mur-browser-request"
-version = "2.101.1"
+version = "2.101.2"
 dependencies = [
  "chrono",
  "hex",
