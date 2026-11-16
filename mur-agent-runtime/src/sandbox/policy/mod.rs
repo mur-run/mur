@@ -614,6 +614,12 @@ pub(crate) fn jobs_dispatch_dirs(mur_home: &Path) -> (PathBuf, PathBuf) {
     )
 }
 
+/// Device files every shell process writes to. Landlock is default-deny for
+/// writes, so without this `cmd >/dev/null` fails with EACCES inside the
+/// sandbox, and `ssh` aborts at startup ("Couldn't open /dev/null"). The
+/// macOS profile allows the same file in `MACOS_SYSTEM_WRITE_PATHS`.
+pub(crate) const SYSTEM_WRITE_PATHS: &[&str] = &["/dev/null"];
+
 fn system_read_paths() -> Vec<PathBuf> {
     // `mut` is only used inside the #[cfg(target_os = "macos")] block below;
     // allow the lint rather than restructure the initialization.
