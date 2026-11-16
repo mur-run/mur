@@ -411,6 +411,7 @@ pub(super) fn rebuild_after_resize(
     // re-flush of rows the next successful rebuild would redraw anyway.
     app.flushed_upto = 0;
     app.flushed_bytes = 0;
+    app.flushed_thinking = 0;
     app.flushed_raw = false;
     purge_and_reanchor(terminal, h)?;
     Ok(h)
