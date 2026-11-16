@@ -179,6 +179,10 @@ pub(super) fn prepare_and_seal(
     // yet run `mur limits --global` would get no grant, and their first edit
     // would be invisible until restart. Read-only to the agent; the CLI writes.
     let _ = std::fs::create_dir_all(mur_common::limits::global_limits_dir(mur_home));
+    // Shared skill store: same existence-checked read grant, same reason. An
+    // agent that sealed before the first skill was ever installed would serve
+    // `skills/get` EACCES until restart. Read-only to the agent.
+    let _ = std::fs::create_dir_all(mur_common::skill::global_skills_root(mur_home));
     let extra_write_paths = extra_write_paths(mur_home);
     if let Some(vlc) = &vlc {
         extra_ports.push(vlc.port);
