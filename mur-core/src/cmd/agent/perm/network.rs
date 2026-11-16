@@ -102,46 +102,63 @@ fn validate_host_pattern(name: &str, glob: &str) -> Result<String> {
 /// the one the user has in mind. Saying so at grant time is the only place
 /// the user is still thinking about the decision.
 pub fn cmd_perm_allow_port(name: &str, port: u16) -> Result<()> {
+    match grant_port(name, port)? {
+        None => {
+            println!("port {port} is already open by default in `restricted` mode — nothing to do")
+        }
+        Some(note) => {
+            println!("{note}");
+            warn_if_running(name);
+        }
+    }
+    Ok(())
+}
+
+/// Grant `port` to `name` under its profile lock. `Ok(None)` when the port
+/// is already in the web set (nothing written). Refuses port 0.
+pub(crate) fn grant_port(name: &str, port: u16) -> Result<Option<String>> {
     if port == 0 {
         bail!("port 0 is not dialable");
     }
     let (path, mut profile) = load_profile_for_edit(name)?;
-    let mode = profile.entitlements.network.outbound.mode;
     if is_base_port(port) {
-        println!("port {port} is already open by default in `restricted` mode — nothing to do");
-        return Ok(());
+        return Ok(None);
     }
+    let mode = profile.entitlements.network.outbound.mode;
     add_port(&mut profile.entitlements.network.outbound.allow_ports, port);
     save_profile(&path, &mut profile)?;
+    Ok(Some(port_grant_note(name, port, mode)))
+}
 
+/// What a port grant means under `mode`. Shared by `perm allow-port` and the
+/// browser request card (#2360 D5), so the two never word it differently.
+pub(crate) fn port_grant_note(name: &str, port: u16, mode: NetworkOutboundMode) -> String {
     // The grant is written either way, but under a mode that ignores it the
     // user must not walk away believing the port is open.
     match mode {
         NetworkOutboundMode::Restricted => {
-            println!(
+            format!(
                 "granted outbound TCP port {port} to '{name}'.\n\
                  NOTE: this opens port {port} to ANY host — the OS sandbox filters by port, not by host.\n\
                  To bound which hosts are reachable: `mur agent perm allow-host {name} <host>`"
-            );
+            )
         }
         NetworkOutboundMode::Unrestricted => {
-            println!(
+            format!(
                 "recorded port {port} for '{name}', but outbound mode is `unrestricted` — every port is already open.\n\
                  To make this grant meaningful: `mur agent perm set-mode {name} network.outbound restricted`"
-            );
+            )
         }
         NetworkOutboundMode::ProxyOnly | NetworkOutboundMode::Off => {
-            println!(
+            format!(
                 "recorded port {port} for '{name}', but outbound mode is `{}` — general TCP stays denied and this grant has NO effect until the mode is `restricted`.",
                 match mode {
                     NetworkOutboundMode::ProxyOnly => "proxy_only",
                     _ => "off",
                 }
-            );
+            )
         }
     }
-    warn_if_running(name);
-    Ok(())
 }
 
 /// `mur agent perm deny-port <agent> <port>` — take an extra port grant back.
@@ -250,7 +267,21 @@ pub fn cmd_perm_list_hosts(name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_port, allow_host_preview, is_base_port, remove_port, validate_host_pattern};
+    use super::{
+        NetworkOutboundMode, add_port, allow_host_preview, is_base_port, port_grant_note,
+        remove_port, validate_host_pattern,
+    };
+
+    /// #2360 D5: the card and `allow-port` say the same thing per mode.
+    #[test]
+    fn the_grant_note_names_the_any_host_scope_and_dead_modes() {
+        let r = port_grant_note("a1", 3000, NetworkOutboundMode::Restricted);
+        assert!(r.contains("ANY host") && r.contains("allow-host a1"), "{r}");
+        let u = port_grant_note("a1", 3000, NetworkOutboundMode::Unrestricted);
+        assert!(u.contains("already open"), "{u}");
+        let p = port_grant_note("a1", 3000, NetworkOutboundMode::ProxyOnly);
+        assert!(p.contains("NO effect") && p.contains("proxy_only"), "{p}");
+    }
 
     #[test]
     fn allow_host_preview_names_stored_value() {

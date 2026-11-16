@@ -190,9 +190,6 @@ fn select_browser(
 
 /// [`plan_selection`] for a card: it has no terminal to ask in, so with
 /// several launchable engines the first one `plan_selection` lists wins.
-// Until Task 5 wires `mur browser answer --login`, only tests call these
-// two. Both allows are removed in Task 5.
-#[cfg_attr(not(test), allow(dead_code))]
 fn card_pick(selection: Selection) -> Option<BrowserEngine> {
     match selection {
         Selection::Use(engine, _) => Some(engine),
@@ -202,7 +199,6 @@ fn card_pick(selection: Selection) -> Option<BrowserEngine> {
 }
 
 /// The engine a card login launches, preflighted like `mur browser auth`.
-#[allow(dead_code)]
 pub(crate) fn card_browser(home: &Path) -> Result<BrowserEngine> {
     let install_dir = mur_browser::server::install_dir(home);
     let browsers = mur_browser::chromium::system_browsers_dir();

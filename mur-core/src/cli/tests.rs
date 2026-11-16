@@ -257,3 +257,74 @@ fn cli_rejects_conflicting_or_orphan_model_flags() {
         .is_err()
     );
 }
+
+#[test]
+fn cli_parses_browser_answer() {
+    use clap::Parser;
+    let cli = Cli::try_parse_from([
+        "mur",
+        "browser",
+        "answer",
+        "rev",
+        "http://g.example:3000",
+        "--login",
+        "--name",
+        "g",
+        "--reauth",
+        "--open-port",
+    ])
+    .unwrap();
+    let Commands::Browser {
+        action:
+            crate::cli::actions::BrowserAction::Answer {
+                agent,
+                login,
+                name,
+                reauth,
+                open_port,
+                profile,
+                ..
+            },
+    } = cli.command
+    else {
+        panic!("not browser answer")
+    };
+    assert_eq!(
+        (
+            agent.as_str(),
+            login,
+            name.as_deref(),
+            reauth,
+            open_port,
+            profile
+        ),
+        ("rev", true, Some("g"), true, true, None)
+    );
+    for bad in [
+        &[
+            "mur",
+            "browser",
+            "answer",
+            "a",
+            "s",
+            "--profile",
+            "p",
+            "--login",
+        ][..],
+        &["mur", "browser", "answer", "a", "s", "--name", "p"],
+        &["mur", "browser", "answer", "a", "s", "--reauth"],
+        &[
+            "mur",
+            "browser",
+            "answer",
+            "a",
+            "s",
+            "--allow",
+            "--profile",
+            "p",
+        ],
+        &["mur", "browser", "answer", "a", "s", "--allow", "--dismiss"],
+    ] {
+        assert!(Cli::try_parse_from(bad).is_err(), "{bad:?}");
+    }
+}

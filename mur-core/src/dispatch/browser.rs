@@ -36,6 +36,33 @@ pub(super) async fn run_browser(action: BrowserAction) -> Result<()> {
             )
             .await?
         }
+        BrowserAction::Requests { agent } => cmd::browser::request_cmd::requests(agent.as_deref())?,
+        BrowserAction::Answer {
+            agent,
+            site,
+            profile,
+            login,
+            name,
+            reauth,
+            allow,
+            replace,
+            open_port,
+            dismiss,
+        } => {
+            cmd::browser::request_cmd::answer(cmd::browser::request_cmd::AnswerArgs {
+                agent: &agent,
+                site: &site,
+                profile: profile.as_deref(),
+                login,
+                name: name.as_deref(),
+                reauth,
+                allow,
+                replace,
+                open_port,
+                dismiss,
+            })
+            .await?
+        }
         BrowserAction::Broker => cmd::browser::broker().await?,
         BrowserAction::List {
             json,

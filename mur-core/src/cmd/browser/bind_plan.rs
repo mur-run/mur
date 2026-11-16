@@ -83,7 +83,6 @@ pub(crate) fn plan_bind(
 /// request's host, #2360 D1). Those hosts are checked against the entry's
 /// policy like the profile's domains, but never against the bound profiles
 /// for overlap, so `Overlaps { domains }` stays the profile's own hosts.
-#[cfg_attr(not(test), allow(dead_code))] // caller lands in Task 5
 pub(crate) fn plan_bind_for(
     entry: Option<&McpServerEntry>,
     site: &str,
@@ -161,7 +160,6 @@ pub(crate) fn plan_bind_for(
 
 /// Whether `entry` reaches `host` on its own, for a request that needs no
 /// login (#2360 D7). Nothing is attached, so bound profiles are not checked.
-#[cfg_attr(not(test), allow(dead_code))] // caller lands in Task 5
 pub(crate) fn plan_reach(entry: Option<&McpServerEntry>, host: &str) -> BindPlan {
     plan_bind_for(
         entry,

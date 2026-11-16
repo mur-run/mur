@@ -15,7 +15,7 @@ mod spawn;
 pub(super) mod tools;
 
 pub use intent::cmd_perm_set_intent_check;
-pub(crate) use network::{add_port, is_base_port};
+pub(crate) use network::{add_port, grant_port, is_base_port};
 pub use network::{
     cmd_perm_allow_host, cmd_perm_allow_port, cmd_perm_deny_host, cmd_perm_deny_port,
     cmd_perm_list_hosts, cmd_perm_list_ports,
