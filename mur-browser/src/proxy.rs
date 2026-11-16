@@ -272,34 +272,23 @@ impl Downstream {
         .await
     }
 
-    /// Navigate a headed browser, wait for an explicit human confirmation, and
-    /// use Playwright's unsafe-code tool to write its storage state into MUR's
-    /// private output directory. `@playwright/mcp` does not expose a dedicated
-    /// storage-state tool, so this is the supported escape hatch for invoking
-    /// `BrowserContext.storageState` without carrying session JSON over MCP.
+    /// Navigate a headed browser, wait for `logged_in` (the card's button, or
+    /// Enter in a terminal), then use Playwright's unsafe-code tool to write
+    /// its storage state into MUR's private output directory. `@playwright/mcp`
+    /// does not expose a dedicated storage-state tool, so this is the
+    /// supported escape hatch for invoking `BrowserContext.storageState`
+    /// without carrying session JSON over MCP.
     pub async fn capture_storage_state(
         &self,
         url: &str,
         state_path: &std::path::Path,
+        logged_in: impl std::future::Future<Output = Result<()>>,
     ) -> Result<()> {
         let navigate = self
             .call_tool("browser_navigate", json!({ "url": url }))
             .await?;
         ensure_tool_succeeded("browser_navigate", &navigate)?;
-
-        eprintln!(
-            "Complete sign-in in the opened browser, then press Enter here to save the profile."
-        );
-        let mut confirmation = String::new();
-        let read =
-            tokio::task::spawn_blocking(move || std::io::stdin().read_line(&mut confirmation))
-                .await
-                .context("wait for login confirmation task")??;
-        if read == 0 {
-            bail!(
-                "login confirmation cancelled: stdin closed — `mur browser auth` needs an interactive terminal to wait for Enter"
-            );
-        }
+        logged_in.await?;
 
         let code = storage_state_export_code(state_path)?;
         let state = self
@@ -718,9 +707,9 @@ fn merge_extra_tools(resp: &mut Value, extra: Vec<Value>) {
 }
 
 mod auth;
-pub use auth::capture_storage_state;
 #[cfg(test)]
 use auth::private_output_dir;
+pub use auth::{capture_storage_state, capture_storage_state_on, enter_on_stdin};
 mod respond;
 #[cfg(test)]
 mod tests;
