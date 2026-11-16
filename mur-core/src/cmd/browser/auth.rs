@@ -188,6 +188,40 @@ fn select_browser(
     }
 }
 
+/// [`plan_selection`] for a card: it has no terminal to ask in, so with
+/// several launchable engines the first one `plan_selection` lists wins.
+// Until Task 5 wires `mur browser answer --login`, only tests call these
+// two. Both allows are removed in Task 5.
+#[cfg_attr(not(test), allow(dead_code))]
+fn card_pick(selection: Selection) -> Option<BrowserEngine> {
+    match selection {
+        Selection::Use(engine, _) => Some(engine),
+        Selection::Ask(choices) => choices.first().map(|(engine, _)| *engine),
+        Selection::Nothing => None,
+    }
+}
+
+/// The engine a card login launches, preflighted like `mur browser auth`.
+#[allow(dead_code)]
+pub(crate) fn card_browser(home: &Path) -> Result<BrowserEngine> {
+    let install_dir = mur_browser::server::install_dir(home);
+    let browsers = mur_browser::chromium::system_browsers_dir();
+    let own_ready = |engine: BrowserEngine| {
+        mur_browser::engines::own_build_ready(
+            &install_dir,
+            browsers.as_deref(),
+            engine.playwright_name(),
+        )
+    };
+    let engine = card_pick(plan_selection(own_ready, &installed_browsers())).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no launchable browser found. Run `mur browser setup` to install Playwright's Chromium"
+        )
+    })?;
+    engine_check::preflight(engine.playwright_name(), &install_dir, browsers.as_deref())?;
+    Ok(engine)
+}
+
 /// Begin a headed authentication handoff for a browser profile.
 ///
 /// The Playwright MCP server stays private to this command: it opens the login
@@ -392,6 +426,16 @@ fn several_launchable_engines_prompt() {
             (BrowserEngine::Chrome, "Google Chrome"),
         ])
     );
+}
+
+#[test]
+fn a_card_never_prompts_and_takes_the_first_choice() {
+    let ask = Selection::Ask(vec![
+        (BrowserEngine::Firefox, "Firefox (Playwright build)"),
+        (BrowserEngine::Chrome, "Google Chrome"),
+    ]);
+    assert_eq!(card_pick(ask), Some(BrowserEngine::Firefox));
+    assert_eq!(card_pick(Selection::Nothing), None);
 }
 
 /// End to end through the real cache check: a chromium build at the pinned
