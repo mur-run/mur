@@ -14,6 +14,7 @@ members = [
     "mur-channel",
     "mur-open-items",
     "mur-ssh-request",
+    "mur-browser-request",
     "mur-monitor",
     "mur-mobile-sdk",
     "mur-zfs-agent",

@@ -10,6 +10,7 @@ pub mod bash_jobs;
 pub mod bash_spool_sweep;
 pub mod bash_track;
 pub mod bash_trash;
+pub mod browser_request;
 pub(crate) mod denial;
 pub mod edit_file;
 pub mod fleet_run;
@@ -247,6 +248,7 @@ fn builtin_tool_names_cover_every_builtin() {
         remind::REMIND,
         open_item::OPEN_ITEM,
         ssh_request::SSH_REQUEST,
+        browser_request::BROWSER_REQUEST,
         fleet_run::FLEET_RUN,
         parallel_jobs::PARALLEL_JOBS,
         ask::ASK,

@@ -1,9 +1,9 @@
 use super::*;
 use crate::tools::{
-    ask::ASK, bash::BASH, bash_control, edit_file::EDIT_FILE, fleet_run::FLEET_RUN, git_push,
-    open_item::OPEN_ITEM, parallel_jobs::PARALLEL_JOBS, read_file::READ_FILE, recall::RECALL,
-    remember::REMEMBER, remind::REMIND, ssh_request::SSH_REQUEST, suggest::SUGGEST_REPLIES,
-    write_file::WRITE_FILE,
+    ask::ASK, bash::BASH, bash_control, browser_request::BROWSER_REQUEST, edit_file::EDIT_FILE,
+    fleet_run::FLEET_RUN, git_push, open_item::OPEN_ITEM, parallel_jobs::PARALLEL_JOBS,
+    read_file::READ_FILE, recall::RECALL, remember::REMEMBER, remind::REMIND,
+    ssh_request::SSH_REQUEST, suggest::SUGGEST_REPLIES, write_file::WRITE_FILE,
 };
 use mur_common::agent::FilesystemEntitlement;
 use mur_common::proposal::PROPOSE_TOOL;
@@ -25,6 +25,7 @@ const BUILTINS: &[(&str, &str)] = &[
     ("REMIND", REMIND),
     ("OPEN_ITEM", OPEN_ITEM),
     ("SSH_REQUEST", SSH_REQUEST),
+    ("BROWSER_REQUEST", BROWSER_REQUEST),
     ("FLEET_RUN", FLEET_RUN),
     ("PARALLEL_JOBS", PARALLEL_JOBS),
     ("ASK", ASK),
@@ -95,6 +96,7 @@ fn side_effect_builtins_are_gated_by_rule_4() {
         REMEMBER,
         REMIND,
         OPEN_ITEM,
+        BROWSER_REQUEST,
         FLEET_RUN,
         PARALLEL_JOBS,
         ASK,

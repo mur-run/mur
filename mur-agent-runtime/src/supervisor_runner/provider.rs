@@ -1,4 +1,4 @@
-//! `build_provider_runner` and the model-chain hot-switch seam.
+//! `build_provider_runner`; the model-chain hot-switch seam is in `chain_switch.rs`.
 
 use std::sync::Arc;
 
@@ -18,6 +18,7 @@ use mur_common::config::SkillsConfig;
 use mur_common::model::ModelEntry;
 use tokio_util::sync::CancellationToken;
 
+use super::chain_switch::{RefClientBuilder, chain_switch_handle};
 use super::*;
 
 /// Build the LLM-backed TaskRunner for a resolved model entry.
@@ -386,6 +387,24 @@ pub async fn build_provider_runner(
             );
         }
     }
+    // Built-in browser_request (#2360, Q1): the one route to a site the
+    // browser cannot use yet. Off unless `browser_setup.request_route` is on:
+    // until a card can answer the request, the route is a dead end. When on,
+    // every agent gets it, like ssh_request; an explicit Deny still wins, and
+    // the prompt names it only when the tool is registered.
+    let browser_route = crate::tools::browser_request::route_enabled(
+        &boot_cfg.browser_setup,
+        &profile.inner.entitlements.tools,
+    );
+    if browser_route {
+        use crate::tools::browser_request::{BROWSER_REQUEST, BrowserRequestTool};
+        tool_map.insert(
+            BROWSER_REQUEST.to_string(),
+            Arc::new(BrowserRequestTool {
+                agent_home: agent_home.to_path_buf(),
+            }),
+        );
+    }
     // Built-in remember (memory federation P2a): proactive capture of durable
     // user preferences/facts as agent-local Draft notes. Gated on the global
     // `memory.capture` config; an explicit Deny in the profile still wins.
@@ -488,6 +507,15 @@ pub async fn build_provider_runner(
             &ssh_facts,
             proxy.as_ref(),
         ));
+        Some(p)
+    } else {
+        system_prompt_with_memory
+    };
+
+    // #2360: the browser route, only when the tool is registered (D4).
+    let system_prompt_with_memory = if browser_route {
+        let mut p = system_prompt_with_memory.unwrap_or_default();
+        p.push_str(&crate::tools::browser_request::prompt_section());
         Some(p)
     } else {
         system_prompt_with_memory
@@ -733,61 +761,4 @@ pub async fn build_provider_runner(
     });
     let (r, c, p) = build(switchable as Arc<dyn LlmClient>);
     Ok((r, c, p, Some(handle)))
-}
-
-/// Turns a registry ref into a concrete client; shared by the chain's own
-/// fallback and by `/model`, so both resolve a ref the same way.
-pub(crate) type RefClientBuilder =
-    Arc<dyn Fn(&str) -> anyhow::Result<Arc<dyn LlmClient>> + Send + Sync>;
-
-/// The hot-switch seam for a chain/routing agent. `/model` on such an agent
-/// swaps the PRIMARY and keeps the chain: the chain is the safety net, the
-/// primary is the choice. Returns the live slot and a per-ref builder that
-/// produces a whole routed client whose profile names `model_ref` as primary,
-/// so `resolve_model_refs` keeps deriving `[primary, ...chain]` exactly as at
-/// boot, telemetry included.
-///
-/// Before this, chain agents got no handle at all — and because the global
-/// `models.fallback_chain` / `models.smart` settings make EVERY agent a chain
-/// agent, `/model` stopped hot-switching anything the moment either was set:
-/// each attempt reported `method not found: model/set`, wrote the profile and
-/// asked for a restart.
-pub(crate) fn chain_switch_handle(
-    profile: mur_common::agent::AgentProfile,
-    cfg: mur_common::config::ModelSwitchConfig,
-    telemetry: Option<tokio::sync::mpsc::Sender<crate::telemetry_writer::Event>>,
-    build_one: RefClientBuilder,
-) -> (
-    Arc<crate::llm::switchable::SwitchableLlmClient>,
-    crate::llm::fallback::ClientFactory,
-) {
-    let validate = build_one.clone();
-    let agent = profile.name.clone();
-    let make = Arc::new(move |primary: Option<&str>| -> Arc<dyn LlmClient> {
-        let mut p = profile.clone();
-        if let Some(r) = primary {
-            p.model_ref = Some(r.to_string());
-        }
-        let build_one = build_one.clone();
-        let factory: crate::llm::fallback::ClientFactory = Box::new(move |r: &str| build_one(r));
-        let mut fb = crate::llm::fallback::FallbackLlmClient::new_routed(
-            p,
-            cfg.clone(),
-            factory,
-            cfg.retry.clone(),
-        );
-        if let Some(tx) = telemetry.clone() {
-            fb = fb.with_telemetry(tx, agent.clone());
-        }
-        Arc::new(fb)
-    });
-    let switchable = crate::llm::switchable::SwitchableLlmClient::new(make(None));
-    let build_client: crate::llm::fallback::ClientFactory = Box::new(move |model_ref: &str| {
-        // A ref the registry does not know fails the switch here, where
-        // `model/set` keeps the old client, instead of on the next turn, where
-        // the chain would quietly answer for a primary that never existed.
-        validate(model_ref)?;
-        Ok(make(Some(model_ref)))
-    });
-    (switchable, build_client)
 }

@@ -66,6 +66,7 @@ pub mod parallel;
 pub mod parameterize;
 pub mod paths;
 pub mod permissions;
+pub mod pinned_dir;
 pub mod pipeline;
 pub mod project;
 pub mod proposal;

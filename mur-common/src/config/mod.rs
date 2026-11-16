@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 mod attribution;
 mod backend;
+mod browser_setup;
 mod codebase_reindex;
 mod consult;
 mod conversations;
@@ -15,6 +16,7 @@ mod turn_track;
 
 pub use attribution::*;
 pub use backend::*;
+pub use browser_setup::*;
 pub use codebase_reindex::*;
 pub use consult::*;
 pub use conversations::*;
@@ -367,6 +369,11 @@ pub struct Config {
     /// SSH setup journey switches (`ssh_setup:`).
     #[serde(default)]
     pub ssh_setup: SshSetupConfig,
+
+    /// Browser setup journey switches (`browser_setup:`); the request route
+    /// is off by default until a card can answer it.
+    #[serde(default)]
+    pub browser_setup: BrowserSetupConfig,
 
     /// Per-turn copy-on-write track tuning (`turn_track:`).
     #[serde(default)]

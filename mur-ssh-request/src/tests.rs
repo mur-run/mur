@@ -363,7 +363,7 @@ fn swapping_the_dir_for_a_link_after_it_is_pinned_reaches_nothing_outside() {
     let victim = outside.path().join(&name);
     std::fs::write(&victim, b"not yours").unwrap();
 
-    let pinned = pinned::PinnedDir::open(&dir(home.path())).unwrap();
+    let pinned = mur_common::pinned_dir::PinnedDir::open(&dir(home.path())).unwrap();
     // The agent swaps the checked directory for a link to elsewhere.
     std::fs::rename(dir(home.path()), home.path().join("moved")).unwrap();
     std::os::unix::fs::symlink(outside.path(), dir(home.path())).unwrap();
@@ -381,5 +381,5 @@ fn swapping_the_dir_for_a_link_after_it_is_pinned_reaches_nothing_outside() {
 
     // A fresh read or remove refuses the link outright.
     assert!(read_pending(home.path(), now()).is_empty());
-    assert!(pinned::PinnedDir::open(&dir(home.path())).is_err());
+    assert!(mur_common::pinned_dir::PinnedDir::open(&dir(home.path())).is_err());
 }

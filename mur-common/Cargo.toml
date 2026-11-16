@@ -57,6 +57,10 @@ fd-lock = "4"
 tempfile = "3"
 globset = "0.4"
 
+[target.'cfg(unix)'.dependencies]
+# `pinned_dir`: open the requests dir once, then act relative to its descriptor.
+rustix = { version = "1.1", features = ["fs"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Already in the tree via `keyring`; declared directly for the attribute-only
 # existence probe in `secret::keychain_item_exists`, which keyring lacks.
