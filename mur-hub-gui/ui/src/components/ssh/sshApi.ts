@@ -32,6 +32,14 @@ export interface PlanView {
   spawn: SpawnName | null;
   consent_text: string | null;
   differs_cmd: string | null;
+  dedicated: DedicatedView;
+}
+/** The agent's dedicated key. `line` is the `authorized_keys` line (public). */
+export interface DedicatedView {
+  state: "offer" | "off" | "stored";
+  reason: string | null;
+  fingerprint: string | null;
+  line: string | null;
 }
 export interface Choices {
   key_fp: string | null;
@@ -39,13 +47,15 @@ export interface Choices {
   ticked: string[];
   spawn_consented: boolean;
   user: string;
+  install: boolean;
 }
 export type NotReady =
   | { kind: "no_key" }
   | { kind: "key_not_loaded" }
   | { kind: "spawn_consent" }
   | { kind: "host"; detail: string }
-  | { kind: "user"; detail: string };
+  | { kind: "user"; detail: string }
+  | { kind: "install"; detail: string };
 export interface ReadyView {
   key_fp: string;
   host_keys: string[];
@@ -60,6 +70,15 @@ export interface ApplyView {
   restarted: boolean;
   can_restart: boolean;
   hand_back: string | null;
+  install: { state: "not_chosen" | "done" | "failed"; line: string | null };
+  /** Written, not restarted: the install failed. */
+  held: boolean;
+  /** The grant used the dedicated key: the advisory test is offered. */
+  advisory: boolean;
+}
+export interface AdvisoryView {
+  accepted: boolean;
+  text: string;
 }
 export type PairStateName = "signed" | "approved" | "not_approved";
 export interface HostRuleView {
@@ -106,6 +125,10 @@ export const sshApi = {
   refreshKeys: (planId: string) => invoke<PlanView>("agent_ssh_refresh_keys", { planId }),
   check: (planId: string, choices: Choices) => invoke<CheckView>("agent_ssh_check", { planId, choices }),
   apply: (planId: string, choices: Choices) => invoke<ApplyView>("agent_ssh_apply", { planId, choices }),
+  generate: (planId: string) => invoke<PlanView>("agent_ssh_generate", { planId }),
+  retryInstall: (planId: string) => invoke<ApplyView>("agent_ssh_retry_install", { planId }),
+  finish: (planId: string) => invoke<ApplyView>("agent_ssh_finish", { planId }),
+  advisoryTest: (planId: string) => invoke<AdvisoryView>("agent_ssh_advisory_test", { planId }),
   revoke: (name: string, keyFp: string, hostKeyFp: string | null) =>
     invoke<RevokeView>("agent_ssh_revoke", { name, keyFp, hostKeyFp }),
   dismiss: (name: string, host: string, port: number) => invoke<void>("agent_ssh_dismiss", { name, host, port }),

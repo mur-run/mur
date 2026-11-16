@@ -35,6 +35,7 @@ pub fn dedicated_for(
     match stored(mur_home, agent) {
         Ok(Some(k)) => Dedicated::Stored {
             fingerprint: k.fingerprint,
+            public_line: k.public_line,
         },
         Ok(None) => Dedicated::Offer,
         Err(e) => Dedicated::Off(DedicatedOff::Unusable(e)),

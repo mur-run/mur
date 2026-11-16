@@ -37,8 +37,13 @@ impl From<ParseError> for StoreError {
     }
 }
 
+/// The shared skill store, `<mur_home>/skills`.
+pub fn global_skills_root(mur_home: &Path) -> PathBuf {
+    mur_home.join("skills")
+}
+
 pub fn global_skill_dir(mur_home: &Path, name: &str) -> PathBuf {
-    mur_home.join("skills").join(name)
+    global_skills_root(mur_home).join(name)
 }
 
 pub fn agent_skill_dir(mur_home: &Path, agent: &str) -> PathBuf {
