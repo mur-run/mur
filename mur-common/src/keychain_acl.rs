@@ -41,6 +41,7 @@ pub enum AclError {
 
 /// What [`check`] decides from the decrypt ACLs it found. `None` is an ACL with
 /// no app list; `Some` holds each listed app's identifying bytes.
+#[cfg(any(target_os = "macos", test))]
 fn decide(acls: &[Option<Vec<Vec<u8>>>], target: &[u8]) -> Trust {
     let target = trim_nul(target);
     let listed = acls.iter().any(|acl| match acl {
@@ -55,6 +56,7 @@ fn decide(acls: &[Option<Vec<Vec<u8>>>], target: &[u8]) -> Trust {
 }
 
 /// `SecTrustedApplicationCopyData` returns a C path, sometimes with its NUL.
+#[cfg(any(target_os = "macos", test))]
 fn trim_nul(b: &[u8]) -> &[u8] {
     let end = b.iter().rposition(|&c| c != 0).map_or(0, |i| i + 1);
     &b[..end]
