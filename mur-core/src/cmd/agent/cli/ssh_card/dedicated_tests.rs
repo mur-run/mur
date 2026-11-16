@@ -77,6 +77,29 @@ fn the_extra_row_follows_the_dedicated_state() {
     assert!(text(&card(Dedicated::Offer)).contains("generate a dedicated key"));
 }
 
+/// The live path: the plan learns its keys through `set_keys` after the
+/// dedicated key is known, so a fresh card opens with `D` already chosen.
+#[test]
+fn a_fresh_card_opens_on_the_stored_dedicated_key() {
+    let mut p = plan(Verdict::Trusted, None);
+    p.dedicated = Dedicated::Stored {
+        fingerprint: fp('D'),
+        public_line: LINE.into(),
+    };
+    let (loaded, unloaded) = (p.keys_loaded.clone(), p.keys_unloaded.clone());
+    assert!(
+        !loaded.is_empty(),
+        "D must outrank a key that is already loaded"
+    );
+    p.set_keys(loaded, unloaded);
+    let c = CardState::new(p, Origin::Direct);
+    assert_eq!(
+        c.chosen_key().map(|(k, l)| (k.fingerprint.clone(), l)),
+        Some((fp('D'), true)),
+        "chosen on open, ready"
+    );
+}
+
 #[test]
 fn enter_on_the_generate_row_asks_for_a_key() {
     let mut c = card(Dedicated::Offer);
