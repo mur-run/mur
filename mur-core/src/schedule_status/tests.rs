@@ -181,6 +181,30 @@ fn a_bounded_entry_is_phrased_as_a_one_off_and_an_unreadable_bound_is_not() {
     );
 }
 
+/// A one-off whose date has passed must not read like one still to come:
+/// that is the whole of #2437.
+#[test]
+fn a_past_one_off_is_marked_expired_and_a_future_one_is_not() {
+    let bound = "2026-11-03T10:00:00+08:00";
+    let at = |s: &str| {
+        DateTime::parse_from_rfc3339(s)
+            .unwrap()
+            .with_timezone(&Local)
+    };
+    let before = at("2026-11-03T09:59:00+08:00");
+    let after = at("2026-11-03T10:01:00+08:00");
+
+    assert!(!describe_bounded_at("0 10 3 11 *", Some(bound), before).ends_with("(expired)"));
+    assert!(describe_bounded_at("0 10 3 11 *", Some(bound), after).ends_with("(expired)"));
+    assert!(!is_expired(Some(bound), before));
+    assert!(is_expired(Some(bound), after));
+    assert!(!is_expired(None, after), "an unbounded entry never expires");
+    assert!(
+        !is_expired(Some("next tuesday"), after),
+        "nor does an unreadable bound"
+    );
+}
+
 #[test]
 fn an_unrecognised_cron_shape_is_returned_verbatim() {
     for expr in ["0 9 1 * *", "15 2 * 6 3", "not a cron", "0 9 * *"] {

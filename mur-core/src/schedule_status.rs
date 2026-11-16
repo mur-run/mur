@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use chrono::{Local, TimeZone};
+use chrono::{DateTime, Local, TimeZone};
 use mur_agent_runtime::scheduler::{next_n_fires, parse_bound};
 
 use crate::cmd::fleet::loop_run::parse_duration;
@@ -264,10 +264,25 @@ fn bounded_fires(expr: &str, not_after: Option<&str>) -> Vec<String> {
 /// Panel and the Hub — so none of them can claim an entry repeats when it does
 /// not. Same discipline as #1095, applied to #1119's bound.
 pub fn describe_bounded(cron: &str, not_after: Option<&str>) -> String {
+    describe_bounded_at(cron, not_after, Local::now())
+}
+
+/// [`describe_bounded`] against an explicit clock, so the expired branch is
+/// testable without waiting for a date to pass.
+fn describe_bounded_at(cron: &str, not_after: Option<&str>, now: DateTime<Local>) -> String {
     match parse_bound(not_after) {
+        // A spent one-off stays in the profile (the sandboxed scheduler cannot
+        // edit it), so without the marker it reads exactly like a live one (#2437).
+        Some(b) if b < now => format!("once, on {} (expired)", b.format("%Y-%m-%d %H:%M")),
         Some(b) => format!("once, on {}", b.format("%Y-%m-%d %H:%M")),
         None => describe_cron(cron),
     }
+}
+
+/// Whether a one-off's bound has passed. An absent or unreadable bound is no
+/// bound — the same reading the scheduler uses — so it is never expired.
+pub fn is_expired(not_after: Option<&str>, now: DateTime<Local>) -> bool {
+    parse_bound(not_after).is_some_and(|b| b < now)
 }
 
 fn collect_agents(
@@ -314,7 +329,7 @@ fn collect_agents(
                 // spent one-off did its job, an unreadable cron never will.
                 next_note: next_fires.is_empty().then(|| {
                     if parse_bound(s.not_after.as_deref()).is_some() {
-                        "already fired — this was a one-off and does not repeat".to_string()
+                        "past its date — this was a one-off and does not repeat".to_string()
                     } else {
                         format!("could not read a schedule from `{}`", s.cron)
                     }

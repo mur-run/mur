@@ -665,6 +665,7 @@ pub(super) async fn run_agent(action: AgentAction) -> Result<()> {
             AgentScheduleAction::Remove { name, index } => {
                 cmd::agent_schedule::cmd_schedule_remove(&name, index)?
             }
+            AgentScheduleAction::Prune { name } => cmd::agent_schedule::cmd_schedule_prune(&name)?,
             AgentScheduleAction::Next { name, count } => {
                 cmd::agent_schedule::cmd_schedule_next(&name, count)?
             }

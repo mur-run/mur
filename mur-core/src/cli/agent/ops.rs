@@ -161,6 +161,11 @@ pub enum AgentScheduleAction {
         /// Entry index to remove
         index: usize,
     },
+    /// Remove one-off entries whose date has passed (marked `(expired)` in `list`)
+    Prune {
+        /// Agent name
+        name: String,
+    },
     /// Show next N fire times for each schedule entry
     Next {
         /// Agent name
