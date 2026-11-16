@@ -25,6 +25,8 @@ mod fence_head_tests;
 #[cfg(test)]
 mod ghost_tests;
 #[cfg(test)]
+mod reasoning_spill_tests;
+#[cfg(test)]
 mod scrub_tests;
 #[cfg(test)]
 mod settled_md_tests;
@@ -34,6 +36,8 @@ mod stack_tests;
 mod table_tail_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tool_run_spill_tests;
 mod welcome_head;
 #[cfg(test)]
 mod welcome_head_tests;
@@ -604,10 +608,8 @@ pub fn flush_finished<B: Backend>(
         let Some(m) = app.messages.get(app.flushed_upto) else {
             break;
         };
-        // ponytail: reasoning turns keep the whole-message flush. `thinking`
-        // renders above the body, so committing a body block first would strand
-        // any reasoning that arrives later after it in scrollback.
-        if !m.streaming || m.role != Role::Agent || m.step.is_some() || !m.thinking.is_empty() {
+        // Reasoning turns spill too; refusing them hid the reply behind PgUp.
+        if !m.streaming || m.role != Role::Agent || m.step.is_some() {
             break;
         }
         let rest = m.text.get(skip..).unwrap_or("");
@@ -660,6 +662,7 @@ pub fn flush_finished<B: Backend>(
                 format!("● {}", app.agent_label),
                 theme.accent.add_modifier(Modifier::BOLD),
             )));
+            super::message::push_thinking(&mut lines, &m.thinking, theme);
         }
         if raw {
             lines.extend(raw_body_lines(

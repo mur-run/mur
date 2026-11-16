@@ -120,13 +120,21 @@ pub(super) fn push_agent_header(
         )
     };
     lines.push(Line::from(Span::styled(bullet, header_style)));
-    if !m.thinking.is_empty() {
-        for l in m.thinking.lines() {
-            lines.push(Line::styled(
-                format!("{MSG_INDENT}{l}"),
-                theme.muted.add_modifier(Modifier::ITALIC | Modifier::DIM),
-            ));
-        }
+    push_thinking(lines, &m.thinking, theme);
+}
+
+/// The reasoning block under an agent header: muted italic, one row per line.
+/// Shared by the band and the streaming spill so both paint it the same way.
+pub(super) fn push_thinking(
+    lines: &mut Vec<Line<'static>>,
+    thinking: &str,
+    theme: &'static crate::cmd::agent::cli::theme::Theme,
+) {
+    for l in thinking.lines() {
+        lines.push(Line::styled(
+            format!("{MSG_INDENT}{l}"),
+            theme.muted.add_modifier(Modifier::ITALIC | Modifier::DIM),
+        ));
     }
 }
 
