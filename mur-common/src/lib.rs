@@ -41,6 +41,7 @@ pub mod hub;
 pub mod identity;
 pub mod identity_pin;
 pub mod jcs;
+pub mod keychain_acl;
 pub mod knowledge;
 pub mod labels;
 pub mod ledger;

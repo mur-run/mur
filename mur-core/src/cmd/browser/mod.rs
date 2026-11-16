@@ -6,6 +6,7 @@ pub(crate) mod bind_plan;
 mod bindings;
 pub mod doctor;
 pub mod engine_check;
+pub mod key_acl;
 pub mod list;
 pub(crate) mod live_effect;
 pub(crate) mod live_entry;

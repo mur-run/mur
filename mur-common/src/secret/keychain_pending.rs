@@ -77,6 +77,37 @@ pub fn list(agent_home: &Path) -> Vec<String> {
     names
 }
 
+/// File under the agent home saying a person just ran `mur agent start` or
+/// `restart` (#2369). Kept outside [`PENDING_DIR`] so [`list`] never reports
+/// it as a secret.
+pub const ATTENDED_FILE: &str = "keychain-attended";
+
+/// How long an [`ATTENDED_FILE`] counts. It covers the gap between the
+/// command and the runtime reaching its seal, including a slow service kick.
+pub const ATTENDED_FRESH: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Records that a person is at the machine for this start, so the runtime may
+/// wait longer for a Keychain prompt to be answered. Best-effort.
+pub fn mark_attended(agent_home: &Path) {
+    let _ = std::fs::write(
+        agent_home.join(ATTENDED_FILE),
+        chrono::Utc::now().to_rfc3339(),
+    );
+}
+
+/// Whether this start was asked for by a person within [`ATTENDED_FRESH`].
+/// Consumes the marker: a later crash-loop respawn is unattended again.
+pub fn take_attended(agent_home: &Path) -> bool {
+    let path = agent_home.join(ATTENDED_FILE);
+    let fresh = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age <= ATTENDED_FRESH);
+    let _ = std::fs::remove_file(&path);
+    fresh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +135,17 @@ mod tests {
         assert_eq!(list(home.path()), vec!["A_KEY", "B_KEY"]);
         assert_eq!(clear_all(home.path()), 2);
         assert!(list(home.path()).is_empty());
+    }
+
+    #[test]
+    fn attended_is_taken_once_and_never_listed() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(!take_attended(home.path()));
+        mark_attended(home.path());
+        assert!(list(home.path()).is_empty());
+        assert!(take_attended(home.path()));
+        // A respawn after the first start is unattended again.
+        assert!(!take_attended(home.path()));
     }
 
     #[test]
