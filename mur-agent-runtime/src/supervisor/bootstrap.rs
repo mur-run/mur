@@ -9,6 +9,24 @@ use super::*;
 pub(super) const USER_SECRET_RESOLVE_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(3);
 
+/// The same wait when a person just ran `mur agent start|restart`
+/// (`keychain_pending::take_attended`): long enough to find the prompt and
+/// choose Always Allow, short enough that a missed one still lets the agent
+/// up (#2369). Applied per item, one after another, so several pending
+/// secrets plus the browser key can hold startup for minutes — far past the
+/// CLI's 8 s confirm window, whose "not confirmed" line mentions the prompt.
+pub(super) const ATTENDED_SECRET_RESOLVE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(30);
+
+/// Which of the two waits a pre-seal Keychain read gets.
+pub(super) fn keychain_resolve_timeout(attended: bool) -> std::time::Duration {
+    if attended {
+        ATTENDED_SECRET_RESOLVE_TIMEOUT
+    } else {
+        USER_SECRET_RESOLVE_TIMEOUT
+    }
+}
+
 pub(super) fn parent_pid() -> u32 {
     #[cfg(unix)]
     unsafe {

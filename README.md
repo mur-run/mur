@@ -632,10 +632,13 @@ Agent** wizard offers the same catalog as a source.
   SHA256:<fp> --yes` instead. `mur agent ssh list` (`--json`) shows the grants,
   `revoke` takes them back. `mur agent status` says whether the proxy is a
   real boundary for that agent (`ssh_proxy: boundary`) or audit-only, with
-  the reason. **Limits:** keys stay in your ssh-agent; unrestricted-network
-  agents and Linux are audit-only; on Windows the proxy does not start;
-  detection covers only the socket the proxy uses. Commit signing (SSHSIG),
-  `ssh -A`, and `ssh-add -h` keys are not supported. For git, HTTPS via
+  the reason. `--generate` grants the agent its own dedicated key instead:
+  it is kept where the agent cannot read it and never added to your
+  ssh-agent; the runtime holds it in a private ssh-agent that nothing else
+  can reach. **Limits:** a key of yours stays in your ssh-agent;
+  unrestricted-network agents and Linux are audit-only; on Windows the proxy
+  does not start; detection covers only the socket the proxy uses. Commit
+  signing (SSHSIG), `ssh -A`, and `ssh-add -h` keys are not supported. For git, HTTPS via
   `gh auth setup-git` is still the simpler path.
   In `mur agent cli`, `/ssh <host[:port]> [user]` does the same in a card:
   pick (or `ssh-add`) a key, compare the scanned host key against your own
@@ -647,6 +650,17 @@ Agent** wizard offers the same catalog as a source.
   signing state, the agent's pending `ssh_request`s in its own words, and
   "Add host", which opens the same key → host → summary card as murmur's
   `/ssh`. A pending request also shows in "Needs you".
+  **A dedicated key per agent:** the card (or `mur agent ssh allow <agent>
+  --generate --host <host> [--install --user <login>]`) can make an ed25519
+  key for that agent alone, kept at `~/.mur/secrets/ssh/<agent>/` where a
+  sealed agent cannot read it, and added to your ssh-agent at every start.
+  "Dedicated" means one key per purpose, not isolation: it still signs
+  through your ssh-agent and the same proxy. Install puts its public key in
+  the host's `authorized_keys` using your own login; if that fails, the grant
+  is kept and the restart waits for Retry, Copy line, or Restart anyway.
+  Offered only to agents sandboxed on every run; `ssh_setup.generate_key:
+  false` in `~/.mur/config.yaml` turns it off. `mur agent remove --purge`
+  deletes the key with the agent; without `--purge` the key is kept with its data.
 - **Grant a host when it is blocked** — when the browser is refused a host, the
   chat shows *this time* / *always* / *no* choices after the turn. *This time*
   lets it through until the agent restarts and writes nothing; *always* shows

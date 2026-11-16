@@ -7,6 +7,7 @@
 //!
 //! A key file grants nothing by itself: the profile's `entitlements.ssh` is
 //! the authority, and every caller that loads a key checks the grant first.
+//! The only agent a key is loaded into is the runtime-private one.
 //!
 //! Callers must not put the private path, the public line or the fingerprint
 //! in anything an agent reads (a tool reply, a prompt section, a hand-back).
@@ -229,11 +230,33 @@ pub fn sweep_partial_older_than(mur_home: &Path, agent: &str, min_age: Duration)
     }
 }
 
-/// Add the key to the user's ssh-agent. Adding a key twice is not an error.
-pub fn load(key: &StoredKey) -> Result<(), KeystoreError> {
+/// Add the key to the agent listening on `socket`, never the user's: the
+/// dedicated key is only ever held by the runtime-private agent (K8).
+pub fn load_into(key: &StoredKey, socket: &Path) -> Result<(), KeystoreError> {
     let mut cmd = Command::new(SSH_ADD_BIN);
-    cmd.arg("-q").arg(&key.private);
+    cmd.arg("-q").arg(&key.private).env("SSH_AUTH_SOCK", socket);
     run_ok(cmd, SSH_ADD_BIN).map(drop)
+}
+
+/// Remove the key from the user's ssh-agent, where slice 6a used to load it.
+/// `Ok(false)` when it was not there or the agent cannot be reached or
+/// refuses: this is clean-up, never a reason to stop.
+pub fn unload_from_user(key: &StoredKey) -> Result<bool, KeystoreError> {
+    unload_via(key, None)
+}
+
+/// [`unload_from_user`] against `socket`, or the inherited `SSH_AUTH_SOCK`.
+pub fn unload_via(key: &StoredKey, socket: Option<&Path>) -> Result<bool, KeystoreError> {
+    let mut cmd = Command::new(SSH_ADD_BIN);
+    cmd.arg("-q").arg("-d").arg(&key.private);
+    if let Some(socket) = socket {
+        cmd.env("SSH_AUTH_SOCK", socket);
+    }
+    match run_ok(cmd, SSH_ADD_BIN) {
+        Ok(_) => Ok(true),
+        Err(KeystoreError::ToolFailed { .. }) => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 /// Drop the key from ssh-agent and delete the agent's key directory.

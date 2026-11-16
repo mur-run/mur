@@ -42,6 +42,10 @@ pub const MAX_PENDING: usize = 8;
 pub const SSH_BINARY: &str = "ssh";
 /// Lists, adds and removes the keys held by the user's ssh-agent.
 pub const SSH_ADD_BIN: &str = "ssh-add";
+/// Runs the runtime-private agent that holds an agent's dedicated key.
+pub const SSH_AGENT_BIN: &str = "ssh-agent";
+/// How long to wait for a freshly spawned private agent's socket to appear.
+pub const PRIVATE_AGENT_SOCKET_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 /// Generates keys and looks up the user's own `known_hosts` entries.
 pub const KEYGEN_BIN: &str = "ssh-keygen";
 /// Comment on every dedicated key: `mur-agent-<agent>`. Display only, but

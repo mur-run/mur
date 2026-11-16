@@ -247,6 +247,9 @@ pub async fn auth(
     )?;
     println!("saved encrypted browser profile {site:?}");
     let mut out = std::io::stdout();
+    // The key may be new, or made by an older MUR: let the agent runtime read
+    // it without a prompt, while a person is here to type the password (#2369).
+    super::key_acl::grant_after_auth(&mut out);
     match bind {
         Some(agent) => super::bind::bind_flag(&home, site, &agent, replace, &mut out),
         None => {

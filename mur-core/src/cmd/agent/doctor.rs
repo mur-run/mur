@@ -410,6 +410,17 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
         }
     }
 
+    // ── Browser state key Keychain access (#2369) ───────────────────────────
+    // Machine-wide, so it runs with or without running agents. Stderr under
+    // `--json` for the same reason as the hint below.
+    if let Some(line) = crate::cmd::browser::key_acl::doctor_line(fix) {
+        if json {
+            eprintln!("\n{line}");
+        } else {
+            println!("\n{line}");
+        }
+    }
+
     // ── Removable-volume Full-Disk-Access preflight (issue #1) ──────────────
     // Independent of the stale check: if `/Volumes` is blocked by macOS EPERM,
     // emit the shared guidance. Printed to stderr so it never pollutes the

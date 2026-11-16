@@ -17,7 +17,7 @@
 //! threads: they may block, but must never spawn a child or a thread, since
 //! they are not confined.
 
-use super::bootstrap::USER_SECRET_RESOLVE_TIMEOUT;
+use super::bootstrap::keychain_resolve_timeout;
 use crate::profile::Profile;
 use std::path::Path;
 use std::sync::Arc;
@@ -35,6 +35,8 @@ pub(super) struct PreSeal {
     sandbox_record: Option<mur_common::agent::SandboxRecord>,
     #[cfg(unix)]
     ssh_upstream: Option<super::ssh_proxy_boot::PreSealUpstream>,
+    #[cfg(unix)]
+    ssh_dedicated: Option<super::private_agent::PreSealDedicated>,
     ssh_proxy: mur_common::ssh_proxy_status::SshProxyStatus,
     pin_trust: crate::ssh_proxy::policy::PinTrust,
 }
@@ -174,15 +176,7 @@ pub(super) fn prepare_and_seal(
             "B1 sandbox: allowing VLC HTTP port + runtime dir for co-watching"
         );
     }
-    // Global limits (#1794): the read grant on `<mur_home>/limits` is
-    // existence-checked, so create the directory first or a user who has not
-    // yet run `mur limits --global` would get no grant, and their first edit
-    // would be invisible until restart. Read-only to the agent; the CLI writes.
-    let _ = std::fs::create_dir_all(mur_common::limits::global_limits_dir(mur_home));
-    // Shared skill store: same existence-checked read grant, same reason. An
-    // agent that sealed before the first skill was ever installed would serve
-    // `skills/get` EACCES until restart. Read-only to the agent.
-    let _ = std::fs::create_dir_all(mur_common::skill::global_skills_root(mur_home));
+    ensure_read_grant_dirs(mur_home);
     let extra_write_paths = extra_write_paths(mur_home);
     if let Some(vlc) = &vlc {
         extra_ports.push(vlc.port);
@@ -226,6 +220,12 @@ pub(super) fn prepare_and_seal(
     // and the later lookup fails exactly as it did before. Warn rather than
     // abort, because an agent with an unreachable secret still starts and its
     // other candidates may work.
+    // A person just ran `mur agent start|restart`: a Keychain prompt raised
+    // below can be answered, so wait for it longer (#2369). Taken once, so a
+    // crash-loop respawn after this start is back to the short wait.
+    let keychain_timeout = keychain_resolve_timeout(
+        mur_common::secret::keychain_pending::take_attended(agent_home),
+    );
     {
         let reg = mur_common::model::ModelRegistry::load_from(&mur_home.join("models.yaml"))
             .unwrap_or_default();
@@ -313,7 +313,7 @@ pub(super) fn prepare_and_seal(
             std::thread::spawn(move || {
                 let _ = tx.send(mur_common::secret::cache_before_seal(&probe));
             });
-            match rx.recv_timeout(USER_SECRET_RESOLVE_TIMEOUT) {
+            match rx.recv_timeout(keychain_timeout) {
                 Ok(Ok(())) => {
                     if let Some(v) = r.resolve_preseal_cached() {
                         use secrecy::ExposeSecret;
@@ -332,7 +332,7 @@ pub(super) fn prepare_and_seal(
                 Err(_) => {
                     warn!(
                         name,
-                        timeout_secs = USER_SECRET_RESOLVE_TIMEOUT.as_secs(),
+                        timeout_secs = keychain_timeout.as_secs(),
                         "keychain did not answer for this secret in time — most likely \
                          an authorisation prompt nobody is there to click. Starting \
                          without it, and later starts will not ask again until you \
@@ -358,6 +358,7 @@ pub(super) fn prepare_and_seal(
         &profile.inner.enabled_mcp_servers(),
         agent_home,
         &profile.inner.name,
+        keychain_timeout,
     );
 
     // The approval token lives in `secrets/`, which the seal below makes
@@ -398,13 +399,15 @@ pub(super) fn prepare_and_seal(
         ),
     );
     // The agent's dedicated key lives in `secrets/`, unreadable after the
-    // seal. Add it to ssh-agent first, so the connection below sees it.
+    // seal. Its runtime-private ssh-agent starts now, reachable afterwards
+    // only through the held connection the proxy routes to.
     #[cfg(unix)]
-    super::ssh_proxy_boot::load_dedicated_before_seal(
+    let ssh_dedicated = super::ssh_proxy_boot::start_private_before_seal(
         mur_home,
         &profile.inner.name,
         &profile.inner.entitlements.ssh,
-    );
+    )
+    .pre;
     // ssh-agent proxy, O7 option A: the one upstream connection is made now,
     // while the upstream is still reachable; the seal below makes a new
     // connect impossible on a boundary platform. Never gates start.
@@ -483,6 +486,8 @@ pub(super) fn prepare_and_seal(
         sandbox_record,
         #[cfg(unix)]
         ssh_upstream,
+        #[cfg(unix)]
+        ssh_dedicated,
         ssh_proxy,
         pin_trust,
     })
@@ -504,6 +509,8 @@ pub(super) async fn start_after_seal(
         sandbox_record,
         #[cfg(unix)]
         ssh_upstream,
+        #[cfg(unix)]
+        ssh_dedicated,
         ssh_proxy,
         pin_trust,
     } = pre;
@@ -559,6 +566,7 @@ pub(super) async fn start_after_seal(
                 ent: &profile.inner.entitlements.ssh,
                 pin_trust,
                 upstream: upstream.adopt(),
+                dedicated: ssh_dedicated.and_then(|d| d.adopt()),
                 sink,
                 marks: crate::ssh_proxy::mark::MarkSink::new(super::start_notice::mark_poster(
                     &signer,
@@ -636,6 +644,27 @@ pub fn extra_write_paths(mur_home: &Path) -> Vec<std::path::PathBuf> {
     paths
 }
 
+/// Central-store directories whose read grant is existence-checked
+/// (`SandboxPolicy::from_entitlements`) and which the CLI may create for the
+/// first time while the agent is already running. Landlock takes no new rule
+/// after the seal, so a directory that is missing now stays unreadable until
+/// restart. Create them first. The grant is read-only; the CLI writes.
+///
+/// - Global limits (#1794): otherwise a user who has not yet run
+///   `mur limits --global` gets no grant, and their first edit is invisible
+///   until restart.
+/// - The shared skill store: otherwise the first `mur skill install` on a
+///   machine that has never had a shared skill reads EACCES from `skills/get`
+///   until restart.
+fn ensure_read_grant_dirs(mur_home: &Path) {
+    for dir in [
+        mur_common::limits::global_limits_dir(mur_home),
+        mur_common::skill::global_skills_root(mur_home),
+    ] {
+        let _ = std::fs::create_dir_all(dir);
+    }
+}
+
 /// Create the agent's scratch dir and drop entries past `scratch.retention_days`.
 /// Skipped (already-logged helper error) when the path cannot be derived.
 fn prune_agent_scratch(agent_home: &Path, mur_home: &Path) {
@@ -657,3 +686,7 @@ fn prune_agent_scratch(agent_home: &Path, mur_home: &Path) {
         "scratch prune"
     );
 }
+
+#[cfg(test)]
+#[path = "seal_tests.rs"]
+mod tests;

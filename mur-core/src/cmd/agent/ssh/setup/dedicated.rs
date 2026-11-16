@@ -35,6 +35,7 @@ pub fn dedicated_for(
     match stored(mur_home, agent) {
         Ok(Some(k)) => Dedicated::Stored {
             fingerprint: k.fingerprint,
+            public_line: k.public_line,
         },
         Ok(None) => Dedicated::Offer,
         Err(e) => Dedicated::Off(DedicatedOff::Unusable(e)),
@@ -69,11 +70,6 @@ mod sys {
 
     pub fn generate(mur_home: &Path, agent: &str) -> Result<StoredKey, String> {
         keystore::generate(mur_home, agent).map_err(|e| e.to_string())
-    }
-
-    /// Add the key to the user's ssh-agent.
-    pub fn load(key: &StoredKey) -> Result<(), String> {
-        keystore::load(key).map_err(|e| e.to_string())
     }
 
     pub fn sweep(mur_home: &Path, agent: &str) {
@@ -164,9 +160,6 @@ mod sys {
         None
     }
     pub fn generate(_: &Path, _: &str) -> Result<StoredKey, String> {
-        Err(UNIX_ONLY.into())
-    }
-    pub fn load(_: &StoredKey) -> Result<(), String> {
         Err(UNIX_ONLY.into())
     }
     pub fn sweep(_: &Path, _: &str) {}

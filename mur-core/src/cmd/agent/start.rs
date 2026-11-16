@@ -40,10 +40,6 @@ pub fn cmd_start(name: &str) -> Result<()> {
     if !agent_home.exists() {
         bail!("agent '{name}' not found under {}", mur_home.display());
     }
-    // A start the user typed (service-manager respawns never come through here) lets
-    // the runtime probe secrets an earlier start gave up on (#1980).
-    super::secret::clear_pending_keychain(&agent_home);
-
     // Best-effort program-deps preflight — informational only, never blocks
     // the start. A load/aggregate error is swallowed.
     let _ = (|| -> Result<()> {
@@ -66,6 +62,12 @@ pub fn cmd_start(name: &str) -> Result<()> {
         println!("agent '{name}' is already running (pid {})", lock.pid);
         return Ok(());
     }
+
+    // A start the user typed (service-manager respawns never come through here) lets
+    // the runtime probe secrets an earlier start gave up on (#1980). Only after the
+    // already-running check: a no-op start must not leave the attended marker for a
+    // later respawn to pick up (#2369).
+    super::secret::clear_pending_keychain(&agent_home);
 
     // Taken before the service manager is poked: a refusal can land before
     // `confirm_startup` first looks, and must still count as this start's.
@@ -139,8 +141,9 @@ pub fn cmd_start(name: &str) -> Result<()> {
         }
         if Instant::now() >= deadline {
             println!(
-                "launching '{name}' (pid {pid}) — not confirmed within {}s; slow starts are normal.\nCheck `mur agent status {name}` or `tail {}`.\nUNSUPERVISED: no auto-restart on crash or login. For a persistent service run: mur agent install-service {name}",
+                "launching '{name}' (pid {pid}) — not confirmed within {}s; slow starts are normal.{}\nCheck `mur agent status {name}` or `tail {}`.\nUNSUPERVISED: no auto-restart on crash or login. For a persistent service run: mur agent install-service {name}",
                 CONFIRM_WINDOW.as_secs(),
+                KEYCHAIN_HINT,
                 stderr_log.display()
             );
             return Ok(());
@@ -252,6 +255,16 @@ pub(super) fn start_service_unit(
 const CONFIRM_WINDOW: Duration = Duration::from_secs(8);
 const CONFIRM_POLL: Duration = Duration::from_millis(250);
 
+/// Appended to the "not confirmed" lines. On macOS the runtime may be waiting
+/// on a Keychain prompt (up to `ATTENDED_SECRET_RESOLVE_TIMEOUT`, 30 s per
+/// item, in `mur-agent-runtime`), well past `CONFIRM_WINDOW`; say so, since
+/// nothing else tells the user a dialog is open (#2369).
+#[cfg(target_os = "macos")]
+const KEYCHAIN_HINT: &str =
+    "\nA Keychain \"allow access\" prompt may be waiting; choose Always Allow.";
+#[cfg(not(target_os = "macos"))]
+const KEYCHAIN_HINT: &str = "";
+
 /// The pid from a live `running.lock`, if the runtime has written one and
 /// that pid is still alive. Same check as cmd_start's "already running" leg.
 fn live_lock_pid(agent_home: &std::path::Path) -> Option<u32> {
@@ -312,8 +325,9 @@ fn confirm_startup(
                 );
             }
             println!(
-                "ℹ start not confirmed within {}s — slow starts are normal; check `mur agent status {name}` or {log_hint}",
-                CONFIRM_WINDOW.as_secs()
+                "ℹ start not confirmed within {}s — slow starts are normal; check `mur agent status {name}` or {log_hint}{}",
+                CONFIRM_WINDOW.as_secs(),
+                KEYCHAIN_HINT
             );
             return Ok(());
         }
@@ -387,6 +401,63 @@ mod tests {
         assert!(tail.ends_with("line 30"));
         assert!(!tail.contains("line 1\n"), "must trim to the last 20 lines");
         assert_eq!(tail.lines().count(), 20);
+    }
+
+    /// Starting an agent that is already running is a no-op: it must not leave
+    /// the attended marker behind, or a crash within `ATTENDED_FRESH` hands the
+    /// service-manager respawn the long keychain wait (#2369).
+    #[test]
+    fn start_of_a_running_agent_touches_no_keychain_markers() {
+        use mur_common::secret::keychain_pending::{ATTENDED_FILE, is_pending, mark};
+        use mur_common::{LockFile, agent::LockTransports};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", mur_home);
+        let name = "already-up";
+        let agent_home = mur_home.join("agents").join(name);
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let lock = LockFile {
+            schema: 1,
+            uuid: "0192f5a1-28ab-7111-8000-0000000000ab".into(),
+            name: name.into(),
+            // This test process: alive for the whole test.
+            pid: std::process::id(),
+            ppid: 1,
+            started_at: chrono::Utc::now().to_rfc3339(),
+            binary_version: "test".into(),
+            transports: LockTransports {
+                stdio: true,
+                unix_socket: None,
+                tcp: None,
+                webhook: None,
+            },
+            card_digest: "sha256:x".into(),
+            capabilities: vec![],
+            build_sha: String::new(),
+            proto_version: 0,
+            sandbox: None,
+            startup_override: None,
+            override_rejected: None,
+        };
+        std::fs::write(
+            agent_home.join("running.lock"),
+            serde_json::to_vec(&lock).unwrap(),
+        )
+        .unwrap();
+        mark(&agent_home, "SOME_SECRET").unwrap();
+
+        super::cmd_start(name).unwrap();
+
+        assert!(
+            !agent_home.join(ATTENDED_FILE).exists(),
+            "a no-op start must not mark the next boot as attended"
+        );
+        assert!(
+            is_pending(&agent_home, "SOME_SECRET"),
+            "a no-op start must not clear pending keychain markers"
+        );
     }
 
     #[test]

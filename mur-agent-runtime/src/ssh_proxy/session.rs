@@ -5,6 +5,8 @@
 //! only after the binding rules, the policy, and the approval gate
 //! ([`SignGate`]) all pass; there is no other path to a signature.
 
+use std::collections::HashSet;
+
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -15,7 +17,7 @@ use super::mark::MarkSink;
 use super::policy::Policy;
 use super::refusal::{Refusal, RefusalCode, RefusalSink};
 use super::userauth;
-use super::wire::{self, Answer, Request, SessionBind};
+use super::wire::{self, Answer, Identity, Request, SessionBind};
 
 /// Most `session-bind`s one connection may carry. OpenSSH's agent uses the
 /// same bound; past it the connection is refused.
@@ -55,6 +57,9 @@ pub(crate) struct Session<'a, U> {
     gate: &'a dyn SignGate,
     /// `None`: no marks (tests that do not look at them).
     marks: Option<&'a MarkSink>,
+    /// The runtime-private agent and the key blobs it held at boot (D spec
+    /// §"Proxy with two upstreams"). `None`: the user's agent only.
+    dedicated: Option<(&'a U, &'a HashSet<Vec<u8>>)>,
     bind: Bind,
     binds_seen: usize,
 }
@@ -72,6 +77,7 @@ impl<'a, U: Upstream> Session<'a, U> {
             sink,
             gate,
             marks: None,
+            dedicated: None,
             bind: Bind::None,
             binds_seen: 0,
         }
@@ -80,6 +86,13 @@ impl<'a, U: Upstream> Session<'a, U> {
     /// Write a signing mark for each signature returned under a live approval.
     pub(crate) fn with_marks(mut self, marks: &'a MarkSink) -> Self {
         self.marks = Some(marks);
+        self
+    }
+
+    /// Also serve the runtime-private agent: its identities are listed first
+    /// and a sign for a blob in `blobs` goes to it, never to the user's.
+    pub(crate) fn with_dedicated(mut self, upstream: &'a U, blobs: &'a HashSet<Vec<u8>>) -> Self {
+        self.dedicated = Some((upstream, blobs));
         self
     }
 
@@ -135,33 +148,50 @@ impl<'a, U: Upstream> Session<'a, U> {
         }
     }
 
+    /// Dedicated identities first, then the user's, de-duplicated by blob,
+    /// then filtered by policy. One live upstream is enough to answer; each
+    /// failed one is recorded `upstream_unavailable`.
     async fn list(&self) -> Answer {
         if let Policy::RefuseAll(_) = self.policy {
             return Answer::Identities(Vec::new());
         }
-        let body = match self
-            .upstream
-            .roundtrip(Request::RequestIdentities.encode())
-            .await
-        {
+        let dedicated = match self.dedicated {
+            Some((up, _)) => Some(self.identities(up).await),
+            None => None,
+        };
+        let user = self.identities(self.upstream).await;
+        let mut ids = match (dedicated, user) {
+            (None | Some(None), None) => return Answer::Failure,
+            (d, u) => d
+                .flatten()
+                .into_iter()
+                .flatten()
+                .chain(u.into_iter().flatten()),
+        }
+        .collect::<Vec<_>>();
+        let mut seen = HashSet::new();
+        ids.retain(|id| seen.insert(id.key_blob.clone()));
+        ids.retain(|id| self.policy.lists(&fingerprint(&id.key_blob)));
+        Answer::Identities(ids)
+    }
+
+    /// One upstream's identities. `None` (recorded) when it cannot answer.
+    async fn identities(&self, up: &U) -> Option<Vec<Identity>> {
+        let body = match up.roundtrip(Request::RequestIdentities.encode()).await {
             Ok(b) => b,
             Err(e) => {
                 self.refuse(Refusal::new(RefusalCode::UpstreamUnavailable).detail(e.to_string()));
-                return Answer::Failure;
+                return None;
             }
         };
         match wire::decode_answer(&body) {
-            Ok(Answer::Identities(ids)) => Answer::Identities(
-                ids.into_iter()
-                    .filter(|id| self.policy.lists(&fingerprint(&id.key_blob)))
-                    .collect(),
-            ),
+            Ok(Answer::Identities(ids)) => Some(ids),
             Ok(_) | Err(_) => {
                 self.refuse(
                     Refusal::new(RefusalCode::UpstreamUnavailable)
                         .detail("upstream answered REQUEST_IDENTITIES with something else"),
                 );
-                Answer::Failure
+                None
             }
         }
     }
@@ -261,13 +291,19 @@ impl<'a, U: Upstream> Session<'a, U> {
                 return Answer::Failure;
             }
         };
+        // Route by blob, after policy, binding and gate. A dedicated key is
+        // never retried on the user's agent.
+        let upstream = match self.dedicated {
+            Some((up, blobs)) if blobs.contains(&key_blob) => up,
+            _ => self.upstream,
+        };
         let frame = Request::SignRequest {
             key_blob,
             data,
             flags,
         }
         .encode();
-        let why = match self.upstream.roundtrip(frame).await {
+        let why = match upstream.roundtrip(frame).await {
             Err(e) => e.to_string(),
             Ok(body) => match wire::decode_answer(&body) {
                 Ok(a @ Answer::SignResponse(_)) => {

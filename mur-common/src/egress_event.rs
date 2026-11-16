@@ -27,6 +27,17 @@ pub enum DenyReason {
     NotAllowed,
     /// `BroadAudited`: the host is on the deny list. Never grantable (D3).
     DenyListed,
+    /// The host is allowed, but the sandbox seal refused the upstream dial
+    /// because `port` is outside the agent's outbound port set (#2418). Not
+    /// a host grant: the fix is [`port_fix`], which needs a restart.
+    PortNotOpen,
+}
+
+/// The user-facing fix for a [`DenyReason::PortNotOpen`] denial. Shared by the
+/// proxy's log line, the tool-result note, and every client's notice, so the
+/// command reads the same everywhere.
+pub fn port_fix(agent: &str, port: u16) -> String {
+    format!("`mur agent perm allow-port {agent} {port}`, then restart the agent")
 }
 
 /// `params` of a [`DENIED_METHOD`] notification. The denied connection has
@@ -96,5 +107,15 @@ mod tests {
             ..d
         };
         assert!(!listed.grantable());
+    }
+
+    #[test]
+    fn a_closed_port_is_not_a_host_grant() {
+        let v = serde_json::to_value(DenyReason::PortNotOpen).unwrap();
+        assert_eq!(v, "port_not_open");
+        assert_eq!(
+            port_fix("shop", 3000),
+            "`mur agent perm allow-port shop 3000`, then restart the agent"
+        );
     }
 }

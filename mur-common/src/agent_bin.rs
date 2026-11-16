@@ -17,6 +17,10 @@ pub fn bin_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".local/bin"))
 }
 
+/// File name of the per-agent runtime binary every `mur_agent_<name>` link
+/// points at. It sits in the same directory as the `mur` CLI.
+pub const RUNTIME_BIN: &str = "mur-agent-runtime";
+
 /// The symlink name for agent `slug`.
 pub fn link_name(slug: &str) -> String {
     format!("mur_agent_{slug}")
