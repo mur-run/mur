@@ -21,6 +21,8 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+mod missed;
+
 /// Build the `TaskSpec` for a cron-fired injection. Extracted so the
 /// `Background(Scheduled)` tagging can be asserted in a unit test without
 /// driving the full async cron loop — nobody is synchronously waiting on a
@@ -200,7 +202,8 @@ fn schedule_channel(svc: &ChannelService, mur_home: &Path, agent: &str) -> Resul
 ///
 /// Best-effort, like the `channel/delegate` write it mirrors: a schedule that
 /// fired must not be reported as failed because the channel store was busy.
-async fn record_reply(sink: &ScheduleSink, task: &mur_common::a2a::Task, cron: &str) {
+async fn record_reply(sink: &ScheduleSink, task: &mur_common::a2a::Task, entry: &ScheduleEntry) {
+    let cron = entry.cron.as_str();
     let text = crate::protocol::methods::channel_delegate::reply_text_of(task);
     if text.trim().is_empty() {
         return;
@@ -216,7 +219,7 @@ async fn record_reply(sink: &ScheduleSink, task: &mur_common::a2a::Task, cron: &
             sink.key_version,
             &text,
             &task.id,
-            Some(format!("sched:{}:{}", task.id, cron)),
+            Some(missed::reply_key(&task.id, entry)),
         )
     };
     if let Err(e) = write() {
@@ -362,6 +365,10 @@ async fn run_entry(
         }
     };
 
+    // Whether this loop has fired. A one-off that retires after firing here
+    // was delivered; one that retires before ever firing may have been missed
+    // while the runtime was down (#2436), and the channel is asked.
+    let mut fired_here = false;
     loop {
         let now = Local::now();
         let next = match schedule.upcoming(Local).next() {
@@ -378,6 +385,12 @@ async fn run_entry(
                 not_after = entry.not_after.as_deref().unwrap_or_default(),
                 "schedule retired — its last firing is past, so it will not repeat"
             );
+            if !fired_here
+                && let (Some(sink), Some(bound)) =
+                    (sink.as_deref(), parse_bound(entry.not_after.as_deref()))
+            {
+                missed::report_missed(sink, &entry, bound, Utc::now()).await;
+            }
             return;
         }
 
@@ -404,6 +417,7 @@ async fn run_entry(
             );
         }
 
+        fired_here = true;
         let outcome = runner.run_sync(scheduled_task_spec(&entry.message)).await;
 
         match &outcome {
@@ -417,7 +431,7 @@ async fn run_entry(
             // fired on the second and reached nobody.
             TaskOutcome::Completed(t) => {
                 if let Some(sink) = sink.as_deref() {
-                    record_reply(sink, t, &entry.cron).await;
+                    record_reply(sink, t, &entry).await;
                 }
             }
             TaskOutcome::Cancelled(_) => {}
