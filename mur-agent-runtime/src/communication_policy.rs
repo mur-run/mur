@@ -59,9 +59,14 @@ pub enum Caller {
     SelfAgent,
     /// Another running agent, or a process that agent spawned.
     Agent(String),
-    /// Not descended from any running agent: the user's CLI / GUI.
+    /// Not descended from any running agent: the user's CLI / GUI. Only
+    /// returned when the walk reached the top of the tree (pid 0/1) — an
+    /// established non-agent lineage, never a lookup that gave up.
     User,
-    /// The peer's pid could not be read on this platform.
+    /// The peer's pid, or some ancestor's parent, could not be read (no peer
+    /// credential, a sealed procfs with no oracle, a pid that exited
+    /// mid-walk), or the walk ran out of depth. Lineage is unknown, so a
+    /// restricted `accepts_from` must refuse it.
     Unknown,
 }
 
@@ -69,6 +74,11 @@ pub enum Caller {
 /// until it meets a running agent. The walk (not a bare pid match) is the
 /// point: a request from a tool agent B spawned must count as B, or B could
 /// reach anyone by shelling out.
+///
+/// A failed parent lookup is `Unknown`, not `User`: `admits` waves `User`
+/// through unconditionally, so reading "could not tell" as "the user" would
+/// let a peer's child past a restricted `accepts_from` whenever lineage is
+/// unreadable.
 ///
 /// Known limit: a process that daemonizes (double-fork, reparented to pid 1)
 /// has no lineage left and reads as `User`. Closing that needs a credential
@@ -91,10 +101,13 @@ pub fn identify(
         }
         match parent(cur) {
             Some(p) if p > 1 && p != cur => cur = p,
-            _ => return Caller::User,
+            // Reached init / the root: lineage established, no agent in it.
+            Some(p) if p <= 1 => return Caller::User,
+            // Self-parented or unreadable: lineage is not established.
+            _ => return Caller::Unknown,
         }
     }
-    Caller::User
+    Caller::Unknown
 }
 
 /// Decide whether `caller` may use this agent's socket.
@@ -129,18 +142,22 @@ pub struct AcceptPolicy {
 
 impl AcceptPolicy {
     pub fn check(&self, peer_pid: Option<u32>) -> Result<Caller, String> {
-        let open = self.accepts_from.iter().any(|p| p == "*");
+        self.check_with(peer_pid, crate::hitl::shim_ticket::parent_of)
+    }
+
+    /// [`check`](Self::check) with the parent lookup injected, so tests can
+    /// drive the whole decision through a failing lookup.
+    fn check_with(
+        &self,
+        peer_pid: Option<u32>,
+        parent: impl Fn(u32) -> Option<u32>,
+    ) -> Result<Caller, String> {
         // `*` admits every caller, so skip the directory scan entirely.
-        if open {
+        if self.accepts_from.iter().any(|p| p == "*") {
             return Ok(Caller::Unknown);
         }
         let running = running_agents(&self.agents_dir);
-        let caller = identify(
-            peer_pid,
-            self.self_pid,
-            &running,
-            crate::hitl::shim_ticket::parent_of,
-        );
+        let caller = identify(peer_pid, self.self_pid, &running, parent);
         admits(&self.accepts_from, &caller).map(|()| caller)
     }
 }
