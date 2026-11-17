@@ -83,10 +83,16 @@ pub fn check_protected_writes(
 /// for the agent rooted at `agent_home`, or `None` when it would install it.
 ///
 /// For callers that offer a grant before the agent seals (murmur's cwd
-/// consent, #2448): the same two rules [`super::apply`] enforces, so a prompt
-/// can never offer a path the next start refuses. Write: [`check_protected_writes`]
-/// (a refusal — the agent does not start). Read: the credential-store
-/// partition in `policy/build.rs` (the whole grant is dropped).
+/// consent, #2448): the same rules [`super::apply`] enforces, so a prompt can
+/// never offer a path the next start refuses or silently narrows.
+/// * [`check_protected_writes`] — a refusal; the agent does not start.
+/// * [`LaunchChain::partition_grants`](super::launch_chain::LaunchChain::partition_grants)
+///   — the write-side launch chain (pins, broker, other agents, launch
+///   artifacts, autostart). Landlock drops an overlapping grant whole; SBPL
+///   denies writes inside it. Judged by the Landlock rule on every platform,
+///   as the read side is, so one offer means one thing everywhere.
+/// * [`LaunchChain::partition_read_grants`](super::launch_chain::LaunchChain::partition_read_grants)
+///   — the credential store; the whole grant is dropped.
 pub fn grant_refusal(agent_home: &Path, grant: &Path) -> Option<String> {
     // Same `<mur_home>` derivation as `apply` and `policy/build.rs`.
     let mur_home = agent_home
@@ -102,7 +108,17 @@ pub fn grant_refusal(agent_home: &Path, grant: &Path) -> Option<String> {
         return Some(e.to_string());
     }
     let chain = super::launch_chain::LaunchChain::new(agent_home);
-    let (_, dropped) = chain.partition_read_grants(&[grant.to_path_buf()]);
+    let grants = [grant.to_path_buf()];
+    if !chain.partition_grants(&grants).1.is_empty() {
+        let why = chain
+            .protects_write(grant)
+            .unwrap_or("it contains a launch-chain path no agent may write");
+        return Some(format!(
+            "write grant {} is launch-chain protected: {why}",
+            grant.display()
+        ));
+    }
+    let (_, dropped) = chain.partition_read_grants(&grants);
     (!dropped.is_empty()).then(|| {
         format!(
             "read grant {} reaches the credential store or a sibling signing key; \
@@ -368,6 +384,26 @@ mod tests {
         std::fs::create_dir_all(&narrow).unwrap();
         assert_eq!(grant_refusal(&f.agent_home, &narrow), None);
         assert!(f.check(&f.policy(&[&narrow], &[])).is_ok());
+    }
+
+    #[test]
+    fn grant_refusal_refuses_a_write_protected_but_readable_dir() {
+        // #2452 review: the entitlement pins pass both the heads check and the
+        // read partition, yet the write partition drops them (Linux) and SBPL
+        // denies writes there (macOS). The prompt must not offer read+write.
+        let f = fixture();
+        let pins = f.mur_home.join(mur_common::entitlements_pin::PINS_DIR);
+        std::fs::create_dir_all(&pins).unwrap();
+        assert!(f.check(&f.policy(&[&pins], &[])).is_ok());
+        let chain = super::super::launch_chain::LaunchChain::new(&f.agent_home);
+        assert!(
+            chain
+                .partition_read_grants(std::slice::from_ref(&pins))
+                .1
+                .is_empty()
+        );
+        let refused = grant_refusal(&f.agent_home, &pins).expect("pins are write-protected");
+        assert!(refused.contains("entitlement pins"), "{refused}");
     }
 
     #[test]
