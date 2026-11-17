@@ -29,6 +29,12 @@ pub const POLL: Duration = Duration::from_millis(50);
 pub const CI_ENV_VAR: &str = "CI";
 /// Where unprivileged `sshd` usually lives; `PATH` is tried first.
 pub const SSHD_FALLBACKS: [&str; 2] = ["/usr/sbin/sshd", "/usr/local/sbin/sshd"];
+/// What `sshd` logs when its pre-auth child cannot enter its own sandbox.
+/// macOS refuses `sandbox_init` inside an already-sandboxed process (an agent
+/// shell, for one), so every connection is reset before key exchange.
+pub const NESTED_SANDBOX_MARKER: &str = "sandbox_init: Operation not permitted";
+/// How long the probe waits for the server's identification banner.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Codes that would mean the real client's bytes broke a binding rule.
 /// Which userauth request the client signs (RFC 4252 §7 vs. OpenSSH
 /// `PROTOCOL` §2.5). `ssh -vvv` names the method it used in
@@ -88,6 +94,36 @@ pub fn find_sshd() -> Option<PathBuf> {
             .map(PathBuf::from)
             .find(|p| p.is_file())
     })
+}
+
+/// Opens one connection and reads the server banner. A healthy `sshd`
+/// answers with `SSH-`; one that cannot sandbox its pre-auth child resets
+/// the connection and logs [`NESTED_SANDBOX_MARKER`]. Any other failure is
+/// left for the test itself to report with the full log.
+fn sshd_unusable(dir: &Path, port: u16) -> Option<String> {
+    use std::io::Read;
+    let mut banner = [0u8; 4];
+    let answered = std::net::TcpStream::connect((LOOPBACK, port))
+        .and_then(|mut s| {
+            s.set_read_timeout(Some(PROBE_TIMEOUT))?;
+            s.read_exact(&mut banner)
+        })
+        .is_ok_and(|()| &banner == b"SSH-");
+    if answered {
+        return None;
+    }
+    let log = dir.join("sshd.log");
+    let start = Instant::now();
+    while start.elapsed() < PROBE_TIMEOUT {
+        if std::fs::read_to_string(&log).is_ok_and(|l| l.contains(NESTED_SANDBOX_MARKER)) {
+            return Some(format!(
+                "sshd cannot sandbox its pre-auth child ({NESTED_SANDBOX_MARKER}); \
+                 this process is already inside a macOS sandbox"
+            ));
+        }
+        std::thread::sleep(POLL);
+    }
+    None
 }
 
 /// Kills the child even when an assertion unwinds.
@@ -168,7 +204,10 @@ pub struct Rig {
 }
 
 impl Rig {
-    pub fn start(sshd: &Path) -> Self {
+    /// Starts the rig, or returns `None` (local only) when this host cannot
+    /// run `sshd` at all because it is already inside a macOS sandbox. Under
+    /// CI that is a hard failure, same as a missing `sshd`.
+    pub fn start(sshd: &Path, test: &str) -> Option<Self> {
         let tmp = tempfile::tempdir().unwrap();
         let dir = std::fs::canonicalize(tmp.path()).unwrap();
         let (user_key, host_key) = (dir.join("user_key"), dir.join("host_key"));
@@ -211,6 +250,11 @@ impl Rig {
         wait_for("sshd", || {
             std::net::TcpStream::connect((LOOPBACK, port)).is_ok()
         });
+        if let Some(reason) = sshd_unusable(&dir, port) {
+            assert!(!in_ci(), "{reason} under CI");
+            eprintln!("SKIP {test}: {reason}");
+            return None;
+        }
 
         let upstream_sock = dir.join("up.sock");
         let agent = Reaped(
@@ -230,7 +274,7 @@ impl Rig {
                 .arg(&user_key),
             "ssh-add",
         );
-        Self {
+        Some(Self {
             dir,
             port,
             user_key,
@@ -239,7 +283,7 @@ impl Rig {
             _sshd: sshd,
             _agent: agent,
             _tmp: tmp,
-        }
+        })
     }
 
     pub fn entitlement(&self, allow_hosts: Vec<String>) -> SshEntitlement {
