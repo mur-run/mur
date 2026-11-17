@@ -127,6 +127,8 @@ pub fn cmd_schedule_decline(name: &str, id: &str) -> Result<()> {
 /// Print all schedule entries for the named agent.
 pub fn cmd_schedule_list(name: &str) -> Result<()> {
     let entries = read_schedule(name)?;
+    let home = super::agent::resolve_mur_home()?;
+    let now = chrono::Local::now();
     if entries.is_empty() {
         println!("no schedule entries for agent '{name}'");
         return Ok(());
@@ -147,6 +149,9 @@ pub fn cmd_schedule_list(name: &str) -> Result<()> {
                 "     \u{21b3} {}",
                 crate::schedule_status::describe_bounded(&e.cron, e.not_after.as_deref())
             );
+        }
+        if let Some(note) = crate::schedule_status::firing_note(&home, name, e, now) {
+            println!("       {note}");
         }
     }
     Ok(())
