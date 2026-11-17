@@ -54,29 +54,48 @@ pub fn check_protected_writes(
     policy: &SandboxPolicy,
     mur_home: &Path,
 ) -> Result<(), ProtectedPathWritable> {
+    let protected = protected_dirs(mur_home);
+    for grant in &policy.fs_write {
+        if let Some(err) = refusal_for(grant, &protected) {
+            return Err(err);
+        }
+    }
+    Ok(())
+}
+
+/// The refusal [`check_protected_writes`] would raise for a single write
+/// `grant`, if any. For callers that vet a grant BEFORE it is written to a
+/// profile (the murmur cwd-access prompt, #2448), so they apply the exact
+/// rule the seal applies instead of a copy of its path list.
+pub fn write_grant_refusal(grant: &Path, mur_home: &Path) -> Option<ProtectedPathWritable> {
+    refusal_for(grant, &protected_dirs(mur_home))
+}
+
+/// `<mur_home>/channel-heads`, under both names when `mur_home` is a symlink:
+/// the kernel judges the resolved path.
+fn protected_dirs(mur_home: &Path) -> Vec<PathBuf> {
     let mut protected = vec![mur_home.join(HEADS_DIR)];
-    // The kernel judges the resolved path, so a symlinked `mur_home` is
-    // checked under both names.
     if let Ok(real) = std::fs::canonicalize(mur_home) {
         let resolved = real.join(HEADS_DIR);
         if !protected.contains(&resolved) {
             protected.push(resolved);
         }
     }
-    for grant in &policy.fs_write {
-        // Likewise a grant written through a symlink (macOS `/var` is
-        // `/private/var`) is judged under the name the kernel will see.
-        let resolved = std::fs::canonicalize(grant).ok();
-        for target in &protected {
-            if overlaps(grant, target) || resolved.as_deref().is_some_and(|r| overlaps(r, target)) {
-                return Err(ProtectedPathWritable {
-                    grant: grant.clone(),
-                    protected: target.clone(),
-                });
-            }
-        }
-    }
-    Ok(())
+    protected
+}
+
+fn refusal_for(grant: &Path, protected: &[PathBuf]) -> Option<ProtectedPathWritable> {
+    // A grant written through a symlink (macOS `/var` is `/private/var`) is
+    // judged under the name the kernel will see.
+    let resolved = std::fs::canonicalize(grant).ok();
+    protected.iter().find_map(|target| {
+        (overlaps(grant, target) || resolved.as_deref().is_some_and(|r| overlaps(r, target))).then(
+            || ProtectedPathWritable {
+                grant: grant.to_path_buf(),
+                protected: target.clone(),
+            },
+        )
+    })
 }
 
 /// One path is a component-wise prefix of the other (so `channel-heads-old`
