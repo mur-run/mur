@@ -25,6 +25,7 @@ pub(super) fn settle(text: String, ledger: &crate::turn_ledger::TurnLedger) -> M
     // text and the ledger meet (spec 2026-09-19-unverified-claim-card §4).
     let mut ledger = ledger.clone();
     ledger.claims_external_state = crate::turn_ledger::claims_external_state(&text);
+    ledger.ephemeral_paths = crate::ephemeral_path::ephemeral_paths(&text);
     let ledger = &ledger;
     let mut parts = vec![mur_common::a2a::MessagePart::Text {
         text: if ledger.warrants_settlement() {

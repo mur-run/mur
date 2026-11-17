@@ -20,6 +20,7 @@ pub mod concierge_spawn_migrate;
 pub mod crashlog;
 pub mod durable;
 pub mod entitlements;
+pub mod ephemeral_path;
 mod exec_dirs;
 pub mod export;
 pub mod expression;
