@@ -653,9 +653,10 @@ Agent** wizard offers the same catalog as a source.
   **A dedicated key per agent:** the card (or `mur agent ssh allow <agent>
   --generate --host <host> [--install --user <login>]`) can make an ed25519
   key for that agent alone, kept at `~/.mur/secrets/ssh/<agent>/` where a
-  sealed agent cannot read it, and added to your ssh-agent at every start.
-  "Dedicated" means one key per purpose, not isolation: it still signs
-  through your ssh-agent and the same proxy. Install puts its public key in
+  sealed agent cannot read it, and never added to your ssh-agent: at every
+  start the runtime loads it into a private ssh-agent that only the runtime
+  can reach. Every signature still goes through the same proxy, key→host
+  policy and HITL as your own keys. Install puts its public key in
   the host's `authorized_keys` using your own login; if that fails, the grant
   is kept and the restart waits for Retry, Copy line, or Restart anyway.
   Offered only to agents sandboxed on every run; `ssh_setup.generate_key:
