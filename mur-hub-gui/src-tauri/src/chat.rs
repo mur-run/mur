@@ -73,6 +73,47 @@ pub struct ChatReply {
     /// `None` for stub/misconfigured backends or older runtimes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<Value>,
+    /// Set when the turn ended without a reply — stopped, failed, or an
+    /// approval that timed out — with the runtime's cause. `reply` is empty
+    /// then, and `task_id` is the ended turn's id only when the runtime
+    /// remembered it (#2445), else empty so the caller keeps its thread.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended: Option<String>,
+}
+
+/// How a dialed turn finished, read from the final Task.
+#[derive(Debug, PartialEq)]
+enum Finished {
+    /// Completed; the last agent message's text (may be empty).
+    Reply(String),
+    /// Cancelled or failed. `thread` is the task id to continue from, set
+    /// only when the runtime says it remembered the turn (#2071): threading
+    /// onto a key it never stored would start the conversation over.
+    Ended {
+        cause: String,
+        thread: Option<String>,
+    },
+}
+
+fn finished_turn(task: &Value) -> Finished {
+    use mur_core::cmd::agent::cli::{remembered_task_id, task_outcome};
+    if let Err(cause) = task_outcome(task) {
+        return Finished::Ended {
+            cause,
+            thread: remembered_task_id(task),
+        };
+    }
+    let reply = task
+        .get("messages")
+        .and_then(Value::as_array)
+        .and_then(|msgs| {
+            msgs.iter()
+                .rev()
+                .find(|m| m.get("role").and_then(Value::as_str) == Some("agent"))
+        })
+        .map(extract_text)
+        .unwrap_or_default();
+    Finished::Reply(reply)
 }
 
 /// Send `text` to agent `name` and return its reply, streaming token deltas as
@@ -181,17 +222,21 @@ pub async fn agent_chat_send(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let reply = task
-        .get("messages")
-        .and_then(Value::as_array)
-        .and_then(|msgs| {
-            msgs.iter()
-                .rev()
-                .find(|m| m.get("role").and_then(Value::as_str) == Some("agent"))
-        })
-        .map(extract_text)
-        .unwrap_or_default();
-
+    let reply = match finished_turn(&task) {
+        Finished::Reply(r) => r,
+        // #2445: a stopped or failed turn writes nothing to the channel, but
+        // the runtime kept its ledger under its own id — hand that id back so
+        // the next send threads onto it instead of the last good turn.
+        Finished::Ended { cause, thread } => {
+            return Ok(ChatReply {
+                reply: String::new(),
+                task_id: thread.unwrap_or_default(),
+                streamed,
+                usage: task.get("usage").cloned(),
+                ended: Some(cause),
+            });
+        }
+    };
     if reply.is_empty() {
         return Err("the agent returned no reply".into());
     }
@@ -222,6 +267,7 @@ pub async fn agent_chat_send(
         task_id,
         streamed,
         usage,
+        ended: None,
     })
 }
 
@@ -445,6 +491,56 @@ pub async fn channel_load(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #2445: a stopped or failed turn the runtime remembered must hand its
+    /// id back, so the next send threads onto it and sees its ledger.
+    #[test]
+    fn ended_turn_threads_only_when_remembered() {
+        let cancelled = json!({
+            "id": "task-stop", "state": "cancelled",
+            "messages": [{ "role": "user", "parts": [{ "kind": "text", "text": "go" }] }],
+            "usage": { "remembered": true }
+        });
+        assert_eq!(
+            finished_turn(&cancelled),
+            Finished::Ended {
+                cause: "agent task cancelled".into(),
+                thread: Some("task-stop".into())
+            }
+        );
+        let failed = json!({
+            "id": "task-f", "state": "failed",
+            "error": { "message": "tool call denied: timed out" },
+            "messages": [], "usage": { "remembered": true }
+        });
+        assert_eq!(
+            finished_turn(&failed),
+            Finished::Ended {
+                cause: "tool call denied: timed out".into(),
+                thread: Some("task-f".into())
+            }
+        );
+        // An older runtime never stored it: threading there would blank history.
+        let old = json!({ "id": "task-o", "state": "cancelled", "messages": [] });
+        assert_eq!(
+            finished_turn(&old),
+            Finished::Ended {
+                cause: "agent task cancelled".into(),
+                thread: None
+            }
+        );
+    }
+
+    #[test]
+    fn completed_turn_is_a_reply() {
+        let done = json!({
+            "id": "task-ok", "state": "completed",
+            "messages": [{ "role": "agent", "parts": [{ "kind": "text", "text": "hi" }] }]
+        });
+        assert_eq!(finished_turn(&done), Finished::Reply("hi".into()));
+        let empty = json!({ "id": "task-e", "state": "completed", "messages": [] });
+        assert_eq!(finished_turn(&empty), Finished::Reply(String::new()));
+    }
 
     #[test]
     fn registry_set_get_clear() {

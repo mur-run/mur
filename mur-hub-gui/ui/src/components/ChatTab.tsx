@@ -64,11 +64,22 @@ export function buildStoppedMessage(partial: string): ChatMsg {
   return { role: "agent", text: partial, stopped: true };
 }
 
-interface ChatReply {
+export interface ChatReply {
   reply: string;
   task_id: string;
   streamed: boolean;
   usage?: TurnUsage;
+  /** Set when the turn ended without a reply (stopped, failed, approval
+   *  timed out): the runtime's cause. `task_id` is then the ended turn's id
+   *  only if the runtime remembered it, else empty. */
+  ended?: string;
+}
+
+/** The task id the next send threads onto (`contextTaskId`). An ended turn
+ *  the runtime remembered counts too, so the next turn sees its ledger
+ *  (#2445); an empty id keeps the previous thread. */
+export function nextContextTaskId(current: string | null, res: ChatReply): string | null {
+  return res.task_id || current;
 }
 
 interface ChatDelta {
@@ -328,10 +339,14 @@ export function ChatTab({ agentName, displayName, aboveCompose, channelId }: Pro
         contextTaskId: taskIdRef.current,
         channelId: channelId ?? null,
       });
-      taskIdRef.current = res.task_id || taskIdRef.current;
+      taskIdRef.current = nextContextTaskId(taskIdRef.current, res);
       // If Stop already committed the partial reply, don't append again.
       if (!stoppedRef.current) {
-        setMessages((m) => [...m, { role: "agent", text: res.reply, ...usageFields(res.usage) }]);
+        const msg: ChatMsg =
+          res.ended !== undefined
+            ? { role: "error", text: res.ended.split("\n")[0].slice(0, 200) }
+            : { role: "agent", text: res.reply, ...usageFields(res.usage) };
+        setMessages((m) => [...m, msg]);
       }
     } catch (e) {
       // A stopped turn resolves as a Cancelled result, sometimes via the error
