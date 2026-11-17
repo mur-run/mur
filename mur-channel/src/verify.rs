@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use mur_common::channel::{ChannelActor, ChannelEvent};
 
+pub mod human;
+
 /// The channel's router/owner agent — the trusted WRITER that signs the events
 /// appended to workflow/HITL channels (v3d). The concierge `"mur"` owns these
 /// channels; its on-disk identity (`<home>/agents/mur/`) signs `HitlRequest`/
@@ -32,12 +34,26 @@ pub fn actor_key_dir(mur_home: &Path, actor: &ChannelActor) -> Option<PathBuf> {
 /// Resolve the pubkey that should have signed `actor`'s events. `None` when
 /// the key cannot be read, or when the actor id is not a valid agent name
 /// (see [`actor_key_dir`]).
+///
+/// A `Human` actor that names its key (at-mention phase 2, D-4) resolves on
+/// the local human chain instead, strictly: see [`human::resolve_human_pubkey`].
+/// A keyless `Human` is still the router, as before phase 2.
 pub fn actor_pubkey(
     mur_home: &Path,
     actor: &ChannelActor,
     key_version: Option<u32>,
 ) -> Option<[u8; 32]> {
+    if let ChannelActor::Human { key: Some(key), .. } = actor {
+        return human::resolve_human_pubkey(mur_home, key, key_version);
+    }
     crate::sign::resolve_writer_pubkey(&actor_key_dir(mur_home, actor)?, key_version)
+}
+
+/// The router's key at `key_version`, whatever the event's actor says. For
+/// checks whose question is "did the router write this" — they must not
+/// follow `actor_pubkey` onto the human chain when an actor names a key.
+pub fn router_pubkey(mur_home: &Path, key_version: Option<u32>) -> Option<[u8; 32]> {
+    crate::sign::resolve_writer_pubkey(&mur_home.join("agents").join(ROUTER_AGENT), key_version)
 }
 
 /// True if `ev` verifies against its actor's key (present sig must verify;

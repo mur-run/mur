@@ -30,7 +30,7 @@ pub fn is_router_signed(mur_home: &Path, channel_id: &str, ev: &ChannelEvent) ->
     if matches!(ev.actor, ChannelActor::Agent { .. }) || ev.sig.is_none() {
         return false;
     }
-    crate::channel_verify::actor_pubkey(mur_home, &ev.actor, ev.key_version)
+    mur_channel::verify::router_pubkey(mur_home, ev.key_version)
         .is_some_and(|pk| mur_channel::sign::verify_one(channel_id, ev, &pk, true))
 }
 
@@ -153,6 +153,44 @@ mod tests {
                 "{actor:?}"
             );
         }
+    }
+
+    /// B2: `is_router_signed` asks only "did the router write this". A
+    /// `Human` actor that names a key must not move the check onto the human
+    /// chain: the router's signature still passes, a human-key signature does
+    /// not (that is C3's question, not this one's).
+    #[test]
+    fn is_router_signed_unchanged_for_human_actor() {
+        let tmp = TempDir::new().unwrap();
+        let router = crate::channel_writer::plant_writer_identity(tmp.path());
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        let human = AgentIdentity::generate();
+        let actor = ChannelActor::local_human_with_key(human.pubkey_text());
+        let by_router = svc
+            .append_signed(
+                &ch.id,
+                &router,
+                0,
+                actor.clone(),
+                EventKind::HitlResponse,
+                response("h1"),
+                None,
+            )
+            .unwrap();
+        assert!(is_router_signed(tmp.path(), &ch.id, &by_router));
+        let by_human = svc
+            .append_signed(
+                &ch.id,
+                &human,
+                0,
+                actor,
+                EventKind::HitlResponse,
+                response("h2"),
+                None,
+            )
+            .unwrap();
+        assert!(!is_router_signed(tmp.path(), &ch.id, &by_human));
     }
 
     /// A human answer the router signed for one channel does not carry over
