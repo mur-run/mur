@@ -83,7 +83,9 @@ async fn the_dedicated_key_signs_from_the_private_agent_and_leaves_the_users() {
         eprintln!("SKIP private_agent: sshd not found");
         return;
     };
-    let rig = Rig::start(&sshd);
+    let Some(rig) = Rig::start(&sshd, "private_agent") else {
+        return;
+    };
     let host_fp = fp_of(&rig.host_key);
 
     // The dedicated key, generated where boot looks for it. The private socket

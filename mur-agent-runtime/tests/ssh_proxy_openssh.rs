@@ -40,7 +40,9 @@ async fn real_openssh_login_is_signed_only_when_approved() {
         eprintln!("SKIP real_openssh_login: sshd not found");
         return;
     };
-    let rig = Rig::start(&sshd);
+    let Some(rig) = Rig::start(&sshd, "real_openssh_login") else {
+        return;
+    };
     let (key_fp, host_fp) = (fp_of(&rig.user_key), fp_of(&rig.host_key));
 
     // Allowed key, allowed host, approved through the production gate B:
