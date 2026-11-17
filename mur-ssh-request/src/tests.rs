@@ -383,3 +383,27 @@ fn swapping_the_dir_for_a_link_after_it_is_pinned_reaches_nothing_outside() {
     assert!(read_pending(home.path(), now()).is_empty());
     assert!(mur_common::pinned_dir::PinnedDir::open(&dir(home.path())).is_err());
 }
+
+#[test]
+fn a_request_dated_past_the_skew_allowance_is_dropped() {
+    let home = tempfile::tempdir().unwrap();
+    write(
+        home.path(),
+        &req(
+            "future.example",
+            now() + Duration::seconds(MAX_FUTURE_SKEW_SECS + 1),
+        ),
+    )
+    .unwrap();
+    write(
+        home.path(),
+        &req(
+            "skewed.example",
+            now() + Duration::seconds(MAX_FUTURE_SKEW_SECS),
+        ),
+    )
+    .unwrap();
+    let p = read_pending(home.path(), now());
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].target.host(), "skewed.example");
+}

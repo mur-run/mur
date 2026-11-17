@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 
 use super::{
-    EXPIRY_SECS, MAX_FILE_BYTES, MAX_PENDING, REQUESTS_DIR, RequestHost, SCHEMA, SshRequest,
-    sanitize_reason, validate_user,
+    EXPIRY_SECS, MAX_FILE_BYTES, MAX_FUTURE_SKEW_SECS, MAX_PENDING, REQUESTS_DIR, RequestHost,
+    SCHEMA, SshRequest, sanitize_reason, validate_user,
 };
 use mur_common::pinned_dir::PinnedDir;
 
@@ -108,7 +108,10 @@ fn read_one(dir: &PinnedDir, name: &str, now: DateTime<Utc>) -> Option<PendingRe
     if let Some(u) = &req.user {
         validate_user(u).ok()?;
     }
-    if now.signed_duration_since(req.requested_at) > chrono::Duration::seconds(EXPIRY_SECS) {
+    let age = now.signed_duration_since(req.requested_at);
+    if age > chrono::Duration::seconds(EXPIRY_SECS)
+        || -age > chrono::Duration::seconds(MAX_FUTURE_SKEW_SECS)
+    {
         return None;
     }
     let reason = sanitize_reason(&req.reason);
