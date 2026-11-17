@@ -72,6 +72,10 @@ mod slash_cmds;
 mod ssh_card;
 mod step;
 pub(crate) mod stream;
+// #2445: the Hub threads an ended turn by the same rule murmur does. Consumed
+// by mur-hub-gui through the lib; the `mur` bin uses them via `stream::`.
+#[allow(unused_imports)]
+pub use stream::{remembered_task_id, task_outcome};
 mod stream_handler;
 mod suggest;
 mod term;

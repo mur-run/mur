@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { newTaskId, buildStoppedMessage, channelEventsToMessages } from "./ChatTab";
+import { newTaskId, buildStoppedMessage, channelEventsToMessages, nextContextTaskId } from "./ChatTab";
 
 describe("newTaskId", () => {
   it("produces a unique, task-prefixed id each call", () => {
@@ -49,5 +49,21 @@ describe("channelEventsToMessages", () => {
       { ...base, seq: 0, actor: { kind: "human", name: "david" }, kind: "ask", payload: { to: "pm", question: "status?" } },
     ]);
     expect(msgs).toEqual([{ role: "consult", text: "? → pm: status?" }]);
+  });
+});
+
+describe("nextContextTaskId (#2445)", () => {
+  it("threads onto a completed turn", () => {
+    expect(nextContextTaskId("task-a", { reply: "ok", task_id: "task-b", streamed: true })).toBe("task-b");
+  });
+  it("threads onto a stopped turn the runtime remembered", () => {
+    expect(
+      nextContextTaskId("task-a", { reply: "", task_id: "task-stop", streamed: true, ended: "agent task cancelled" }),
+    ).toBe("task-stop");
+  });
+  it("keeps the old thread when the runtime did not remember the ended turn", () => {
+    expect(
+      nextContextTaskId("task-a", { reply: "", task_id: "", streamed: true, ended: "agent task failed" }),
+    ).toBe("task-a");
   });
 });
