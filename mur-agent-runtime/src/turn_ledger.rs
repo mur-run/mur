@@ -277,6 +277,10 @@ pub struct TurnLedger {
     /// Promote failed, so the track was left on disk for review. The path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_kept: Option<String>,
+    /// Paths the reply quoted under a turn-scoped dir, which is reclaimed
+    /// when the turn ends (#2441). Set by `settle`; additive on the wire.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ephemeral_paths: Vec<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -295,6 +299,7 @@ impl Default for TurnLedger {
             claims_external_state: false,
             files_changed: None,
             track_kept: None,
+            ephemeral_paths: vec![],
         }
     }
 }
@@ -427,6 +432,7 @@ impl TurnLedger {
     pub fn warrants_settlement(&self) -> bool {
         self.files_changed.as_ref().is_some_and(|f| !f.is_empty())
             || self.track_kept.is_some()
+            || !self.ephemeral_paths.is_empty()
             || !self.changed().is_empty()
             || !self.blocked().is_empty()
             || !self.running().is_empty()
@@ -567,6 +573,10 @@ const CHANGED_SHOWN: usize = 6;
 pub const UNVERIFIED_ROW: &str =
     "  ⚠ unverified  no tool ran this turn — external state claims above were not checked\n";
 
+/// Header row for reply paths under a turn-scoped dir (#2441). `⚠`: the
+/// path works now and is gone later, a warning rather than a failure.
+pub const EPHEMERAL_ROW: &str = "  ⚠ ephemeral  path(s) above are reclaimed when this turn ends — copy to ~/.mur/artifacts/ before using\n";
+
 /// Render the settlement card.
 ///
 /// The runtime draws this, not the model. Two reasons: the model would spend
@@ -698,6 +708,13 @@ pub fn render(ledger: &TurnLedger) -> String {
             if !a.target.is_empty() && a.target != tool && !why.contains(a.target.as_str()) {
                 out.push_str(&format!("      {}\n", a.target));
             }
+        }
+    }
+
+    if !ledger.ephemeral_paths.is_empty() {
+        out.push_str(EPHEMERAL_ROW);
+        for p in &ledger.ephemeral_paths {
+            out.push_str(&format!("      {p}\n"));
         }
     }
 

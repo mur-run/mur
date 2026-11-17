@@ -385,6 +385,23 @@ fn a_zero_tool_chat_reply_carries_no_card() {
     assert!(!ledger.unverified_claim());
 }
 
+/// #2441: the reply hands over a binary under the per-turn target dir. The
+/// card says it will be gone, through the same `settle` every turn takes.
+#[test]
+fn a_reply_quoting_a_turn_target_path_carries_the_ephemeral_row() {
+    let reply = settle(
+        "跑這個：`M=/p/mur/target/turns/turn-01a1e6e2/debug/mur`".into(),
+        &crate::turn_ledger::TurnLedger::default(),
+    );
+    let text = text_of(&reply);
+    assert!(text.contains("⚠ ephemeral"), "{text}");
+    let ledger = ledger_of(&reply).expect("ledger part");
+    assert_eq!(
+        ledger.ephemeral_paths,
+        vec!["/p/mur/target/turns/turn-01a1e6e2/debug/mur"]
+    );
+}
+
 #[test]
 fn conversation_survives_a_restart() {
     use crate::llm::RichMessage;

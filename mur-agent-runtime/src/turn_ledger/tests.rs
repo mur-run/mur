@@ -643,3 +643,30 @@ fn an_empty_ledger_still_says_nothing_ran() {
     let card = render(&TurnLedger::default());
     assert!(card.contains("nothing ran"), "{card}");
 }
+
+#[test]
+fn a_reply_quoting_a_turn_path_warrants_the_ephemeral_row() {
+    // #2441: the reply ran nothing else worth a card, but handed over a
+    // binary under the per-turn target dir.
+    let mut l = TurnLedger::default();
+    l.record(act("bash", "cargo build", Outcome::Ok));
+    assert!(!l.warrants_settlement());
+    l.ephemeral_paths = vec!["/p/target/turns/turn-1a/debug/mur".into()];
+    assert!(l.warrants_settlement());
+    let card = render(&l);
+    assert!(card.contains(EPHEMERAL_ROW.trim_end()), "{card}");
+    assert!(
+        card.contains("      /p/target/turns/turn-1a/debug/mur"),
+        "{card}"
+    );
+}
+
+#[test]
+fn ephemeral_paths_are_additive_on_the_wire() {
+    let s = serde_json::to_string(&TurnLedger::default()).unwrap();
+    assert!(!s.contains("ephemeral_paths"), "{s}");
+    let old =
+        r#"{"actions":[],"stop":"end_turn","iterations":0,"input_tokens":0,"output_tokens":0}"#;
+    let l: TurnLedger = serde_json::from_str(old).unwrap();
+    assert!(l.ephemeral_paths.is_empty());
+}
