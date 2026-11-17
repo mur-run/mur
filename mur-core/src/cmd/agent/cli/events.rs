@@ -686,10 +686,13 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                             // older `last_sent` stranded stale text in the box
                             // that no later turn cleared (the "leftover
                             // steering line" bug).
+                            // The bubble is withdrawn only when its text
+                            // actually went back into the composer (#2442).
                             if app.input_text().is_empty()
                                 && let Some(text) = app.last_sent.clone()
                             {
                                 app.set_input(&text);
+                                app.withdraw_cancelled_turn();
                             }
                             app.push_system("cancelled — message restored");
                             app.last_esc_at = None;

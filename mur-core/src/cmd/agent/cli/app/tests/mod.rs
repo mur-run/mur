@@ -12,3 +12,4 @@ mod session_cost_tests;
 mod state;
 mod step_app_tests;
 mod theme_tests;
+mod withdraw_tests;

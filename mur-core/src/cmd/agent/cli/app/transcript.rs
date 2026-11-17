@@ -217,6 +217,44 @@ impl App {
         self.turn_started = None;
     }
 
+    /// Take back a turn ESC cancelled before the runtime produced anything
+    /// (#2442): its text is going back into the composer, so leaving the
+    /// User bubble and the `(cancelled)` placeholder on screen would show the
+    /// message twice once it is resent. A turn that streamed text, ran a step
+    /// or raised an approval stays — it is real history.
+    ///
+    /// Inline mode may already have flushed the bubble into native
+    /// scrollback, which cannot be edited in place; that case rewinds the
+    /// flush cursor and asks for the same purge-and-replay `/clear` uses.
+    /// Returns whether anything was withdrawn.
+    pub fn withdraw_cancelled_turn(&mut self) -> bool {
+        if self.turn_produced_output || self.streaming {
+            return false;
+        }
+        let Some(bubble) = self.messages.iter().rposition(|m| m.role == Role::User) else {
+            return false;
+        };
+        let mut i = self.messages.len();
+        while i > bubble + 1 {
+            i -= 1;
+            let m = &self.messages[i];
+            if m.role == Role::Agent && m.step.is_none() {
+                self.messages.remove(i);
+            }
+        }
+        self.messages.remove(bubble);
+        if bubble < self.flushed_upto {
+            self.flushed_upto = 0;
+            self.flushed_bytes = 0;
+            self.flushed_raw = false;
+            self.wants_screen_wipe = true;
+        } else {
+            self.flushed_upto = self.flushed_upto.min(self.messages.len());
+        }
+        self.scroll_back = 0;
+        true
+    }
+
     /// Freeze the current streaming text segment (or drop it if empty) and push
     /// a new running tool-call card.
     pub fn push_step_started(&mut self, step_id: String, name: String, args: serde_json::Value) {
