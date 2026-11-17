@@ -20,14 +20,47 @@ use chrono::{DateTime, Local, Utc};
 use mur_channel::ChannelService;
 use mur_common::agent::ScheduleEntry;
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
+use sha2::{Digest, Sha256};
 use tracing::{info, warn};
+
+/// Identity of one entry, from everything that makes it a different reminder.
+///
+/// The cron alone is not one: `schedule add` takes any number of entries with
+/// the same expression and different messages, and keying on it let one
+/// reminder's firing or notice silence another due the same minute. A content
+/// hash rather than a stored id, because the scheduler cannot write the
+/// profile to mint one, and identical entries are one reminder anyway.
+pub(super) fn entry_id(entry: &ScheduleEntry) -> String {
+    let mut h = Sha256::new();
+    for field in [
+        entry.cron.as_str(),
+        entry.message.as_str(),
+        entry.sends_to.as_deref().unwrap_or_default(),
+        entry.not_after.as_deref().unwrap_or_default(),
+    ] {
+        // Length-prefixed, so ("ab", "c") and ("a", "bc") stay distinct.
+        h.update((field.len() as u64).to_le_bytes());
+        h.update(field.as_bytes());
+    }
+    hex::encode(&h.finalize()[..ENTRY_ID_BYTES])
+}
+
+/// 64 bits: collisions need two entries on one agent, not a public namespace.
+const ENTRY_ID_BYTES: usize = 8;
+
+/// Idempotency key of a completed firing's reply.
+pub(super) fn reply_key(task_id: &str, entry: &ScheduleEntry) -> String {
+    format!("sched:{task_id}:{}#{}", entry.cron, entry_id(entry))
+}
 
 /// Idempotency key of the notice for one entry's one firing. Stable across
 /// restarts, so the channel's own dedup makes the notice exactly-once.
-pub(super) fn missed_key(cron: &str, bound: DateTime<Local>) -> String {
+pub(super) fn missed_key(entry: &ScheduleEntry, bound: DateTime<Local>) -> String {
     // UTC, so a change of the machine's zone cannot mint a second key.
     format!(
-        "sched-missed:{cron}:{}",
+        "sched-missed:{}#{}:{}",
+        entry.cron,
+        entry_id(entry),
         bound.with_timezone(&Utc).to_rfc3339()
     )
 }
@@ -38,17 +71,26 @@ pub(super) fn missed_key(cron: &str, bound: DateTime<Local>) -> String {
 /// The `ts >= bound` guard matters because cron has no year: the same
 /// expression may have fired in an earlier year, and that reply says nothing
 /// about this one.
+///
+/// A reply keyed by the bare cron predates entry ids and still counts. It
+/// cannot say which same-minute entry fired, but treating it as unaccounted
+/// would raise a false "missed" for every reminder that fired before upgrade.
 pub(super) fn already_accounted(
     events: &[ChannelEvent],
-    cron: &str,
+    entry: &ScheduleEntry,
     bound: DateTime<Local>,
 ) -> bool {
-    let notice = missed_key(cron, bound);
-    let reply_suffix = format!(":{cron}");
+    let notice = missed_key(entry, bound);
+    let reply_suffix = format!(":{}#{}", entry.cron, entry_id(entry));
+    let legacy_suffix = format!(":{}", entry.cron);
     let bound_utc = bound.with_timezone(&Utc);
     events.iter().any(|e| match e.idempotency_key.as_deref() {
         Some(k) if k == notice => true,
-        Some(k) => k.starts_with("sched:") && k.ends_with(&reply_suffix) && e.ts >= bound_utc,
+        Some(k) => {
+            k.starts_with("sched:")
+                && (k.ends_with(&reply_suffix) || k.ends_with(&legacy_suffix))
+                && e.ts >= bound_utc
+        }
         None => false,
     })
 }
@@ -78,7 +120,7 @@ pub(super) async fn report_missed(
     let post = || -> Result<bool> {
         let svc = ChannelService::open(&sink.mur_home)?;
         let channel_id = schedule_channel(&svc, &sink.mur_home, &sink.agent)?;
-        if already_accounted(&svc.load_events(&channel_id)?, &entry.cron, bound) {
+        if already_accounted(&svc.load_events(&channel_id)?, entry, bound) {
             return Ok(false);
         }
         svc.append_signed(
@@ -90,7 +132,7 @@ pub(super) async fn report_missed(
             },
             EventKind::Message,
             serde_json::json!({ "text": text }),
-            Some(missed_key(&entry.cron, bound)),
+            Some(missed_key(entry, bound)),
         )?;
         Ok(true)
     };

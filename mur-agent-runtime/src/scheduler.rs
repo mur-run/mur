@@ -202,7 +202,8 @@ fn schedule_channel(svc: &ChannelService, mur_home: &Path, agent: &str) -> Resul
 ///
 /// Best-effort, like the `channel/delegate` write it mirrors: a schedule that
 /// fired must not be reported as failed because the channel store was busy.
-async fn record_reply(sink: &ScheduleSink, task: &mur_common::a2a::Task, cron: &str) {
+async fn record_reply(sink: &ScheduleSink, task: &mur_common::a2a::Task, entry: &ScheduleEntry) {
+    let cron = entry.cron.as_str();
     let text = crate::protocol::methods::channel_delegate::reply_text_of(task);
     if text.trim().is_empty() {
         return;
@@ -218,7 +219,7 @@ async fn record_reply(sink: &ScheduleSink, task: &mur_common::a2a::Task, cron: &
             sink.key_version,
             &text,
             &task.id,
-            Some(format!("sched:{}:{}", task.id, cron)),
+            Some(missed::reply_key(&task.id, entry)),
         )
     };
     if let Err(e) = write() {
@@ -430,7 +431,7 @@ async fn run_entry(
             // fired on the second and reached nobody.
             TaskOutcome::Completed(t) => {
                 if let Some(sink) = sink.as_deref() {
-                    record_reply(sink, t, &entry.cron).await;
+                    record_reply(sink, t, &entry).await;
                 }
             }
             TaskOutcome::Cancelled(_) => {}

@@ -108,7 +108,7 @@ async fn a_one_off_that_did_fire_is_not_reported_as_missed() {
         1,
         "done",
         "t1",
-        Some(format!("sched:t1:{CRON}")),
+        Some(reply_key("t1", &once(PAST_BOUND))),
     )
     .unwrap();
 
@@ -135,7 +135,7 @@ fn a_reply_from_an_earlier_year_does_not_account_for_this_one() {
         "idempotency_key": format!("sched:t0:{CRON}"),
     }))
     .unwrap();
-    assert!(!already_accounted(&[ev], CRON, bound));
+    assert!(!already_accounted(&[ev], &once(PAST_BOUND), bound));
 }
 
 #[test]
@@ -152,5 +152,85 @@ fn a_reply_for_a_different_entry_does_not_count() {
         "idempotency_key": "sched:t0:0 9 * * 1",
     }))
     .unwrap();
-    assert!(!already_accounted(&[ev], CRON, bound));
+    assert!(!already_accounted(&[ev], &once(PAST_BOUND), bound));
+}
+
+fn once_saying(message: &str) -> ScheduleEntry {
+    ScheduleEntry {
+        message: message.into(),
+        ..once(PAST_BOUND)
+    }
+}
+
+/// Two one-offs due at the same minute are two reminders: missing both
+/// must raise two notices, each with its own text.
+#[tokio::test]
+async fn two_reminders_due_together_are_each_reported() {
+    let tmp = tempfile::tempdir().unwrap();
+    start(tmp.path(), once_saying("pay invoice")).await;
+    start(tmp.path(), once_saying("call dentist")).await;
+
+    let got = notices(tmp.path());
+    assert_eq!(got.len(), 2, "one notice per reminder, got {got:?}");
+    let texts: Vec<&str> = got
+        .iter()
+        .map(|e| e.payload["text"].as_str().unwrap())
+        .collect();
+    assert!(texts.iter().any(|t| t.contains("pay invoice")), "{texts:?}");
+    assert!(
+        texts.iter().any(|t| t.contains("call dentist")),
+        "{texts:?}"
+    );
+}
+
+/// A firing of one reminder says nothing about another sharing its minute.
+#[tokio::test]
+async fn a_reply_for_one_reminder_does_not_cover_its_sibling() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = sink(tmp.path());
+    let fired = once_saying("pay invoice");
+    crate::protocol::methods::channel_delegate::append_self_reply(
+        tmp.path(),
+        &schedule_channel(
+            &ChannelService::open(tmp.path()).unwrap(),
+            tmp.path(),
+            "probe",
+        )
+        .unwrap(),
+        "probe",
+        &s.identity,
+        1,
+        "done",
+        "t1",
+        Some(reply_key("t1", &fired)),
+    )
+    .unwrap();
+
+    start(tmp.path(), fired).await;
+    start(tmp.path(), once_saying("call dentist")).await;
+
+    let got = notices(tmp.path());
+    assert_eq!(got.len(), 1, "only the unfired one, got {got:?}");
+    let text = got[0].payload["text"].as_str().unwrap();
+    assert!(text.contains("call dentist"), "{text}");
+}
+
+/// Replies recorded before entries carried an identity end in the bare
+/// cron. They still count, so upgrading never raises a notice for a
+/// reminder that did fire.
+#[test]
+fn a_reply_in_the_old_key_format_still_counts() {
+    let bound = DateTime::parse_from_rfc3339(PAST_BOUND)
+        .unwrap()
+        .with_timezone(&Local);
+    let ev: ChannelEvent = serde_json::from_value(serde_json::json!({
+        "seq": 0,
+        "ts": "2030-01-01T00:00:00Z",
+        "actor": {"kind": "agent", "id": "probe"},
+        "kind": "message",
+        "payload": {},
+        "idempotency_key": format!("sched:t0:{CRON}"),
+    }))
+    .unwrap();
+    assert!(already_accounted(&[ev], &once(PAST_BOUND), bound));
 }
