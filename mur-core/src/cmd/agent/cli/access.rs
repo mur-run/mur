@@ -360,6 +360,13 @@ mod tests {
         }
         // The credential store is refused on the read side too.
         assert!(seal_refusal(&mur_home.join("secrets"), &agent_home).is_some());
+        // The entitlement pins pass the heads check and stay readable, but the
+        // launch chain's write partition drops them — only `partition_grants`
+        // in `seal_refusal` catches this, so pin it here.
+        let pins = mur_home.join(mur_common::entitlements_pin::PINS_DIR);
+        std::fs::create_dir_all(&pins).unwrap();
+        assert!(write_grant_refusal(&pins, &mur_home).is_none());
+        assert!(seal_refusal(&pins, &agent_home).is_some());
         // A dir under the MUR home that reaches nothing protected is fine.
         let ok = mur_home.join("artifacts/mur/run");
         std::fs::create_dir_all(&ok).unwrap();
