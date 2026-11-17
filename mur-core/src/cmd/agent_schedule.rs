@@ -165,6 +165,34 @@ pub fn cmd_schedule_remove(name: &str, index: usize) -> Result<()> {
     Ok(())
 }
 
+/// Remove every one-off entry whose date has passed.
+///
+/// The runtime retires a spent one-off but cannot delete it — it runs
+/// sandboxed and may not write its own profile — so this is the host-side
+/// sweep (#2437). Recurring entries and unreadable bounds are never touched.
+pub fn cmd_schedule_prune(name: &str) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    let now = chrono::Local::now();
+    let (expired, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut profile.lifecycle.schedule)
+        .into_iter()
+        .partition(|e| crate::schedule_status::is_expired(e.not_after.as_deref(), now));
+    profile.lifecycle.schedule = kept;
+    if expired.is_empty() {
+        println!("no expired one-off entries for agent '{name}'");
+        return Ok(());
+    }
+    save_profile(&path, &mut profile)?;
+    for e in &expired {
+        println!("removed expired entry: {:?}", e.cron);
+    }
+    println!(
+        "pruned {} entr{}",
+        expired.len(),
+        if expired.len() == 1 { "y" } else { "ies" }
+    );
+    Ok(())
+}
+
 /// Print the next `count` fire times for each schedule entry.
 pub fn cmd_schedule_next(name: &str, count: usize) -> Result<()> {
     let entries = read_schedule(name)?;

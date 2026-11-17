@@ -1270,6 +1270,11 @@ Agent** wizard offers the same catalog as a source.
   field, so a request for one morning can only be written as an annual
   recurrence, and without a bound it would arrive again every September. `accept`
   turns it into a real entry on the real scheduler, bound included.
+  Once its date has passed, `mur agent schedule list` marks the entry
+  `(expired)` and says it is past its date — not that it fired, which `list`
+  cannot know — and `mur agent schedule prune <agent>` removes those spent
+  one-offs (the agent itself cannot: it may not write its own profile).
+  Recurring entries and unreadable bounds are never pruned.
 - **An outstanding-work list that ages and checks itself** — agents record what
   they left undone, and that list used to only grow: it once carried items about
   a release six versions old next to a breakfast reminder three weeks past. A
@@ -1450,7 +1455,7 @@ mur
 ├── init / doctor / update / stats / verify
 ├── agent        create · start · stop · restart (--no-hitl · --net · --full-perms) · remove · cli · send ('@agent#N' continues conversation N) · card · dial · who · limits ·
 │                export · install · install-service · addon · companion · voice · pair ·
-│                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal · intent-check) · ssh (allow · revoke · list) · secret · hitl (list · forget · pending · approve · deny) ·
+│                schedule (add · list · prune · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal · intent-check) · ssh (allow · revoke · list) · secret · hitl (list · forget · pending · approve · deny) ·
 │                fallback · smart · routing · effort · trash · rollback · turn (list · undo) … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run [--run-id] · review · review-setup · review-resume · prune-reviews · set-loop · limits · send · jobs [--since] · stop · start · pause · resume [--detach]   (squads of agents over a shared channel)

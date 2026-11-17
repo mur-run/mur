@@ -5,7 +5,7 @@
 
 use mur_core::cmd::agent_schedule::{
     cmd_schedule_accept, cmd_schedule_add, cmd_schedule_list, cmd_schedule_next,
-    cmd_schedule_remove, read_schedule,
+    cmd_schedule_prune, cmd_schedule_remove, read_schedule,
 };
 use std::fs;
 use tempfile::TempDir;
@@ -167,4 +167,44 @@ fn accept_carries_the_one_shot_bound_onto_the_entry() {
         Some("2026-09-01T10:00:00+08:00"),
         "granting a proposal must grant what it said, bound included"
     );
+}
+
+/// `prune` takes only one-offs whose date has passed — never a recurring
+/// entry, never a one-off still to come (#2437).
+#[test]
+fn prune_removes_only_expired_one_offs() {
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    let tmp = setup("sched_prune");
+    envg.set_var("MUR_HOME", tmp.path());
+
+    cmd_schedule_add("sched_prune", "0 9 * * 1", "weekly", None, None).unwrap();
+    cmd_schedule_add(
+        "sched_prune",
+        "0 10 3 11 *",
+        "spent",
+        None,
+        Some("2000-11-03T10:00:00+00:00".into()),
+    )
+    .unwrap();
+    cmd_schedule_add(
+        "sched_prune",
+        "0 10 23 11 *",
+        "upcoming",
+        None,
+        Some("2999-11-23T10:00:00+00:00".into()),
+    )
+    .unwrap();
+
+    cmd_schedule_prune("sched_prune").unwrap();
+
+    let left: Vec<_> = read_schedule("sched_prune")
+        .unwrap()
+        .into_iter()
+        .map(|e| e.message)
+        .collect();
+    assert_eq!(left, ["weekly", "upcoming"]);
+
+    // A second pass has nothing to do and must not fail.
+    cmd_schedule_prune("sched_prune").unwrap();
+    assert_eq!(read_schedule("sched_prune").unwrap().len(), 2);
 }
