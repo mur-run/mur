@@ -13,11 +13,14 @@ use std::path::Path;
 /// belong. Guidance, not enforcement. The first bullet exists because the
 /// earlier wording ("never write into the working directory; the only
 /// exception is editing an existing file") sent an agent asked for a new
-/// `ci.yml` in the user's repo off to `~/.mur/artifacts` instead.
+/// `ci.yml` in the user's repo off to `~/.mur/artifacts` instead. The
+/// handover bullet exists because an agent quoted a binary under the per-turn
+/// `$CARGO_TARGET_DIR` as the thing to run, and it was reclaimed first (#2441).
 const OUTPUT_LOCATIONS_BASE: &str = "\n\n## Output locations\n\
 - Files that belong to the project in the working directory (source, config, CI definitions — new or existing) go in that project, where the user expects them.\n\
 - Knowledge objects (workflows, skills, notes): register with the real command so they land in ~/.mur and show up in MUR and the Hub — `mur skill install <path>` for a skill, `mur workflow new` for a workflow. Never leave the definition in a source tree.\n\
-- Run artifacts that are not part of any project (reports, quarantined files, scratch output): write to ~/.mur/artifacts/<your-agent-name>/<run>/, where <run> is a short timestamp or task label — never into a source tree.";
+- Run artifacts that are not part of any project (reports, quarantined files, scratch output): write to ~/.mur/artifacts/<your-agent-name>/<run>/, where <run> is a short timestamp or task label — never into a source tree.\n\
+- Anything you hand to the user to use after this turn (a binary to run, a report, any path quoted in your reply): copy or write it to ~/.mur/artifacts/<your-agent-name>/<run>/ and quote that path. Never hand over a path under a turn-scoped directory — `target/turns/turn-*`, `.worktrees/turn-*`, or the per-turn `$CARGO_TARGET_DIR` — because it is reclaimed after the turn ends.";
 
 /// The scratch-dir bullet, appended after the artifacts bullet. Deliberately
 /// does not claim "`/tmp` is not writable" — false for bash children on macOS.
@@ -120,6 +123,32 @@ mod tests {
         let with = static_sections(Some(p), &["GITEA_TOKEN".into()]);
         assert!(with.starts_with(&none));
         assert!(with.ends_with(&secrets_fragment(&["GITEA_TOKEN".into()]).unwrap()));
+    }
+
+    /// #2441: an agent handed the user a binary under
+    /// `target/turns/turn-*/debug/`, which was reclaimed before the user ran
+    /// it. The rule must name turn-scoped dirs as ephemeral and send anything
+    /// handed over to `~/.mur/artifacts/`, with or without a scratch dir.
+    #[test]
+    fn output_locations_marks_turn_dirs_ephemeral() {
+        for rule in [
+            output_locations_rule(None),
+            output_locations_rule(Some(Path::new("/home/u/.mur/tmp/w1"))),
+        ] {
+            let line = rule
+                .lines()
+                .find(|l| l.starts_with("- Anything you hand to the user"))
+                .unwrap_or_else(|| panic!("handover bullet missing: {rule}"));
+            for needle in [
+                "~/.mur/artifacts/",
+                "target/turns/turn-*",
+                ".worktrees/turn-*",
+                "$CARGO_TARGET_DIR",
+                "reclaimed",
+            ] {
+                assert!(line.contains(needle), "{needle} missing: {line}");
+            }
+        }
     }
 
     #[test]
