@@ -82,6 +82,23 @@ describe("channelEventsToMessages", () => {
       expect(msgs.map((m) => m.text)).toEqual(["foo", "bar"]);
     });
 
+    it("keeps a message whose retract the runtime refused", () => {
+      const refusal = (seq: number, target: number) =>
+        ({ ...base, seq, actor: { kind: "agent" as const, id: "mur" }, kind: "note",
+           payload: { retract_refused: { target_seq: target }, text: "kept" } });
+      const msgs = channelEventsToMessages([
+        human(0, "foo"), retract(1, 0), refusal(2, 0), human(3, "foo bar"),
+      ]);
+      expect(msgs.map((m) => m.text)).toEqual(["foo", "foo bar"]);
+    });
+
+    it("ignores a refusal written before the retract", () => {
+      const refusal = { ...base, seq: 1, actor: { kind: "agent" as const, id: "mur" }, kind: "note",
+        payload: { retract_refused: { target_seq: 0 } } };
+      const msgs = channelEventsToMessages([human(0, "foo"), refusal, retract(2, 0)]);
+      expect(msgs.map((m) => m.text)).toEqual([]);
+    });
+
     it("ignores a forward or self target", () => {
       const msgs = channelEventsToMessages([human(0, "a"), retract(1, 2), retract(2, 2), human(3, "b")]);
       expect(msgs.map((m) => m.text)).toEqual(["a", "b"]);

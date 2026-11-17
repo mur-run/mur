@@ -5,9 +5,15 @@
 //! by the same actor as the retract, lies before the retract, and nothing
 //! answered it: no `Agent{self}` `Message` and no non-repair `System` `Note`
 //! between the two. Anything else is ignored, never damage.
+//!
+//! A valid retract the runtime **refused** (the cancelled turn had already
+//! run tools, retract spec §4.3) is void: `Agent{self}` records the refusal
+//! as a `Note` carrying [`RetractRefusal`] after the retract, and every
+//! history reader then keeps the target, as the model does. Without that
+//! record the UI would hide a message the model still receives.
 use std::collections::{BTreeMap, BTreeSet};
 
-use mur_common::channel::{ChannelActor, ChannelEvent, EventKind, RetractPayload};
+use mur_common::channel::{ChannelActor, ChannelEvent, EventKind, RetractPayload, RetractRefusal};
 
 /// The retracts among `events` with `seq < before`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -16,32 +22,63 @@ pub struct RetractScan {
     pub targets: BTreeSet<u64>,
     /// Seqs of `Retract` events that withdraw nothing, for audit.
     pub ignored: Vec<u64>,
+    /// Targets of valid retracts the runtime refused (a refusal note below
+    /// `before`); kept in history, not in `targets` or `ignored`.
+    pub refused: BTreeSet<u64>,
 }
 
 /// Scan `events` (in seq order) for retracts below `before`.
 pub fn scan(events: &[ChannelEvent], agent: &str, before: u64) -> RetractScan {
     let by_seq: BTreeMap<u64, &ChannelEvent> = events.iter().map(|e| (e.seq, e)).collect();
     let mut out = RetractScan::default();
+    let mut first_retract: BTreeMap<u64, u64> = BTreeMap::new();
     for r in events
         .iter()
         .filter(|e| e.seq < before && e.kind == EventKind::Retract)
     {
         match valid_target(&by_seq, agent, r) {
             Some(t) => {
-                out.targets.insert(t);
+                first_retract.entry(t).or_insert(r.seq);
             }
             None => out.ignored.push(r.seq),
         }
     }
-    // A duplicate of an honoured retract withdraws nothing new, but it is
-    // not a refused one either.
+    // Once refused, every retract of that target is void: a later duplicate
+    // must not hide what the model was told it keeps.
+    for (t, first) in first_retract {
+        if refused_after(events, agent, first, t, before) {
+            out.refused.insert(t);
+        } else {
+            out.targets.insert(t);
+        }
+    }
+    // A duplicate of an honoured (or refused) retract withdraws nothing new,
+    // but it is not an invalid one either.
     out.ignored.retain(|seq| {
         !by_seq
             .get(seq)
             .and_then(|r| target_seq(r))
-            .is_some_and(|t| out.targets.contains(&t))
+            .is_some_and(|t| out.targets.contains(&t) || out.refused.contains(&t))
     });
     out
+}
+
+/// `Agent{agent}` recorded refusing the retract of `target` somewhere after
+/// its first valid retract (`retract_seq`) and below `before`.
+fn refused_after(
+    events: &[ChannelEvent],
+    agent: &str,
+    retract_seq: u64,
+    target: u64,
+    before: u64,
+) -> bool {
+    events.iter().any(|e| {
+        e.seq > retract_seq
+            && e.seq < before
+            && e.kind == EventKind::Note
+            && matches!(&e.actor, ChannelActor::Agent { id } if id == agent)
+            && RetractRefusal::from_payload(&e.payload).is_some_and(|r| r.target_seq == target)
+    })
 }
 
 fn target_seq(r: &ChannelEvent) -> Option<u64> {
@@ -225,6 +262,41 @@ mod tests {
         let s = scan(&evs, AGENT, u64::MAX);
         assert_eq!(targets(&s), vec![0]);
         assert!(s.ignored.is_empty());
+    }
+
+    fn refusal(seq: u64, by: &str, target: u64) -> ChannelEvent {
+        ev(
+            seq,
+            ChannelActor::Agent { id: by.into() },
+            EventKind::Note,
+            RetractRefusal { target_seq: target }.to_payload(),
+        )
+    }
+
+    #[test]
+    fn a_retract_the_runtime_refused_withdraws_nothing() {
+        let evs = [human(0), retract(1, 0), refusal(2, AGENT, 0), retract(3, 0)];
+        let s = scan(&evs, AGENT, u64::MAX);
+        assert!(s.targets.is_empty(), "{s:?}");
+        assert_eq!(s.refused.iter().copied().collect::<Vec<_>>(), vec![0]);
+        assert!(s.ignored.is_empty(), "a duplicate is not invalid: {s:?}");
+    }
+
+    #[test]
+    fn a_refusal_at_or_past_before_is_not_seen() {
+        let evs = [human(0), retract(1, 0), refusal(2, AGENT, 0)];
+        assert_eq!(targets(&scan(&evs, AGENT, 2)), vec![0]);
+    }
+
+    #[test]
+    fn a_refusal_by_another_agent_or_before_the_retract_is_ignored() {
+        let evs = [
+            human(0),
+            refusal(1, AGENT, 0),
+            retract(2, 0),
+            refusal(3, "qa", 0),
+        ];
+        assert_eq!(targets(&scan(&evs, AGENT, u64::MAX)), vec![0]);
     }
 
     #[test]

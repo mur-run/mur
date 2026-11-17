@@ -228,8 +228,10 @@ fn event_to_turn(ev: &ChannelEvent) -> TurnRecord {
 }
 
 /// Load a channel's turns for `App::load_history`. A message a valid
-/// `Retract` withdrew is skipped, and so is the `Retract` itself and any
-/// other non-turn kind (same rule the runtime projects with).
+/// `Retract` withdrew is skipped, and so is the `Retract` itself (same rule
+/// the runtime projects with). A retract the runtime refused withdraws
+/// nothing, and its refusal note replays as a `system` notice so the user
+/// sees why the message is still there.
 pub fn load(home: &Path, channel_id: &str, agent: &str) -> Result<Vec<TurnRecord>> {
     let svc = ChannelService::open(home)?;
     let events = svc.load_events(channel_id)?;
@@ -237,9 +239,21 @@ pub fn load(home: &Path, channel_id: &str, agent: &str) -> Result<Vec<TurnRecord
     Ok(events
         .iter()
         .filter(|e| e.kind != EventKind::Retract && !withdrawn.contains(&e.seq))
-        .map(event_to_turn)
+        .map(|e| {
+            let mut t = event_to_turn(e);
+            if e.kind == EventKind::Note
+                && mur_common::channel::RetractRefusal::from_payload(&e.payload).is_some()
+            {
+                t.role = REFUSAL_ROLE.to_string();
+            }
+            t
+        })
         .collect())
 }
+
+/// [`TurnRecord::role`] of a replayed retract-refusal note: a local notice,
+/// never an agent reply.
+pub const REFUSAL_ROLE: &str = "system";
 
 /// Newest channels that involve `agent`, newest-first.
 pub fn list_recent(home: &Path, agent: &str, limit: usize) -> Result<Vec<SessionInfo>> {

@@ -127,3 +127,54 @@ async fn replay_hides_the_withdrawn_message() {
     let texts: Vec<_> = turns.iter().map(|t| t.text.as_str()).collect();
     assert_eq!(texts, vec!["foo bar"]);
 }
+
+/// #2446 review: when the runtime refuses the retract (the turn had already
+/// run tools) it records that in the log; replay then keeps the message the
+/// model still receives, and shows the refusal as a local notice, never as
+/// an agent reply.
+#[tokio::test]
+async fn replay_keeps_a_message_whose_retract_the_runtime_refused() {
+    let home = tempfile::tempdir().unwrap();
+    let mut app = app_in(&home);
+    let (tx, _rx) = mpsc::channel(16);
+    send(&mut app, "foo", &tx).await;
+    let (id, seq) = app.pending_channel.clone().unwrap();
+    esc_twice(&mut app, &tx).await;
+    // What the runtime's gate appends when it refuses (§4.3).
+    let agent =
+        mur_common::identity::AgentIdentity::load(&home.path().join("agents").join("a")).unwrap();
+    mur_channel::ChannelService::open(home.path())
+        .unwrap()
+        .append_signed(
+            &id,
+            &agent,
+            1,
+            ChannelActor::Agent { id: "a".into() },
+            EventKind::Note,
+            mur_common::channel::RetractRefusal { target_seq: seq }.to_payload(),
+            Some(mur_common::channel::retract_refused_idempotency_key(seq)),
+        )
+        .unwrap();
+    app.clear_input();
+    send(&mut app, "foo bar", &tx).await;
+
+    let turns = persist::load(&app.home, &id, "a").unwrap();
+    let got: Vec<_> = turns
+        .iter()
+        .map(|t| (t.role.as_str(), t.text.as_str()))
+        .collect();
+    assert_eq!(got[0], ("user", "foo"), "{got:?}");
+    assert_eq!(got[1].0, persist::REFUSAL_ROLE, "{got:?}");
+    assert!(got[1].1.contains("already run tools"), "{got:?}");
+    assert_eq!(got[2], ("user", "foo bar"), "{got:?}");
+
+    let mut fresh = App::new(
+        home.path().to_path_buf(),
+        "a".into(),
+        Session::create(home.path(), "a").unwrap(),
+        &super::super::theme::ANSI,
+    );
+    fresh.load_history(turns);
+    let roles: Vec<_> = fresh.messages.iter().map(|m| m.role).collect();
+    assert_eq!(roles, vec![Role::User, Role::System, Role::User]);
+}

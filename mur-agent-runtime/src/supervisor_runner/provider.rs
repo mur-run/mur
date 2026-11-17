@@ -558,7 +558,8 @@ pub async fn build_provider_runner(
                     mur_home.clone(),
                     Some(agent_home.join("conversations")),
                     boot_cfg.mention.conversation_max_waiting,
-                ),
+                )
+                .with_retract_signer(identity.clone(), profile.inner.identity.key_version),
             system_prompt_with_memory.clone(),
             runtime_skills.clone(),
             skills_cfg.clone(),

@@ -72,6 +72,9 @@ pub(crate) struct ChannelConversationStore {
     budget_tokens: u64,
     /// Files left by earlier processes are swept once, on first write.
     swept: bool,
+    /// Retract targets the last `reconcile` refused (§4.3), for the caller
+    /// to record in the log; see [`Self::take_refused`].
+    refused: Vec<u64>,
 }
 
 impl Default for ChannelConversationStore {
@@ -90,6 +93,7 @@ impl ChannelConversationStore {
             dir: conversation_dir.map(|d| d.join(CHANNELS_SUBDIR)),
             budget_tokens: budget_tokens.max(1),
             swept: false,
+            refused: Vec::new(),
         }
     }
 
@@ -97,6 +101,13 @@ impl ChannelConversationStore {
     /// became known after the store was built).
     pub(crate) fn set_budget_tokens(&mut self, budget_tokens: u64) {
         self.budget_tokens = budget_tokens.max(1);
+    }
+
+    /// Retract targets the last [`Self::reconcile`] refused because their
+    /// turn ran tools. The caller records each in the log so history readers
+    /// keep showing what the model still sees.
+    pub(crate) fn take_refused(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.refused)
     }
 
     pub(crate) fn cache_state(&self, channel_id: &str) -> CacheState {
@@ -129,7 +140,7 @@ impl ChannelConversationStore {
         for seq in &a.ignored_retracts {
             tracing::info!(target: AUDIT, channel_id, seq, "retract ignored: withdraws nothing");
         }
-        apply_retracts(channel_id, &mut h.entries, &a.retracted);
+        self.refused = apply_retracts(channel_id, &mut h.entries, &a.retracted);
 
         let (mut entries, provisional): (Vec<Entry>, Vec<Entry>) =
             h.entries.into_iter().partition(|e| e.seq.is_some());
@@ -348,8 +359,9 @@ impl ChannelConversationStore {
 /// same seq). A turn whose ledger records no tool call is dropped whole. One
 /// that ran tools is refused: the user entry stays and its ledger is pinned
 /// to the user's seq, so the model keeps knowing what ran; the unconfirmed
-/// `turn ended:` reply is dropped as usual.
-fn apply_retracts(channel_id: &str, entries: &mut Vec<Entry>, retracted: &[u64]) {
+/// `turn ended:` reply is dropped as usual. Returns the refused seqs.
+fn apply_retracts(channel_id: &str, entries: &mut Vec<Entry>, retracted: &[u64]) -> Vec<u64> {
+    let mut refused = Vec::new();
     for &t in retracted {
         let Some(i) = entries
             .iter()
@@ -373,12 +385,14 @@ fn apply_retracts(channel_id: &str, entries: &mut Vec<Entry>, retracted: &[u64])
         if tail.iter().any(|e| e.seq.is_none()) {
             tracing::info!(target: AUDIT, channel_id, seq = t, "retract refused: turn {t} ran tools");
         }
+        refused.push(t);
         tail.retain(|e| matches!(e.message, RichMessage::TurnLedger { .. }));
         for e in &mut tail {
             e.seq = Some(t);
         }
         entries.splice(i + 1..i + 1, tail);
     }
+    refused
 }
 
 fn is_user_text(m: &RichMessage) -> bool {
@@ -473,6 +487,9 @@ pub(crate) struct ChannelConversations {
     pub(crate) mur_home: PathBuf,
     pub(crate) store: std::sync::Mutex<ChannelConversationStore>,
     pub(crate) locks: ConversationLocks,
+    /// Signs the refusal note (§4.3) as this agent; `None` = refusals are
+    /// audit-only (stub runners, tests that do not exercise it).
+    pub(crate) signer: Option<RefusalSigner>,
 }
 
 impl ChannelConversations {
@@ -489,6 +506,7 @@ impl ChannelConversations {
                 budget_tokens,
             )),
             locks: ConversationLocks::new(max_waiting),
+            signer: None,
         }
     }
 
@@ -496,5 +514,46 @@ impl ChannelConversations {
     /// (rotation chain head, else `identity.pub`).
     pub(crate) fn writer_pubkey(&self, agent: &str) -> Option<[u8; 32]> {
         mur_channel::sign::resolve_writer_pubkey(&self.mur_home.join("agents").join(agent), None)
+    }
+}
+
+/// Who signs the refusal note: this agent's identity and key version.
+pub(crate) type RefusalSigner = (Arc<mur_common::identity::AgentIdentity>, u32);
+
+/// Record each refused retract in the log as a signed `Agent{agent}` `Note`
+/// (retract spec §4.3), so replay and Hub keep the message the model still
+/// receives. Keyed per target: a refusal seen again on a later turn appends
+/// nothing. A failed append is audited, never fatal — the turn has its
+/// history either way.
+pub(crate) fn record_refusals(
+    mur_home: &Path,
+    signer: &RefusalSigner,
+    agent: &str,
+    channel_id: &str,
+    refused: &[u64],
+) {
+    use mur_common::channel::{
+        ChannelActor, EventKind, RetractRefusal, retract_refused_idempotency_key,
+    };
+    let svc = match mur_channel::ChannelService::open(mur_home) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(target: AUDIT, channel_id, "retract refusal not recorded: {e:#}");
+            return;
+        }
+    };
+    let (identity, kv) = signer;
+    for &t in refused {
+        if let Err(e) = svc.append_signed(
+            channel_id,
+            identity,
+            *kv,
+            ChannelActor::Agent { id: agent.into() },
+            EventKind::Note,
+            RetractRefusal { target_seq: t }.to_payload(),
+            Some(retract_refused_idempotency_key(t)),
+        ) {
+            tracing::warn!(target: AUDIT, channel_id, seq = t, "retract refusal not recorded: {e:#}");
+        }
     }
 }

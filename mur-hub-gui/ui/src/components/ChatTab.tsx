@@ -101,6 +101,9 @@ export interface ChannelEvent {
     question?: string;
     /** `retract` only: the withdrawn event's seq. */
     target_seq?: number;
+    /** Agent `note` only: the runtime refused that retract (the turn had
+     *  already run tools), so the model still sees the message. */
+    retract_refused?: { target_seq?: number };
   };
   idempotency_key?: string | null;
 }
@@ -123,7 +126,10 @@ export function consultLine(ev: ChannelEvent): ChatMsg | null {
  *  `message` by the same actor, and no agent `message` or system `note` lies
  *  between the two. Any agent's reply counts as an answer here (the Rust rule
  *  only counts the channel's own agent); erring that way keeps a message
- *  visible rather than hiding one the model still sees. */
+ *  visible rather than hiding one the model still sees. A retract the
+ *  runtime refused — an agent `note` carrying `retract_refused` for the same
+ *  target, after the retract — withdraws nothing: the model kept it. Any
+ *  agent's refusal counts, for the same reason. */
 export function withdrawnSeqs(events: ChannelEvent[]): Set<number> {
   const bySeq = new Map(events.map((e) => [e.seq, e]));
   const out = new Set<number>();
@@ -146,7 +152,14 @@ export function withdrawnSeqs(events: ChannelEvent[]): Set<number> {
         ((e.actor.kind === "agent" && e.kind === "message") ||
           (e.actor.kind === "system" && e.kind === "note")),
     );
-    if (!answered) out.add(t);
+    const refused = events.some(
+      (e) =>
+        e.seq > r.seq &&
+        e.actor.kind === "agent" &&
+        e.kind === "note" &&
+        e.payload?.retract_refused?.target_seq === t,
+    );
+    if (!answered && !refused) out.add(t);
   }
   return out;
 }

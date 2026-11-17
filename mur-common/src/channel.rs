@@ -219,6 +219,44 @@ pub fn retract_idempotency_key(target_seq: u64) -> String {
     format!("retract:{target_seq}")
 }
 
+/// Key inside an `Agent` `Note` payload that records the runtime refusing a
+/// retract (the cancelled turn had already run tools, so the model keeps the
+/// message). A `Note`, not a new `EventKind`, so older readers still parse
+/// the line. History readers honour it: the target stays visible, matching
+/// what the model sees.
+pub const RETRACT_REFUSED_PAYLOAD_KEY: &str = "retract_refused";
+
+/// Body of a [`RETRACT_REFUSED_PAYLOAD_KEY`] note.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RetractRefusal {
+    /// `seq` of the message the retract tried to withdraw.
+    pub target_seq: u64,
+}
+
+impl RetractRefusal {
+    /// The note payload; `text` is for tails (`mur channel follow`).
+    pub fn to_payload(self) -> serde_json::Value {
+        serde_json::json!({
+            RETRACT_REFUSED_PAYLOAD_KEY: self,
+            "text": format!(
+                "kept message #{}: the cancelled turn had already run tools",
+                self.target_seq
+            ),
+        })
+    }
+
+    /// `None` = not a refusal note (or a malformed one).
+    pub fn from_payload(payload: &serde_json::Value) -> Option<Self> {
+        serde_json::from_value(payload.get(RETRACT_REFUSED_PAYLOAD_KEY)?.clone()).ok()
+    }
+}
+
+/// The `idempotency_key` of the refusal of `target_seq`'s retract, so a
+/// refusal re-observed on a later turn appends nothing.
+pub fn retract_refused_idempotency_key(target_seq: u64) -> String {
+    format!("retract-refused:{target_seq}")
+}
+
 /// One append-only line in `~/.mur/channels/<id>/events.jsonl`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelEvent {

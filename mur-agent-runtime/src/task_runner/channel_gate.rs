@@ -20,7 +20,7 @@ use mur_channel::store::ManifestError;
 use mur_common::channel::{ChannelActor, ChannelPurpose};
 
 use super::TaskRunner;
-use super::channel_conversation::{AUDIT, Busy};
+use super::channel_conversation::{AUDIT, Busy, record_refusals};
 use crate::llm::RichMessage;
 use crate::protocol::a2a_server::HandlerError;
 use crate::protocol::methods::message_send::ChannelContext;
@@ -226,10 +226,34 @@ impl TaskRunner {
                 "anchor_dirty tolerated"
             );
         }
-        Ok(cc
-            .store
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .reconcile(&ctx.channel_id, &a, ctx.channel_seq))
+        let (prior, refused) = {
+            let mut store = cc.store.lock().unwrap_or_else(|e| e.into_inner());
+            let prior = store.reconcile(&ctx.channel_id, &a, ctx.channel_seq);
+            (prior, store.take_refused())
+        };
+        if !refused.is_empty() {
+            // Retract spec §4.3: the model keeps these messages, so the log
+            // must say so or replay and Hub would hide them.
+            match cc.signer.clone() {
+                Some(signer) => {
+                    let (home, agent, channel_id) = (
+                        cc.mur_home.clone(),
+                        self.agent_name.clone(),
+                        ctx.channel_id.clone(),
+                    );
+                    blocking(move || {
+                        record_refusals(&home, &signer, &agent, &channel_id, &refused);
+                        Ok(())
+                    })
+                    .await?;
+                }
+                None => tracing::info!(
+                    target: AUDIT,
+                    channel_id = %ctx.channel_id,
+                    "retract refusal not recorded: no signer"
+                ),
+            }
+        }
+        Ok(prior)
     }
 }
