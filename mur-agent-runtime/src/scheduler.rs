@@ -23,6 +23,8 @@ use tracing::{info, warn};
 
 mod missed;
 
+pub use missed::{FiringOutcome, read_firing_outcome};
+
 /// Build the `TaskSpec` for a cron-fired injection. Extracted so the
 /// `Background(Scheduled)` tagging can be asserted in a unit test without
 /// driving the full async cron loop — nobody is synchronously waiting on a

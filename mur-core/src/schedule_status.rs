@@ -13,7 +13,8 @@
 use std::path::Path;
 
 use chrono::{DateTime, Local, TimeZone};
-use mur_agent_runtime::scheduler::{next_n_fires, parse_bound};
+use mur_agent_runtime::scheduler::{FiringOutcome, next_n_fires, parse_bound, read_firing_outcome};
+use mur_common::agent::ScheduleEntry;
 
 use crate::cmd::fleet::loop_run::parse_duration;
 
@@ -285,6 +286,35 @@ pub fn is_expired(not_after: Option<&str>, now: DateTime<Local>) -> bool {
     parse_bound(not_after).is_some_and(|b| b < now)
 }
 
+/// What became of a one-off whose date has passed, read from the agent's
+/// schedule channel (#2437). `None` while the entry is still live or recurring.
+///
+/// "Past its date" alone cannot say whether the reminder reached anyone; the
+/// channel can: a completed firing leaves a reply, and a firing missed while
+/// the runtime was down leaves a notice (#2436).
+pub fn firing_note(
+    mur_home: &Path,
+    agent: &str,
+    entry: &ScheduleEntry,
+    now: DateTime<Local>,
+) -> Option<String> {
+    let bound = parse_bound(entry.not_after.as_deref()).filter(|b| *b < now)?;
+    Some(match read_firing_outcome(mur_home, agent, entry, bound) {
+        Ok(o) => outcome_text(o).to_string(),
+        Err(e) => format!("could not read the schedule channel: {e}"),
+    })
+}
+
+fn outcome_text(o: FiringOutcome) -> &'static str {
+    match o {
+        FiringOutcome::Fired => "fired — its reply is in the schedule channel",
+        FiringOutcome::Missed => "missed — the agent was not running then; a notice was posted",
+        // Not "missed": the runtime may simply not have started since the
+        // date, and it posts the notice when it does.
+        FiringOutcome::NoRecord => "no firing recorded",
+    }
+}
+
 fn collect_agents(
     home: &Path,
     filter: Option<&str>,
@@ -329,7 +359,12 @@ fn collect_agents(
                 // spent one-off did its job, an unreadable cron never will.
                 next_note: next_fires.is_empty().then(|| {
                     if parse_bound(s.not_after.as_deref()).is_some() {
-                        "past its date — this was a one-off and does not repeat".to_string()
+                        match firing_note(home, &name, s, Local::now()) {
+                            Some(note) => format!("past its date — {note}"),
+                            None => {
+                                "past its date — this was a one-off and does not repeat".to_string()
+                            }
+                        }
                     } else {
                         format!("could not read a schedule from `{}`", s.cron)
                     }

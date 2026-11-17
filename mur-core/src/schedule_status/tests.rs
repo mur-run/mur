@@ -393,3 +393,44 @@ fn broken_profile_is_a_warning_not_a_panic() {
             .any(|s| matches!(s, ScheduleItem::AgentCron { owner, .. } if owner == "ok"))
     );
 }
+
+/// A spent one-off with no channel yet says "no firing recorded", never
+/// "missed": the runtime may not have started since the date (#2437).
+/// Live and recurring entries get no note at all.
+#[test]
+fn firing_note_only_speaks_for_spent_one_offs_and_never_guesses_missed() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("agents/probe")).unwrap();
+    let at = |s: &str| {
+        DateTime::parse_from_rfc3339(s)
+            .unwrap()
+            .with_timezone(&Local)
+    };
+    let entry = |not_after: Option<&str>| ScheduleEntry {
+        cron: "0 10 3 11 *".into(),
+        message: "pay invoice".into(),
+        sends_to: None,
+        not_after: not_after.map(str::to_string),
+    };
+    let bound = "2026-11-03T10:00:00+08:00";
+    let note = |e: &ScheduleEntry, now: &str| firing_note(home.path(), "probe", e, at(now));
+
+    assert_eq!(note(&entry(Some(bound)), "2026-11-03T09:59:00+08:00"), None);
+    assert_eq!(note(&entry(None), "2030-01-01T00:00:00+08:00"), None);
+    assert_eq!(
+        note(&entry(Some(bound)), "2026-11-03T10:01:00+08:00").as_deref(),
+        Some("no firing recorded")
+    );
+}
+
+#[test]
+fn each_outcome_reads_differently() {
+    let texts = [
+        outcome_text(FiringOutcome::Fired),
+        outcome_text(FiringOutcome::Missed),
+        outcome_text(FiringOutcome::NoRecord),
+    ];
+    assert!(texts[0].starts_with("fired"));
+    assert!(texts[1].starts_with("missed"));
+    assert!(!texts[2].contains("missed"));
+}

@@ -17,10 +17,11 @@
 use super::{ScheduleSink, notify_inbox, schedule_channel};
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
-use mur_channel::ChannelService;
-use mur_common::agent::ScheduleEntry;
+use mur_channel::{ChannelService, ChannelStore};
+use mur_common::agent::{SCHEDULE_CHANNEL_FILE, ScheduleEntry};
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use sha2::{Digest, Sha256};
+use std::path::Path;
 use tracing::{info, warn};
 
 /// Identity of one entry, from everything that makes it a different reminder.
@@ -65,34 +66,96 @@ pub(super) fn missed_key(entry: &ScheduleEntry, bound: DateTime<Local>) -> Strin
     )
 }
 
-/// Whether the channel already accounts for the firing at `bound`: a reply
-/// recorded at or after it, or a notice already posted for it.
+/// What the schedule channel says about one entry's firing at `bound`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FiringOutcome {
+    /// A completed firing left its reply at or after the bound.
+    Fired,
+    /// The runtime found the firing passed while it was down and posted a notice.
+    Missed,
+    /// Neither: the runtime has not started since the bound, or the turn
+    /// fired with an empty reply (which records nothing). Never read as missed.
+    NoRecord,
+}
+
+/// Read the channel's verdict on the firing at `bound`.
 ///
-/// The `ts >= bound` guard matters because cron has no year: the same
-/// expression may have fired in an earlier year, and that reply says nothing
-/// about this one.
+/// A reply counts only if recorded at or after the bound, because cron has no
+/// year: the same expression may have fired in an earlier year, and that
+/// reply says nothing about this one.
 ///
 /// A reply keyed by the bare cron predates entry ids and still counts. It
 /// cannot say which same-minute entry fired, but treating it as unaccounted
 /// would raise a false "missed" for every reminder that fired before upgrade.
+pub fn firing_outcome(
+    events: &[ChannelEvent],
+    entry: &ScheduleEntry,
+    bound: DateTime<Local>,
+) -> FiringOutcome {
+    let notice = missed_key(entry, bound);
+    let reply_suffix = format!(":{}#{}", entry.cron, entry_id(entry));
+    let legacy_suffix = format!(":{}", entry.cron);
+    let bound_utc = bound.with_timezone(&Utc);
+    let mut missed = false;
+    for e in events {
+        match e.idempotency_key.as_deref() {
+            // A reply beats a notice: if both exist, it did fire.
+            Some(k)
+                if k.starts_with("sched:")
+                    && (k.ends_with(&reply_suffix) || k.ends_with(&legacy_suffix))
+                    && e.ts >= bound_utc =>
+            {
+                return FiringOutcome::Fired;
+            }
+            Some(k) if k == notice => missed = true,
+            _ => {}
+        }
+    }
+    if missed {
+        FiringOutcome::Missed
+    } else {
+        FiringOutcome::NoRecord
+    }
+}
+
+/// Whether the channel already accounts for the firing at `bound`: a reply
+/// recorded at or after it, or a notice already posted for it.
 pub(super) fn already_accounted(
     events: &[ChannelEvent],
     entry: &ScheduleEntry,
     bound: DateTime<Local>,
 ) -> bool {
-    let notice = missed_key(entry, bound);
-    let reply_suffix = format!(":{}#{}", entry.cron, entry_id(entry));
-    let legacy_suffix = format!(":{}", entry.cron);
-    let bound_utc = bound.with_timezone(&Utc);
-    events.iter().any(|e| match e.idempotency_key.as_deref() {
-        Some(k) if k == notice => true,
-        Some(k) => {
-            k.starts_with("sched:")
-                && (k.ends_with(&reply_suffix) || k.ends_with(&legacy_suffix))
-                && e.ts >= bound_utc
+    firing_outcome(events, entry, bound) != FiringOutcome::NoRecord
+}
+
+/// [`firing_outcome`] for `agent` under `mur_home`, read without side effects.
+///
+/// For host-side readers (`schedule list`, the Panel): it never creates the
+/// schedule channel or its marker the way the runtime's writer path does. No
+/// channel yet means nothing was ever recorded.
+pub fn read_firing_outcome(
+    mur_home: &Path,
+    agent: &str,
+    entry: &ScheduleEntry,
+    bound: DateTime<Local>,
+) -> Result<FiringOutcome> {
+    let marker = mur_home
+        .join("agents")
+        .join(agent)
+        .join(SCHEDULE_CHANNEL_FILE);
+    let id = match std::fs::read_to_string(&marker) {
+        Ok(raw) => raw.trim().to_string(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(FiringOutcome::NoRecord);
         }
-        None => false,
-    })
+        Err(e) => return Err(e.into()),
+    };
+    if id.is_empty() {
+        return Ok(FiringOutcome::NoRecord);
+    }
+    let events = ChannelStore::new(mur_home).load_events(&id)?;
+    Ok(firing_outcome(&events, entry, bound))
 }
 
 pub(super) fn notice_text(message: &str, bound: DateTime<Local>) -> String {

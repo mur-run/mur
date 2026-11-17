@@ -1293,8 +1293,10 @@ Agent** wizard offers the same catalog as a source.
   recurrence, and without a bound it would arrive again every September. `accept`
   turns it into a real entry on the real scheduler, bound included.
   Once its date has passed, `mur agent schedule list` marks the entry
-  `(expired)` and says it is past its date — not that it fired, which `list`
-  cannot know — and `mur agent schedule prune <agent>` removes those spent
+  `(expired)` and reads the agent's schedule channel to say what became of it:
+  *fired* (its reply is there), *missed* (the agent was down at the time and
+  posted a notice), or *no firing recorded* (the agent has not started since —
+  never guessed as missed). `mur agent schedule prune <agent>` removes those spent
   one-offs (the agent itself cannot: it may not write its own profile).
   Recurring entries and unreadable bounds are never pruned.
 - **An outstanding-work list that ages and checks itself** — agents record what

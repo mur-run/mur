@@ -234,3 +234,56 @@ fn a_reply_in_the_old_key_format_still_counts() {
     .unwrap();
     assert!(already_accounted(&[ev], &once(PAST_BOUND), bound));
 }
+
+/// The host-side reader `schedule list` uses (#2437): no channel means no
+/// record, and reading must not create one.
+#[test]
+fn the_reader_reports_no_record_without_creating_a_channel() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("agents/probe")).unwrap();
+    let bound = DateTime::parse_from_rfc3339(PAST_BOUND)
+        .unwrap()
+        .with_timezone(&Local);
+    let got = read_firing_outcome(tmp.path(), "probe", &once(PAST_BOUND), bound).unwrap();
+    assert_eq!(got, FiringOutcome::NoRecord);
+    assert!(
+        !tmp.path()
+            .join("agents/probe")
+            .join(SCHEDULE_CHANNEL_FILE)
+            .exists(),
+        "a read must not mint the schedule channel"
+    );
+}
+
+#[tokio::test]
+async fn the_reader_tells_a_missed_entry_from_its_fired_sibling() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fired = once_saying("pay invoice");
+    let missed = once_saying("call dentist");
+    let s = sink(tmp.path());
+    crate::protocol::methods::channel_delegate::append_self_reply(
+        tmp.path(),
+        &schedule_channel(
+            &ChannelService::open(tmp.path()).unwrap(),
+            tmp.path(),
+            "probe",
+        )
+        .unwrap(),
+        "probe",
+        &s.identity,
+        1,
+        "paid",
+        "t1",
+        Some(reply_key("t1", &fired)),
+    )
+    .unwrap();
+    start(tmp.path(), fired.clone()).await;
+    start(tmp.path(), missed.clone()).await;
+
+    let bound = DateTime::parse_from_rfc3339(PAST_BOUND)
+        .unwrap()
+        .with_timezone(&Local);
+    let read = |e: &ScheduleEntry| read_firing_outcome(tmp.path(), "probe", e, bound).unwrap();
+    assert_eq!(read(&fired), FiringOutcome::Fired);
+    assert_eq!(read(&missed), FiringOutcome::Missed);
+}
