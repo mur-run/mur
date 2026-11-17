@@ -2,6 +2,7 @@
 
 mod awaiting_tests;
 mod esc_action_tests;
+mod fixture;
 mod footer_state_tests;
 mod monitor_refresh_tests;
 mod open_items_notice_tests;
@@ -12,3 +13,4 @@ mod session_cost_tests;
 mod state;
 mod step_app_tests;
 mod theme_tests;
+mod withdraw_tests;

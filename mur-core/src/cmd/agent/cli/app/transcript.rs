@@ -47,7 +47,9 @@ impl App {
             return None;
         };
         self.pending_channel = self.channel.as_ref().map(|c| (c.id.clone(), seq));
-        Some(self.begin_turn())
+        let task_id = self.begin_turn();
+        self.turn_bubble = Some(bubble);
+        Some(task_id)
     }
 
     /// Start a turn the transcript already shows — a `!cmd` whose Shell card
@@ -60,6 +62,7 @@ impl App {
         self.inflight_params = None;
         self.send_retried = false;
         self.turn_produced_output = false;
+        self.turn_bubble = None;
         self.streaming = true;
         self.turn_started = Some(std::time::Instant::now());
         self.turn_in = 0;
@@ -215,6 +218,57 @@ impl App {
         self.streaming = false;
         self.current_task_id = None;
         self.turn_started = None;
+    }
+
+    /// Take back a turn ESC cancelled before the runtime produced anything
+    /// (#2442): its text is going back into the composer, so leaving the
+    /// User bubble and the `(cancelled)` placeholder on screen would show the
+    /// message twice once it is resent. A turn that streamed text, ran a step
+    /// or raised an approval stays — it is real history.
+    ///
+    /// Inline mode may already have flushed the bubble into native
+    /// scrollback, which cannot be edited in place; that case rewinds the
+    /// flush cursor and asks for the same purge-and-replay `/clear` uses.
+    /// Returns whether anything was withdrawn.
+    pub fn withdraw_cancelled_turn(&mut self) -> bool {
+        if self.turn_produced_output || self.streaming {
+            return false;
+        }
+        let Some(bubble) = self.turn_bubble.take() else {
+            return false;
+        };
+        if self
+            .messages
+            .get(bubble)
+            .is_none_or(|m| m.role != Role::User)
+        {
+            return false;
+        }
+        let mut i = self.messages.len();
+        while i > bubble + 1 {
+            i -= 1;
+            let m = &self.messages[i];
+            if m.role == Role::Agent && m.step.is_none() {
+                self.messages.remove(i);
+            }
+        }
+        self.messages.remove(bubble);
+        if bubble < self.flushed_upto {
+            self.flushed_upto = 0;
+            self.flushed_bytes = 0;
+            self.flushed_raw = false;
+            self.wants_screen_wipe = true;
+        } else {
+            self.flushed_upto = self.flushed_upto.min(self.messages.len());
+        }
+        self.scroll_back = 0;
+        true
+    }
+
+    /// Whether the current turn has its own User bubble — the only case
+    /// where `last_sent` is that turn's text and may go back to the composer.
+    pub fn turn_has_bubble(&self) -> bool {
+        self.turn_bubble.is_some()
     }
 
     /// Freeze the current streaming text segment (or drop it if empty) and push
