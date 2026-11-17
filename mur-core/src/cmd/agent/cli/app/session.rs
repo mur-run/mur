@@ -19,6 +19,7 @@ impl App {
         self.session = session;
         self.channel = None;
         self.pending_channel = None;
+        self.turn_bubble = None;
         self.messages.clear();
         self.flushed_upto = 0;
         self.flushed_bytes = 0;
@@ -48,6 +49,7 @@ impl App {
         self.session = session;
         self.channel = None;
         self.pending_channel = None;
+        self.turn_bubble = None;
         self.messages.clear();
         self.flushed_upto = 0;
         self.flushed_bytes = 0;

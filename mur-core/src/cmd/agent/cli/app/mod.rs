@@ -156,6 +156,10 @@ pub struct App {
     /// step, or HITL event) — after that a failed dial is never replayed,
     /// since the agent may already have done side-effectful work.
     pub turn_produced_output: bool,
+    /// Index of the current turn's own User bubble. `None` for a turn that
+    /// has none — a `!cmd` turn, whose Shell card is its entry — so ESC
+    /// never withdraws or restores an earlier turn's message (#2442).
+    pub turn_bubble: Option<usize>,
     pub streaming: bool,
     pub hitl: Option<HitlRequest>,
     /// Gates that arrived while `hitl` was occupied. A P3 runtime asks once
@@ -478,6 +482,7 @@ impl App {
             inflight_params: None,
             send_retried: false,
             turn_produced_output: false,
+            turn_bubble: None,
             streaming: false,
             hitl: None,
             hitl_queue: std::collections::VecDeque::new(),

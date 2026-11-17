@@ -56,3 +56,25 @@ fn no_wipe_when_bubble_still_in_live_band() {
     assert!(!a.wants_screen_wipe);
     assert_eq!(a.flushed_upto, before.min(a.messages.len()));
 }
+
+/// PR #2443 review: a `!cmd` turn has no User bubble of its own. Cancelling
+/// it must not reach back and withdraw the previous, completed turn.
+#[test]
+fn shell_turn_withdraws_nothing_from_an_earlier_turn() {
+    let mut a = App::test_fixture();
+    a.begin_user_turn("earlier question").expect("turn starts");
+    a.finish_agent_turn("earlier answer".into(), None);
+    a.begin_turn(); // what `start_shell_turn` does
+    a.finish_partial();
+    assert!(!a.withdraw_cancelled_turn());
+    assert!(!a.turn_has_bubble(), "nothing to restore into the composer");
+    assert!(a.messages.iter().any(|m| m.text == "earlier question"));
+    assert!(a.messages.iter().any(|m| m.text == "earlier answer"));
+}
+
+#[test]
+fn user_turn_reports_its_bubble() {
+    let mut a = App::test_fixture();
+    sent(&mut a, "hello");
+    assert!(a.turn_has_bubble());
+}

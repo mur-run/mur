@@ -7,6 +7,7 @@ mod browser_slash_live_tests;
 mod channel_seq_tests;
 mod egress_audit_tests;
 mod enter_hint_tests;
+mod esc_shell_turn_tests;
 mod fallback_visibility_tests;
 mod help_coverage_tests;
 mod hitl_key_tests;
