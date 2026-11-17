@@ -7,6 +7,15 @@ fn agent_home_always_in_write() {
     assert!(policy.fs_write.contains(&home));
 }
 
+/// `cmd >/dev/null` and `ssh` both open `/dev/null` for writing; Landlock
+/// denies that unless it is granted (found on a live Ubuntu 20.04 host).
+#[test]
+fn dev_null_always_in_write() {
+    let home = PathBuf::from("/tmp/agent_home");
+    let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &home);
+    assert!(policy.fs_write.contains(&PathBuf::from("/dev/null")));
+}
+
 #[test]
 fn own_profile_and_identity_key_always_denied() {
     // Issue #712: even a broad write grant covering the agents root (or

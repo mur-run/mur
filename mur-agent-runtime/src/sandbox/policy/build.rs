@@ -491,6 +491,13 @@ impl SandboxPolicy {
             }
         }
 
+        // Standard system write paths: `/dev/null` (see SYSTEM_WRITE_PATHS).
+        for p in SYSTEM_WRITE_PATHS.iter().map(PathBuf::from) {
+            if !fs_write.contains(&p) {
+                fs_write.push(p);
+            }
+        }
+
         // Standard system read paths: libraries, certs, DNS config.
         let system_read = system_read_paths();
         for p in system_read {
