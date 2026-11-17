@@ -271,6 +271,22 @@ impl App {
         self.turn_bubble.is_some()
     }
 
+    /// After [`Self::withdraw_cancelled_turn`]: take the same message back
+    /// from the channel the model reads (retract spec §4.4), and forget the
+    /// turn so nothing replays it. A failed append is said once; the bubble
+    /// stays withdrawn either way.
+    pub fn retract_cancelled_turn(&mut self) {
+        self.inflight_params = None;
+        let Some((id, seq)) = self.pending_channel.take() else {
+            return;
+        };
+        if let Err(e) = self.session.retract(&id, seq) {
+            self.push_system(format!(
+                "warning: the agent may still see the cancelled message: {e}"
+            ));
+        }
+    }
+
     /// Freeze the current streaming text segment (or drop it if empty) and push
     /// a new running tool-call card.
     pub fn push_step_started(&mut self, step_id: String, name: String, args: serde_json::Value) {

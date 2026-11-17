@@ -50,4 +50,41 @@ describe("channelEventsToMessages", () => {
     ]);
     expect(msgs).toEqual([{ role: "consult", text: "? → pm: status?" }]);
   });
+
+  describe("retract", () => {
+    const me = { kind: "human" as const, name: "local" };
+    const human = (seq: number, text: string, actor: typeof me | { kind: "human"; name: string } = me) =>
+      ({ ...base, seq, actor, kind: "message", payload: { text } });
+    const agent = (seq: number, text: string) =>
+      ({ ...base, seq, actor: { kind: "agent" as const, id: "mur" }, kind: "message", payload: { text } });
+    const retract = (seq: number, target: number, actor: { kind: "human"; name: string } | { kind: "agent"; id: string } = me) =>
+      ({ ...base, seq, actor, kind: "retract", payload: { target_seq: target, reason: "cancelled" } });
+
+    it("hides a validly withdrawn message and the retract line", () => {
+      const msgs = channelEventsToMessages([
+        human(0, "hi"), agent(1, "hello"), human(2, "foo"), retract(3, 2), human(4, "foo bar"),
+      ]);
+      expect(msgs.map((m) => m.text)).toEqual(["hi", "hello", "foo bar"]);
+    });
+
+    it("keeps a message withdrawn by another actor", () => {
+      const msgs = channelEventsToMessages([human(0, "foo"), retract(1, 0, { kind: "human", name: "eve" })]);
+      expect(msgs.map((m) => m.text)).toEqual(["foo"]);
+    });
+
+    it("keeps an agent message", () => {
+      const msgs = channelEventsToMessages([agent(0, "hello"), retract(1, 0, { kind: "agent", id: "mur" })]);
+      expect(msgs.map((m) => m.text)).toEqual(["hello"]);
+    });
+
+    it("keeps a message that was already answered", () => {
+      const msgs = channelEventsToMessages([human(0, "foo"), agent(1, "bar"), retract(2, 0)]);
+      expect(msgs.map((m) => m.text)).toEqual(["foo", "bar"]);
+    });
+
+    it("ignores a forward or self target", () => {
+      const msgs = channelEventsToMessages([human(0, "a"), retract(1, 2), retract(2, 2), human(3, "b")]);
+      expect(msgs.map((m) => m.text)).toEqual(["a", "b"]);
+    });
+  });
 });

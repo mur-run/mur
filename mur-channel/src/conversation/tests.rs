@@ -557,3 +557,73 @@ fn damage_serializes_as_the_kebab_reason() {
     assert_eq!(v, serde_json::json!({ "reason": "log-regressed" }));
     assert_eq!(ConversationDamage::LogRegressed.reason(), "log-regressed");
 }
+
+// ── Retract (retract spec §4.1–§4.2) ────────────────────────────────────────
+
+impl Fx {
+    fn retract(&self, target: u64) -> u64 {
+        let p = mur_common::channel::RetractPayload {
+            target_seq: target,
+            reason: mur_common::channel::RetractReason::Cancelled,
+        };
+        self.svc
+            .append_signed(
+                &self.ch,
+                &self.me,
+                1,
+                ChannelActor::local_human(),
+                EventKind::Retract,
+                serde_json::to_value(p).unwrap(),
+                Some(mur_common::channel::retract_idempotency_key(target)),
+            )
+            .unwrap()
+            .seq
+    }
+}
+
+#[test]
+fn retracted_message_is_dropped_and_reported() {
+    let fx = Fx::new("mur");
+    fx.human("a");
+    fx.reply("b");
+    fx.human("foo");
+    fx.retract(2);
+    let seq = fx.human("foo bar");
+    let a = ok(fx.assess(None, seq, "foo bar"));
+    assert_eq!(
+        a.projected,
+        vec![msg(0, Role::User, "a"), msg(1, Role::Agent, "b")]
+    );
+    assert_eq!(a.retracted, vec![2]);
+    assert!(a.ignored_retracts.is_empty());
+}
+
+#[test]
+fn retract_of_an_answered_message_is_ignored_and_reported() {
+    let fx = Fx::new("mur");
+    fx.human("a");
+    fx.reply("b");
+    let r = fx.retract(0);
+    let seq = fx.human("c");
+    let a = ok(fx.assess(None, seq, "c"));
+    assert_eq!(
+        a.projected,
+        vec![msg(0, Role::User, "a"), msg(1, Role::Agent, "b")]
+    );
+    assert!(a.retracted.is_empty());
+    assert_eq!(a.ignored_retracts, vec![r]);
+}
+
+#[test]
+fn turn_on_a_retracted_seq_is_watermark() {
+    let fx = Fx::new("mur");
+    let seq = fx.human("foo");
+    fx.retract(seq);
+    let d = damaged(fx.assess(None, seq, "foo"));
+    assert_eq!(
+        d,
+        ConversationDamage::Watermark {
+            detail: format!("seq {seq} was retracted")
+        }
+    );
+}

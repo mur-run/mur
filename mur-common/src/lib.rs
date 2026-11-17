@@ -117,7 +117,8 @@ pub use agent_name::{AgentNameError, MAX_AGENT_NAME_LEN, validate_agent_name};
 pub use bridge::{LlmEntitlement, LlmMode};
 pub use channel::{
     AskPayload, AskReplyPayload, CHANNEL_SCHEMA_VERSION, Channel, ChannelActor, ChannelEvent,
-    ChannelState, EventKind, Goal, Participant, ParticipantRole,
+    ChannelState, EventKind, Goal, Participant, ParticipantRole, RetractPayload, RetractReason,
+    retract_idempotency_key,
 };
 pub use identity::{
     AgentIdentity, ChainError, ChainOptions, ChainOutcome, IdentityError, RotationAttestation,

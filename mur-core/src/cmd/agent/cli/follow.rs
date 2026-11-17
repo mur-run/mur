@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use mur_channel::ChannelStore;
-use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
+use mur_common::channel::{ChannelActor, ChannelEvent, EventKind, RetractPayload, RetractReason};
 use mur_common::hitl::{HitlRequest, HitlResponse};
 
 /// How often a followed channel is re-read. Each poll is one `metadata()` call
@@ -224,6 +224,16 @@ pub fn summarize(ev: &ChannelEvent, channel_id: &str) -> String {
             clip(field(ev, &["question"]).unwrap_or(""))
         ),
         EventKind::AskReply => format!("↩ {}", clip(field(ev, &["text"]).unwrap_or(""))),
+        EventKind::Retract => match serde_json::from_value::<RetractPayload>(ev.payload.clone()) {
+            Ok(r) => format!(
+                "↶ withdrew #{} ({})",
+                r.target_seq,
+                match r.reason {
+                    RetractReason::Cancelled => "cancelled",
+                }
+            ),
+            Err(_) => "↶ withdrew a message (unreadable)".to_string(),
+        },
     };
     format!("{who}: {body}")
 }
@@ -433,6 +443,23 @@ mod tests {
     }
 
     // ── Milestone mode ──────────────────────────────────────────────────────
+
+    /// A live tail already printed the withdrawn message, so the retract shows
+    /// as its own raw line rather than vanishing; it is never a milestone.
+    #[test]
+    fn retract_renders_raw_but_not_as_milestone() {
+        let ev = mk(
+            5,
+            0,
+            ChannelActor::Human {
+                name: "local".into(),
+            },
+            EventKind::Retract,
+            serde_json::json!({ "target_seq": 4, "reason": "cancelled" }),
+        );
+        assert_eq!(summarize(&ev, "ch1"), "human: ↶ withdrew #4 (cancelled)");
+        assert!(milestone(&ev, "ch1", &mut HashMap::new()).is_none());
+    }
 
     fn mk(
         seq: u64,

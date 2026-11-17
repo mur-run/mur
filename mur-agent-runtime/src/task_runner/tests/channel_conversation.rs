@@ -24,6 +24,8 @@ fn ok(projected: Vec<ProjectedMessage>, log_last_seq: u64) -> Assessment {
         log_last_seq,
         rebuilt_after_repair: None,
         anchor_dirty: false,
+        retracted: vec![],
+        ignored_retracts: vec![],
     }
 }
 

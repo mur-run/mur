@@ -126,6 +126,10 @@ impl ChannelConversationStore {
             );
             h = ChannelHistory::default();
         }
+        for seq in &a.ignored_retracts {
+            tracing::info!(target: AUDIT, channel_id, seq, "retract ignored: withdraws nothing");
+        }
+        apply_retracts(channel_id, &mut h.entries, &a.retracted);
 
         let (mut entries, provisional): (Vec<Entry>, Vec<Entry>) =
             h.entries.into_iter().partition(|e| e.seq.is_some());
@@ -336,6 +340,49 @@ impl ChannelConversationStore {
             let _ = std::fs::remove_file(path);
         }
     }
+}
+
+/// Retract spec §4.3. For each withdrawn seq the cache still holds, the turn
+/// is the user entry plus the tail `remember_turn` pushed after it (the
+/// provisional reply and ledger, or a ledger an earlier refusal pinned to the
+/// same seq). A turn whose ledger records no tool call is dropped whole. One
+/// that ran tools is refused: the user entry stays and its ledger is pinned
+/// to the user's seq, so the model keeps knowing what ran; the unconfirmed
+/// `turn ended:` reply is dropped as usual.
+fn apply_retracts(channel_id: &str, entries: &mut Vec<Entry>, retracted: &[u64]) {
+    for &t in retracted {
+        let Some(i) = entries
+            .iter()
+            .position(|e| e.seq == Some(t) && is_user_text(&e.message))
+        else {
+            continue;
+        };
+        let end = entries[i + 1..]
+            .iter()
+            .position(|e| e.seq.is_some_and(|s| s != t))
+            .map_or(entries.len(), |k| i + 1 + k);
+        let ran_tools = entries[i + 1..end].iter().any(|e| {
+            matches!(&e.message, RichMessage::TurnLedger { memory, .. } if !memory.tools.is_empty())
+        });
+        if !ran_tools {
+            entries.drain(i..end);
+            tracing::info!(target: AUDIT, channel_id, seq = t, "retract honoured");
+            continue;
+        }
+        let mut tail: Vec<Entry> = entries.drain(i + 1..end).collect();
+        if tail.iter().any(|e| e.seq.is_none()) {
+            tracing::info!(target: AUDIT, channel_id, seq = t, "retract refused: turn {t} ran tools");
+        }
+        tail.retain(|e| matches!(e.message, RichMessage::TurnLedger { .. }));
+        for e in &mut tail {
+            e.seq = Some(t);
+        }
+        entries.splice(i + 1..i + 1, tail);
+    }
+}
+
+fn is_user_text(m: &RichMessage) -> bool {
+    matches!(m, RichMessage::Text { role, .. } if role == "user")
 }
 
 /// Pop the oldest provisional agent reply and, when it directly follows, its

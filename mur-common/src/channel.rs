@@ -158,6 +158,10 @@ pub enum EventKind {
     /// The answerer's reply to an [`EventKind::Ask`]; the payload is an
     /// [`AskReplyPayload`]. Not agent progress, a fleet reply, or a final answer.
     AskReply,
+    /// Withdraws one earlier `Human` `Message` from conversation history; the
+    /// payload is a [`RetractPayload`]. Readers that fold history skip the
+    /// target and this line; audit readers keep both. Not agent progress.
+    Retract,
 }
 
 impl EventKind {
@@ -191,6 +195,28 @@ pub struct AskReplyPayload {
     pub nonce: String,
     /// The answer text.
     pub text: String,
+}
+
+/// Why a [`EventKind::Retract`] was written. Closed vocabulary.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RetractReason {
+    /// The user cancelled the turn before it produced anything.
+    Cancelled,
+}
+
+/// Payload of an [`EventKind::Retract`] event.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RetractPayload {
+    /// `seq` of the withdrawn event.
+    pub target_seq: u64,
+    pub reason: RetractReason,
+}
+
+/// The `idempotency_key` of the retract of `target_seq`, so a retried append
+/// is a no-op.
+pub fn retract_idempotency_key(target_seq: u64) -> String {
+    format!("retract:{target_seq}")
 }
 
 /// One append-only line in `~/.mur/channels/<id>/events.jsonl`.
@@ -261,6 +287,26 @@ mod tests {
             assert!(kind.is_consult());
         }
         assert!(!EventKind::Message.is_consult());
+    }
+
+    #[test]
+    fn retract_round_trips_with_typed_payload() {
+        assert_eq!(
+            serde_json::to_string(&EventKind::Retract).unwrap(),
+            "\"retract\""
+        );
+        assert!(!EventKind::Retract.is_consult());
+        let p = RetractPayload {
+            target_seq: 41,
+            reason: RetractReason::Cancelled,
+        };
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({ "target_seq": 41, "reason": "cancelled" })
+        );
+        assert_eq!(serde_json::from_value::<RetractPayload>(v).unwrap(), p);
+        assert_eq!(retract_idempotency_key(41), "retract:41");
     }
 
     #[test]

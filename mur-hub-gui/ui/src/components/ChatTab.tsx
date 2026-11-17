@@ -99,6 +99,8 @@ export interface ChannelEvent {
     /** `ask` only: the answering agent and the question. */
     to?: string;
     question?: string;
+    /** `retract` only: the withdrawn event's seq. */
+    target_seq?: number;
   };
   idempotency_key?: string | null;
 }
@@ -116,14 +118,53 @@ export function consultLine(ev: ChannelEvent): ChatMsg | null {
   return null;
 }
 
+/** Seqs of human messages a valid `retract` withdrew — the same rule as
+ *  `mur_channel::conversation::retract`: the target is an earlier human
+ *  `message` by the same actor, and no agent `message` or system `note` lies
+ *  between the two. Any agent's reply counts as an answer here (the Rust rule
+ *  only counts the channel's own agent); erring that way keeps a message
+ *  visible rather than hiding one the model still sees. */
+export function withdrawnSeqs(events: ChannelEvent[]): Set<number> {
+  const bySeq = new Map(events.map((e) => [e.seq, e]));
+  const out = new Set<number>();
+  for (const r of events) {
+    if (r.kind !== "retract" || r.actor.kind !== "human") continue;
+    const t = r.payload?.target_seq;
+    if (typeof t !== "number" || t >= r.seq) continue;
+    const target = bySeq.get(t);
+    if (
+      !target ||
+      target.kind !== "message" ||
+      target.actor.kind !== "human" ||
+      target.actor.name !== r.actor.name
+    )
+      continue;
+    const answered = events.some(
+      (e) =>
+        e.seq > t &&
+        e.seq < r.seq &&
+        ((e.actor.kind === "agent" && e.kind === "message") ||
+          (e.actor.kind === "system" && e.kind === "note")),
+    );
+    if (!answered) out.add(t);
+  }
+  return out;
+}
+
 /** Map persisted channel events to the committed message list. We render
  *  `message` events, plus agent-to-agent consults as muted `consult` rows;
  *  other kinds (notes, tool calls, state changes …) are not displayed here.
  *  System-actor messages are skipped — this view has no system role and
- *  rendering them as the agent would mislabel them. */
+ *  rendering them as the agent would mislabel them. A message a `retract`
+ *  withdrew is skipped (see `withdrawnSeqs`). */
 export function channelEventsToMessages(events: ChannelEvent[]): ChatMsg[] {
   const out: ChatMsg[] = [];
+  const withdrawn = withdrawnSeqs(events);
   for (const ev of events) {
+    // A message the user took back (ESC in murmur) is not part of the
+    // conversation; the `retract` line itself is skipped below with the other
+    // non-message kinds.
+    if (withdrawn.has(ev.seq)) continue;
     const consult = consultLine(ev);
     if (consult) {
       out.push(consult);

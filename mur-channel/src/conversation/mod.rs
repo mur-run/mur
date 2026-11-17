@@ -10,6 +10,7 @@ use serde::Serialize;
 
 pub mod assess;
 pub mod project;
+pub mod retract;
 #[cfg(test)]
 mod tests;
 
@@ -104,6 +105,12 @@ pub struct Assessment {
     pub rebuilt_after_repair: Option<u64>,
     /// `anchor_dirty` was set: proceed, audit-warn.
     pub anchor_dirty: bool,
+    /// Seqs a valid `Retract` below `channel_seq` withdrew; `projected`
+    /// already omits them, the runtime drops them from its cache.
+    pub retracted: Vec<u64>,
+    /// Seqs of `Retract` events below `channel_seq` that withdrew nothing
+    /// (other actor, answered, forward seq…): audit only.
+    pub ignored_retracts: Vec<u64>,
 }
 
 /// One message of the projected history.
