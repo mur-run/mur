@@ -42,6 +42,11 @@ const PIPED_OPT_OUTS: &[(&[&str], &str)] = &[
     (&["mur", "agent", "ssh", "revoke"], "--yes"),
 ];
 
+/// Commands that need the terminal only with one flag: (prefix, flag).
+/// `mur browser answer --login` waits for Enter, the terminal's "logged in"
+/// button; every other answer stays on the piped path.
+const FLAG_INTERACTIVE: &[(&[&str], &str)] = &[(&["mur", "browser", "answer"], "--login")];
+
 /// `mur agent start|restart` asks the person to type the agent name only when
 /// it carries a startup-override flag; a plain start never prompts, so a
 /// prefix entry would hand over the terminal for nothing. `--confirm` is the
@@ -91,7 +96,10 @@ pub fn needs_terminal(cmd: &str) -> bool {
         && INTERACTIVE_PREFIXES
             .iter()
             .any(|prefix| starts_with(prefix));
-    prefixed || needs_override_confirmation(&tokens)
+    let flagged = FLAG_INTERACTIVE
+        .iter()
+        .any(|(prefix, flag)| starts_with(prefix) && tokens[prefix.len()..].contains(flag));
+    prefixed || flagged || needs_override_confirmation(&tokens)
 }
 
 /// `!mur fleet review …` and `!mur fleet review-resume …` are attended and
@@ -167,6 +175,17 @@ mod tests {
         assert!(needs_terminal(
             "  mur   browser  auth x --url https://e.com"
         ));
+    }
+
+    #[test]
+    fn browser_answer_needs_the_terminal_only_to_log_in() {
+        assert!(needs_terminal(
+            "mur browser answer rev http://g.example:3000 --login"
+        ));
+        assert!(!needs_terminal(
+            "mur browser answer rev g.example --profile g"
+        ));
+        assert!(!needs_terminal("mur browser requests"));
     }
 
     #[test]

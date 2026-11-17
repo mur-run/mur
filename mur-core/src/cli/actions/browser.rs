@@ -71,6 +71,51 @@ pub enum BrowserAction {
         #[arg(long, requires = "bind")]
         replace: bool,
     },
+    /// Browser access requests agents made with `browser_request`, each with
+    /// its card: matching saved logins and what picking each would do.
+    Requests {
+        /// Only this agent's requests.
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    /// Answer an agent's browser request: bind a saved login, log in again,
+    /// allow the host, or dismiss it. `mur browser requests` shows the card
+    /// and the exact command for each choice.
+    Answer {
+        /// The agent that asked.
+        agent: String,
+        /// The site as the request shows it; a bare host means https.
+        site: String,
+        /// Bind this saved profile. It must be a row on the card.
+        #[arg(long, conflicts_with_all = ["login", "allow", "dismiss"])]
+        profile: Option<String>,
+        /// Open a fresh login in a headed browser, save it, then bind it.
+        #[arg(long, conflicts_with_all = ["allow", "dismiss"])]
+        login: bool,
+        /// With --login: the profile name to save under (default: the host,
+        /// plus the port when it is not the default).
+        #[arg(long, requires = "login", value_name = "PROFILE")]
+        name: Option<String>,
+        /// With --login: replace the saved login of that name. Its hosts
+        /// are kept.
+        #[arg(long, requires = "login")]
+        reauth: bool,
+        /// A request that needs no login: let the agent's browser reach the
+        /// host.
+        #[arg(long, conflicts_with = "dismiss")]
+        allow: bool,
+        /// Drop the agent's other bound profiles. Only for a row the card
+        /// marks "only as a replacement".
+        #[arg(long, conflicts_with_all = ["allow", "dismiss"])]
+        replace: bool,
+        /// Also open the site's non-default port. It opens to ANY host (the
+        /// OS sandbox filters by port, not host) and needs an agent restart.
+        #[arg(long, conflicts_with = "dismiss")]
+        open_port: bool,
+        /// Clear the request without granting anything.
+        #[arg(long)]
+        dismiss: bool,
+    },
     /// Run the secret broker (needs MUR_BROWSER_BROKER_TOKEN; `record` starts its own).
     Broker,
     /// List recorded runs as a table (name, summary, domain, steps, mode, runs, date).

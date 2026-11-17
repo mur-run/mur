@@ -13,6 +13,8 @@ pub(crate) mod live_entry;
 pub mod live_state;
 pub mod perms;
 mod replay;
+mod request_card;
+pub mod request_cmd;
 pub mod server_install;
 pub mod setup;
 // `record` (the only writer) is unix-only; `status` reads it everywhere.

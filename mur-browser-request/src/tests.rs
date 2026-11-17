@@ -225,3 +225,20 @@ fn remove_deletes_exactly_that_request_and_a_second_remove_is_fine() {
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].site.host(), "b.example");
 }
+
+#[test]
+fn remove_keeps_a_newer_request_for_the_same_origin() {
+    // The agent asked again while the card for the first ask was open: the
+    // answer to the first must not delete the second unseen (review #2426).
+    let home = tempfile::tempdir().unwrap();
+    write(home.path(), &req("a.example", now())).unwrap();
+    let shown = read_pending(home.path(), now()).pop().unwrap();
+    let later = now() + chrono::Duration::seconds(90);
+    let again = BrowserRequest::new(&shown.site, true, "log in again", later).unwrap();
+    write(home.path(), &again).unwrap();
+    remove(home.path(), &shown).unwrap();
+    let left = read_pending(home.path(), later);
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].reason, "log in again");
+    assert_eq!(left[0].requested_at, later);
+}

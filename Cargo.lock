@@ -6717,6 +6717,7 @@ dependencies = [
  "multibase",
  "mur-agent-runtime",
  "mur-browser",
+ "mur-browser-request",
  "mur-channel",
  "mur-common",
  "mur-compress",
