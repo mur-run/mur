@@ -125,6 +125,12 @@ impl Follow {
         let cursor = self.cursor;
         for ev in evs.iter().filter(|e| e.seq >= cursor) {
             self.cursor = ev.seq + 1;
+            // Retract spec §4.4: follow hides retracts in both modes. The
+            // withdrawn line was already printed live; history readers
+            // (replay, model context) are where the withdrawal takes effect.
+            if ev.kind == EventKind::Retract {
+                continue;
+            }
             match self.mode {
                 FollowMode::Raw => out.push(format!(
                     "⟨{}⟩ {}",
@@ -303,6 +309,7 @@ pub fn milestone(
         | EventKind::ToolCall
         | EventKind::ToolResult
         | EventKind::Artifact => Some(summarize(ev, channel_id)),
+        EventKind::Retract => None,
         _ => None,
     }
 }
@@ -389,6 +396,45 @@ mod tests {
         );
     }
 
+    /// Retract spec §4.4: a raw follow hides the retract line. The withdrawn
+    /// message itself was already printed live and cannot be unprinted.
+    #[test]
+    fn raw_follow_hides_retract_lines() {
+        let home = tempdir().unwrap();
+        let svc = ChannelService::open(home.path()).unwrap();
+        let ch = svc.create_for_agent("rustsmith").unwrap();
+        let now = Instant::now();
+        let mut f = Follow::start(home.path(), &ch.id, now).unwrap();
+
+        append(
+            home.path(),
+            &ch.id,
+            EventKind::Message,
+            serde_json::json!({"text": "first draft"}),
+        );
+        let target = svc.load_events(&ch.id).unwrap().last().unwrap().seq;
+        append(
+            home.path(),
+            &ch.id,
+            EventKind::Retract,
+            serde_json::json!({"target_seq": target, "reason": "cancelled"}),
+        );
+        append(
+            home.path(),
+            &ch.id,
+            EventKind::ToolCall,
+            serde_json::json!({"step_id": "s1", "tool": "bash"}),
+        );
+
+        let lines = f.drain(home.path(), now).unwrap();
+        assert_eq!(lines.len(), 2, "retract must not print: {lines:?}");
+        assert!(lines.iter().all(|l| !l.contains("withdrew")), "{lines:?}");
+        assert!(
+            lines[1].contains("bash"),
+            "cursor must pass the retract: {lines:?}"
+        );
+    }
+
     /// A gate is only useful if the line tells you how to answer it.
     #[test]
     fn hitl_request_line_carries_the_approve_command() {
@@ -444,10 +490,10 @@ mod tests {
 
     // ── Milestone mode ──────────────────────────────────────────────────────
 
-    /// A live tail already printed the withdrawn message, so the retract shows
-    /// as its own raw line rather than vanishing; it is never a milestone.
+    /// A retract is never a milestone; `summarize` still renders it for any
+    /// caller outside the follow tail.
     #[test]
-    fn retract_renders_raw_but_not_as_milestone() {
+    fn retract_is_never_a_milestone() {
         let ev = mk(
             5,
             0,
