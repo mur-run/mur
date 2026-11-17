@@ -221,6 +221,7 @@ mod approval;
 mod bash_ceiling;
 mod basics;
 mod channel_conversation;
+mod channel_retract;
 mod consult_scope;
 mod continuation;
 mod conversation;

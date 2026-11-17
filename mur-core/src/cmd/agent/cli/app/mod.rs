@@ -599,6 +599,7 @@ impl App {
             let role = match t.role.as_str() {
                 "agent" => Role::Agent,
                 "shell" => Role::Shell,
+                super::persist::REFUSAL_ROLE => Role::System,
                 _ => Role::User,
             };
             if role == Role::Agent {

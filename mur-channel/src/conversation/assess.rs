@@ -69,9 +69,22 @@ pub fn assess_locked(
     if let Some(d) = watermark(channel_id, keys, &events, channel_seq, turn_input) {
         return Ok(Verdict::Damaged(d));
     }
+    // The user took this turn's message back (a stale replay raced the
+    // retract): the retract lies after `channel_seq`, so scan the whole log.
+    if super::retract::scan(&events, keys.agent, u64::MAX)
+        .targets
+        .contains(&channel_seq)
+    {
+        return Ok(Verdict::Damaged(D::Watermark {
+            detail: format!("seq {channel_seq} was retracted"),
+        }));
+    }
 
+    let retracts = super::retract::scan(&events, keys.agent, channel_seq);
     Ok(Verdict::Ok(Assessment {
         projected: super::project::project(&events, keys.agent, channel_seq),
+        retracted: retracts.targets.into_iter().collect(),
+        ignored_retracts: retracts.ignored,
         log_last_seq: log_last_seq.unwrap_or(0),
         rebuilt_after_repair,
         anchor_dirty: report.anchor_dirty,

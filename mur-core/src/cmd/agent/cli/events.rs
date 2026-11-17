@@ -693,7 +693,9 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                             let restore = app.turn_has_bubble() && app.input_text().is_empty();
                             if restore && let Some(text) = app.last_sent.clone() {
                                 app.set_input(&text);
-                                app.withdraw_cancelled_turn();
+                                if app.withdraw_cancelled_turn() {
+                                    app.retract_cancelled_turn();
+                                }
                             }
                             app.push_system(if restore {
                                 "cancelled — message restored"

@@ -163,6 +163,27 @@ impl Session {
         )?;
         Ok(ev.seq)
     }
+
+    /// Withdraw the user event at `target_seq` from the history the model
+    /// reads (retract spec §4.4): one signed `Retract`, keyed so a retried
+    /// append is a no-op. The original line stays on disk.
+    pub fn retract(&self, channel_id: &str, target_seq: u64) -> Result<u64> {
+        let payload = mur_common::channel::RetractPayload {
+            target_seq,
+            reason: mur_common::channel::RetractReason::Cancelled,
+        };
+        let ev = crate::channel_writer::append_as_writer(
+            &self.svc,
+            &self.home,
+            channel_id,
+            &self.agent,
+            ChannelActor::local_human(),
+            EventKind::Retract,
+            serde_json::to_value(payload)?,
+            Some(mur_common::channel::retract_idempotency_key(target_seq)),
+        )?;
+        Ok(ev.seq)
+    }
 }
 
 /// Serialize offered quick-reply options for the channel payload: a bare
@@ -206,15 +227,33 @@ fn event_to_turn(ev: &ChannelEvent) -> TurnRecord {
     }
 }
 
-/// Load a channel's turns for `App::load_history`.
-pub fn load(home: &Path, channel_id: &str, _agent: &str) -> Result<Vec<TurnRecord>> {
+/// Load a channel's turns for `App::load_history`. A message a valid
+/// `Retract` withdrew is skipped, and so is the `Retract` itself (same rule
+/// the runtime projects with). A retract the runtime refused withdraws
+/// nothing, and its refusal note replays as a `system` notice so the user
+/// sees why the message is still there.
+pub fn load(home: &Path, channel_id: &str, agent: &str) -> Result<Vec<TurnRecord>> {
     let svc = ChannelService::open(home)?;
-    Ok(svc
-        .load_events(channel_id)?
+    let events = svc.load_events(channel_id)?;
+    let withdrawn = mur_channel::conversation::retract::scan(&events, agent, u64::MAX).targets;
+    Ok(events
         .iter()
-        .map(event_to_turn)
+        .filter(|e| e.kind != EventKind::Retract && !withdrawn.contains(&e.seq))
+        .map(|e| {
+            let mut t = event_to_turn(e);
+            if e.kind == EventKind::Note
+                && mur_common::channel::RetractRefusal::from_payload(&e.payload).is_some()
+            {
+                t.role = REFUSAL_ROLE.to_string();
+            }
+            t
+        })
         .collect())
 }
+
+/// [`TurnRecord::role`] of a replayed retract-refusal note: a local notice,
+/// never an agent reply.
+pub const REFUSAL_ROLE: &str = "system";
 
 /// Newest channels that involve `agent`, newest-first.
 pub fn list_recent(home: &Path, agent: &str, limit: usize) -> Result<Vec<SessionInfo>> {

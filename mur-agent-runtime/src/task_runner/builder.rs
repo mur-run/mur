@@ -425,6 +425,21 @@ impl TaskRunner {
         self
     }
 
+    /// Sign the note that records a refused retract (retract spec §4.3) as
+    /// this agent. Call after [`Self::with_channel_conversations`]; without
+    /// it a refusal is audit-only and history readers would hide a message
+    /// the model still receives.
+    pub fn with_retract_signer(
+        mut self,
+        identity: std::sync::Arc<mur_common::identity::AgentIdentity>,
+        key_version: u32,
+    ) -> Self {
+        if let Some(c) = &mut self.channel_conversations {
+            c.signer = Some((identity, key_version));
+        }
+        self
+    }
+
     /// Share the tools' session cwd so each turn can adopt the caller's
     /// working directory and declare it in the prompt. `allowed_roots` are the
     /// entitlement roots (read + write + agent home) a `TaskSpec.cwd` must fall

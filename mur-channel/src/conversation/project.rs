@@ -7,11 +7,14 @@ use super::{ProjectedMessage, Role};
 /// (assumption S1) the `System` `Note` murmur persists for a `!cmd` card,
 /// folded as a user turn so the reply after it has one. The repair record is
 /// also a `System` `Note`, but it is the chain's bookkeeping, not a turn, so
-/// it is skipped. Every other kind/actor is skipped. Only `seq < before`.
+/// it is skipped. Every other kind/actor is skipped, and so is a message a
+/// valid `Retract` below `before` withdrew (see [`super::retract`]). Only
+/// `seq < before`.
 pub fn project(events: &[ChannelEvent], agent: &str, before: u64) -> Vec<ProjectedMessage> {
+    let withdrawn = super::retract::scan(events, agent, before).targets;
     events
         .iter()
-        .filter(|e| e.seq < before)
+        .filter(|e| e.seq < before && !withdrawn.contains(&e.seq))
         .filter_map(|e| {
             let text = e.payload.get("text").and_then(|t| t.as_str())?.to_string();
             let role = match (&e.actor, e.kind) {
