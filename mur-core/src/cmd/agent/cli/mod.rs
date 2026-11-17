@@ -338,8 +338,10 @@ pub async fn cmd_cli(
     // it is inert until a restart (#1939).
     let was_live = autostart::is_running(&home, &agent);
     let cwd_access = access::ensure_cwd_access(&agent)?;
-    if cwd_access.needs_restart(was_live) {
-        access::offer_restart_after_grant(&agent)?;
+    if let access::CwdAccess::Granted(grant) = &cwd_access
+        && cwd_access.needs_restart(was_live)
+    {
+        access::offer_restart_after_grant(&agent, grant)?;
     }
 
     // Streaming requires a live socket: start the agent if it is down (#1767),

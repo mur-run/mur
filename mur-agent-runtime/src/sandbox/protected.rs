@@ -79,6 +79,39 @@ pub fn check_protected_writes(
     Ok(())
 }
 
+/// Why the sandbox would refuse or drop `grant` as a read+write entitlement
+/// for the agent rooted at `agent_home`, or `None` when it would install it.
+///
+/// For callers that offer a grant before the agent seals (murmur's cwd
+/// consent, #2448): the same two rules [`super::apply`] enforces, so a prompt
+/// can never offer a path the next start refuses. Write: [`check_protected_writes`]
+/// (a refusal — the agent does not start). Read: the credential-store
+/// partition in `policy/build.rs` (the whole grant is dropped).
+pub fn grant_refusal(agent_home: &Path, grant: &Path) -> Option<String> {
+    // Same `<mur_home>` derivation as `apply` and `policy/build.rs`.
+    let mur_home = agent_home
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(mur_common::home::mur_home);
+    let policy = SandboxPolicy {
+        fs_write: vec![grant.to_path_buf()],
+        ..SandboxPolicy::default()
+    };
+    if let Err(e) = check_protected_writes(&policy, &mur_home) {
+        return Some(e.to_string());
+    }
+    let chain = super::launch_chain::LaunchChain::new(agent_home);
+    let (_, dropped) = chain.partition_read_grants(&[grant.to_path_buf()]);
+    (!dropped.is_empty()).then(|| {
+        format!(
+            "read grant {} reaches the credential store or a sibling signing key; \
+             the sandbox drops it whole",
+            grant.display()
+        )
+    })
+}
+
 /// One path is a component-wise prefix of the other (so `channel-heads-old`
 /// does not overlap `channel-heads`), compared without regard to case.
 fn overlaps(a: &Path, b: &Path) -> bool {
@@ -314,6 +347,27 @@ mod tests {
         let extra = [f.mur_home.clone()];
         let err = crate::sandbox::apply(&ent, &f.agent_home, &[], &[], &extra).unwrap_err();
         assert!(is_refusal(&err), "{err:#}");
+    }
+
+    #[test]
+    fn grant_refusal_matches_the_seal_time_write_check() {
+        // #2448: the cwd prompt asks this before offering; it must refuse
+        // exactly what `check_protected_writes` refuses.
+        let f = fixture();
+        let refused = grant_refusal(&f.agent_home, &f.mur_home).expect("mur_home is refused");
+        assert!(refused.contains("channel heads"), "{refused}");
+        assert!(f.check(&f.policy(&[&f.mur_home], &[])).is_err());
+        let heads = f.mur_home.join(HEADS_DIR);
+        assert!(grant_refusal(&f.agent_home, &heads).is_some());
+    }
+
+    #[test]
+    fn grant_refusal_accepts_a_narrow_dir_under_mur_home() {
+        let f = fixture();
+        let narrow = f.mur_home.join("artifacts").join("mur").join("run");
+        std::fs::create_dir_all(&narrow).unwrap();
+        assert_eq!(grant_refusal(&f.agent_home, &narrow), None);
+        assert!(f.check(&f.policy(&[&narrow], &[])).is_ok());
     }
 
     #[test]
