@@ -418,6 +418,11 @@ pub(super) fn prepare_and_seal(
             .map(std::path::PathBuf::from)
             .as_deref(),
     );
+    // Lineage gates (ssh proxy, A2A accepts_from, shim tickets) read other
+    // pids' `/proc/<pid>/stat`, which Landlock denies after the seal. The
+    // oracle is started now so it stays unconfined; see its module doc.
+    #[cfg(target_os = "linux")]
+    crate::sandbox::ppid_oracle::install_before_seal();
     let sandbox_record = match crate::sandbox::apply(
         &profile.inner.entitlements,
         agent_home,

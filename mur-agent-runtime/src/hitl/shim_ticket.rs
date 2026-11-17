@@ -275,11 +275,10 @@ pub(crate) fn parent_of(pid: u32) -> Option<u32> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn parent_of(pid: u32) -> Option<u32> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // `comm` may hold spaces and parens; the fields after the LAST ')' are
-    // fixed: state, then ppid.
-    let rest = &stat[stat.rfind(')')? + 1..];
-    rest.split_whitespace().nth(1)?.parse().ok()
+    // Direct read works before the seal and for `/proc/self`; after the seal
+    // every other pid is EACCES, so ask the pre-seal oracle (#2435 follow-up).
+    use crate::sandbox::ppid_oracle;
+    ppid_oracle::read_ppid(pid).or_else(|| ppid_oracle::installed()?.parent_of(pid))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]

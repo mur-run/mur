@@ -106,6 +106,7 @@ pub fn entrypoint() -> anyhow::Result<()> {
     }
     #[cfg(unix)]
     crate::sandbox::ssh_bypass::child::exit_if_probe(&argv);
+    crate::sandbox::ppid_oracle::exit_if_oracle(&argv);
     if boot::print_meta_flag(&argv) {
         return Ok(());
     }

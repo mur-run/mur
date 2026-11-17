@@ -65,9 +65,55 @@ fn a_missing_or_zero_pid_is_unknown() {
 }
 
 #[test]
-fn a_parent_cycle_terminates() {
+fn a_parent_cycle_terminates_as_unknown() {
     let cyc = |p: u32| Some(if p == 7 { 8 } else { 7 });
-    assert_eq!(identify(Some(7), SELF, &running(), cyc), Caller::User);
+    assert_eq!(identify(Some(7), SELF, &running(), cyc), Caller::Unknown);
+}
+
+#[test]
+fn a_self_parented_pid_is_unknown() {
+    assert_eq!(
+        identify(Some(9), SELF, &running(), |_| Some(9)),
+        Caller::Unknown
+    );
+}
+
+/// A child of peer "watcher" (202 → 201 → 200) whose ancestry cannot be read
+/// past the first hop: lineage is not established, so it must not read as
+/// the user.
+fn blind_after(first_hop: u32) -> impl Fn(u32) -> Option<u32> {
+    move |p| tree(p).filter(|_| p == first_hop)
+}
+
+#[test]
+fn an_unreadable_parent_is_unknown_not_user() {
+    assert_eq!(
+        identify(Some(202), SELF, &running(), |_| None),
+        Caller::Unknown
+    );
+    assert_eq!(
+        identify(Some(202), SELF, &running(), blind_after(202)),
+        Caller::Unknown
+    );
+}
+
+/// The whole accept decision, not just the walk: an excluded peer's child
+/// connecting while lineage is unreadable (sealed procfs, oracle dead or
+/// never started) is refused by a restricted list.
+#[test]
+fn excluded_peer_child_is_refused_when_lineage_is_unreadable() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let policy = AcceptPolicy {
+        accepts_from: list(&["notify_*"]),
+        agents_dir: tmp.path().to_path_buf(),
+        self_pid: SELF,
+    };
+    let dead_oracle = |_: u32| None;
+    let err = policy.check_with(Some(202), dead_oracle).unwrap_err();
+    assert!(err.contains("could not be identified"), "{err}");
+    assert!(policy.check_with(Some(202), blind_after(202)).is_err());
+    // Control: with lineage readable, the user's shell is still admitted.
+    assert_eq!(policy.check_with(Some(501), tree), Ok(Caller::User));
 }
 
 #[test]
