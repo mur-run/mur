@@ -76,8 +76,18 @@ pub enum ChannelPurpose {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ChannelActor {
-    Human { name: String },
-    Agent { id: String },
+    Human {
+        name: String,
+        /// The human owner's public key (multibase) when the event is signed
+        /// with it (at-mention phase 2, D-4). Absent on every event written
+        /// before phase 2, and omitted on the wire when `None`, so those
+        /// events serialize — and therefore sign — byte-identically.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+    },
+    Agent {
+        id: String,
+    },
     System,
 }
 
@@ -89,7 +99,19 @@ impl ChannelActor {
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "you".to_string());
-        ChannelActor::Human { name }
+        ChannelActor::Human { name, key: None }
+    }
+
+    /// [`Self::local_human`] carrying the human owner's public key, for an
+    /// event signed with it (at-mention phase 2, D-4).
+    pub fn local_human_with_key(key: impl Into<String>) -> Self {
+        match Self::local_human() {
+            ChannelActor::Human { name, .. } => ChannelActor::Human {
+                name,
+                key: Some(key.into()),
+            },
+            other => other,
+        }
     }
 }
 
@@ -162,6 +184,10 @@ pub enum EventKind {
     /// payload is a [`RetractPayload`]. Readers that fold history skip the
     /// target and this line; audit readers keep both. Not agent progress.
     Retract,
+    /// Enrolls the human owner's key for this channel; the payload is an
+    /// [`OwnerKeyEnrolledPayload`] (at-mention phase 2, D-5). Not agent
+    /// progress. Nothing writes it until phase 2 PR 2.
+    OwnerKeyEnrolled,
 }
 
 impl EventKind {
@@ -195,6 +221,28 @@ pub struct AskReplyPayload {
     pub nonce: String,
     /// The answer text.
     pub text: String,
+}
+
+/// The last pre-enrollment line of a channel (at-mention phase 2, D-6):
+/// history up to and including `seq` stays trusted under the router's
+/// signature. `line_hash` is `mur_channel::store::chain::line_hash` of the raw
+/// line at `seq`, because v1-era events carry no `prev_hash` to hash.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HumanCut {
+    pub seq: u64,
+    pub line_hash: String,
+}
+
+/// Payload of an [`EventKind::OwnerKeyEnrolled`] event (at-mention phase 2,
+/// D-5/D-6). Owner state lives only in this signed record, never in the
+/// manifest.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OwnerKeyEnrolledPayload {
+    /// The human owner's public key (multibase).
+    pub owner_key: String,
+    pub key_version: u32,
+    /// `None` for a channel created with an owner, so nothing predates it.
+    pub human_cut: Option<HumanCut>,
 }
 
 /// Why a [`EventKind::Retract`] was written. Closed vocabulary.
@@ -287,6 +335,65 @@ pub struct ChannelEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn human_without_key_serializes_without_key_field() {
+        let a = ChannelActor::Human {
+            name: "david".into(),
+            key: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&a).unwrap(),
+            r#"{"kind":"human","name":"david"}"#
+        );
+        let back: ChannelActor =
+            serde_json::from_str(r#"{"kind":"human","name":"david"}"#).unwrap();
+        assert_eq!(back, a);
+        let keyed = ChannelActor::Human {
+            name: "david".into(),
+            key: Some("zKey".into()),
+        };
+        assert_eq!(
+            serde_json::to_string(&keyed).unwrap(),
+            r#"{"kind":"human","name":"david","key":"zKey"}"#
+        );
+    }
+
+    #[test]
+    fn owner_key_enrolled_wire_spelling_is_kebab() {
+        assert_eq!(
+            serde_json::to_string(&EventKind::OwnerKeyEnrolled).unwrap(),
+            r#""owner-key-enrolled""#
+        );
+        let p = OwnerKeyEnrolledPayload {
+            owner_key: "zKey".into(),
+            key_version: 1,
+            human_cut: Some(HumanCut {
+                seq: 4,
+                line_hash: "ab".into(),
+            }),
+        };
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(v["human_cut"]["seq"], 4);
+        assert_eq!(
+            serde_json::from_value::<OwnerKeyEnrolledPayload>(v).unwrap(),
+            p
+        );
+    }
+
+    #[test]
+    fn local_human_with_key_keeps_the_local_name() {
+        let ChannelActor::Human { name, .. } = ChannelActor::local_human() else {
+            panic!("local_human is Human");
+        };
+        assert_eq!(
+            ChannelActor::local_human_with_key("zKey"),
+            ChannelActor::Human {
+                name,
+                key: Some("zKey".into())
+            }
+        );
+    }
 
     #[test]
     fn channel_state_serializes_kebab() {

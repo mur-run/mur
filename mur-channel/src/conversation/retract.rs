@@ -234,7 +234,10 @@ mod tests {
 
     #[test]
     fn retract_by_another_actor_is_ignored() {
-        let other = ChannelActor::Human { name: "eve".into() };
+        let other = ChannelActor::Human {
+            name: "eve".into(),
+            key: None,
+        };
         let evs = [human(0), retract_by(1, other, 0)];
         let s = scan(&evs, AGENT, u64::MAX);
         assert!(s.targets.is_empty());

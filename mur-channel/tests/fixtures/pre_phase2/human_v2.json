@@ -1,0 +1,1 @@
+{"seq":2,"ts":"2026-11-01T00:00:00Z","actor":{"kind":"human","name":"david"},"kind":"message","payload":{"text":"hello"},"idempotency_key":"k1","sig":"z4EKwaSqNPbspdv3ggVHN1wVUNxLSxwX9WkRnyvabutYMMtaU2t7Pjm5gurp1L6oiKnK5WtVTjPRgLEVWnvJSSFPy","prev_hash":"0000000000000000000000000000000000000000000000000000000000000000"}

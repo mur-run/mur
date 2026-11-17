@@ -160,7 +160,10 @@ mod tests {
             goal: Goal::default(),
             state: ChannelState::Working,
             purpose: None,
-            owner: ChannelActor::Human { name: "me".into() },
+            owner: ChannelActor::Human {
+                name: "me".into(),
+                key: None,
+            },
             participants: vec![],
             created_at: now,
             updated_at: now,
@@ -180,7 +183,10 @@ mod tests {
         store
             .append_event(
                 "c-keep",
-                ChannelActor::Human { name: "me".into() },
+                ChannelActor::Human {
+                    name: "me".into(),
+                    key: None,
+                },
                 EventKind::Message,
                 serde_json::json!({"text": "hi"}),
                 None,
@@ -556,7 +562,10 @@ mod tests {
         let e0 = store
             .append_event(
                 "c1",
-                ChannelActor::Human { name: "me".into() },
+                ChannelActor::Human {
+                    name: "me".into(),
+                    key: None,
+                },
                 EventKind::Message,
                 serde_json::json!({"text":"hi"}),
                 None,
@@ -667,7 +676,10 @@ mod tests {
             assert!(store.delete(id).is_err(), "delete {id:?}");
             let appended = store.append_event(
                 id,
-                ChannelActor::Human { name: "me".into() },
+                ChannelActor::Human {
+                    name: "me".into(),
+                    key: None,
+                },
                 EventKind::Message,
                 serde_json::json!({"text": "x"}),
                 None,

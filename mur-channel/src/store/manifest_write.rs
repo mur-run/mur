@@ -64,7 +64,10 @@ mod tests {
             goal: Goal::default(),
             state: ChannelState::Working,
             purpose: None,
-            owner: ChannelActor::Human { name: "me".into() },
+            owner: ChannelActor::Human {
+                name: "me".into(),
+                key: None,
+            },
             participants: vec![],
             created_at: now,
             updated_at: now,

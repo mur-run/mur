@@ -87,6 +87,7 @@ fn a_hitl_request_blocks_and_its_response_unblocks() {
         3,
         ChannelActor::Human {
             name: "david".into(),
+            key: None,
         },
         EventKind::HitlResponse,
         json!({"hitl_id": "h1", "allow": true, "surface": "cli"}),
@@ -125,6 +126,7 @@ fn human_and_system_actors_never_become_rows() {
             1,
             ChannelActor::Human {
                 name: "david".into(),
+                key: None,
             },
             EventKind::Message,
             json!({"text": "go"}),
@@ -193,6 +195,7 @@ fn state_change_input_required_blocks_with_empty_hitl_id() {
         2,
         ChannelActor::Human {
             name: "david".into(),
+            key: None,
         },
         EventKind::HitlResponse,
         json!({"hitl_id": "some-other-id", "allow": true, "surface": "cli"}),
@@ -285,6 +288,7 @@ fn approving_one_hitl_id_does_not_unblock_a_different_one() {
             3,
             ChannelActor::Human {
                 name: "david".into(),
+                key: None,
             },
             EventKind::HitlResponse,
             json!({"hitl_id": "h1", "allow": true, "surface": "cli"}),

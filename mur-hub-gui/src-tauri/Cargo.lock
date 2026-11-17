@@ -6948,6 +6948,7 @@ dependencies = [
  "landlock",
  "libc",
  "mime_guess",
+ "mur-browser-request",
  "mur-channel",
  "mur-common",
  "mur-compress",
@@ -7013,6 +7014,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mur-browser-request"
+version = "2.101.2"
+dependencies = [
+ "chrono",
+ "hex",
+ "mur-common",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "url",
+]
+
+[[package]]
 name = "mur-channel"
 version = "2.101.2"
 dependencies = [
@@ -7041,6 +7057,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "core-foundation-sys",
  "curve25519-dalek",
  "dirs 6.0.0",
  "ed25519-dalek",
@@ -7057,9 +7074,11 @@ dependencies = [
  "quick-xml 0.36.2",
  "rand_core 0.6.4",
  "regex-lite",
+ "rustix 1.1.4",
  "schemars 1.2.1",
  "secrecy",
  "security-framework 3.7.0",
+ "security-framework-sys",
  "semver",
  "serde",
  "serde_bytes",
@@ -7152,6 +7171,7 @@ dependencies = [
  "multibase",
  "mur-agent-runtime",
  "mur-browser",
+ "mur-browser-request",
  "mur-channel",
  "mur-common",
  "mur-compress",
@@ -7336,7 +7356,6 @@ dependencies = [
  "chrono",
  "hex",
  "mur-common",
- "rustix 1.1.4",
  "serde",
  "serde_json",
  "sha2 0.10.9",

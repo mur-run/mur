@@ -30,7 +30,10 @@ const PAYLOAD_BYTES: usize = 200;
 const KV: u32 = 1;
 
 fn actor() -> ChannelActor {
-    ChannelActor::Human { name: "me".into() }
+    ChannelActor::Human {
+        name: "me".into(),
+        key: None,
+    }
 }
 
 /// A channel whose log holds `lines` unsigned legacy lines, written directly

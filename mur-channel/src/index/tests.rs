@@ -12,7 +12,10 @@ fn ch(id: &str, state: ChannelState) -> Channel {
         goal: Goal::default(),
         state,
         purpose: None,
-        owner: ChannelActor::Human { name: "me".into() },
+        owner: ChannelActor::Human {
+            name: "me".into(),
+            key: None,
+        },
         participants: vec![],
         created_at: now,
         updated_at: now,

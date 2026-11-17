@@ -111,6 +111,7 @@ fn human_decides_at(
         ch,
         ChannelActor::Human {
             name: "user".into(),
+            key: None,
         },
         EventKind::HitlResponse,
         serde_json::to_value(&resp).unwrap(),
