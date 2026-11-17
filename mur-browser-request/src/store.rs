@@ -8,8 +8,8 @@ use chrono::{DateTime, Utc};
 use mur_common::pinned_dir::PinnedDir;
 
 use super::{
-    BrowserRequest, EXPIRY_SECS, MAX_FILE_BYTES, MAX_PENDING, REQUESTS_DIR, SCHEMA, Site,
-    sanitize_reason,
+    BrowserRequest, EXPIRY_SECS, MAX_FILE_BYTES, MAX_FUTURE_SKEW_SECS, MAX_PENDING, REQUESTS_DIR,
+    SCHEMA, Site, sanitize_reason,
 };
 
 /// A request [`read_pending`] accepted. Only it builds one, so [`remove`] can
@@ -105,7 +105,10 @@ fn read_one(dir: &PinnedDir, name: &str, now: DateTime<Utc>) -> Option<PendingRe
     if site.origin() != req.site || site.id() != id {
         return None;
     }
-    if now.signed_duration_since(req.requested_at) > chrono::Duration::seconds(EXPIRY_SECS) {
+    let age = now.signed_duration_since(req.requested_at);
+    if age > chrono::Duration::seconds(EXPIRY_SECS)
+        || -age > chrono::Duration::seconds(MAX_FUTURE_SKEW_SECS)
+    {
         return None;
     }
     let reason = sanitize_reason(&req.reason);

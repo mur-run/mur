@@ -242,3 +242,27 @@ fn remove_keeps_a_newer_request_for_the_same_origin() {
     assert_eq!(left[0].reason, "log in again");
     assert_eq!(left[0].requested_at, later);
 }
+
+#[test]
+fn a_request_dated_past_the_skew_allowance_is_dropped() {
+    let home = tempfile::tempdir().unwrap();
+    write(
+        home.path(),
+        &req(
+            "future.example",
+            now() + Duration::seconds(MAX_FUTURE_SKEW_SECS + 1),
+        ),
+    )
+    .unwrap();
+    write(
+        home.path(),
+        &req(
+            "skewed.example",
+            now() + Duration::seconds(MAX_FUTURE_SKEW_SECS),
+        ),
+    )
+    .unwrap();
+    let p = read_pending(home.path(), now());
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].site.origin(), "https://skewed.example");
+}

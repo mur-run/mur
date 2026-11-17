@@ -36,6 +36,9 @@ pub const MAX_REASON_CHARS: usize = 500;
 pub const MAX_FILE_BYTES: u64 = 4 * 1024;
 /// A request older than this is not listed.
 pub const EXPIRY_SECS: i64 = 7 * 24 * 60 * 60;
+/// How far past now a `requested_at` may be and still be listed: clock
+/// skew, not a way to make a request never expire and always sort first.
+pub const MAX_FUTURE_SKEW_SECS: i64 = 5 * 60;
 /// Requests listed per agent, newest first.
 pub const MAX_PENDING: usize = 8;
 /// The binary an agent needs to exec to use an SSH grant.
