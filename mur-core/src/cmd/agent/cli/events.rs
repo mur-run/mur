@@ -457,12 +457,7 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                 handle_hitl_key(app, key, ctrl, tx);
                 return;
             }
-            // The `/ssh` card owns the keys while open; Ctrl combos (cancel,
-            // quit) still reach the composer's handlers below.
-            if app.ssh.card.is_some() && !ctrl {
-                if app.ssh.settled() {
-                    ssh_card::on_key(app, key, tx);
-                }
+            if super::cards::on_key(app, key, ctrl, tx) {
                 return;
             }
             // Stale-decision swallow: a gate that auto-resolves (read lane,
