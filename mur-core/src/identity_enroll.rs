@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use mur_common::identity::human::{
-    HumanIdentityError, human_identity_dir, human_key_dir, human_private_key_path,
+    HumanIdentityError, KEYS_DIR, human_identity_dir, human_key_dir, human_private_key_path,
     human_pubkey_path, human_rotations_path, load_pubkey, rotation_chain,
 };
 use mur_common::identity::{AgentIdentity, IdentityError, RotationAttestation, RotationReason};
@@ -59,7 +59,8 @@ fn present(path: &Path) -> Result<bool> {
 ///
 /// | `identity/identity.pub` | `keys/.human/identity.key` | result |
 /// |---|---|---|
-/// | absent  | absent             | create both + bootstrap attestation v0 |
+/// | absent  | absent, no chain   | create both + bootstrap attestation v0 |
+/// | absent  | absent, chain left | error: chain survives, path named |
 /// | present | present, matches   | `Existing` |
 /// | present | absent/unreadable  | error: key missing, path named |
 /// | absent  | present            | error: public half missing |
@@ -71,8 +72,22 @@ fn present(path: &Path) -> Result<bool> {
 pub fn enroll(mur_home: &Path) -> Result<Enrollment> {
     let pub_path = human_pubkey_path(mur_home);
     let key_path = human_private_key_path(mur_home);
+    let _lock = lock_identity(mur_home)?;
     match (present(&pub_path)?, present(&key_path)?) {
-        (false, false) => create(mur_home),
+        (false, false) => {
+            // Both halves gone but the chain survives: a fresh pair would not
+            // be the key the chain names. Check before anything is written.
+            let chain = human_rotations_path(mur_home);
+            if present(&chain)? {
+                bail!(
+                    "human identity is incomplete: both keys are missing but the rotation \
+                     chain {} survives. Restore the keys from backup; MUR will not mint a \
+                     key the chain does not name.",
+                    chain.display()
+                );
+            }
+            create(mur_home)
+        }
         (true, true) => existing(mur_home),
         (true, false) => bail!(
             "human identity is incomplete: {} exists but the private key {} is missing. \
@@ -87,6 +102,30 @@ pub fn enroll(mur_home: &Path) -> Result<Enrollment> {
             pub_path.display()
         ),
     }
+}
+
+/// Lock file serializing every human identity mutation (enroll, rekey).
+/// Beside `keys/.human/`, not in it, so the key directory holds only keys;
+/// `keys/` is denied to every agent, so no sandbox can hold the lock.
+const LOCK_FILE: &str = ".human.lock";
+
+/// Hold an exclusive lock on the human identity until the guard drops.
+/// Callers must re-read the chain and keys after taking it: anything read
+/// before may be stale.
+pub(crate) fn lock_identity(mur_home: &Path) -> Result<fs::File> {
+    use fs2::FileExt;
+    let keys = mur_home.join(KEYS_DIR);
+    fs::create_dir_all(&keys).with_context(|| format!("create {}", keys.display()))?;
+    let path = keys.join(LOCK_FILE);
+    let f = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    f.lock_exclusive()
+        .with_context(|| format!("lock {}", path.display()))?;
+    Ok(f)
 }
 
 /// `enroll`, for call sites that need the human's key to proceed (D-2).

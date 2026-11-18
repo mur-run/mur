@@ -10,7 +10,8 @@
 //!   (D-6), and decide whether one `Human` event is trusted.
 //!
 //! Nothing here writes. Until a channel carries an `owner-key-enrolled`
-//! record (PR 2), [`HumanTrust::is_trusted_human`] is today's rule.
+//! record (PR 2), [`HumanTrust::is_trusted_human`] is today's rule for
+//! keyless humans and refuses keyed ones.
 
 use std::path::Path;
 
@@ -151,7 +152,9 @@ impl HumanTrust {
     /// - live record, keyless: `seq <= human_cut.seq` and router-signed.
     ///   `require_sig` does not relax this: past the cut a keyless human line
     ///   is exactly what an agent could write.
-    /// - no live record: today's rule, [`super::verify_event`].
+    /// - no live record, keyed: fail (spec §2.3). Verifying on the local chain
+    ///   is provenance, not enrollment on this channel.
+    /// - no live record, keyless: today's rule, [`super::verify_event`].
     pub fn is_trusted_human(
         &self,
         mur_home: &Path,
@@ -163,7 +166,7 @@ impl HumanTrust {
             return false;
         };
         let Some(live) = &self.live else {
-            return super::verify_event(mur_home, channel_id, ev, require_sig);
+            return key.is_none() && super::verify_event(mur_home, channel_id, ev, require_sig);
         };
         match key {
             Some(_) => super::verify_event(mur_home, channel_id, ev, true),

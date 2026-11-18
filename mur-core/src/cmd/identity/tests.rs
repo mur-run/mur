@@ -104,3 +104,53 @@ fn rekey_has_no_emergency() {
     assert!(rekey::run(t.path(), "emergency", true).is_err());
     assert_eq!(rotation_chain(t.path()).unwrap().head_key_version(), 0);
 }
+
+/// Another terminal completes a rekey while this one waits at the prompt.
+/// The stale command must refuse, not append a second `0 -> 1` signed by
+/// the retired key.
+#[test]
+fn rekey_refuses_when_head_moved_during_confirmation() {
+    let t = TempDir::new().unwrap();
+    enroll(t.path()).unwrap();
+    let home = t.path().to_path_buf();
+    let err = rekey::rotate(
+        t.path(),
+        "scheduled",
+        Some(|shown: rekey::Head| {
+            assert_eq!(shown.version, 0);
+            rekey::run(&home, "scheduled", true).unwrap();
+            Ok(true)
+        }),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("changed while waiting"), "{err}");
+    let chain = rotation_chain(t.path()).unwrap();
+    assert_eq!(chain.head_key_version(), 1);
+    assert_eq!(chain.entries().len(), 2);
+}
+
+/// Parallel `--yes` rekeys serialize: every one lands on a fresh head, the
+/// chain stays valid, and none deletes another's scratch key.
+#[test]
+fn concurrent_rekeys_serialize_into_a_valid_chain() {
+    const N: u32 = 8;
+    let t = TempDir::new().unwrap();
+    enroll(t.path()).unwrap();
+    let home = t.path().to_path_buf();
+    let handles: Vec<_> = (0..N)
+        .map(|_| {
+            let h = home.clone();
+            std::thread::spawn(move || rekey::run(&h, "scheduled", true))
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap().unwrap();
+    }
+    let chain = rotation_chain(t.path()).unwrap();
+    assert_eq!(chain.head_key_version(), N);
+    assert_eq!(chain.entries().len(), N as usize + 1);
+    let s = crate::identity_enroll::HumanSigner::load(t.path()).unwrap();
+    assert_eq!(s.pubkey(), chain.head_pubkey());
+    assert!(!human_key_dir(t.path()).join(".rekey-scratch").exists());
+}

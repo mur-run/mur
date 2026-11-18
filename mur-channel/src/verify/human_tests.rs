@@ -297,3 +297,22 @@ fn agent_named_identity_cannot_reach_human_dir() {
     };
     assert_eq!(super::super::actor_key_dir(home, &dot_human), None);
 }
+
+/// Spec §2.3: a keyed human is trusted only when the channel has a live
+/// owner record. A message that verifies on the local chain is provenance,
+/// not enrollment; the legacy fallback is for keyless humans only.
+#[test]
+fn keyed_human_without_live_record_is_untrusted() {
+    let tmp = tempfile::tempdir().unwrap();
+    router(tmp.path());
+    let h = AgentIdentity::generate();
+    enroll(tmp.path(), &[&h]);
+    let ev = msg(0, &h, keyed(&h), Some(0));
+    // Provenance holds on its own...
+    assert!(super::super::verify_event(tmp.path(), CH, &ev, true));
+    // ...but an unenrolled channel does not trust it.
+    let t = HumanTrust::from_log(tmp.path(), CH, &log(std::slice::from_ref(&ev)), None);
+    assert!(t.live_record().is_none());
+    assert!(!t.is_trusted_human(tmp.path(), CH, &ev, false));
+    assert!(!t.is_trusted_human(tmp.path(), CH, &ev, true));
+}

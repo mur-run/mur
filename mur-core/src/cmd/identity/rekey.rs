@@ -15,7 +15,7 @@ use mur_common::identity::human::{
 };
 use mur_common::identity::{AgentIdentity, RotationAttestation, RotationReason};
 
-use crate::identity_enroll::HumanSigner;
+use crate::identity_enroll::{HumanSigner, lock_identity};
 
 const SCRATCH: &str = ".rekey-scratch";
 
@@ -31,8 +31,17 @@ fn parse_reason(s: &str) -> Result<RotationReason> {
     }
 }
 
-pub(super) fn run(mur_home: &Path, reason: &str, yes: bool) -> Result<()> {
-    let reason = parse_reason(reason)?;
+/// The head the user was shown, and so the one they agreed to rotate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Head {
+    pub version: u32,
+    pub pubkey: [u8; 32],
+}
+
+/// Load the chain and the signer, and check they agree. Called once to show
+/// the prompt and again under the lock, because the first read may be stale
+/// by the time the user answers.
+fn load_head(mur_home: &Path) -> Result<(Head, HumanSigner)> {
     let chain = match rotation_chain(mur_home) {
         Ok(c) => c,
         Err(HumanIdentityError::NotEnrolled { .. }) => {
@@ -44,24 +53,68 @@ pub(super) fn run(mur_home: &Path, reason: &str, yes: bool) -> Result<()> {
     if signer.pubkey() != chain.head_pubkey() {
         bail!("the private key does not match the chain head; restore the matching key first");
     }
-    let old_version = chain.head_key_version();
-    let new_version = old_version + 1;
-    let old_pub = mur_common::identity::encode_pubkey_bytes(&chain.head_pubkey());
+    let head = Head {
+        version: chain.head_key_version(),
+        pubkey: chain.head_pubkey(),
+    };
+    Ok((head, signer))
+}
 
-    if !yes {
-        eprintln!("About to rotate the human owner key:");
-        eprintln!("  current key_version: {old_version}");
-        eprintln!("  current pubkey:      {old_pub}");
-        eprintln!("  next key_version:    {new_version}");
-        eprint!("\nProceed? [y/N] ");
-        std::io::stderr().flush().ok();
-        let mut buf = String::new();
-        std::io::stdin().read_line(&mut buf).ok();
-        if !buf.trim().eq_ignore_ascii_case("y") {
-            eprintln!("aborted");
-            return Ok(());
-        }
+fn prompt(head: Head) -> Result<bool> {
+    let old_pub = mur_common::identity::encode_pubkey_bytes(&head.pubkey);
+    eprintln!("About to rotate the human owner key:");
+    eprintln!("  current key_version: {}", head.version);
+    eprintln!("  current pubkey:      {old_pub}");
+    eprintln!("  next key_version:    {}", head.version + 1);
+    eprint!("\nProceed? [y/N] ");
+    std::io::stderr().flush().ok();
+    let mut buf = String::new();
+    std::io::stdin().read_line(&mut buf).ok();
+    Ok(buf.trim().eq_ignore_ascii_case("y"))
+}
+
+pub(super) fn run(mur_home: &Path, reason: &str, yes: bool) -> Result<()> {
+    if yes {
+        rotate(mur_home, reason, None::<fn(Head) -> Result<bool>>)
+    } else {
+        rotate(mur_home, reason, Some(prompt))
     }
+}
+
+/// Rotate the key. With `confirm`, the head shown to it is the only head this
+/// call will rotate: if another rekey lands while it waits, refuse rather
+/// than sign a second `n -> n+1` with a retired key. Without it (`--yes`),
+/// rotate whatever the head is once the lock is held.
+pub(super) fn rotate<F>(mur_home: &Path, reason: &str, confirm: Option<F>) -> Result<()>
+where
+    F: FnOnce(Head) -> Result<bool>,
+{
+    let reason = parse_reason(reason)?;
+    let (shown, _) = load_head(mur_home)?;
+    let agreed = match confirm {
+        Some(f) => {
+            if !f(shown)? {
+                eprintln!("aborted");
+                return Ok(());
+            }
+            Some(shown)
+        }
+        None => None,
+    };
+
+    let _lock = lock_identity(mur_home)?;
+    let (head, signer) = load_head(mur_home)?;
+    if agreed.is_some_and(|a| a != head) {
+        bail!(
+            "the human identity changed while waiting for confirmation (key_version {} -> {}); \
+             nothing was written. Re-run to rotate the current key.",
+            shown.version,
+            head.version
+        );
+    }
+    let old_version = head.version;
+    let new_version = old_version + 1;
+    let old_pub = mur_common::identity::encode_pubkey_bytes(&head.pubkey);
 
     let new_identity = AgentIdentity::generate();
     let new_pub = new_identity.pubkey_text();
@@ -85,6 +138,9 @@ pub(super) fn run(mur_home: &Path, reason: &str, yes: bool) -> Result<()> {
     Ok(())
 }
 
+/// Callers hold [`lock_identity`]: the scratch directory is shared, so two
+/// unlocked rotations would delete each other's new key.
+///
 /// Order matters for crash safety: the old secret is set aside before the new
 /// one lands, and the public half is promoted last, so `identity.pub` never
 /// names a key whose secret is missing. A crash in between leaves a state

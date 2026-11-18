@@ -171,3 +171,18 @@ fn signer_signs_under_the_enrolled_key() {
     vk.verify_strict(b"hello", &ed25519_dalek::Signature::from_bytes(&sig))
         .unwrap();
 }
+
+/// Both key halves gone but the chain survives: minting a new pair would
+/// leave a fresh key the old chain does not name. Refuse before writing.
+#[test]
+fn chain_only_state_is_refused_and_untouched() {
+    let tmp = TempDir::new().unwrap();
+    let mur = tmp.path();
+    enroll(mur).unwrap();
+    fs::remove_file(human_pubkey_path(mur)).unwrap();
+    fs::remove_file(human_private_key_path(mur)).unwrap();
+    assert!(human_rotations_path(mur).exists());
+    assert_refused_untouched(mur, "rotation chain");
+    assert!(!human_pubkey_path(mur).exists());
+    assert!(!human_private_key_path(mur).exists());
+}
