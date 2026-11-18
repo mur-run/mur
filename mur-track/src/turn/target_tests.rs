@@ -91,3 +91,34 @@ fn sweep_clears_stale_trash() {
     assert!(!trash.exists());
     assert!(report.removed.is_empty(), "trash is not a turn dir");
 }
+
+#[test]
+fn sweep_keeps_scratch_of_live_turn_removes_orphan_scratch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path();
+    mkdir(&p.join(WORKTREES_DIR).join("turn-a"));
+    // A warm-cache clone still in flight for a live turn.
+    let live_scratch = make_turn_dir(p, "turn-a.tmp-4242");
+    // Left behind by a crashed clone whose turn is gone.
+    let orphan_scratch = make_turn_dir(p, "turn-b.tmp-4242");
+
+    let report = sweep_orphan_turn_targets(p, "turns");
+
+    assert!(live_scratch.exists());
+    assert!(!orphan_scratch.exists());
+    assert_eq!(report.removed, vec![orphan_scratch]);
+    assert!(report.failed.is_empty());
+}
+
+#[test]
+fn sweep_judges_non_pid_suffix_by_full_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path();
+    mkdir(&p.join(WORKTREES_DIR).join("turn-a"));
+    // Not a scratch dir: the suffix after `.tmp-` is not a pid.
+    let odd = make_turn_dir(p, "turn-a.tmp-x");
+
+    sweep_orphan_turn_targets(p, "turns");
+
+    assert!(!odd.exists());
+}

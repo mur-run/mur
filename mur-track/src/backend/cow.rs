@@ -52,7 +52,7 @@ const FLEET_SKIP_SUBDIRS: &[&str] = &["incremental"];
 const PROFILE_MARKER: &str = ".fingerprint";
 
 /// Suffix of the scratch dir a clone is built in before it is renamed into place.
-const TMP_SUFFIX: &str = ".tmp-";
+pub(crate) const TMP_SUFFIX: &str = ".tmp-";
 
 /// What a filtered build-cache clone leaves out.
 pub struct CachePlan<'a> {
@@ -190,23 +190,42 @@ fn clone_into(src: &Path, tmp: &Path, plan: &CachePlan, copy: Copier) -> Result<
 }
 
 fn cow_copy_dir(method: &CowMethod, src: &Path, dst: &Path) -> Result<()> {
-    let status = match method {
+    let output = match method {
         CowMethod::ApfsClone => Command::new("cp")
             .args(["-cR"])
             .arg(src)
             .arg(dst)
-            .status()?,
+            .output()?,
         CowMethod::Reflink => Command::new("cp")
             .args(["--reflink=always", "-a"])
             .arg(src)
             .arg(dst)
-            .status()?,
+            .output()?,
         CowMethod::Skip => return Ok(()),
     };
-    if !status.success() {
-        anyhow::bail!("cp exited with {status}");
+    if !output.status.success() {
+        anyhow::bail!(
+            "cp exited with {}{}",
+            output.status,
+            stderr_tail(&output.stderr)
+        );
     }
     Ok(())
+}
+
+/// How many trailing stderr lines of a failed `cp` go into the error. A large
+/// tree can fail on thousands of files; the last few name the cause.
+const CP_STDERR_TAIL_LINES: usize = 5;
+
+/// `": <last lines>"` of `stderr`, or empty when it has none.
+fn stderr_tail(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    let start = lines.len().saturating_sub(CP_STDERR_TAIL_LINES);
+    format!(": {}", lines[start..].join(" | "))
 }
 
 /// Take a Time Machine local snapshot before parallel track creation so the
@@ -272,6 +291,17 @@ mod filtered_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stderr_tail_keeps_last_lines() {
+        assert_eq!(stderr_tail(b""), "");
+        assert_eq!(stderr_tail(b"\n  \n"), "");
+        let many: String = (1..=8).map(|i| format!("cp: e{i}\n")).collect();
+        assert_eq!(
+            stderr_tail(many.as_bytes()),
+            ": cp: e4 | cp: e5 | cp: e6 | cp: e7 | cp: e8"
+        );
+    }
 
     #[test]
     fn detect_returns_known_variant() {
