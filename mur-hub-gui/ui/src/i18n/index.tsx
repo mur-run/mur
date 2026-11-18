@@ -24,7 +24,10 @@ export function translate(
 function detectDefault(): Lang {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored === "en" || stored === "zh-TW") return stored;
-  return navigator.language.toLowerCase().startsWith("zh") ? "zh-TW" : "en";
+  // Node < 21 has no global `navigator` (CI's .nvmrc pins Node 20), and the
+  // SSR-style tests render LanguageProvider outside a browser.
+  const lang = typeof navigator === "undefined" ? "" : navigator.language;
+  return lang.toLowerCase().startsWith("zh") ? "zh-TW" : "en";
 }
 
 interface Ctx {
