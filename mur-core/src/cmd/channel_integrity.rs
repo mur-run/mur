@@ -17,7 +17,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use mur_channel::store::AnchorMismatchKind;
 use mur_channel::store::ChannelStore;
-use mur_common::channel::ChannelActor;
+use mur_common::channel::{ChannelActor, EventKind};
 
 /// Exit code for a channel that verified clean.
 pub const EXIT_INTACT: i32 = 0;
@@ -59,6 +59,43 @@ pub struct IntegrityReport {
     /// The head file exists but could not be read or parsed. When set the
     /// other checks were skipped, because the reader refuses such a channel.
     pub head_error: Option<String>,
+    /// The channel's human-owner state (B4). Default on a channel with no
+    /// owner record, which is every legacy channel.
+    pub owner: OwnerReport,
+}
+
+/// What integrity sees of the owner record (B2's [`HumanTrust`]).
+///
+/// [`HumanTrust`]: mur_channel::verify::human::HumanTrust
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OwnerReport {
+    /// `seq` of the live `owner-key-enrolled` record, if any.
+    pub live_record_seq: Option<u64>,
+    /// `seq` of records that do not verify under the local human chain
+    /// (another machine's key, a retired key). Reported, never damage (D-7).
+    pub ignored_records: Vec<u64>,
+    /// The live record is not covered by the signed head (D-3). Damage.
+    pub unanchored: bool,
+    /// `human_cut` points past the head or at a line that does not hash to
+    /// it (D-6). Damage.
+    pub cut_mismatch: bool,
+}
+
+impl OwnerReport {
+    fn from_trust(trust: &mur_channel::verify::human::HumanTrust) -> Self {
+        use mur_channel::verify::human::OwnerDamage;
+        let has = |d: OwnerDamage| trust.damage().contains(&d);
+        Self {
+            live_record_seq: trust.live_record().map(|r| r.seq),
+            ignored_records: trust.ignored_records().to_vec(),
+            unanchored: has(OwnerDamage::Unanchored),
+            cut_mismatch: has(OwnerDamage::CutBeyondHead) || has(OwnerDamage::CutLineHashMismatch),
+        }
+    }
+
+    fn is_damaged(&self) -> bool {
+        self.unanchored || self.cut_mismatch
+    }
 }
 
 impl IntegrityReport {
@@ -72,6 +109,7 @@ impl IntegrityReport {
             && !self.anchor_dirty
             && !self.repair_pending
             && self.head_error.is_none()
+            && !self.owner.is_damaged()
     }
 
     pub fn exit_code(&self) -> i32 {
@@ -140,6 +178,22 @@ impl IntegrityReport {
         }
         push_list(&mut out, "unparseable lines", &self.unparseable_lines);
         push_list(&mut out, "bad signature on seq", &self.unverified_seqs);
+        if let Some(seq) = self.owner.live_record_seq {
+            out.push_str(&format!("  owner: live record at seq {seq}\n"));
+        }
+        if self.owner.unanchored {
+            out.push_str("  owner record is not covered by the signed head\n");
+        }
+        if self.owner.cut_mismatch {
+            out.push_str(
+                "  owner record's human_cut does not match the log (past the head, or the line was rewritten)\n",
+            );
+        }
+        push_list(
+            &mut out,
+            "note: owner records under a key this machine does not hold (ignored, not damage) at seq",
+            &self.owner.ignored_records,
+        );
         push_list(&mut out, "broken hash chain at seq", &self.chain_breaks);
         push_list(
             &mut out,
@@ -260,9 +314,23 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
         damage.anchor_mismatch = again.anchor_mismatch;
     }
 
+    // Owner state from the same bytes the line count came from (D-6 hashes
+    // the raw line). A non-UTF-8 log has unparseable lines already counted.
+    let trust = mur_channel::verify::human::HumanTrust::from_log(
+        mur_home,
+        channel_id,
+        &String::from_utf8_lossy(log.as_deref().unwrap_or_default()),
+        head.as_ref(),
+    );
+    report.owner = OwnerReport::from_trust(&trust);
+    let ignored = trust.ignored_records();
+
     report.events = events.len();
     report.unverified_seqs = events
         .iter()
+        // A foreign owner record fails its signature by construction; it is
+        // reported under `owner`, not as damage (D-7).
+        .filter(|ev| !(ev.kind == EventKind::OwnerKeyEnrolled && ignored.contains(&ev.seq)))
         .filter(|ev| !crate::channel_verify::verify_event(mur_home, channel_id, ev, require_sig))
         .map(|ev| ev.seq)
         .chain(
@@ -330,3 +398,7 @@ pub fn run(mur_home: &Path, channel_id: &str) -> Result<i32> {
 #[cfg(test)]
 #[path = "channel_integrity_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "channel_integrity_owner_tests.rs"]
+mod owner_tests;
