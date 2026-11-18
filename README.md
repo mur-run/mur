@@ -770,6 +770,11 @@ Agent** wizard offers the same catalog as a source.
   prints the text to send the agent; its first visit is the test, and what
   it reports is the agent's own report, not a check by MUR.
   `mur browser answer --login` needs a terminal.
+  The same card opens by itself in `murmur` when the agent files a
+  `browser_request`, and in Hub as a "needs you" item: one button per row,
+  "logged in" while a login browser is open, and "saved, not yet tried"
+  until the agent reports back. Neither UI can open a non-default port;
+  the card only prints the `--open-port` line for you to run.
   To unbind everything, rerun `/browser live <hosts> --no-profile`; to keep
   some, name only those (`--profile a --profile b`). The saved profiles stay
   on disk.
