@@ -39,7 +39,7 @@ pub(crate) enum Choice {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Answered {
+pub enum Answered {
     /// Applied; the request is gone. `effect` is `None` when nothing was
     /// written (D12).
     Done {

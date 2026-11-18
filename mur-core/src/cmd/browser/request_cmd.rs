@@ -8,10 +8,10 @@ use anyhow::{Result, bail};
 use mur_browser_request::{PendingRequest, Site};
 
 use super::live_effect::Effect;
-use super::live_entry::{LIVE_ENTRY, norm};
-use super::request_card::{
-    self as card, Answer, Answered, Card, Choice, Offer, Profile, Reach, use_offer,
-};
+#[cfg(test)]
+use super::request_card::Choice;
+use super::request_card::front::{self, Pick};
+use super::request_card::{self as card, Answered, Card, Offer, Reach};
 
 pub fn requests(agent: Option<&str>) -> Result<()> {
     let home = super::mur_home()?;
@@ -170,135 +170,89 @@ pub struct AnswerArgs<'a> {
     pub dismiss: bool,
 }
 
-/// The flags against the card, for every answer but `--login` (whose row
+/// The flags as a card pick, for every answer but `--login` (whose row
 /// does not exist until the plan is made). Every `Choice` comes from a row
-/// or a reach the card printed (D11).
+/// or a reach the card printed (D11); [`front::choice_for`] decides it.
+#[cfg(test)]
 fn choose(c: &Card, a: &AnswerArgs<'_>) -> Result<Choice, String> {
-    if a.dismiss {
-        return Ok(Choice::Dismiss);
-    }
-    match (c, a.profile, a.allow) {
-        (Card::NoLiveEntry, ..) => Err("the agent has no live browser entry".into()),
-        (Card::Login { rows, .. }, Some(p), _) => {
-            let Some(row) = rows.iter().find(|r| r.name == p) else {
-                let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-                return Err(format!(
-                    "{p:?} is not on this card (rows: {}); see `mur browser requests`",
-                    if names.is_empty() {
-                        "none".into()
-                    } else {
-                        names.join(", ")
-                    }
-                ));
-            };
-            use_offer(&row.name, &row.domains, &row.offer, a.replace)
-        }
-        (Card::Login { .. }, None, _) => {
-            Err("this request needs a login: pick --profile <row>, --login, or --dismiss".into())
-        }
-        (Card::Reach { .. }, Some(_), _) => {
-            Err("this request needs no login: answer with --allow or --dismiss".into())
-        }
-        (Card::Reach { reach, .. }, None, true) => match reach {
-            Reach::Allowed | Reach::Unscoped { .. } => Ok(Choice::Allow { approved: vec![] }),
-            Reach::NeedsHost { missing } => Ok(Choice::Allow {
-                approved: missing.clone(),
-            }),
-            Reach::Disabled { why } => Err(format!("not available: {why}")),
+    front::choice_for(c, &pick_of(c, a)?)
+}
+
+fn pick_of(c: &Card, a: &AnswerArgs<'_>) -> Result<Pick, String> {
+    Ok(match (a.dismiss, a.profile, a.allow) {
+        (true, ..) => Pick::Dismiss,
+        (_, Some(p), _) => Pick::Row {
+            name: p.into(),
+            replace: a.replace,
         },
-        (Card::Reach { .. }, None, false) => Err("answer with --allow or --dismiss".into()),
-    }
+        (_, None, true) => Pick::Allow,
+        (_, None, false) => {
+            return Err(match c {
+                Card::NoLiveEntry => "the agent has no live browser entry".into(),
+                Card::Login { .. } => {
+                    "this request needs a login: pick --profile <row>, --login, or --dismiss".into()
+                }
+                Card::Reach { .. } => "answer with --allow or --dismiss".into(),
+            });
+        }
+    })
 }
 
 pub async fn answer(a: AnswerArgs<'_>) -> Result<()> {
     let home = super::mur_home()?;
     let agent = crate::a2a_dial::canonicalize_agent_name(&home, a.agent);
     let want = Site::parse(a.site).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let Some(req) = card::open_requests(&home, &agent)
-        .into_iter()
-        .find(|r| r.site == want)
-    else {
-        bail!(
-            "{agent} has no browser request for {} (see `mur browser requests`)",
-            want.origin()
-        );
-    };
-    let (shown, snapshot) = card::card_for(&home, &agent, &req)?;
-    let port = match &shown {
-        Card::Login { port, .. } | Card::Reach { port, .. } => *port,
-        Card::NoLiveEntry => None,
-    };
-    if a.open_port && port.is_none() {
-        println!("no port to open for {}.", req.site.origin());
+    let shown = front::show(&home, &agent, &want)?;
+    if a.open_port && shown.port().is_none() {
+        println!("no port to open for {}.", want.origin());
     }
-    let bound = super::bind::bound_domains(&home);
-    let mut saved_as = None;
-    let choice = if a.login {
-        if matches!(shown, Card::Reach { .. }) {
-            bail!("✗ {agent}: this request needs no login: answer with --allow or --dismiss");
+    let pick = if a.login {
+        Pick::Login {
+            name: a.name.map(str::to_owned),
+            reauth: a.reauth,
+            replace: a.replace,
         }
-        let plan = card::login_plan(&home, &req.site, a.name, a.reauth)?;
-        // Council B4: decide the row before anyone signs in.
-        let entry = snapshot.iter().find(|e| e.name == LIVE_ENTRY);
-        let Some(entry) = entry else {
-            bail!("✗ {agent}: no live browser entry — nothing written");
-        };
-        let row = Profile {
-            name: plan.profile.clone(),
-            domains: plan.allow_domains.clone(),
-        };
-        let offer = card::offer_for(entry, &row, &norm(req.site.host()), &bound);
-        let choice =
-            use_offer(&plan.profile, &plan.allow_domains, &offer, a.replace).map_err(|why| {
-                anyhow::anyhow!("✗ {agent}: {why} — nothing written, no browser opened")
-            })?;
-        if plan.replace {
-            let others = card::shared_with(&home, &agent, &plan.profile);
-            println!("this replaces the saved login {:?}.", plan.profile);
-            if !others.is_empty() {
-                println!(
-                    "  {} also use it and get the new login on their next restart.",
-                    others.join(", ")
-                );
-            }
-        }
+    } else {
+        let nothing = |why| anyhow::anyhow!("✗ {agent}: {why} — nothing written");
+        let pick = pick_of(&shown.card, &a).map_err(nothing)?;
+        front::choice_for(&shown.card, &pick).map_err(nothing)?;
+        pick
+    };
+    let mut say = |l: String| println!("{l}");
+    let run_login = async |plan: &card::LoginPlan, say: &mut (dyn FnMut(String) + Send)| {
         let engine = super::auth::card_browser(&home)?;
-        println!("opening {} for the login.", engine.playwright_name());
+        say(format!(
+            "opening {} for the login.",
+            engine.playwright_name()
+        ));
         card::login(
             &home,
-            &plan,
+            plan,
             engine.playwright_name(),
             mur_browser::proxy::enter_on_stdin(),
         )
         .await?;
-        saved_as = Some(plan.profile);
-        choice
-    } else {
-        choose(&shown, &a).map_err(|why| anyhow::anyhow!("✗ {agent}: {why} — nothing written"))?
+        Ok(())
     };
-    let answer = Answer {
-        agent: &agent,
-        agent_home: &home.join("agents").join(&agent),
-        request: &req,
-        port,
-        snapshot: &snapshot,
-        login_saved: saved_as.as_deref(),
-    };
-    let mut ops = crate::cmd::agent::cli::browser_live_cmd::ProfileOps(&agent);
-    let got = card::answer(
-        &answer,
-        &choice,
+    // `--open-port` is the one path that grants a port (D1, #2456).
+    let front::Settled { answered, saved_as } = front::settle_with(
+        &home,
+        &shown,
+        pick,
         a.open_port,
-        &bound,
-        &mut ops,
+        run_login,
+        &mut say,
+        &mut crate::cmd::agent::cli::browser_live_cmd::ProfileOps(&agent),
         &mut card::AgentPorts(&agent),
-    )?;
+    )
+    .await?;
+    let port = shown.port();
     // A refusal after a login must not say "nothing written" (council B4).
     let kept = match &saved_as {
         Some(p) => format!("the login is saved as {p:?}; the request stays open"),
         None => "nothing written; the request stays open".into(),
     };
-    match got {
+    match answered {
         Answered::Done {
             effect,
             notes,
