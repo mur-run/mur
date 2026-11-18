@@ -10,6 +10,7 @@ fn spec<'a>(cmd: &'a str, dir: &'a Path, vault: Option<Arc<SecretVault>>) -> Spa
             .collect(),
         spool_dir: dir,
         vault,
+        slot: None,
     }
 }
 
@@ -241,6 +242,7 @@ async fn unwritable_spool_dir_is_a_note_not_a_failure() {
         env: vec![("PATH".into(), std::env::var("PATH").unwrap_or_default())],
         spool_dir: &bad,
         vault: None,
+        slot: None,
     };
     let id = t.spawn(s).unwrap();
     let p = t.poll(&id, Duration::from_secs(5)).await.unwrap();
@@ -282,6 +284,7 @@ async fn child_env_is_exactly_the_spec_env() {
         .collect(),
         spool_dir: dir.path(),
         vault: None,
+        slot: None,
     };
     let id = t.spawn(s).unwrap();
     let p = t.poll(&id, Duration::from_secs(5)).await.unwrap();

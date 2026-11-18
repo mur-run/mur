@@ -375,6 +375,7 @@ async fn drain_stays_within_budget_when_jobs_ignore_sigterm() {
                     env: vec![("PATH".into(), std::env::var("PATH").unwrap_or_default())],
                     spool_dir: dir.path(),
                     vault: None,
+                    slot: None,
                 })
             })
             .await
