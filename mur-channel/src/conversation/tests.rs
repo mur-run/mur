@@ -108,6 +108,7 @@ impl Fx {
                     identity: signer,
                     kv: 1,
                     anchor_home: None,
+                    owner: None,
                 },
                 || Ok(true),
                 |_| Ok(serde_json::json!({ "type": REPAIR_EVENT_TYPE, "text": "repaired" })),

@@ -8,11 +8,22 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use mur_channel::service::restart::RestartOwner;
 use mur_channel::service::{ChannelOwner, RouterSeal};
 use mur_common::identity::AgentIdentity;
 
 use crate::channel_writer::{ROUTER_AGENT, read_key_version};
 use crate::identity_enroll::{HumanSigner, ensure_enrolled};
+
+/// Whether A0 is in force on this build: the agent sandbox refuses every
+/// write grant over `<mur_home>/identity` (D-7). Asked of the router agent's
+/// launch chain; the rule is the same for every agent.
+pub fn identity_protected(mur_home: &Path) -> bool {
+    mur_agent_runtime::sandbox::launch_chain::LaunchChain::new(
+        &mur_home.join("agents").join(ROUTER_AGENT),
+    )
+    .protects_human_identity()
+}
 
 /// The human signer and the router key that seals the head, loaded once.
 pub struct HumanOwner {
@@ -41,14 +52,28 @@ impl HumanOwner {
         })
     }
 
+    /// The owner a `restart_chain` carries onto a repaired chain (C5).
+    /// `identity_protected` is A0's answer, decided by the caller.
+    pub fn restart_owner(&self, identity_protected: bool) -> RestartOwner<'_> {
+        RestartOwner {
+            signer: &self.signer,
+            router: self.router_seal(),
+            identity_protected,
+        }
+    }
+
+    fn router_seal(&self) -> RouterSeal<'_> {
+        RouterSeal {
+            identity: &self.router,
+            kv: self.router_kv,
+            key_home: &self.router_home,
+        }
+    }
+
     pub fn owner(&self) -> ChannelOwner<'_> {
         ChannelOwner::Human {
             signer: &self.signer,
-            router: RouterSeal {
-                identity: &self.router,
-                kv: self.router_kv,
-                key_home: &self.router_home,
-            },
+            router: self.router_seal(),
         }
     }
 }

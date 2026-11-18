@@ -673,6 +673,8 @@ mod anchored;
 mod create;
 mod enroll;
 pub mod restart;
+#[cfg(test)]
+mod test_home;
 mod transition;
 
 #[cfg(test)]

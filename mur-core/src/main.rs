@@ -8,6 +8,8 @@ mod auth;
 mod bridge_keychain;
 mod capabilities;
 mod capture;
+#[allow(dead_code)] // `owner()` is used by the lib (creators), not the bin yet
+mod channel_owner;
 mod channel_verify;
 mod channel_writer;
 mod codebase;
