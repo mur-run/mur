@@ -175,7 +175,10 @@ mod tests {
     fn a_racing_append_waits_until_the_fresh_chain_is_written() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_workflow("restart").unwrap().id;
+        let ch = svc
+            .create_for_workflow("restart", crate::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         note(&svc, &ch, 0);
         note(&svc, &ch, 1);
         let identity = AgentIdentity::generate();
@@ -227,7 +230,10 @@ mod tests {
     fn a_failed_prepare_writes_no_record() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_workflow("restart").unwrap().id;
+        let ch = svc
+            .create_for_workflow("restart", crate::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         note(&svc, &ch, 0);
         let identity = AgentIdentity::generate();
         let err = svc.restart_chain(
@@ -263,7 +269,10 @@ mod tests {
     fn a_recheck_that_finds_no_damage_touches_nothing() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_workflow("restart").unwrap().id;
+        let ch = svc
+            .create_for_workflow("restart", crate::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         note(&svc, &ch, 0);
         let before = std::fs::read(svc.store().events_path(&ch).unwrap()).unwrap();
         let identity = AgentIdentity::generate();
@@ -295,7 +304,10 @@ mod tests {
     fn the_recheck_runs_under_the_append_lock() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_workflow("restart").unwrap().id;
+        let ch = svc
+            .create_for_workflow("restart", crate::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         note(&svc, &ch, 0);
         let identity = AgentIdentity::generate();
         let done = Arc::new(AtomicBool::new(false));

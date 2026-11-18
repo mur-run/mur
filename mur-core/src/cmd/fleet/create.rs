@@ -45,7 +45,12 @@ pub fn cmd_fleet_create(
         .unwrap_or_else(|| CONCIERGE_AGENT.to_string());
 
     let svc = mur_channel::ChannelService::open(mur_home)?;
-    let ch = svc.create_for_fleet(name, &router_name, &members)?;
+    let ch = svc.create_for_fleet(
+        name,
+        &router_name,
+        &members,
+        mur_channel::service::ChannelOwner::Legacy,
+    )?;
 
     let fleet = Fleet {
         name: name.to_string(),

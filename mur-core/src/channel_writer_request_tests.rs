@@ -29,7 +29,7 @@ fn request(home: &Path, ch: &str, r: Refuse) -> anyhow::Result<ChannelEvent> {
 fn channel(home: &Path) -> String {
     ChannelService::open(home)
         .unwrap()
-        .create_for_workflow("g")
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
         .unwrap()
         .id
 }

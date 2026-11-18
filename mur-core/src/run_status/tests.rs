@@ -287,7 +287,9 @@ fn status_of_reports_a_genuine_channel_fault_instead_of_none() {
     let tmp = tempfile::tempdir().unwrap();
     let mur_home = tmp.path();
     let svc = mur_channel::ChannelService::open(mur_home).unwrap();
-    let ch = svc.create_for_workflow("faulty-channel").unwrap();
+    let ch = svc
+        .create_for_workflow("faulty-channel", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     // The dir the store writes to — `MUR_RUN_OWNER` moves it under the agent.
     let dir = store::record_dir(mur_home, RunKind::Job, None, "run-x");
     std::fs::create_dir_all(&dir).unwrap();
@@ -334,7 +336,9 @@ fn status_of_rebuilds_from_the_channel_when_the_cache_is_corrupt() {
     // A channel with a finished (failed) run's worth of events, written
     // the way the executor writes them — run_id stamped on each payload.
     let svc = mur_channel::ChannelService::open(mur_home).unwrap();
-    let ch = svc.create_for_workflow("corrupt-cache").unwrap();
+    let ch = svc
+        .create_for_workflow("corrupt-cache", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     svc.append_delegation(&ch.id, "pm", "child-1", None, Some("run-c"))
         .unwrap();
     svc.transition(
@@ -394,7 +398,9 @@ fn status_of_reconciles_a_parseable_running_cache_with_the_channel() {
 
     // The channel's authoritative tail: this run completed.
     let svc = mur_channel::ChannelService::open(mur_home).unwrap();
-    let ch = svc.create_for_workflow("reconcile").unwrap();
+    let ch = svc
+        .create_for_workflow("reconcile", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     svc.append_delegation(&ch.id, "pm", "child-1", None, Some("run-r"))
         .unwrap();
     svc.transition(
@@ -456,7 +462,12 @@ fn status_of_warns_when_the_reconcile_sidecar_read_fails() {
 
     // The channel's authoritative tail: this run completed.
     let svc = mur_channel::ChannelService::open(mur_home).unwrap();
-    let ch = svc.create_for_workflow("corrupt-sidecar").unwrap();
+    let ch = svc
+        .create_for_workflow(
+            "corrupt-sidecar",
+            mur_channel::service::ChannelOwner::Legacy,
+        )
+        .unwrap();
     svc.append_delegation(&ch.id, "pm", "child-1", None, Some("run-s"))
         .unwrap();
     svc.transition(
@@ -531,7 +542,12 @@ fn status_of_reconciliation_ignores_other_runs_on_the_same_channel() {
     let mur_home = tmp.path();
 
     let svc = mur_channel::ChannelService::open(mur_home).unwrap();
-    let ch = svc.create_for_workflow("reconcile-shared").unwrap();
+    let ch = svc
+        .create_for_workflow(
+            "reconcile-shared",
+            mur_channel::service::ChannelOwner::Legacy,
+        )
+        .unwrap();
     // Run B completed on the shared channel; run R is still running.
     svc.append_delegation(&ch.id, "pm", "child-b", None, Some("run-b"))
         .unwrap();

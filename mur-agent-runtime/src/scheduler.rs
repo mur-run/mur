@@ -192,7 +192,7 @@ fn schedule_channel(svc: &ChannelService, mur_home: &Path, agent: &str) -> Resul
             return Ok(id.to_string());
         }
     }
-    let ch = svc.create_for_agent(agent)?;
+    let ch = svc.create_for_agent(agent, mur_channel::service::ChannelOwner::Legacy)?;
     if let Some(dir) = marker.parent() {
         std::fs::create_dir_all(dir)?;
     }

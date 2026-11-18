@@ -35,7 +35,9 @@ fn human() -> ChannelActor {
 }
 
 fn exercise_all_paths(svc: &ChannelService) -> String {
-    let ch = svc.create_for_agent("seal-agent").unwrap();
+    let ch = svc
+        .create_for_agent("seal-agent", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let id = ch.id.clone();
     let identity = AgentIdentity::generate();
     svc.append_message(&id, human(), EventKind::Message, "hi", None)
@@ -110,12 +112,16 @@ fn a_failing_hook_fails_the_write_but_leaves_the_line() {
     let tmp = TempDir::new().unwrap();
     let hook: SharedSealHook = Arc::new(|_| anyhow::bail!("seal down"));
     let svc = ChannelService::open(tmp.path()).unwrap().with_seal(hook);
-    let ch = svc.create_for_agent("seal-agent").unwrap_or_else(|_| {
-        // create_for_agent may itself write through the hook; fall back to a
-        // hook-free service to get a channel id.
-        let plain = ChannelService::open(tmp.path()).unwrap();
-        plain.create_for_agent("seal-agent").unwrap()
-    });
+    let ch = svc
+        .create_for_agent("seal-agent", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap_or_else(|_| {
+            // create_for_agent may itself write through the hook; fall back to a
+            // hook-free service to get a channel id.
+            let plain = ChannelService::open(tmp.path()).unwrap();
+            plain
+                .create_for_agent("seal-agent", mur_channel::service::ChannelOwner::Legacy)
+                .unwrap()
+        });
     let before = svc.load_events(&ch.id).unwrap().len();
     let r = svc.append_message(&ch.id, human(), EventKind::Message, "x", None);
     assert!(r.is_err(), "B1: a failed seal must surface as Err");
@@ -131,7 +137,10 @@ fn append_presigned_persists_sig_verbatim_and_runs_the_seal_hook() {
     let tmp = TempDir::new().unwrap();
     let (hook, seen) = recording_hook();
     let svc = ChannelService::open(tmp.path()).unwrap().with_seal(hook);
-    let id = svc.create_for_agent("seal-agent").unwrap().id;
+    let id = svc
+        .create_for_agent("seal-agent", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap()
+        .id;
     let identity = AgentIdentity::generate();
     let payload = serde_json::json!({ "directive": "pause" });
     let sig = mur_channel::sign::sign_event(
@@ -166,7 +175,10 @@ fn append_presigned_persists_sig_verbatim_and_runs_the_seal_hook() {
 fn append_presigned_refreshes_the_read_model() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let id = svc.create_for_agent("seal-agent").unwrap().id;
+    let id = svc
+        .create_for_agent("seal-agent", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap()
+        .id;
 
     let ev = svc
         .append_presigned(
@@ -195,7 +207,10 @@ fn append_presigned_does_not_verify_the_signature() {
     // key). The service must not second-guess a sig it cannot attribute.
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let id = svc.create_for_agent("seal-agent").unwrap().id;
+    let id = svc
+        .create_for_agent("seal-agent", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap()
+        .id;
     let ev = svc
         .append_presigned(
             &id,

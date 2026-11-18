@@ -15,7 +15,7 @@ fn setup() -> (TempDir, String) {
     crate::channel_writer::plant_writer_identity(tmp.path());
     let ch = ChannelService::open(tmp.path())
         .unwrap()
-        .create_for_workflow("repair")
+        .create_for_workflow("repair", mur_channel::service::ChannelOwner::Legacy)
         .unwrap();
     (tmp, ch.id)
 }

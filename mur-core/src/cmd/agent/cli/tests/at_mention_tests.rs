@@ -58,7 +58,9 @@ async fn murmur_at_own_agent_ordinal_switches_then_sends_rest() {
     let home = tempfile::tempdir().unwrap();
     let mut app = app_in(&home);
     let svc = ChannelService::open(home.path()).unwrap();
-    let older = svc.create_for_agent("a").unwrap();
+    let older = svc
+        .create_for_agent("a", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let n = svc.index().ordinal_of(&older.id).unwrap().unwrap();
     let (tx, _rx) = mpsc::channel(16);
     type_line(&mut app, &format!("@A#{n} carry on"));
@@ -109,7 +111,9 @@ async fn murmur_at_own_agent_non_member_channel_is_not_a_participant() {
     let home = tempfile::tempdir().unwrap();
     let mut app = app_in(&home);
     let svc = ChannelService::open(home.path()).unwrap();
-    let theirs = svc.create_for_agent("b").unwrap();
+    let theirs = svc
+        .create_for_agent("b", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let n = svc.index().ordinal_of(&theirs.id).unwrap().unwrap();
     let (tx, _rx) = mpsc::channel(16);
     type_line(&mut app, &format!("@a#{n} hi"));

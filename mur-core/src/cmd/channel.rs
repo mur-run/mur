@@ -576,7 +576,9 @@ mod backfill_tests {
         // flip it to "conversation".
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_workflow("release").unwrap();
+        let ch = svc
+            .create_for_workflow("release", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         svc.append_message(
             &ch.id,
             ChannelActor::local_human(),
@@ -633,7 +635,9 @@ mod backfill_tests {
     fn apply_writes_the_inferred_purpose() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("mur").unwrap();
+        let ch = svc
+            .create_for_agent("mur", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         svc.append_message(
             &ch.id,
             ChannelActor::local_human(),
@@ -657,7 +661,9 @@ mod backfill_tests {
     fn apply_is_idempotent() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("mur").unwrap();
+        let ch = svc
+            .create_for_agent("mur", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         svc.append_message(
             &ch.id,
             ChannelActor::local_human(),
@@ -683,7 +689,12 @@ mod backfill_tests {
         // conversation. Only this id/purpose mismatch can distinguish "left
         // alone" from "re-derived and happened to match".
         let ch = svc
-            .create_for_fleet("projectx", "router", &["worker".to_string()])
+            .create_for_fleet(
+                "projectx",
+                "router",
+                &["worker".to_string()],
+                mur_channel::service::ChannelOwner::Legacy,
+            )
             .unwrap();
         let mut manifest = svc.store().load_manifest(&ch.id).unwrap();
         manifest.purpose = Some(ChannelPurpose::Conversation);
@@ -704,7 +715,9 @@ mod backfill_tests {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
         for _ in 0..3 {
-            let ch = svc.create_for_agent("mur").unwrap();
+            let ch = svc
+                .create_for_agent("mur", mur_channel::service::ChannelOwner::Legacy)
+                .unwrap();
             svc.append_message(
                 &ch.id,
                 ChannelActor::local_human(),

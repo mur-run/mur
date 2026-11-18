@@ -40,7 +40,10 @@ fn actor() -> ChannelActor {
 /// (the per-append path takes a lock and is far slower than the log it
 /// builds). Returns the log size in bytes.
 fn legacy_channel(home: &Path, svc: &ChannelService, lines: usize) -> (String, u64) {
-    let id = svc.create_for_workflow("timing").unwrap().id;
+    let id = svc
+        .create_for_workflow("timing", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap()
+        .id;
     let store = ChannelStore::new(home);
     store
         .append_event_with(

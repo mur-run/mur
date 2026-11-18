@@ -50,9 +50,13 @@ fn persist_mobile_exchange_writes_both_turns_to_one_channel() {
 fn persist_into_explicit_channel_targets_it() {
     let tmp = tempfile::TempDir::new().unwrap();
     let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-    let a = svc.create_for_agent("mur").unwrap();
+    let a = svc
+        .create_for_agent("mur", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(2));
-    let _b = svc.create_for_agent("mur").unwrap(); // newer = latest_for_agent
+    let _b = svc
+        .create_for_agent("mur", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap(); // newer = latest_for_agent
     // An explicit channel_id lands the turn in `a`, NOT the newer `_b`.
     persist_mobile_exchange_into(tmp.path(), "mur", Some(&a.id), "q", "ans");
     assert_eq!(
@@ -81,7 +85,9 @@ fn respond_hitl_writes_a_hitl_response_echoing_the_request() {
     // `respond_hitl` only answers a request the router signed.
     let router = crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     // A pending HitlRequest the phone will respond to.
     svc.append_signed(
         &ch.id,
@@ -130,7 +136,9 @@ fn respond_hitl_resolves_an_older_stacked_gate_not_just_the_newest() {
     let tmp = tempfile::TempDir::new().unwrap();
     let router = crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     for (hid, ah) in [("h1", "AH1"), ("h2", "AH2")] {
         svc.append_signed(
             &ch.id,
@@ -168,7 +176,9 @@ fn respond_hitl_from_params_dispatches_a_well_formed_request() {
     let tmp = tempfile::TempDir::new().unwrap();
     let router = crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     svc.append_signed(
         &ch.id,
         &router,
@@ -490,10 +500,17 @@ fn persist_without_channel_skips_a_newer_fleet_run() {
     // phone's next message.
     let tmp = tempfile::TempDir::new().unwrap();
     let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-    let chat = svc.create_for_agent("mur").unwrap();
+    let chat = svc
+        .create_for_agent("mur", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(2));
     let fleet = svc
-        .create_for_fleet("projectx", "mur", &["mur".into()])
+        .create_for_fleet(
+            "projectx",
+            "mur",
+            &["mur".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     persist_mobile_exchange(tmp.path(), "mur", "q", "ans");
     assert_eq!(svc.load_events(&chat.id).unwrap().len(), 2);

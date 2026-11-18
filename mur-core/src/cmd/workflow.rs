@@ -92,7 +92,10 @@ async fn run_workflow_skill(
     // --channel uses an existing one.
     let channel_id = if channel_new {
         let svc = mur_channel::ChannelService::open(mur_dir)?;
-        let ch = svc.create_for_workflow(&skill.manifest.name)?;
+        let ch = svc.create_for_workflow(
+            &skill.manifest.name,
+            mur_channel::service::ChannelOwner::Legacy,
+        )?;
         eprintln!("# channel: {}", ch.id);
         Some(ch.id)
     } else {

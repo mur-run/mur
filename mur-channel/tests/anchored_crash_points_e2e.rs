@@ -250,7 +250,7 @@ fn run(point: CrashPoint) {
     let home = tmp.path();
     let ch = ChannelService::open(home)
         .unwrap()
-        .create_for_workflow("crash-point")
+        .create_for_workflow("crash-point", mur_channel::service::ChannelOwner::Legacy)
         .unwrap()
         .id;
     let id = AgentIdentity::generate();

@@ -604,7 +604,10 @@ pub fn persist_mobile_exchange_into(
             Some(id) => id.to_string(),
             None => match svc.latest_for_agent(agent)? {
                 Some(id) => id,
-                None => svc.create_for_agent(agent)?.id,
+                None => {
+                    svc.create_for_agent(agent, mur_channel::service::ChannelOwner::Legacy)?
+                        .id
+                }
             },
         };
         svc.append_message(

@@ -15,7 +15,9 @@ async fn redispatching_a_delegate_step_records_a_second_delegation() {
     let tmp = tempfile::TempDir::new().unwrap();
     crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("rerun-wf").unwrap();
+    let ch = svc
+        .create_for_workflow("rerun-wf", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
 
     // The member is not running, so the dial fails AFTER the Delegation event
     // is appended: the step never records a ToolResult and the resume cursor

@@ -130,7 +130,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let router = crate::channel_writer::plant_writer_identity(tmp.path());
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_workflow("g").unwrap();
+        let ch = svc
+            .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         for (actor, human) in [
             (ChannelActor::local_human(), true),
             (ChannelActor::System, false),
@@ -164,7 +166,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let router = crate::channel_writer::plant_writer_identity(tmp.path());
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_workflow("g").unwrap();
+        let ch = svc
+            .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         let human = AgentIdentity::generate();
         let actor = ChannelActor::local_human_with_key(human.pubkey_text());
         let by_router = svc
@@ -201,8 +205,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let router = crate::channel_writer::plant_writer_identity(tmp.path());
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let here = svc.create_for_workflow("here").unwrap();
-        let there = svc.create_for_workflow("there").unwrap();
+        let here = svc
+            .create_for_workflow("here", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
+        let there = svc
+            .create_for_workflow("there", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         let ev = svc
             .append_signed(
                 &here.id,
@@ -236,7 +244,9 @@ mod tests {
         let router = crate::channel_writer::plant_writer_identity(tmp.path());
         let qa = crate::channel_writer::plant_identity_for(tmp.path(), "qa");
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_workflow("g").unwrap();
+        let ch = svc
+            .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
 
         // 1. Unsigned, claiming to be the human — what a sandboxed
         //    `mur channel approve` writes, since it cannot read the router key.
@@ -313,7 +323,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let router = crate::channel_writer::plant_writer_identity(tmp.path());
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_workflow("g").unwrap();
+        let ch = svc
+            .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         svc.append(
             &ch.id,
             ChannelActor::System,

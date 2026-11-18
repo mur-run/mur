@@ -11,6 +11,7 @@ pub mod auth;
 pub mod bridge_keychain;
 pub mod capabilities;
 pub mod capture;
+pub mod channel_owner;
 pub mod channel_verify;
 pub mod channel_writer;
 pub mod character_card;

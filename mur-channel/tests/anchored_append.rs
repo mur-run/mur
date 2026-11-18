@@ -13,7 +13,10 @@ use tempfile::TempDir;
 fn setup() -> (TempDir, ChannelService, String, AgentIdentity) {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap().id;
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap()
+        .id;
     (tmp, svc, ch, AgentIdentity::generate())
 }
 

@@ -147,8 +147,13 @@ fn the_headline_says_stopped_when_the_rail_reports_a_stop() {
     // Plant a stop event in the fleet's channel so the rail's final poll
     // folds it. The fixture home has no channel yet; create it.
     let svc = mur_channel::ChannelService::open(&a.home).unwrap();
-    svc.create_for_fleet("dev", "mur", &["qa".to_string()])
-        .unwrap();
+    svc.create_for_fleet(
+        "dev",
+        "mur",
+        &["qa".to_string()],
+        mur_channel::service::ChannelOwner::Legacy,
+    )
+    .unwrap();
     // The rail verifies before it folds: an unsigned stop event is dropped
     // under enforcement and the headline would say "finished" for the wrong
     // reason. Sign it as the router, the way a real run does.
@@ -251,6 +256,7 @@ fn shell_card_opens_accumulates_and_stamps_exit() {
     assert_eq!(body, "running 3 tests\ntest result: FAILED\n[exit 1]");
 
     let home_b = tempfile::tempdir().unwrap();
+
     let mut b = persisting_app(&home_b);
     b.begin_shell("true");
     b.append_shell_output("ok");

@@ -498,8 +498,13 @@ fn stop_while_paused_ends_both_run_ids_on_the_channel() {
     let home = paused_home(None);
     crate::channel_writer::plant_writer_identity(home.path());
     let svc = mur_channel::ChannelService::open(home.path()).unwrap();
-    svc.create_for_fleet("dev", "mur", &["pm".to_string()])
-        .unwrap();
+    svc.create_for_fleet(
+        "dev",
+        "mur",
+        &["pm".to_string()],
+        mur_channel::service::ChannelOwner::Legacy,
+    )
+    .unwrap();
     let iter_run = format!("{RUN}-2");
     let sc = crate::run_status::Sidecar {
         schema: crate::run_status::SIDECAR_SCHEMA,
@@ -543,7 +548,9 @@ fn a_member_signed_pause_cannot_supply_the_original_bounds() {
     let router = crate::channel_writer::plant_writer_identity(tmp.path());
     let pm = crate::channel_writer::plant_identity_for(tmp.path(), "pm");
     let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("dev").unwrap();
+    let ch = svc
+        .create_for_workflow("dev", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let pause = |cost: f64| {
         FleetRunPayload::RunPaused {
             run_id: RUN.into(),
@@ -591,7 +598,9 @@ fn a_custom_router_fleet_reads_back_its_own_signed_pause() {
     // The custom router has a key of its own; it must not be the one used.
     crate::channel_writer::plant_identity_for(tmp.path(), "pm");
     let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("dev").unwrap();
+    let ch = svc
+        .create_for_workflow("dev", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let mut f = fleet();
     f.router = Some("pm".into());
     f.channel_id = ch.id.clone();
@@ -634,8 +643,13 @@ fn every_crash_point_of_a_resume_is_resumable_again_or_finished() {
     let h = home.path();
     crate::channel_writer::plant_writer_identity(h);
     let svc = mur_channel::ChannelService::open(h).unwrap();
-    svc.create_for_fleet("dev", "mur", &["pm".to_string()])
-        .unwrap();
+    svc.create_for_fleet(
+        "dev",
+        "mur",
+        &["pm".to_string()],
+        mur_channel::service::ChannelOwner::Legacy,
+    )
+    .unwrap();
     let from = resume_from(&cp(Some("job-1")), None, false).unwrap();
 
     // 1. Crash after `Running`.

@@ -130,7 +130,12 @@ pub(super) fn create_session_fleet(
 ) -> Result<Fleet> {
     let members = vec![main.to_string(), reviewer.to_string()];
     let svc = ChannelService::open(mur_home)?;
-    let ch = svc.create_for_fleet(name, crate::channel_writer::ROUTER_AGENT, &members)?;
+    let ch = svc.create_for_fleet(
+        name,
+        crate::channel_writer::ROUTER_AGENT,
+        &members,
+        mur_channel::service::ChannelOwner::Legacy,
+    )?;
     let fleet = session_fleet(name, members, ch.id, task);
     store::save_fleet(mur_home, &fleet)?;
     Ok(fleet)

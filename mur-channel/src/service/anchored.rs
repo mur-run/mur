@@ -43,9 +43,6 @@ pub(super) struct HeadSigner<'a> {
 }
 
 /// The key that seals (and, going forward, vouches for) the head.
-// `Router` is unconstructed in PR 1 by design (H1 is behaviour-neutral); C1
-// is the first caller.
-#[allow(dead_code)]
 #[derive(Clone, Copy)]
 pub(super) enum HeadSealer<'a> {
     /// Today's behaviour: the event signer seals its own head.

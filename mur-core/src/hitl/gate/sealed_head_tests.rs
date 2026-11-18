@@ -29,7 +29,9 @@ async fn gate_transitions_are_signed_and_keep_the_head_on_the_log() {
     let tmp = TempDir::new().unwrap();
     let router = crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     drop(svc);
 
     // `yes` runs the gate to completion: pause, auto-answer, resume.

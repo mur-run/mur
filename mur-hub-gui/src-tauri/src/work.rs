@@ -159,7 +159,9 @@ mod tests {
     fn summary_of_extracts_agents_preview_and_state() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("qa").unwrap();
+        let ch = svc
+            .create_for_agent("qa", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         svc.append_message(
             &ch.id,
             ChannelActor::local_human(),
@@ -186,7 +188,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
         // One real channel with a turn…
-        let a = svc.create_for_agent("qa").unwrap();
+        let a = svc
+            .create_for_agent("qa", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         svc.append_message(
             &a.id,
             ChannelActor::local_human(),
@@ -196,7 +200,9 @@ mod tests {
         )
         .unwrap();
         // …and one empty stub that must be filtered out of the rail.
-        let _empty = svc.create_for_agent("ghost").unwrap();
+        let _empty = svc
+            .create_for_agent("ghost", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
 
         let rows = list_channels(tmp.path()).unwrap();
         assert_eq!(rows.len(), 1, "empty channels are hidden from the rail");

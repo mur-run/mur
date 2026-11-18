@@ -395,7 +395,12 @@ async fn progress_file_written_with_outcome_on_guard_stop() {
     crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
     mur_channel::ChannelService::open(home)
         .unwrap()
-        .create_for_fleet("dev", "mur", &["pm".into()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["pm".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     // Kill-switch: the loop stops before any delegation, so no live agent
     // is needed — but the before-loop and exit progress writes still run.
@@ -539,7 +544,13 @@ async fn a_guard_stop_is_written_to_the_channel_with_reason_and_remedy() {
     };
     crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
     let svc = mur_channel::ChannelService::open(home).unwrap();
-    svc.create_for_fleet("dev", "mur", &["pm".into()]).unwrap();
+    svc.create_for_fleet(
+        "dev",
+        "mur",
+        &["pm".into()],
+        mur_channel::service::ChannelOwner::Legacy,
+    )
+    .unwrap();
     // Kill-switch: the loop stops before any delegation, no live agent needed.
     crate::cmd::fleet::control::cmd_fleet_stop(home, "dev").unwrap();
 
@@ -649,7 +660,12 @@ async fn commander_kill_halts_loop_and_local_start_cannot_clear_it() {
     crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
     mur_channel::ChannelService::open(home)
         .unwrap()
-        .create_for_fleet("dev", "mur", &["pm".into()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["pm".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     // plant a commander kill
     crate::cmd::commander::cmd_commander_directive(home, "dev", "kill", None, 1000).unwrap();
@@ -698,7 +714,12 @@ async fn commander_zero_budget_ceiling_halts_loop() {
     crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
     mur_channel::ChannelService::open(home)
         .unwrap()
-        .create_for_fleet("dev", "mur", &["pm".into()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["pm".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     // a zero budget ceiling is a budget halt (spec §6), not a kill
     crate::cmd::commander::cmd_commander_directive(home, "dev", "budget_ceiling", Some(0.0), 1000)
@@ -776,7 +797,12 @@ async fn queue_drained_break_fires_when_policy_is_queue_empty_and_queue_is_empty
     crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
     mur_channel::ChannelService::open(home)
         .unwrap()
-        .create_for_fleet("dev", "mur", &["pm".into()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["pm".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     // No job is ever queued, so the break fires on iteration 1 — ahead of
     // the `plan_via_router` dial, so no live "pm" agent is needed here.
@@ -823,7 +849,12 @@ async fn queue_drained_break_stays_inert_under_router_policy() {
     crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
     mur_channel::ChannelService::open(home)
         .unwrap()
-        .create_for_fleet("dev", "mur", &["pm".into()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["pm".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     // Same empty queue as the fires case, but router policy: the gate must
     // not mistake an empty queue for `done_when: queue-empty`. No live
@@ -865,7 +896,12 @@ async fn queue_empty_policy_with_claimed_job_does_not_converge_via_router() {
     crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
     mur_channel::ChannelService::open(home)
         .unwrap()
-        .create_for_fleet("dev", "mur", &["pm".into()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["pm".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     // A claimed job means `active_job` is `Some`, so the drained-queue
     // break above does NOT fire and this iteration takes the normal
@@ -1036,7 +1072,12 @@ async fn the_loop_records_itself_under_the_callers_run_id() {
     crate::cmd::fleet::store::save_fleet(home, &f).unwrap();
     mur_channel::ChannelService::open(home)
         .unwrap()
-        .create_for_fleet("dev", "mur", &["pm".into()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["pm".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     let (stop, _, _) = run_guarded(
         home,
@@ -1097,7 +1138,12 @@ async fn a_goal_override_is_this_runs_goal_and_leaves_fleet_yaml_alone() {
     let before = std::fs::read(crate::cmd::fleet::store::fleet_path(home, "dev")).unwrap();
     mur_channel::ChannelService::open(home)
         .unwrap()
-        .create_for_fleet("dev", "mur", &["pm".into()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["pm".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     let (stop, _, _) = run_guarded(
         home,

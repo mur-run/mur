@@ -41,7 +41,10 @@ impl Fx {
             plant(tmp.path(), ROUTER_AGENT)
         };
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent(agent).unwrap().id;
+        let ch = svc
+            .create_for_agent(agent, crate::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         Self {
             tmp,
             svc,

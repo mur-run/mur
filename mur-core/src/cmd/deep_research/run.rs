@@ -115,6 +115,7 @@ mod tests {
                 "dr-test",
                 "mur",
                 &["research_worker_1".into(), "research_worker_2".into()],
+                mur_channel::service::ChannelOwner::Legacy,
             )
             .unwrap();
 

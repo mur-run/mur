@@ -125,7 +125,9 @@ impl Session {
         let id = match &self.channel_id {
             Some(id) => id.clone(),
             None => {
-                let ch = self.svc.create_for_agent(&self.agent)?;
+                let ch = self
+                    .svc
+                    .create_for_agent(&self.agent, mur_channel::service::ChannelOwner::Legacy)?;
                 self.channel_id = Some(ch.id.clone());
                 ch.id
             }

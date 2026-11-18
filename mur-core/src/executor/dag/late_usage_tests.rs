@@ -300,7 +300,9 @@ async fn an_unrecoverable_spend_is_warned_about_in_the_channel() {
     let tmp = tempfile::TempDir::new().unwrap();
     let home = tmp.path();
     let svc = ChannelService::open(home).unwrap();
-    let ch = svc.create_for_workflow("t").unwrap();
+    let ch = svc
+        .create_for_workflow("t", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     // The member lost its record of the turn (a restart, say).
     let _rx = fake_member(
         home,
@@ -357,7 +359,9 @@ async fn late_usage_past_the_cap_trips_the_one_shot_guard() {
     let tmp = tempfile::TempDir::new().unwrap();
     let home = tmp.path();
     let svc = ChannelService::open(home).unwrap();
-    let ch = svc.create_for_workflow("t").unwrap();
+    let ch = svc
+        .create_for_workflow("t", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let _rx = fake_member(home, working_until_cancelled());
 
     // `member` bills an unpriced metered model, so its 4_200 late tokens cost

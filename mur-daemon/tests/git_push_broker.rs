@@ -38,7 +38,10 @@ fn world() -> World {
     let router = plant(home.path(), ROUTER);
     let agent = plant(home.path(), "bob");
     let svc = ChannelService::open(home.path()).unwrap();
-    let ch = svc.create_for_agent("bob").unwrap().id;
+    let ch = svc
+        .create_for_agent("bob", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap()
+        .id;
     World {
         home,
         svc,

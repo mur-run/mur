@@ -18,7 +18,10 @@ fn sealed_service(tmp: &TempDir) -> ChannelService {
 
 /// A channel with one anchored append, so it has a head in `channel-heads/`.
 fn sealed_channel(svc: &ChannelService, tmp: &TempDir) -> String {
-    let id = svc.create_for_agent("del-agent").unwrap().id;
+    let id = svc
+        .create_for_agent("del-agent", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap()
+        .id;
     svc.append_and_anchor(
         &id,
         &AgentIdentity::generate(),
@@ -108,7 +111,10 @@ fn deleting_a_never_sealed_channel_succeeds_without_a_heads_dir() {
     let tmp = TempDir::new().unwrap();
     // No anchored append, so no head and no `channel-heads/` directory.
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let id = svc.create_for_agent("plain-agent").unwrap().id;
+    let id = svc
+        .create_for_agent("plain-agent", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap()
+        .id;
     assert!(!heads_dir(tmp.path()).exists());
 
     svc.delete_channel(&id).unwrap();

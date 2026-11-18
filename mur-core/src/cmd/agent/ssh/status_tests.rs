@@ -62,7 +62,9 @@ impl Fixture {
         if let Ok(id) = std::fs::read_to_string(&marker) {
             return id;
         }
-        let ch = svc.create_for_agent(AGENT).unwrap();
+        let ch = svc
+            .create_for_agent(AGENT, mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         std::fs::write(&marker, &ch.id).unwrap();
         ch.id
     }

@@ -178,7 +178,10 @@ mod refusal_reaches_the_log {
         let me = Arc::new(AgentIdentity::generate());
         me.save(&tmp.path().join("agents").join(AGENT)).unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent(AGENT).unwrap().id;
+        let ch = svc
+            .create_for_agent(AGENT, mur_channel::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         let mut runner = TaskRunner::with_llm(Arc::new(Never))
             .with_agent_name(AGENT)
             .with_channel_conversations(tmp.path().to_path_buf(), None, 4);

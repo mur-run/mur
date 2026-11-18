@@ -47,7 +47,9 @@ fn answering_one_of_two_open_gates_keeps_the_channel_pending() {
     // response, so answering gate A hid gate B while B was still waiting.
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     for id in ["a", "b"] {
         svc.append(
             &ch.id,
@@ -83,7 +85,9 @@ fn answering_one_of_two_open_gates_keeps_the_channel_pending() {
 fn a_response_for_an_unknown_gate_does_not_clear_a_pending_one() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     svc.append(
         &ch.id,
         ChannelActor::System,
@@ -109,7 +113,9 @@ fn a_response_folded_before_its_request_still_closes_the_gate() {
     // per-gate bits make the result independent of fold order.
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     let ev = |seq: u64, kind: EventKind, payload: serde_json::Value| ChannelEvent {
         seq,
         ts: chrono::Utc::now(),
@@ -133,7 +139,9 @@ fn a_response_folded_before_its_request_still_closes_the_gate() {
 fn rebuild_rederives_pending_per_gate() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     for id in ["a", "b"] {
         svc.append(
             &ch.id,
@@ -160,7 +168,9 @@ fn rebuild_rederives_pending_per_gate() {
 fn hitl_request_sets_pending_and_response_clears_it() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
 
     svc.append(
         &ch.id,

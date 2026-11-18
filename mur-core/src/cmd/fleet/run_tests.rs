@@ -257,7 +257,12 @@ fn grant_fleet(home: &Path, member: &str, grant: bool) -> PathBuf {
     crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
     mur_channel::ChannelService::open(home)
         .unwrap()
-        .create_for_fleet("dev", "mur", &[member.into()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &[member.into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     project
 }

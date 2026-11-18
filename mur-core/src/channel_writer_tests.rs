@@ -30,7 +30,9 @@ fn an_unreadable_writer_key_does_not_silently_write_unsigned() {
     // (#850 option (c)), so chmod the file where it actually is.
     let key = mur_common::identity::private_key_dir(&agent_home).join("identity.key");
     let svc = ChannelService::open(home).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
 
     // Precondition: with the key readable, the event IS signed.
     let signed = append_as_writer(
@@ -145,7 +147,9 @@ fn refusals_since_counts_only_what_followed_the_mark() {
 fn unsigned_when_identity_absent() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     // Pinned to the non-enforcing policy: this is the bootstrap path, and
     // under enforcement the same call is a refusal (covered separately in
     // `missing_key_tests`).
@@ -168,7 +172,9 @@ fn unsigned_when_identity_absent() {
 fn signed_when_identity_present_and_verifies() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     // Plant the router identity under <home>/agents/mur/.
     let agent_home = tmp.path().join("agents").join("mur");
     std::fs::create_dir_all(&agent_home).unwrap();
@@ -216,7 +222,9 @@ fn a_disk_keyed_transition_advances_the_head() {
     std::fs::create_dir_all(&agent_home).unwrap();
     AgentIdentity::generate().save(&agent_home).unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
 
     transition_as_writer(
         &svc,
@@ -251,7 +259,9 @@ fn a_disk_keyed_transition_advances_the_head() {
 fn a_handed_over_key_signs_but_does_not_anchor() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let id = AgentIdentity::generate();
     let key = WriterKey {
         id,
@@ -307,7 +317,9 @@ fn a_cross_router_run_outside_the_seal_signs_as_the_router() {
     );
 
     let svc = ChannelService::open(home).unwrap();
-    let ch = svc.create_for_workflow("council").unwrap();
+    let ch = svc
+        .create_for_workflow("council", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let actor = ChannelActor::Agent {
         id: "orchestrator".into(),
     };

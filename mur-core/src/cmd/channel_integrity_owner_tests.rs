@@ -53,7 +53,10 @@ impl Owned {
         let home = TempDir::new().unwrap();
         plant_writer_identity(home.path());
         let svc = ChannelService::open(home.path()).unwrap();
-        let id = svc.create_for_workflow("owner").unwrap().id;
+        let id = svc
+            .create_for_workflow("owner", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         Self { home, svc, id }
     }
 

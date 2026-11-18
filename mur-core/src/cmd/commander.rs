@@ -263,7 +263,13 @@ mod tests {
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         let svc = mur_channel::ChannelService::open(home).unwrap();
-        svc.create_for_fleet("dev", "mur", &["pm".into()]).unwrap();
+        svc.create_for_fleet(
+            "dev",
+            "mur",
+            &["pm".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
+        .unwrap();
 
         // no directive yet → not killed
         assert!(!governance_state(home, "dev").unwrap().killed);
@@ -303,7 +309,13 @@ mod tests {
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         let svc = mur_channel::ChannelService::open(home).unwrap();
-        svc.create_for_fleet("dev", "mur", &["pm".into()]).unwrap();
+        svc.create_for_fleet(
+            "dev",
+            "mur",
+            &["pm".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
+        .unwrap();
 
         cmd_commander_directive(home, "dev", "kill", None, 1000).unwrap();
 

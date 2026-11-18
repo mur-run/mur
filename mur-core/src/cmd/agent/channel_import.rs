@@ -66,7 +66,7 @@ pub fn migrate_all(mur_home: &Path) -> Result<usize> {
             if turns.is_empty() {
                 continue;
             }
-            let ch = svc.create_for_agent(&agent)?;
+            let ch = svc.create_for_agent(&agent, mur_channel::service::ChannelOwner::Legacy)?;
             for t in &turns {
                 let (actor, kind) = match t.role.as_str() {
                     "agent" => (

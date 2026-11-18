@@ -102,7 +102,12 @@ fn removes_only_stopped_sessions_past_the_cutoff() {
     let stale_def = session(h, "review-defn0001", &[stopped()], true);
     let user = ChannelService::open(h)
         .unwrap()
-        .create_for_fleet("dev", "router", &[])
+        .create_for_fleet(
+            "dev",
+            "router",
+            &[],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap()
         .id;
 

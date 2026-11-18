@@ -405,7 +405,9 @@ fn resolve_turn_channel(
     let resolved =
         ChannelService::open(home).and_then(|svc| match svc.latest_for_agent(agent)? {
             Some(id) => Ok(id),
-            None => Ok(svc.create_for_agent(agent)?.id),
+            None => Ok(svc
+                .create_for_agent(agent, mur_channel::service::ChannelOwner::Legacy)?
+                .id),
         });
     match resolved {
         Ok(id) => Some(id),
@@ -439,7 +441,10 @@ fn persist_exchange(
             Some(id) => id.to_string(),
             None => match svc.latest_for_agent(agent)? {
                 Some(id) => id,
-                None => svc.create_for_agent(agent)?.id,
+                None => {
+                    svc.create_for_agent(agent, mur_channel::service::ChannelOwner::Legacy)?
+                        .id
+                }
             },
         };
         svc.append_message(
@@ -616,7 +621,10 @@ mod channel_tests {
     fn explicit_channel_id_wins_over_latest() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let old = svc.create_for_agent("qa").unwrap().id;
+        let old = svc
+            .create_for_agent("qa", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         svc.append_message(
             &old,
             ChannelActor::local_human(),
@@ -625,7 +633,10 @@ mod channel_tests {
             None,
         )
         .unwrap();
-        let new = svc.create_for_agent("qa").unwrap().id;
+        let new = svc
+            .create_for_agent("qa", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         svc.append_message(
             &new,
             ChannelActor::local_human(),
@@ -664,8 +675,14 @@ mod channel_tests {
         assert_eq!(resolve_turn_channel(tmp.path(), "qa", None), Some(first));
         assert_eq!(svc.list(10).unwrap().len(), 1);
 
-        let old = svc.create_for_agent("qa").unwrap().id;
-        let new = svc.create_for_agent("qa").unwrap().id;
+        let old = svc
+            .create_for_agent("qa", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
+        let new = svc
+            .create_for_agent("qa", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         // Explicit pick wins; otherwise the latest.
         assert_eq!(
             resolve_turn_channel(tmp.path(), "qa", Some(old.clone())),

@@ -4,8 +4,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use chrono::Utc;
 use mur_common::channel::{
-    CHANNEL_SCHEMA_VERSION, Channel, ChannelActor, ChannelEvent, ChannelPurpose, ChannelState,
-    EventKind, Goal, Participant, ParticipantRole,
+    Channel, ChannelActor, ChannelEvent, ChannelPurpose, ChannelState, EventKind, Participant,
+    ParticipantRole,
 };
 
 use crate::anchor;
@@ -13,6 +13,7 @@ use crate::head_io::remove_head;
 use crate::index::{ChannelIndex, ChannelRow};
 use crate::store::{ChannelStore, ManifestPolicy, SealInput};
 use anchored::HeadSigner;
+pub use create::{ChannelOwner, HumanSign, RouterSeal};
 
 /// Shared truncation limit for auto-derived conversation titles. One constant
 /// so TUI, Hub, and mobile cannot disagree about where a title ends.
@@ -188,87 +189,6 @@ impl ChannelService {
         }
     }
 
-    /// Create a fresh channel whose participants are the local human (owner)
-    /// and one agent (delegate). Used by both CLI and Hub when opening a chat.
-    pub fn create_for_agent(&self, agent: &str) -> Result<Channel> {
-        let now = Utc::now();
-        let ch = Channel {
-            v: CHANNEL_SCHEMA_VERSION,
-            id: uuid::Uuid::now_v7().to_string(),
-            title: String::new(),
-            goal: Goal::default(),
-            state: ChannelState::Working,
-            purpose: Some(ChannelPurpose::Conversation),
-            owner: ChannelActor::local_human(),
-            participants: vec![
-                Participant {
-                    actor: ChannelActor::local_human(),
-                    role: ParticipantRole::Owner,
-                    joined_at: now,
-                },
-                Participant {
-                    actor: ChannelActor::Agent {
-                        id: agent.to_string(),
-                    },
-                    role: ParticipantRole::Delegate,
-                    joined_at: now,
-                },
-            ],
-            created_at: now,
-            updated_at: now,
-        };
-        self.store.create(&ch)?;
-        self.index.upsert(&ch)?;
-        Ok(ch)
-    }
-
-    /// Create the long-lived shared channel for a fleet. Id is the stable,
-    /// filesystem-safe `fleet-<name>`. Router gets `Router`, members `Delegate`.
-    pub fn create_for_fleet(
-        &self,
-        fleet_name: &str,
-        router: &str,
-        members: &[String],
-    ) -> Result<Channel> {
-        let now = Utc::now();
-        let mut participants = vec![
-            Participant {
-                actor: ChannelActor::local_human(),
-                role: ParticipantRole::Owner,
-                joined_at: now,
-            },
-            Participant {
-                actor: ChannelActor::Agent {
-                    id: router.to_string(),
-                },
-                role: ParticipantRole::Router,
-                joined_at: now,
-            },
-        ];
-        for m in members {
-            participants.push(Participant {
-                actor: ChannelActor::Agent { id: m.clone() },
-                role: ParticipantRole::Delegate,
-                joined_at: now,
-            });
-        }
-        let ch = Channel {
-            v: CHANNEL_SCHEMA_VERSION,
-            id: format!("fleet-{fleet_name}"),
-            title: format!("fleet: {fleet_name}"),
-            goal: Goal::default(),
-            state: ChannelState::Working,
-            purpose: Some(ChannelPurpose::FleetRun),
-            owner: ChannelActor::local_human(),
-            participants,
-            created_at: now,
-            updated_at: now,
-        };
-        self.store.create(&ch)?;
-        self.index.upsert(&ch)?;
-        Ok(ch)
-    }
-
     /// Append a message event and bump the manifest's `updated_at` + index.
     pub fn append_message(
         &self,
@@ -285,37 +205,6 @@ impl ChannelService {
         self.write_event(
             channel_id, actor, kind, payload, None, None, None, None, None,
         )
-    }
-
-    /// Create a channel that records a workflow execution. No agent participant;
-    /// the DAG executor acts as `ChannelActor::System`.
-    pub fn create_for_workflow(&self, skill_name: &str) -> Result<Channel> {
-        self.create_for_workflow_with_id(skill_name, &uuid::Uuid::now_v7().to_string())
-    }
-
-    /// [`Self::create_for_workflow`] under an id the caller minted earlier —
-    /// a sealed agent that already handed the id back as its run handle
-    /// (#2379). Refuses an id that is not a UUID or is already taken, so a
-    /// replayed request can never append to someone else's channel.
-    pub fn create_for_workflow_with_id(&self, skill_name: &str, id: &str) -> Result<Channel> {
-        uuid::Uuid::parse_str(id).map_err(|e| anyhow::anyhow!("channel id {id:?}: {e}"))?;
-        anyhow::ensure!(!self.exists(id), "channel {id} already exists");
-        let now = Utc::now();
-        let ch = Channel {
-            v: CHANNEL_SCHEMA_VERSION,
-            id: id.to_string(),
-            title: format!("workflow: {skill_name}"),
-            goal: Goal::default(),
-            state: ChannelState::Working,
-            purpose: Some(ChannelPurpose::WorkflowRun),
-            owner: ChannelActor::local_human(),
-            participants: vec![],
-            created_at: now,
-            updated_at: now,
-        };
-        self.store.create(&ch)?;
-        self.index.upsert(&ch)?;
-        Ok(ch)
     }
 
     /// Append an event with an arbitrary payload, bumping `updated_at` + index.
@@ -780,6 +669,7 @@ impl ChannelService {
 }
 
 mod anchored;
+mod create;
 pub mod restart;
 mod transition;
 

@@ -221,6 +221,47 @@ impl ChannelStore {
             hooks,
         )
     }
+
+    /// Sign (v2) with a caller-held key that is not an [`AgentIdentity`] —
+    /// the human owner's (B3) — and append, under one append lock.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn append_signed_by_with(
+        &self,
+        id: &str,
+        key_version: u32,
+        sign: &dyn Fn(&[u8]) -> [u8; 64],
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+        hooks: super::SealHooks<'_>,
+    ) -> Result<ChannelEvent> {
+        self.with_append_lock(id, super::ManifestPolicy::Require, || {
+            self.append_locked(
+                id,
+                actor,
+                kind,
+                payload,
+                idempotency_key,
+                |u| {
+                    let input = crate::sign::sign_input_v2(
+                        u.channel_id,
+                        u.actor,
+                        u.kind,
+                        u.payload,
+                        u.idempotency_key,
+                        u.tail_hash,
+                    );
+                    Seal {
+                        sig: Some(multibase::encode(multibase::Base::Base58Btc, sign(&input))),
+                        key_version: Some(key_version),
+                        prev_hash: Some(u.tail_hash.to_owned()),
+                    }
+                },
+                hooks,
+            )
+        })
+    }
 }
 
 #[cfg(test)]

@@ -92,7 +92,7 @@ async fn a_yes_audit_record_does_not_approve_a_later_run_without_yes() {
     let _router = crate::channel_writer::plant_writer_identity(tmp.path());
     let ch = ChannelService::open(tmp.path())
         .unwrap()
-        .create_for_workflow("g")
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
         .unwrap();
 
     let first = gate(
@@ -139,7 +139,7 @@ async fn a_router_signed_system_answer_does_not_release_the_gate() {
     let _router = crate::channel_writer::plant_writer_identity(tmp.path());
     let ch = ChannelService::open(tmp.path())
         .unwrap()
-        .create_for_workflow("g")
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
         .unwrap();
 
     let parked = gate(
@@ -175,7 +175,7 @@ async fn a_router_signed_human_answer_still_releases_the_gate() {
     let _router = crate::channel_writer::plant_writer_identity(tmp.path());
     let ch = ChannelService::open(tmp.path())
         .unwrap()
-        .create_for_workflow("g")
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
         .unwrap();
 
     let parked = gate(

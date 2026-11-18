@@ -76,7 +76,7 @@ fn ask_channel(
     let id = match std::fs::read_to_string(&marker) {
         Ok(raw) if !raw.trim().is_empty() && svc.exists(raw.trim()) => raw.trim().to_string(),
         _ => {
-            let ch = svc.create_for_agent(agent)?;
+            let ch = svc.create_for_agent(agent, mur_channel::service::ChannelOwner::Legacy)?;
             std::fs::write(&marker, &ch.id).context("record the ask channel id")?;
             ch.id
         }

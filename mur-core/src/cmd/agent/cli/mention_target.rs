@@ -156,7 +156,10 @@ pub fn prepare_send(home: &Path, target: &str, text: &str) -> Result<PreparedSen
         Some(ch) => ch.id,
         None => match svc.latest_for_agent(&agent)? {
             Some(id) => id,
-            None => svc.create_for_agent(&agent)?.id,
+            None => {
+                svc.create_for_agent(&agent, mur_channel::service::ChannelOwner::Legacy)?
+                    .id
+            }
         },
     };
     let text = mur_channel::conversation::normalize_user_text(text);

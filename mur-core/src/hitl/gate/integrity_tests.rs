@@ -41,7 +41,7 @@ fn setup() -> (TempDir, String) {
     crate::channel_writer::plant_writer_identity(tmp.path());
     let ch = ChannelService::open(tmp.path())
         .unwrap()
-        .create_for_workflow("g")
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
         .unwrap();
     (tmp, ch.id)
 }
@@ -447,7 +447,7 @@ fn rekeyed_home(with_history: bool) -> (TempDir, String) {
     let old = crate::channel_writer::plant_writer_identity(tmp.path());
     let ch = ChannelService::open(tmp.path())
         .unwrap()
-        .create_for_workflow("g")
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
         .unwrap()
         .id;
     let h = hash_of(&ch, &action());

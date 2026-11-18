@@ -102,11 +102,17 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
 
-        let older = svc.create_for_agent("mur").unwrap();
+        let older = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &older.id, "old question");
-        let newer = svc.create_for_agent("mur").unwrap();
+        let newer = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &newer.id, "new question");
-        let other = svc.create_for_agent("qa").unwrap();
+        let other = svc
+            .create_for_agent("qa", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &other.id, "qa question");
 
         let rows = svc
@@ -132,11 +138,17 @@ mod tests {
     fn per_agent_history_returns_every_conversation_newest_first() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let a = svc.create_for_agent("mur").unwrap();
+        let a = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &a.id, "first");
-        let b = svc.create_for_agent("mur").unwrap();
+        let b = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &b.id, "second");
-        let unrelated = svc.create_for_agent("qa").unwrap();
+        let unrelated = svc
+            .create_for_agent("qa", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &unrelated.id, "qa");
 
         let rows = svc
@@ -156,12 +168,21 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
         let fleet = svc
-            .create_for_fleet("projectx", "mur", &["mur".into()])
+            .create_for_fleet(
+                "projectx",
+                "mur",
+                &["mur".into()],
+                crate::service::ChannelOwner::Legacy,
+            )
             .unwrap();
         say(&svc, &fleet.id, "run it");
-        let wf = svc.create_for_workflow("release").unwrap();
+        let wf = svc
+            .create_for_workflow("release", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &wf.id, "step 1");
-        let chat = svc.create_for_agent("mur").unwrap();
+        let chat = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &chat.id, "hello");
 
         let rows = svc
@@ -194,10 +215,17 @@ mod tests {
         // `service/tests.rs`.
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let chat = svc.create_for_agent("mur").unwrap();
+        let chat = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &chat.id, "hello");
         let fleet = svc
-            .create_for_fleet("projectx", "mur", &["mur".into()])
+            .create_for_fleet(
+                "projectx",
+                "mur",
+                &["mur".into()],
+                crate::service::ChannelOwner::Legacy,
+            )
             .unwrap();
         say(&svc, &fleet.id, "much later");
 
@@ -215,7 +243,8 @@ mod tests {
     fn empty_channels_are_never_listed() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        svc.create_for_agent("mur").unwrap(); // created, never written to
+        svc.create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap(); // created, never written to
 
         let rows = svc
             .list_conversations(ConversationQuery {
@@ -237,7 +266,9 @@ mod tests {
         // channel tools instead.
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let orphan = svc.create_for_workflow("legacy").unwrap();
+        let orphan = svc
+            .create_for_workflow("legacy", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &orphan.id, "step 1");
         // Force the legacy shape: no purpose, no workflow title convention.
         let mut m = svc.store().load_manifest(&orphan.id).unwrap();
@@ -262,9 +293,13 @@ mod tests {
         // agent in it.
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let direct = svc.create_for_agent("mur").unwrap();
+        let direct = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &direct.id, "direct question");
-        let group = svc.create_for_agent("mur").unwrap();
+        let group = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         svc.add_participant(
             &group.id,
             "qa",
@@ -289,7 +324,9 @@ mod tests {
     fn a_summary_read_does_not_mutate_the_manifest() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("mur").unwrap();
+        let ch = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &ch.id, "hello");
         let path = tmp
             .path()
@@ -312,7 +349,9 @@ mod tests {
     fn rebuilding_the_index_reproduces_every_summary_field() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let chat = svc.create_for_agent("mur").unwrap();
+        let chat = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &chat.id, "the deploy pipeline broke");
         svc.append_message(
             &chat.id,
@@ -323,7 +362,12 @@ mod tests {
         )
         .unwrap();
         let fleet = svc
-            .create_for_fleet("projectx", "mur", &["mur".into()])
+            .create_for_fleet(
+                "projectx",
+                "mur",
+                &["mur".into()],
+                crate::service::ChannelOwner::Legacy,
+            )
             .unwrap();
         say(&svc, &fleet.id, "run it");
 
@@ -383,7 +427,9 @@ mod tests {
         // losing it on rebuild would resurface everything as unread.
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("mur").unwrap();
+        let ch = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &ch.id, "hi");
         let last = svc
             .append_message(
@@ -411,7 +457,9 @@ mod tests {
         // event log cannot regenerate, so a rebuild must keep it.
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("mur").unwrap();
+        let ch = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         let first = svc
             .append_message(
                 &ch.id,
@@ -456,7 +504,9 @@ mod search_tests {
     fn search_finds_message_text_and_locates_the_exact_event() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("mur").unwrap();
+        let ch = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &ch.id, "opening question");
         say(&svc, &ch.id, "the deploy pipeline broke again");
 
@@ -475,10 +525,17 @@ mod search_tests {
     fn results_are_grouped_by_surface_not_interleaved() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let chat = svc.create_for_agent("mur").unwrap();
+        let chat = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &chat.id, "shared keyword here");
         let fleet = svc
-            .create_for_fleet("projectx", "mur", &["mur".into()])
+            .create_for_fleet(
+                "projectx",
+                "mur",
+                &["mur".into()],
+                crate::service::ChannelOwner::Legacy,
+            )
             .unwrap();
         say(&svc, &fleet.id, "shared keyword there");
 
@@ -493,10 +550,17 @@ mod search_tests {
     fn scope_filters_the_result_set() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let chat = svc.create_for_agent("mur").unwrap();
+        let chat = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &chat.id, "shared keyword here");
         let fleet = svc
-            .create_for_fleet("projectx", "mur", &["mur".into()])
+            .create_for_fleet(
+                "projectx",
+                "mur",
+                &["mur".into()],
+                crate::service::ChannelOwner::Legacy,
+            )
             .unwrap();
         say(&svc, &fleet.id, "shared keyword there");
 
@@ -509,7 +573,9 @@ mod search_tests {
     fn search_matches_titles_as_well_as_bodies() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("mur").unwrap();
+        let ch = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &ch.id, "refactor the parser"); // becomes the title
         say(&svc, &ch.id, "unrelated follow-up");
 
@@ -524,7 +590,12 @@ mod search_tests {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
         let fleet = svc
-            .create_for_fleet("projectx", "mur", &["mur".into()])
+            .create_for_fleet(
+                "projectx",
+                "mur",
+                &["mur".into()],
+                crate::service::ChannelOwner::Legacy,
+            )
             .unwrap();
         say(&svc, &fleet.id, "run it");
 
@@ -543,7 +614,9 @@ mod search_tests {
         // and operators would otherwise be a hard error mid-typing.
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("mur").unwrap();
+        let ch = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &ch.id, "quoted \"thing\" and (parens)");
 
         for q in ["\"", "AND", "a OR", "(", "*", ""] {
@@ -556,7 +629,9 @@ mod search_tests {
     fn search_does_not_mutate_manifests() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("mur").unwrap();
+        let ch = svc
+            .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         say(&svc, &ch.id, "hello world");
         let path = tmp
             .path()
