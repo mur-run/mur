@@ -566,6 +566,10 @@ jobs:
         run: cd mur-hub-gui/ui && npm ci
       - name: Frontend build
         run: cd mur-hub-gui/ui && npm run build
+      # `npm run build` only type-checks the *.test.tsx files; nothing ran
+      # them, so a broken frontend test could merge unnoticed (#2462).
+      - name: Frontend tests (vitest)
+        run: cd mur-hub-gui/ui && npm test
       - name: cargo check
         run: cargo check --manifest-path mur-hub-gui/src-tauri/Cargo.toml
       # Not --lib: the integration test in tests/ went unnoticed for months
