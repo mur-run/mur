@@ -203,7 +203,9 @@ pub async fn agent_browser_card(
 }
 
 /// What the card's button sent. `Row.replace` must be the user's explicit
-/// replace choice; `Login.reauth` is the card's `login_again_exists`.
+/// replace choice; `Login.reauth` is the card's `login_again_exists`, and
+/// `Login.replace` is `true` exactly when `login_offer` is `replace_only`
+/// (the explicit binding replace, #2461 — not the reauth).
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PickArg {

@@ -15,6 +15,9 @@ use super::super::live_entry::{attached_profiles, norm, within};
 pub(crate) struct Profile {
     pub name: String,
     pub domains: Vec<String>,
+    /// The host of the page the profile logged in at (`meta.url`), when
+    /// readable.
+    pub login_host: Option<String>,
 }
 
 /// What picking a profile row does.
@@ -59,6 +62,10 @@ pub struct ProfileRow {
     /// Other agents whose live entry already launches with this profile.
     pub shared_with: Vec<String>,
     pub offer: Offer,
+    /// Where the profile logged in, when no one of its domains covers both
+    /// that host and the request's (#2461): its saved session is for another
+    /// site, so the card does not default to it.
+    pub session_elsewhere: Option<String>,
 }
 
 /// A `login: false` request (D7): can the live entry reach the host?
@@ -95,6 +102,10 @@ pub enum Card {
     Login {
         rows: Vec<ProfileRow>,
         login_again: LoginAgain,
+        /// What binding the "log in again" profile would do, decided the
+        /// way the login itself decides it (#2461): a `ReplaceOnly` login
+        /// needs the explicit replace choice too.
+        login_offer: Offer,
         port: Option<u16>,
     },
     Reach {
@@ -110,6 +121,9 @@ pub(crate) struct Inputs<'a> {
     pub bound: &'a BoundDomains<'a>,
     pub shared: &'a dyn Fn(&str) -> Vec<String>,
     pub port: Option<u16>,
+    /// The hosts the login would save with (`login_plan`), or why no
+    /// login can be planned.
+    pub login_domains: Result<Vec<String>, String>,
 }
 
 /// D1: the host is a profile domain or a label-aligned subdomain of one,
@@ -117,6 +131,17 @@ pub(crate) struct Inputs<'a> {
 /// reaching the host is the planner's check.
 fn matches(host: &str, p: &Profile) -> bool {
     p.domains.iter().any(|d| within(host, d))
+}
+
+/// The profile's login host, when none of its domains covers both it and
+/// `host`: e.g. a `vercel` profile that lists `github.com` but logged in at
+/// `vercel.com` holds no GitHub session. A same-site SSO host
+/// (`login.example.com` for `app.example.com` under `example.com`) is not
+/// flagged. Unknown login host: not flagged.
+fn session_elsewhere(host: &str, p: &Profile) -> Option<String> {
+    let at = norm(p.login_host.as_deref()?);
+    let same = p.domains.iter().any(|d| within(host, d) && within(&at, d));
+    (!same).then_some(at)
 }
 
 /// The port the card offers to open (D5): non-zero, non-default, outside
@@ -151,11 +176,24 @@ pub(crate) fn build(site: &Site, login: bool, login_again: LoginAgain, i: &Input
             domains: p.domains.clone(),
             shared_with: (i.shared)(&p.name),
             offer: offer_for(entry, p, &host, i.bound),
+            session_elsewhere: session_elsewhere(&host, p),
         })
         .collect();
+    let login_offer = match &i.login_domains {
+        Ok(domains) => {
+            let p = Profile {
+                name: login_again.name.clone(),
+                domains: domains.clone(),
+                login_host: None,
+            };
+            offer_for(entry, &p, &host, i.bound)
+        }
+        Err(why) => Offer::Disabled { why: why.clone() },
+    };
     Card::Login {
         rows,
         login_again,
+        login_offer,
         port: i.port,
     }
 }

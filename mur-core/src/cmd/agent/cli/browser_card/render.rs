@@ -20,7 +20,7 @@ pub fn hint(c: &State) -> &'static str {
         (Phase::LoggingIn, _) => "Enter logged in · Esc cancel (nothing is saved)",
         (Phase::Saved { .. }, _) => "Enter/Esc close",
         (_, Card::Login { .. }) => {
-            "↑↓ pick · Enter use · r replace · l log in again · d dismiss · Esc close"
+            "↑↓ pick · Enter use · r replace · l log in · d dismiss · Esc close"
         }
         (_, Card::Reach { .. }) => "a allow · d dismiss · Esc close",
         (_, Card::NoLiveEntry) => "Esc close",
@@ -86,7 +86,10 @@ fn body(c: &State, t: &'static Theme, out: &mut Vec<Line<'static>>) {
             Reach::Disabled { why } => format!("not available: {why}"),
         })),
         Card::Login {
-            rows, login_again, ..
+            rows,
+            login_again,
+            login_offer,
+            ..
         } => {
             if rows.is_empty() {
                 out.push(Line::styled("no saved login covers this site", t.muted));
@@ -109,6 +112,15 @@ fn body(c: &State, t: &'static Theme, out: &mut Vec<Line<'static>>) {
                     format!("    {}", offer_text(&row.offer)),
                     t.muted,
                 ));
+                if let Some(at) = &row.session_elsewhere {
+                    out.push(Line::styled(
+                        format!(
+                            "    logged in at {at} — may have no session for {}",
+                            c.shown.request.site.host()
+                        ),
+                        t.warn,
+                    ));
+                }
                 if !row.shared_with.is_empty() {
                     out.push(Line::styled(
                         format!("    shared with {}", row.shared_with.join(", ")),
@@ -117,12 +129,31 @@ fn body(c: &State, t: &'static Theme, out: &mut Vec<Line<'static>>) {
                 }
             }
             out.push(Line::from(""));
-            out.push(Line::from(if login_again.exists {
-                format!("l  log in again as “{}”", login_again.name)
+            let on = c.selected == c.login_at();
+            let label = if login_again.exists {
+                format!(" l  log in again as “{}”", login_again.name)
             } else {
-                format!("l  log in and save as “{}”", login_again.name)
-            }));
+                format!(" l  log in and save as “{}”", login_again.name)
+            };
+            out.push(Line::from(vec![
+                Span::styled(if on { CURSOR } else { " " }.to_string(), t.accent),
+                Span::styled(label, if on { t.accent } else { t.text }),
+            ]));
+            if !matches!(login_offer, Offer::Offered) {
+                out.push(Line::styled(
+                    format!("    {}", login_offer_text(login_offer)),
+                    t.muted,
+                ));
+            }
         }
+    }
+}
+
+/// The login line's offer: what saving the login would do to the binding.
+fn login_offer_text(o: &Offer) -> String {
+    match o {
+        Offer::ReplaceOnly { .. } => format!("{} — press r to log in", offer_text(o)),
+        _ => offer_text(o),
     }
 }
 

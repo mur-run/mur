@@ -26,6 +26,8 @@ export interface RowView {
   domains: string[];
   shared_with: string[];
   offer: OfferView;
+  /** Where the profile logged in, when that is another site (#2461). */
+  session_elsewhere: string | null;
 }
 
 export type ReachView =
@@ -36,7 +38,14 @@ export type ReachView =
 
 export type BodyView =
   | { kind: "no_live_entry" }
-  | { kind: "login"; rows: RowView[]; login_again: string; login_again_exists: boolean }
+  | {
+      kind: "login";
+      rows: RowView[];
+      login_again: string;
+      login_again_exists: boolean;
+      /** `replace_only` needs `replace: true` on the login pick (#2461). */
+      login_offer: OfferView;
+    }
   | { kind: "reach"; reach: ReachView };
 
 /** D1: the ANY-host sentence, and one complete CLI line per answer choice. */

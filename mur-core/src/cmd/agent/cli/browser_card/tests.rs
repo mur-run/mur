@@ -33,10 +33,15 @@ fn row(name: &str, offer: Offer) -> ProfileRow {
         domains: vec!["git.example.com".into()],
         shared_with: vec![],
         offer,
+        session_elsewhere: None,
     }
 }
 
 fn login_card(rows: Vec<ProfileRow>, port: Option<u16>) -> State {
+    login_card_with(rows, port, Offer::Offered)
+}
+
+fn login_card_with(rows: Vec<ProfileRow>, port: Option<u16>, login_offer: Offer) -> State {
     State::new(Shown::for_test(
         "qa",
         req(true),
@@ -46,6 +51,7 @@ fn login_card(rows: Vec<ProfileRow>, port: Option<u16>) -> State {
                 name: "git-example".into(),
                 exists: false,
             },
+            login_offer,
             port,
         },
     ))
@@ -116,6 +122,9 @@ fn enter_on_a_disabled_row_picks_nothing() {
         vec![row("blocked", Offer::Disabled { why: "off".into() })],
         None,
     );
+    // The usable login line is the default; put the cursor on the row.
+    assert_eq!(c.selected, c.login_at());
+    c.selected = 0;
     assert_eq!(c.on_key(k(KeyCode::Enter)), KeyAction::Nothing);
     assert_eq!(c.phase, Phase::Choosing);
     assert!(c.note.is_some());
@@ -158,6 +167,93 @@ fn a_replace_row_needs_r_not_enter() {
         KeyAction::Settle(Pick::Row {
             name: "work".into(),
             replace: true
+        })
+    );
+}
+
+fn replaces(drops: &[&str]) -> Offer {
+    Offer::ReplaceOnly {
+        with: "vercel".into(),
+        domains: vec![],
+        drops: drops.iter().map(|s| s.to_string()).collect(),
+        adds: vec![],
+    }
+}
+
+/// #2461 bug 1: a login that only binds as a replacement is not refused
+/// after `l`; `l` asks for `r`, and `r` sends `replace: true`.
+#[test]
+fn a_replace_only_login_takes_l_then_r() {
+    let mut c = login_card_with(
+        vec![row("vercel", Offer::AlreadyBound)],
+        None,
+        replaces(&["vercel"]),
+    );
+    assert_eq!(c.on_key(k(KeyCode::Char('l'))), KeyAction::Nothing);
+    assert_eq!(c.selected, c.login_at());
+    let note = c.note.clone().unwrap();
+    assert!(
+        note.contains("replaces vercel") && note.contains("press r"),
+        "{note}"
+    );
+    assert_eq!(
+        c.on_key(k(KeyCode::Char('r'))),
+        KeyAction::Settle(Pick::Login {
+            name: None,
+            reauth: false,
+            replace: true
+        })
+    );
+    let s = text(&c);
+    assert!(
+        s.contains("only by replacing vercel — press r to log in"),
+        "{s}"
+    );
+}
+
+#[test]
+fn a_login_that_cannot_bind_opens_nothing() {
+    let mut c = login_card_with(vec![], None, Offer::Disabled { why: "off".into() });
+    assert_eq!(c.on_key(k(KeyCode::Char('l'))), KeyAction::Nothing);
+    assert!(c.note.as_deref().unwrap().contains("not available: off"));
+    assert_eq!(c.on_key(k(KeyCode::Char('r'))), KeyAction::Nothing);
+}
+
+/// #2461 bug 2: the card does not default to a row whose session is for
+/// another site; the login line is the default and takes Enter.
+#[test]
+fn the_default_skips_a_row_with_no_session_for_the_site() {
+    let mut vercel = row("vercel", Offer::AlreadyBound);
+    vercel.session_elsewhere = Some("vercel.com".into());
+    let mut c = login_card(vec![vercel.clone()], None);
+    assert_eq!(c.selected, c.login_at());
+    assert!(text(&c).contains("logged in at vercel.com — may have no session for git.example.com"));
+    assert_eq!(
+        c.on_key(k(KeyCode::Enter)),
+        KeyAction::Settle(Pick::Login {
+            name: None,
+            reauth: false,
+            replace: false
+        })
+    );
+    // A row with a session for the site stays the default.
+    let c = login_card(vec![vercel, row("gh", Offer::Offered)], None);
+    assert_eq!(c.selected, 1);
+    // The flagged row can still be picked on purpose.
+    let mut c = login_card(
+        vec![{
+            let mut r = row("vercel", Offer::Offered);
+            r.session_elsewhere = Some("vercel.com".into());
+            r
+        }],
+        None,
+    );
+    c.on_key(k(KeyCode::Up));
+    assert_eq!(
+        c.on_key(k(KeyCode::Enter)),
+        KeyAction::Settle(Pick::Row {
+            name: "vercel".into(),
+            replace: false
         })
     );
 }

@@ -35,6 +35,7 @@ fn p(name: &str, domains: &[&str]) -> Profile {
     Profile {
         name: name.into(),
         domains: domains.iter().map(|s| s.to_string()).collect(),
+        login_host: None,
     }
 }
 
@@ -74,6 +75,7 @@ fn card_with(
             bound,
             shared: &nobody,
             port: None,
+            login_domains: Ok(hosts(&["fresh.invalid"])),
         },
     )
 }
@@ -221,6 +223,88 @@ fn overlap_is_replace_only_and_names_everything_it_drops() {
     }
 }
 
+/// #2461: a login whose new profile overlaps a bound one is offered only
+/// as a replacement, the same way a row is, so the card can ask for `r`.
+#[test]
+fn the_login_offer_is_planned_like_a_row() {
+    let e = restricted(&["github.com"], &["vercel"]);
+    let bound = |n: &str| match n {
+        "vercel" => Some(hosts(&["vercel.com", "github.com"])),
+        _ => Some(Vec::new()),
+    };
+    let build_with = |login_domains| {
+        build(
+            &site("https://github.com"),
+            true,
+            again(),
+            &Inputs {
+                entry: Some(&e),
+                profiles: &[],
+                bound: &bound,
+                shared: &nobody,
+                port: None,
+                login_domains,
+            },
+        )
+    };
+    let Card::Login { login_offer, .. } = build_with(Ok(hosts(&["github.com"]))) else {
+        panic!()
+    };
+    assert!(
+        matches!(&login_offer, Offer::ReplaceOnly { drops, .. } if *drops == hosts(&["vercel"])),
+        "{login_offer:?}"
+    );
+    let Card::Login { login_offer, .. } = build_with(Err("bad name".into())) else {
+        panic!()
+    };
+    assert_eq!(
+        login_offer,
+        Offer::Disabled {
+            why: "bad name".into()
+        }
+    );
+}
+
+/// #2461: a profile that lists the host but logged in elsewhere is flagged;
+/// a same-site login host (SSO under the same domain) is not.
+#[test]
+fn a_row_says_when_its_session_is_for_another_site() {
+    let e = restricted(&["github.com", "vercel.com", "example.com"], &[]);
+    let at = |name: &str, domains: &[&str], url: &str| Profile {
+        login_host: Some(url.into()),
+        ..p(name, domains)
+    };
+    let c = card(
+        "github.com",
+        true,
+        Some(&e),
+        &[
+            at("vercel", &["vercel.com", "github.com"], "vercel.com"),
+            at("gh", &["github.com"], "github.com"),
+            p("unknown", &["github.com"]),
+        ],
+    );
+    let got: Vec<(String, Option<String>)> = rows(c)
+        .into_iter()
+        .map(|r| (r.name, r.session_elsewhere))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("vercel".into(), Some("vercel.com".into())),
+            ("gh".into(), None),
+            ("unknown".into(), None),
+        ]
+    );
+    let c = card(
+        "app.example.com",
+        true,
+        Some(&e),
+        &[at("sso", &["example.com"], "login.example.com")],
+    );
+    assert_eq!(rows(c)[0].session_elsewhere, None);
+}
+
 #[test]
 fn needs_hosts_names_the_missing_hosts() {
     let e = restricted(&["other.example"], &[]);
@@ -319,12 +403,14 @@ fn shared_lists_the_other_agents() {
             bound: &disjoint,
             shared: &shared,
             port: Some(3000),
+            login_domains: Ok(hosts(&["gitea.example"])),
         },
     );
     let Card::Login {
         rows,
         login_again,
         port,
+        ..
     } = c
     else {
         panic!()

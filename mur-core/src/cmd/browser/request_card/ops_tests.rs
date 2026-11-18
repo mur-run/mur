@@ -88,6 +88,7 @@ fn card_for_reads_profiles_bindings_ports_and_the_snapshot_off_disk() {
     let Card::Login {
         rows,
         login_again,
+        login_offer,
         port,
     } = card
     else {
@@ -96,6 +97,10 @@ fn card_for_reads_profiles_bindings_ports_and_the_snapshot_off_disk() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].offer, Offer::Offered);
     assert_eq!(rows[0].shared_with, vec!["reviewer"]);
+    assert_eq!(rows[0].session_elsewhere, None);
+    // `gitea` exists under another name than the login's, so the login
+    // profile would be new and bind alongside nothing.
+    assert_eq!(login_offer, Offer::Offered);
     assert_eq!(
         (login_again.name.as_str(), login_again.exists, port),
         ("gitea.example-3000", false, Some(3000))
