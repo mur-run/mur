@@ -90,9 +90,15 @@ where
     F: FnOnce(Head) -> Result<bool>,
 {
     let reason = parse_reason(reason)?;
-    let (shown, _) = load_head(mur_home)?;
+    // Every read is under the lock: an unlocked read can land mid-rotation
+    // (chain appended, `identity.pub` not yet promoted) and see a torn state.
+    // The lock is dropped before the prompt so a waiting user blocks no one.
     let agreed = match confirm {
         Some(f) => {
+            let shown = {
+                let _lock = lock_identity(mur_home)?;
+                load_head(mur_home)?.0
+            };
             if !f(shown)? {
                 eprintln!("aborted");
                 return Ok(());
@@ -104,7 +110,7 @@ where
 
     let _lock = lock_identity(mur_home)?;
     let (head, signer) = load_head(mur_home)?;
-    if agreed.is_some_and(|a| a != head) {
+    if let Some(shown) = agreed.filter(|a| *a != head) {
         bail!(
             "the human identity changed while waiting for confirmation (key_version {} -> {}); \
              nothing was written. Re-run to rotate the current key.",
