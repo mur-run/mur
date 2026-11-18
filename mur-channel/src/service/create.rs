@@ -51,6 +51,43 @@ pub enum ChannelOwner<'a> {
     },
 }
 
+/// The agent that sealed a channel's head before the router took over: only
+/// its public chain is read, to accept that one legacy head (H1). Without it
+/// a legacy agent-sealed head cannot be verified, and C1 would refuse a
+/// channel that is merely old.
+#[derive(Clone, Copy)]
+pub struct LegacySealer<'a> {
+    pub identity: &'a AgentIdentity,
+    pub kv: u32,
+    /// That agent's home (its `rotations.jsonl`).
+    pub key_home: &'a Path,
+}
+
+/// The head signer of an owned channel: the router seals, whoever signed the
+/// event. `live_record` is whether the same load found a live owner record;
+/// `legacy` names the agent whose head the router may take over once.
+pub(super) fn router_head<'a>(
+    router: RouterSeal<'a>,
+    live_record: bool,
+    legacy: Option<LegacySealer<'a>>,
+) -> HeadSigner<'a> {
+    let (identity, kv, key_home) = legacy
+        .map_or((router.identity, router.kv, router.key_home), |l| {
+            (l.identity, l.kv, l.key_home)
+        });
+    HeadSigner {
+        identity,
+        kv,
+        key_home,
+        sealer: HeadSealer::Router {
+            identity: router.identity,
+            kv: router.kv,
+            key_home: router.key_home,
+            live_record,
+        },
+    }
+}
+
 impl ChannelService {
     /// Create a fresh channel whose participants are the local human (owner)
     /// and one agent (delegate). Used by both CLI and Hub when opening a chat.
@@ -194,17 +231,7 @@ impl ChannelService {
             key_version: kv,
             human_cut: None,
         })?;
-        let head = HeadSigner {
-            identity: router.identity,
-            kv: router.kv,
-            key_home: router.key_home,
-            sealer: HeadSealer::Router {
-                identity: router.identity,
-                kv: router.kv,
-                key_home: router.key_home,
-                live_record: true,
-            },
-        };
+        let head = router_head(router, true, None);
         let ev = self.with_hooks(Some(head), |hooks| {
             self.store.append_signed_by_with(
                 channel_id,

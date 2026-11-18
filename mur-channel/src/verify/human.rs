@@ -76,6 +76,11 @@ pub struct HumanTrust {
     ignored: Vec<u64>,
     /// `seq` of qualifying records after the live one. Ignored with a warning.
     later: Vec<u64>,
+    /// `seq` of records that verify on the local chain but are not live: a
+    /// retired key's record that no head covers yet. Anchoring anything
+    /// after one would make it live (and first), so C1 refuses (see
+    /// [`HumanTrust::dormant_records`]).
+    dormant: Vec<u64>,
     damage: Vec<OwnerDamage>,
 }
 
@@ -120,6 +125,9 @@ impl HumanTrust {
                          local human chain — ignored, grants nothing"
                     );
                     trust.ignored.push(ev.seq);
+                    if record_on_chain(mur_home, channel_id, ev).is_some() {
+                        trust.dormant.push(ev.seq);
+                    }
                 }
             }
         }
@@ -131,6 +139,13 @@ impl HumanTrust {
 
     pub fn live_record(&self) -> Option<&LiveRecord> {
         self.live.as_ref()
+    }
+
+    /// Ignored records that nonetheless verify under the local human chain
+    /// (a retired key's, not yet covered by a head). A head sealed over one
+    /// would turn it live, so enrolling must not proceed past it.
+    pub fn dormant_records(&self) -> &[u64] {
+        &self.dormant
     }
 
     pub fn ignored_records(&self) -> &[u64] {
@@ -197,6 +212,20 @@ fn qualifying_record(
     ev: &ChannelEvent,
     head: Option<&Head>,
 ) -> Option<OwnerKeyEnrolledPayload> {
+    let payload = record_on_chain(mur_home, channel_id, ev)?;
+    let head_kv = rotation_chain(mur_home).ok()?.head_key_version();
+    let anchored = head.is_some_and(|h| ev.seq <= h.seq);
+    (payload.key_version == head_kv || anchored).then_some(payload)
+}
+
+/// An `owner-key-enrolled` record that is well-formed and verifies under the
+/// local human chain at its own key version — before asking whether it is
+/// the head key or anchored.
+fn record_on_chain(
+    mur_home: &Path,
+    channel_id: &str,
+    ev: &ChannelEvent,
+) -> Option<OwnerKeyEnrolledPayload> {
     let ChannelActor::Human { key: Some(key), .. } = &ev.actor else {
         return None;
     };
@@ -205,12 +234,7 @@ fn qualifying_record(
         return None;
     }
     let pk = resolve_human_pubkey(mur_home, key, Some(payload.key_version))?;
-    if !crate::sign::verify_one(channel_id, ev, &pk, true) {
-        return None;
-    }
-    let head_kv = rotation_chain(mur_home).ok()?.head_key_version();
-    let anchored = head.is_some_and(|h| ev.seq <= h.seq);
-    (payload.key_version == head_kv || anchored).then_some(payload)
+    crate::sign::verify_one(channel_id, ev, &pk, true).then_some(payload)
 }
 
 fn owner_damage(

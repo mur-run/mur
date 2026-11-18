@@ -13,7 +13,8 @@ use crate::head_io::remove_head;
 use crate::index::{ChannelIndex, ChannelRow};
 use crate::store::{ChannelStore, ManifestPolicy, SealInput};
 use anchored::HeadSigner;
-pub use create::{ChannelOwner, HumanSign, RouterSeal};
+pub use create::{ChannelOwner, HumanSign, LegacySealer, RouterSeal};
+pub use enroll::EnrollGate;
 
 /// Shared truncation limit for auto-derived conversation titles. One constant
 /// so TUI, Hub, and mobile cannot disagree about where a title ends.
@@ -670,6 +671,7 @@ impl ChannelService {
 
 mod anchored;
 mod create;
+mod enroll;
 pub mod restart;
 mod transition;
 
