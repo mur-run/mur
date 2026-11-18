@@ -3,6 +3,7 @@ pub(crate) mod atomic_write;
 pub mod bash;
 #[cfg(test)]
 mod bash_cache_env_tests;
+pub mod bash_cargo_slot;
 pub mod bash_control;
 pub mod bash_env;
 pub(crate) mod bash_guard;

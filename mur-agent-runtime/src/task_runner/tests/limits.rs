@@ -439,6 +439,7 @@ async fn cancel_kills_the_tasks_jobs() {
                 env: vec![("PATH".into(), std::env::var("PATH").unwrap_or_default())],
                 spool_dir: &base,
                 vault: None,
+                slot: None,
             })
         })
         .await

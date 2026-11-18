@@ -112,6 +112,8 @@ pub struct SpawnSpec<'a> {
     pub env: Vec<(String, String)>,
     pub spool_dir: &'a Path,
     pub vault: Option<Arc<SecretVault>>,
+    /// Held until the child exits (cross-agent cargo cap), then dropped.
+    pub slot: Option<crate::tools::bash_cargo_slot::CargoSlot>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -225,6 +227,7 @@ impl JobTable {
             done_tx,
             spec.vault,
             killed_by.clone(),
+            spec.slot,
         ));
         jobs.insert(
             id.clone(),
@@ -451,6 +454,7 @@ async fn pump(
     done: watch::Sender<Option<Exit>>,
     vault: Option<Arc<SecretVault>>,
     killed_by: Arc<Mutex<Option<&'static str>>>,
+    slot: Option<crate::tools::bash_cargo_slot::CargoSlot>,
 ) {
     let spool = spool.map(|f| Arc::new(Mutex::new(f)));
     let a = tokio::spawn(copy_stream(
@@ -468,6 +472,7 @@ async fn pump(
         vault.as_ref().map(|v| v.masker()),
     ));
     let status = child.wait().await;
+    drop(slot);
     // Bounded drain: a grandchild holding the pipe open must not keep the
     // job "running" after the shell is gone. Dropping the handles detaches
     // the readers; they keep appending to the tail until EOF.

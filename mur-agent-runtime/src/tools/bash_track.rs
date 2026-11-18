@@ -128,6 +128,35 @@ pub(crate) async fn prepare_current_turn(
     (Some(pair), note)
 }
 
+/// Take a cross-agent cargo slot when `command` runs a build trigger.
+/// Waits at most the call's own `timeout_secs`; `Err` is the refusal text.
+/// Any I/O failure on the slot files runs the build unthrottled (logged):
+/// a broken lock dir must not take `cargo` away from every agent.
+pub(crate) async fn cargo_slot(
+    agent: Option<&(PathBuf, String)>,
+    command: &str,
+    timeout_secs: u64,
+) -> Result<Option<crate::tools::bash_cargo_slot::CargoSlot>, String> {
+    use crate::tools::bash_cargo_slot as slot;
+    let Some((home, _)) = agent else {
+        return Ok(None);
+    };
+    let tt = Config::load_or_default(&home.join("config.yaml")).turn_track;
+    if !command_triggers(command, &tt.warm_build_cache.triggers) {
+        return Ok(None);
+    }
+    let n = slot::effective_slots(tt.max_parallel_cargo);
+    let within = std::time::Duration::from_secs(timeout_secs);
+    match slot::acquire(&slot::slot_dir(home), n, within).await {
+        Ok(Some(s)) => Ok(Some(s)),
+        Ok(None) => Err(slot::busy_message(n, within)),
+        Err(e) => {
+            tracing::warn!(error = %e, "cargo slot unavailable; running unthrottled");
+            Ok(None)
+        }
+    }
+}
+
 /// Prepend a warm note to the tool's reply.
 pub(crate) fn with_note(
     mut out: crate::tools::ToolOutput,

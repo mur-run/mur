@@ -14,6 +14,8 @@ pub const TURN_TRACK_DEFAULT_MIN_FREE_GIB: u64 = 20;
 pub const TURN_TRACK_DEFAULT_TURN_TARGET_SUBDIR: &str = "turns";
 /// Minutes a released or orphaned turn track waits before it is reclaimed.
 pub const TURN_TRACK_DEFAULT_STALE_GRACE_MINS: u64 = 30;
+/// `0` = derive the cross-agent cargo build cap from physical memory.
+pub const TURN_TRACK_DEFAULT_MAX_PARALLEL_CARGO: u32 = 0;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TurnTrackConfig {
@@ -23,6 +25,10 @@ pub struct TurnTrackConfig {
     /// as a patch, worktree removed) once quiet this many minutes.
     #[serde(default = "turn_track_default_stale_grace_mins")]
     pub stale_grace_mins: u64,
+    /// Cargo builds allowed at once across every agent on this machine.
+    /// `0` = one per 8 GiB of RAM (at least one).
+    #[serde(default = "turn_track_default_max_parallel_cargo")]
+    pub max_parallel_cargo: u32,
 }
 
 impl Default for TurnTrackConfig {
@@ -30,12 +36,17 @@ impl Default for TurnTrackConfig {
         Self {
             warm_build_cache: WarmBuildCacheConfig::default(),
             stale_grace_mins: turn_track_default_stale_grace_mins(),
+            max_parallel_cargo: turn_track_default_max_parallel_cargo(),
         }
     }
 }
 
 fn turn_track_default_stale_grace_mins() -> u64 {
     TURN_TRACK_DEFAULT_STALE_GRACE_MINS
+}
+
+fn turn_track_default_max_parallel_cargo() -> u32 {
+    TURN_TRACK_DEFAULT_MAX_PARALLEL_CARGO
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +135,7 @@ mod tests {
         assert_eq!(w.min_free_gib, 20);
         assert_eq!(w.turn_target_subdir, "turns");
         assert_eq!(c.turn_track.stale_grace_mins, 30);
+        assert_eq!(c.turn_track.max_parallel_cargo, 0);
     }
 
     #[test]

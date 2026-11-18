@@ -314,6 +314,12 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
         }
         // Parallel first compiles race to start the agent's own server (#1860).
         crate::agent_paths::sccache_server::ensure_for(&command, &env).await;
+        let slot = match super::bash_track::cargo_slot(self.agent.as_ref(), &command, timeout_secs)
+            .await
+        {
+            Ok(slot) => slot,
+            Err(busy) => return Ok(ToolOutput::from(busy)),
+        };
         let spool_dir = self.working_dir.join(crate::tools::bash_jobs::SPOOL_DIR);
         let job_id = self
             .jobs
@@ -323,6 +329,7 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
                 env,
                 spool_dir: &spool_dir,
                 vault: self.secrets.clone(),
+                slot,
             })
             .map_err(|e| match e {
                 crate::tools::bash_jobs::JobError::Spawn(io) => {
