@@ -68,7 +68,10 @@ async fn the_childs_write_grant_request_is_router_signed() {
         .collect();
     assert_eq!(asks.len(), 1, "one write-grant approval for coder");
     assert!(
-        crate::hitl::authority::is_router_signed(home, &channel_id, &asks[0]),
+        crate::hitl::authority::is_router_signed(
+            &crate::hitl::authority::AuthorityCtx::load(home, &channel_id).unwrap(),
+            &asks[0]
+        ),
         "the approval card must be answerable: {:?}",
         asks[0]
     );

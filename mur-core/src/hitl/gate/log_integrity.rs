@@ -31,10 +31,13 @@ const NO_ROUTER_KEY: [u8; 32] = [0u8; 32];
 /// it, so it is one constant.
 pub(super) const INTEGRITY_FAILED: &str = "log integrity check failed";
 
-/// The log's events, and — when the log cannot be trusted — why.
+/// The log's events, the authority context built from the same read, and —
+/// when the log cannot be trusted — why.
 pub(super) struct Checked {
     pub events: Vec<ChannelEvent>,
     pub damage: Option<String>,
+    /// Owner trust and keys from the same bytes as `events` (C3: one load).
+    pub ctx: crate::hitl::authority::AuthorityCtx,
 }
 
 /// Read `channel_id`'s events with the integrity check, as one locked
@@ -46,27 +49,42 @@ pub(super) fn load_checked(mur_home: &Path, channel_id: &str) -> Result<Checked>
     // under the current key, and the retry would then call a healthy log
     // forged. Signatures are not judged here (see module doc), so
     // `require_sig` is off.
-    let (events, report) = svc.store().with_shared_lock(channel_id, |store| {
-        let load = |key: &[u8; 32]| store.load_events_with_damage(channel_id, key, false);
+    let (events, report, ctx) = svc.store().with_shared_lock(channel_id, |store| {
+        let load = |key: &[u8; 32]| store.load_raw_with_damage(channel_id, key, false);
         let first = load(&router_key.unwrap_or(NO_ROUTER_KEY))?;
         // A head sealed before a router rekey carries the old `key_version`;
         // check it under the key the verified rotation history gives that
         // version, as the writer does, instead of calling it forged.
-        match rekeyed_head_key(mur_home, &first.1, router_key) {
+        let (raw, events, report) = match rekeyed_head_key(mur_home, &first.2, router_key) {
             Some(older) => {
                 #[cfg(test)]
                 BETWEEN_READS.with(|h| h.borrow().as_ref().map(|f| f()));
-                load(&older)
+                load(&older)?
             }
-            None => Ok(first),
-        }
+            None => first,
+        };
+        // Same lock, same bytes: the owner trust the authority checks use
+        // is the log the integrity check just judged.
+        let head =
+            mur_channel::head_io::read_head(&mur_channel::anchor::heads_dir(mur_home), channel_id)?;
+        let ctx = crate::hitl::authority::AuthorityCtx::from_log(
+            mur_home,
+            channel_id,
+            &raw,
+            head.as_ref(),
+        );
+        Ok((events, report, ctx))
     })?;
     drop(svc);
     let damage = describe(&report, router_key.is_some());
     if let Some(why) = &damage {
         tracing::warn!(channel_id, damage = %why, "HITL gate: {INTEGRITY_FAILED}");
     }
-    Ok(Checked { events, damage })
+    Ok(Checked {
+        events,
+        damage,
+        ctx,
+    })
 }
 
 #[cfg(test)]
