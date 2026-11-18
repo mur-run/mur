@@ -229,3 +229,36 @@ fn cancel_login_drops_the_sender() {
         Err(tokio::sync::oneshot::error::TryRecvError::Closed)
     ));
 }
+
+#[test]
+fn ssh_card_outranks_the_browser_card() {
+    let (tx, _rx) = tokio::sync::mpsc::channel(4);
+    let mut app = crate::cmd::agent::cli::app::App::test_fixture();
+    app.browser.card = Some(Box::new(login_card(vec![row("a", Offer::Offered)], None)));
+    // Browser card alone: it owns the key and Esc closes it.
+    assert!(crate::cmd::agent::cli::cards::on_key(
+        &mut app,
+        k(KeyCode::Esc),
+        false,
+        &tx
+    ));
+    assert!(app.browser.card.is_none());
+    // Ctrl combos still reach the composer.
+    app.browser.card = Some(Box::new(login_card(vec![], None)));
+    assert!(!crate::cmd::agent::cli::cards::on_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        true,
+        &tx
+    ));
+}
+
+#[test]
+fn browser_requests_with_nothing_pending_says_so() {
+    let (tx, _rx) = tokio::sync::mpsc::channel(4);
+    let mut app = crate::cmd::agent::cli::app::App::test_fixture();
+    let home = tempfile::tempdir().unwrap();
+    app.home = home.path().to_path_buf();
+    super::command(&mut app, &[], &tx);
+    assert!(app.browser.card.is_none() && !app.browser.busy);
+}

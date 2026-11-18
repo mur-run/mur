@@ -43,6 +43,10 @@ fn setup_hint(agent: &str) -> String {
 pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<StreamMsg>) {
     use super::browser_live_cmd::{self as live, Route};
     use super::browser_mode_cmd as mode;
+    // `/browser requests [site]`: the request card (slice 4).
+    if args.first().map(String::as_str) == Some("requests") {
+        return super::browser_card::command(app, &args[1..], tx);
+    }
     let route = live::route(&args);
     if let Route::Live(hosts) = route {
         use super::browser_live_intent::{

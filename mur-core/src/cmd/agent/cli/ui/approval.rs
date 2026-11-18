@@ -150,6 +150,17 @@ pub(super) fn docked_rows(
         );
         return (0, h, 0, None);
     }
+    if let Some(card) = app.browser.card.as_deref() {
+        let h = crate::cmd::agent::cli::browser_card::render::height(
+            card,
+            app.theme,
+            app.width,
+            total_h,
+            avail,
+            PANEL_MAX_PCT,
+        );
+        return (0, h, 0, None);
+    }
     let chooser = super::chooser::chooser_band_height(app, total_h, input_h);
     let chip = u16::from(crate::cmd::agent::cli::proposal::chip_line(app).is_some());
     (chooser, 0, chip, None)

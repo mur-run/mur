@@ -239,6 +239,9 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
                 if name == mur_agent_runtime::tools::ssh_request::SSH_REQUEST {
                     app.ssh.tool_step = Some((step_id.clone(), args.clone()));
                 }
+                if name == mur_agent_runtime::tools::browser_request::BROWSER_REQUEST {
+                    app.browser.tool_step = Some((step_id.clone(), args.clone()));
+                }
                 app.saw_step_this_turn = true;
                 // A delegated fleet run is a long, otherwise-opaque step:
                 // auto-arm the member rail + milestone follow so the user
@@ -285,6 +288,16 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
                 && ok
             {
                 super::ssh_card::on_tool_result(app, &args, tx);
+            }
+            if app
+                .browser
+                .tool_step
+                .as_ref()
+                .is_some_and(|(id, _)| *id == step_id)
+                && let Some((_, args)) = app.browser.tool_step.take()
+                && ok
+            {
+                super::browser_card::on_tool_result(app, &args, tx);
             }
         }
         StreamMsg::StepTokens {

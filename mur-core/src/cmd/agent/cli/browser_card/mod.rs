@@ -22,9 +22,6 @@ use crate::cmd::browser::request_card::front::{
 };
 use state::{KeyAction, Phase, State};
 
-/// Tool name the runtime streams for a browser request.
-pub const BROWSER_REQUEST_TOOL: &str = "browser_request";
-
 #[derive(Debug, Default)]
 pub struct BrowserSlot {
     pub card: Option<Box<State>>,

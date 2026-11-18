@@ -22,5 +22,10 @@ pub fn on_key(
         }
         return true;
     }
+    // The SSH card outranks the browser card when both are open.
+    if app.browser.card.is_some() && !ctrl {
+        super::browser_card::on_key(app, key, tx);
+        return true;
+    }
     false
 }

@@ -123,13 +123,15 @@ fn render_frame(f: &mut Frame, app: &mut App) {
     }
     if chooser_h > 0 {
         render_chooser_band(f, app, chunks[2]);
-    } else if !gated && app.ssh.card.is_none() {
+    } else if !gated && app.ssh.card.is_none() && app.browser.card.is_none() {
         render_completion(f, app, chunks[5]);
     }
     if let Some(form) = form {
         render_approval(f, app, chunks[3], form, std::time::Instant::now());
     } else if let Some(card) = app.ssh.card.as_deref() {
         super::ssh_card::render::draw(f, card, app.theme, chunks[3]);
+    } else if let Some(card) = app.browser.card.as_deref() {
+        super::browser_card::render::draw(f, card, app.theme, chunks[3]);
     }
     if let Some((what, hint)) = chip {
         render_chip(f, app, chunks[4], &what, &hint);
