@@ -132,6 +132,44 @@ fn show_reads_the_card_and_the_port_step_says_any_host() {
 }
 
 #[test]
+fn a_replace_only_login_port_line_carries_replace_and_a_disabled_one_is_dropped() {
+    // #2461: the port step's login line must bind the way the card does.
+    let t = tempfile::tempdir().unwrap();
+    saved(t.path(), "gitea", None);
+    asker(t.path(), true);
+    let s = show(t.path(), "asker", &site()).unwrap();
+    let with = |login_offer: Offer| {
+        let Card::Login { login_again, .. } = s.card.clone() else {
+            panic!("login card")
+        };
+        let card = Card::Login {
+            rows: Vec::new(),
+            login_again: LoginAgain {
+                exists: true,
+                ..login_again
+            },
+            login_offer,
+            port: Some(3000),
+        };
+        port_step(&Shown::for_test("asker", s.request.clone(), card))
+            .unwrap()
+            .commands
+    };
+    assert_eq!(
+        with(Offer::ReplaceOnly {
+            with: "gitea".into(),
+            domains: vec!["gitea.example".into()],
+            drops: vec!["vercel".into()],
+            adds: Vec::new(),
+        }),
+        vec![
+            "mur browser answer asker http://gitea.example:3000 --login --reauth --replace --open-port"
+        ]
+    );
+    assert!(with(Offer::Disabled { why: "no".into() }).is_empty());
+}
+
+#[test]
 fn a_reach_port_step_offers_allow_and_a_disabled_one_offers_nothing() {
     let t = tempfile::tempdir().unwrap();
     saved(t.path(), "gitea", None);
@@ -160,6 +198,7 @@ fn a_replace_only_row_needs_the_explicit_replace() {
             name: "b".into(),
             domains: vec!["g.example".into()],
             shared_with: vec![],
+            session_elsewhere: None,
             offer: Offer::ReplaceOnly {
                 with: "old".into(),
                 domains: vec!["g.example".into()],
@@ -171,6 +210,7 @@ fn a_replace_only_row_needs_the_explicit_replace() {
             name: "x".into(),
             exists: false,
         },
+        login_offer: Offer::Offered,
         port: None,
     };
     let row = |replace| Pick::Row {

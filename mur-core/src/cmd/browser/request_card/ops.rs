@@ -14,7 +14,7 @@ use super::super::bind::bound_domains;
 use super::super::bind_plan::profile_domains;
 use super::super::live_entry::{LIVE_ENTRY, attached_profiles};
 use super::apply::PortOps;
-use super::login::default_name;
+use super::login::{default_name, login_plan};
 use super::model::{self, Card, Inputs, LoginAgain, Profile};
 
 /// The MCP entries a card was built from (D11). The answer writes only if
@@ -34,6 +34,9 @@ pub(crate) fn saved_profiles(home: &Path) -> Vec<Profile> {
             let meta = super::super::read_profile_meta(&paths::profile_meta(home, &name)).ok()?;
             Some(Profile {
                 domains: profile_domains(&meta)?,
+                login_host: url::Url::parse(&meta.url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(str::to_owned)),
                 name,
             })
         })
@@ -92,10 +95,12 @@ pub(crate) fn card_for_in(
     let profiles = saved_profiles(home);
     let bound = bound_domains(home);
     let name = default_name(&r.site);
-    let login_again = LoginAgain {
-        exists: paths::profile_state(home, &name).exists(),
-        name,
-    };
+    let exists = paths::profile_state(home, &name).exists();
+    // The same plan `l` makes, so the card offers what the login would do.
+    let login_domains = login_plan(home, &r.site, Some(&name), exists)
+        .map(|p| p.allow_domains)
+        .map_err(|e| format!("{e:#}"));
+    let login_again = LoginAgain { exists, name };
     let card = model::build(
         &r.site,
         r.login,
@@ -106,6 +111,7 @@ pub(crate) fn card_for_in(
             bound: &bound,
             shared: &shared,
             port: model::port_step(&r.site, out.mode, &out.allow_ports),
+            login_domains,
         },
     );
     Ok((card, profile.mcp_servers.clone()))

@@ -66,6 +66,11 @@ function Row({ row, busy, onAnswer }: { row: RowView; busy: boolean; onAnswer: (
         <span className="field-muted"> · {t("browser.row.sharedWith", { agents: row.shared_with.join(", ") })}</span>
       )}
       {detail && <div className="field-muted">{detail}</div>}
+      {row.session_elsewhere && (
+        <div className="field-muted">
+          {t("browser.row.sessionElsewhere", { at: row.session_elsewhere })}
+        </div>
+      )}
       {o.kind === "already_bound" && <span className="field-muted"> {t("browser.row.bound")}</span>}
       {(o.kind === "offered" || o.kind === "adds_hosts" || o.kind === "already_bound") && (
         <button
@@ -113,25 +118,35 @@ export function BrowserCardBody({ card, busy, loggingIn, result, note, onAnswer,
                 {t("browser.login.loggedIn")}
               </button>
             </>
+          ) : b.login_offer.kind === "disabled" ? (
+            <p className="field-muted">{b.login_offer.why}</p>
           ) : (
-            <button
-              type="button"
-              className="btn btn--secondary"
-              disabled={busy}
-              onClick={() => {
-                if (b.login_again_exists && !confirm) return setConfirm(true);
-                setConfirm(false);
-                // `reauth` overwrites the saved login of that name; it is
-                // not a binding replace, which a bound profile refuses.
-                onAnswer({ kind: "login", reauth: b.login_again_exists, replace: false });
-              }}
-            >
-              {confirm
-                ? t("browser.login.confirmReplace")
-                : t(b.login_again_exists ? "browser.login.againReplace" : "browser.login.again", {
-                    name: b.login_again,
-                  })}
-            </button>
+            <>
+              {b.login_offer.kind === "replace_only" && (
+                <div className="field-muted">
+                  {t("browser.login.replacesBinding", { drops: b.login_offer.drops.join(", ") })}
+                </div>
+              )}
+              <button
+                type="button"
+                className="btn btn--secondary"
+                disabled={busy}
+                onClick={() => {
+                  // `reauth` overwrites the saved login of that name;
+                  // `replace` swaps the bound profile (#2461). Separate.
+                  const rebinds = b.login_offer.kind === "replace_only";
+                  if ((b.login_again_exists || rebinds) && !confirm) return setConfirm(true);
+                  setConfirm(false);
+                  onAnswer({ kind: "login", reauth: b.login_again_exists, replace: rebinds });
+                }}
+              >
+                {confirm
+                  ? t("browser.login.confirmReplace")
+                  : t(b.login_again_exists ? "browser.login.againReplace" : "browser.login.again", {
+                      name: b.login_again,
+                    })}
+              </button>
+            </>
           )}
         </>
       )}

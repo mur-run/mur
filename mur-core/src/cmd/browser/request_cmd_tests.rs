@@ -21,6 +21,7 @@ fn row(name: &str, offer: Offer) -> ProfileRow {
         domains: vec!["g.example".into()],
         shared_with: vec![],
         offer,
+        session_elsewhere: None,
     }
 }
 
@@ -48,6 +49,7 @@ fn login_card() -> Card {
             name: "g.example-3000".into(),
             exists: true,
         },
+        login_offer: Offer::Offered,
         port: Some(3000),
     }
 }
@@ -81,6 +83,34 @@ fn render_names_every_row_and_the_command_for_it() {
     ] {
         assert!(text.contains(want), "missing {want:?} in\n{text}");
     }
+}
+
+/// #2461: the printed login command carries `--replace` when the login
+/// only binds as a replacement, and names what it drops.
+#[test]
+fn render_a_replace_only_login_prints_replace() {
+    let mut c = login_card();
+    if let Card::Login {
+        login_again,
+        login_offer,
+        ..
+    } = &mut c
+    {
+        login_again.exists = false;
+        *login_offer = Offer::ReplaceOnly {
+            with: "vercel".into(),
+            domains: vec!["github.com".into()],
+            drops: vec!["vercel".into()],
+            adds: vec![],
+        };
+    }
+    let text = render("rev", &req("http://g.example:3000", true), &c).join("\n");
+    assert!(
+        text.contains(
+            "--login --replace   (saves as \"g.example-3000\"; replaces the binding vercel"
+        ),
+        "{text}"
+    );
 }
 
 #[test]

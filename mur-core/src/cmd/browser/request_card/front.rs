@@ -125,13 +125,28 @@ pub struct PortStep {
 }
 
 /// The [`PortStep`] for `s`, or `None` when there is no port step.
+/// The `--login` flags for a port-step line, or none when the login cannot
+/// bind at all. A `ReplaceOnly` login needs `--replace` too (#2461).
+fn login_cli(reauth: bool, offer: &Offer) -> Option<String> {
+    let replace = match offer {
+        Offer::Disabled { .. } => return None,
+        Offer::ReplaceOnly { .. } => " --replace",
+        _ => "",
+    };
+    let reauth = if reauth { " --reauth" } else { "" };
+    Some(format!("--login{reauth}{replace}"))
+}
+
 pub fn port_step(s: &Shown) -> Option<PortStep> {
     let port = s.port()?;
     let base = format!("mur browser answer {} {}", s.agent, s.request.site.origin());
     let picks: Vec<String> = match &s.card {
         Card::NoLiveEntry => Vec::new(),
         Card::Login {
-            rows, login_again, ..
+            rows,
+            login_again,
+            login_offer,
+            ..
         } => rows
             .iter()
             .filter_map(|r| match r.offer {
@@ -139,14 +154,7 @@ pub fn port_step(s: &Shown) -> Option<PortStep> {
                 Offer::ReplaceOnly { .. } => Some(format!("--profile {} --replace", r.name)),
                 _ => Some(format!("--profile {}", r.name)),
             })
-            .chain(std::iter::once(
-                if login_again.exists {
-                    "--login --reauth"
-                } else {
-                    "--login"
-                }
-                .to_owned(),
-            ))
+            .chain(login_cli(login_again.exists, login_offer))
             .collect(),
         Card::Reach { reach, .. } => match reach {
             Reach::Disabled { .. } => Vec::new(),
@@ -271,6 +279,7 @@ fn login_choice(
     let row = super::Profile {
         name: plan.profile.clone(),
         domains: plan.allow_domains.clone(),
+        login_host: None,
     };
     let bound = super::super::bind::bound_domains(home);
     let offer = super::offer_for(entry, &row, &norm(s.request.site.host()), &bound);

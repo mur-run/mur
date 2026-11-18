@@ -30,6 +30,7 @@ fn shown() -> Shown {
                 name: "work".into(),
                 domains: vec!["git.example.com".into()],
                 shared_with: vec![],
+                session_elsewhere: Some("vercel.com".into()),
                 offer: Offer::ReplaceOnly {
                     with: "work".into(),
                     domains: vec!["git.example.com".into()],
@@ -40,6 +41,12 @@ fn shown() -> Shown {
             login_again: LoginAgain {
                 name: "git-example-com".into(),
                 exists: false,
+            },
+            login_offer: Offer::ReplaceOnly {
+                with: "work".into(),
+                domains: vec!["git.example.com".into()],
+                drops: vec!["work".into()],
+                adds: vec![],
             },
             port: Some(8443),
         },
@@ -106,19 +113,26 @@ fn one_answer_at_a_time_and_a_kept_card_can_be_answered_again() {
 #[test]
 fn the_view_keeps_replace_explicit_and_the_port_cli_only() {
     let v = card_view("id1", &shown());
-    let BodyView::Login { rows, .. } = &v.body else {
+    let BodyView::Login {
+        rows, login_offer, ..
+    } = &v.body
+    else {
         panic!("login body");
     };
     assert!(matches!(rows[0].offer, OfferView::ReplaceOnly { .. }));
+    // #2461: the login's own replace is shown, so the button can send it.
+    assert!(matches!(login_offer, OfferView::ReplaceOnly { drops, .. } if drops == &["work"]));
+    assert_eq!(rows[0].session_elsewhere.as_deref(), Some("vercel.com"));
     let step = v.port_step.expect("port step");
     assert!(step.warning.contains("ANY host"), "{}", step.warning);
     // The copyable lines are commands only: the replace row needs its
-    // explicit --replace, and every line carries --open-port.
+    // explicit --replace, so does the replace_only login (#2461), and
+    // every line carries --open-port.
     assert_eq!(
         step.commands,
         vec![
             "mur browser answer qa https://git.example.com:8443 --profile work --replace --open-port",
-            "mur browser answer qa https://git.example.com:8443 --login --open-port",
+            "mur browser answer qa https://git.example.com:8443 --login --replace --open-port",
         ]
     );
 }

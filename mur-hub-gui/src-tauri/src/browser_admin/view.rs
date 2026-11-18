@@ -53,6 +53,9 @@ pub struct RowView {
     pub domains: Vec<String>,
     pub shared_with: Vec<String>,
     pub offer: OfferView,
+    /// The host the profile logged in at, when its session is for another
+    /// site than the request's (#2461).
+    pub session_elsewhere: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,6 +77,9 @@ pub enum BodyView {
         /// replaces a saved login of that name.
         login_again: String,
         login_again_exists: bool,
+        /// What saving the login does to the binding; `replace_only` needs
+        /// `replace: true` on the pick (#2461).
+        login_offer: OfferView,
     },
     Reach {
         reach: ReachView,
@@ -125,6 +131,7 @@ fn row_view(r: &ProfileRow) -> RowView {
         domains: r.domains.clone(),
         shared_with: r.shared_with.clone(),
         offer: offer_view(&r.offer),
+        session_elsewhere: r.session_elsewhere.clone(),
     }
 }
 
@@ -145,11 +152,13 @@ pub fn card_view(id: &str, s: &Shown) -> CardView {
         Card::Login {
             rows,
             login_again: LoginAgain { name, exists },
+            login_offer,
             ..
         } => BodyView::Login {
             rows: rows.iter().map(row_view).collect(),
             login_again: name.clone(),
             login_again_exists: *exists,
+            login_offer: offer_view(login_offer),
         },
         Card::Reach { reach, .. } => BodyView::Reach {
             reach: reach_view(reach),

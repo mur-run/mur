@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { LanguageProvider } from "../../i18n";
 import { BrowserCardBody } from "./BrowserCardBody";
-import type { BodyView, CardView, PickArg, PortStepView } from "./browserApi";
+import type { BodyView, CardView, OfferView, PickArg, PortStepView } from "./browserApi";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // jsdom here has no usable localStorage; LanguageProvider reads it on mount.
@@ -59,11 +59,20 @@ async function click(b: HTMLButtonElement) {
   await act(async () => b.click());
 }
 
-const login = (exists: boolean): BodyView => ({
+const login = (exists: boolean, login_offer: OfferView = { kind: "already_bound" }): BodyView => ({
   kind: "login",
-  rows: [{ name: "work", domains: ["git.example"], shared_with: [], offer: { kind: "already_bound" } }],
+  rows: [
+    {
+      name: "work",
+      domains: ["git.example"],
+      shared_with: [],
+      offer: { kind: "already_bound" },
+      session_elsewhere: null,
+    },
+  ],
   login_again: "work",
   login_again_exists: exists,
+  login_offer,
 });
 
 describe("BrowserCardBody", () => {
@@ -73,6 +82,16 @@ describe("BrowserCardBody", () => {
     await click(button("Log in again")); // first click asks to confirm the overwrite
     await click(button("Confirm replace"));
     expect(onAnswer).toHaveBeenCalledWith({ kind: "login", reauth: true, replace: false });
+  });
+
+  it("a replace_only login asks first, then answers replace without reauth (#2461)", async () => {
+    const onAnswer = vi.fn();
+    const offer: OfferView = { kind: "replace_only", with: "work", drops: ["old.example"], adds: [] };
+    await render(card(login(false, offer)), onAnswer);
+    await click(button("Log in again"));
+    expect(onAnswer).not.toHaveBeenCalled();
+    await click(button("Confirm replace"));
+    expect(onAnswer).toHaveBeenCalledWith({ kind: "login", reauth: false, replace: true });
   });
 
   it("an already-bound row can still be used to finish the request", async () => {

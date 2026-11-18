@@ -78,6 +78,7 @@ fn render(agent: &str, r: &PendingRequest, c: &Card) -> Vec<String> {
         Card::Login {
             rows,
             login_again,
+            login_offer,
             port,
         } => {
             if rows.is_empty() {
@@ -120,17 +121,27 @@ fn render(agent: &str, r: &PendingRequest, c: &Card) -> Vec<String> {
                 };
                 out.push(format!("  {}{shared}: {what}", row.name));
             }
-            let again = if login_again.exists {
-                format!(
-                    "  log in again → {cmd} --login --reauth   (replaces the saved login {:?}; \
-                     --name to save under another name)",
+            // #2461: a login that only binds as a replacement needs
+            // `--replace` too, or the answer is refused before it opens.
+            let (replace, drops) = match login_offer {
+                Offer::ReplaceOnly { drops, .. } => (
+                    " --replace",
+                    format!("; replaces the binding {}", drops.join(", ")),
+                ),
+                _ => ("", String::new()),
+            };
+            let again = match login_offer {
+                Offer::Disabled { why } => format!("  log in again: not available: {why}"),
+                _ if login_again.exists => format!(
+                    "  log in again → {cmd} --login --reauth{replace}   (replaces the saved \
+                     login {:?}{drops}; --name to save under another name)",
                     login_again.name
-                )
-            } else {
-                format!(
-                    "  log in again → {cmd} --login   (saves as {:?}; --name to change)",
+                ),
+                _ => format!(
+                    "  log in again → {cmd} --login{replace}   (saves as {:?}{drops}; \
+                     --name to change)",
                     login_again.name
-                )
+                ),
             };
             out.push(again);
             *port
