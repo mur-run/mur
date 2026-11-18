@@ -240,6 +240,7 @@ pub fn summarize(ev: &ChannelEvent, channel_id: &str) -> String {
             ),
             Err(_) => "↶ withdrew a message (unreadable)".to_string(),
         },
+        EventKind::OwnerKeyEnrolled => "🔑 owner key enrolled".to_string(),
     };
     format!("{who}: {body}")
 }
@@ -499,6 +500,7 @@ mod tests {
             0,
             ChannelActor::Human {
                 name: "local".into(),
+                key: None,
             },
             EventKind::Retract,
             serde_json::json!({ "target_seq": 4, "reason": "cancelled" }),
@@ -561,7 +563,10 @@ mod tests {
         let human = mk(
             1,
             0,
-            ChannelActor::Human { name: "d".into() },
+            ChannelActor::Human {
+                name: "d".into(),
+                key: None,
+            },
             EventKind::Message,
             serde_json::json!({"text": "the goal"}),
         );

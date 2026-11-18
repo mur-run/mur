@@ -29,6 +29,7 @@ mod load;
 mod manifest_gate;
 #[cfg(test)]
 mod manifest_gate_tests;
+mod manifest_write;
 mod newer_kind;
 #[cfg(test)]
 mod newer_kind_tests;
@@ -84,11 +85,19 @@ impl ChannelStore {
         let dir = self.channel_dir(&channel.id)?;
         fs::create_dir_all(&dir)
             .with_context(|| format!("create channel dir {}", dir.display()))?;
-        self.save_manifest(channel)
+        self.write_manifest_file(channel)
+    }
+
+    /// Unlocked manifest write. Only `create` (a channel nobody else can see
+    /// yet) may use it; every later change goes through `update_manifest`.
+    /// `pub` solely because cross-crate tests seed manifests with it.
+    #[doc(hidden)]
+    pub fn save_manifest(&self, channel: &Channel) -> Result<()> {
+        self.write_manifest_file(channel)
     }
 
     /// Atomic manifest write (temp file + rename), matching the YamlStore idiom.
-    pub fn save_manifest(&self, channel: &Channel) -> Result<()> {
+    pub(super) fn write_manifest_file(&self, channel: &Channel) -> Result<()> {
         let path = self.manifest_path(&channel.id)?;
         let yaml = serde_yaml::to_string(channel).context("serialize channel manifest")?;
         let tmp = path.with_extension("yaml.tmp");
@@ -151,7 +160,10 @@ mod tests {
             goal: Goal::default(),
             state: ChannelState::Working,
             purpose: None,
-            owner: ChannelActor::Human { name: "me".into() },
+            owner: ChannelActor::Human {
+                name: "me".into(),
+                key: None,
+            },
             participants: vec![],
             created_at: now,
             updated_at: now,
@@ -171,7 +183,10 @@ mod tests {
         store
             .append_event(
                 "c-keep",
-                ChannelActor::Human { name: "me".into() },
+                ChannelActor::Human {
+                    name: "me".into(),
+                    key: None,
+                },
                 EventKind::Message,
                 serde_json::json!({"text": "hi"}),
                 None,
@@ -547,7 +562,10 @@ mod tests {
         let e0 = store
             .append_event(
                 "c1",
-                ChannelActor::Human { name: "me".into() },
+                ChannelActor::Human {
+                    name: "me".into(),
+                    key: None,
+                },
                 EventKind::Message,
                 serde_json::json!({"text":"hi"}),
                 None,
@@ -658,7 +676,10 @@ mod tests {
             assert!(store.delete(id).is_err(), "delete {id:?}");
             let appended = store.append_event(
                 id,
-                ChannelActor::Human { name: "me".into() },
+                ChannelActor::Human {
+                    name: "me".into(),
+                    key: None,
+                },
                 EventKind::Message,
                 serde_json::json!({"text": "x"}),
                 None,

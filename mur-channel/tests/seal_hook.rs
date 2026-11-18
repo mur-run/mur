@@ -14,7 +14,10 @@ use tempfile::TempDir;
 const CH: &str = "seal-ch";
 
 fn human() -> ChannelActor {
-    ChannelActor::Human { name: "me".into() }
+    ChannelActor::Human {
+        name: "me".into(),
+        key: None,
+    }
 }
 
 fn store_with_channel() -> (TempDir, ChannelStore) {

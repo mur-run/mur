@@ -16,7 +16,10 @@ fn sample_channel(id: &str) -> Channel {
         goal: Goal::default(),
         state: ChannelState::Working,
         purpose: None,
-        owner: ChannelActor::Human { name: "me".into() },
+        owner: ChannelActor::Human {
+            name: "me".into(),
+            key: None,
+        },
         participants: vec![],
         created_at: now,
         updated_at: now,
@@ -26,7 +29,10 @@ fn sample_channel(id: &str) -> Channel {
 fn say(store: &ChannelStore, id: &str, text: &str) -> Result<ChannelEvent> {
     store.append_event(
         id,
-        ChannelActor::Human { name: "me".into() },
+        ChannelActor::Human {
+            name: "me".into(),
+            key: None,
+        },
         EventKind::Message,
         serde_json::json!({ "text": text }),
         None,

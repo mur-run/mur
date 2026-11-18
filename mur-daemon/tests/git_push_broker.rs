@@ -141,6 +141,7 @@ fn human_says(w: &World, id: &str, hash: &str, allow: bool) {
 fn human() -> ChannelActor {
     ChannelActor::Human {
         name: "human".into(),
+        key: None,
     }
 }
 

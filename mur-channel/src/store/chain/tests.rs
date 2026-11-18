@@ -48,6 +48,7 @@ impl Fx {
         let payload = serde_json::json!({ "cmd": n });
         let actor = ChannelActor::Human {
             name: "commander".into(),
+            key: None,
         };
         let sig = crate::sign::sign_event(&self.id, CH, &actor, EventKind::Message, &payload, None);
         self.store

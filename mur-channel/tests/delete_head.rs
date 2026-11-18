@@ -24,7 +24,10 @@ fn sealed_channel(svc: &ChannelService, tmp: &TempDir) -> String {
         &AgentIdentity::generate(),
         1,
         tmp.path(),
-        ChannelActor::Human { name: "me".into() },
+        ChannelActor::Human {
+            name: "me".into(),
+            key: None,
+        },
         EventKind::Message,
         serde_json::json!({ "text": "hi" }),
         None,

@@ -66,7 +66,10 @@ const ENV_CHANNEL: &str = "MUR_ANCHOR_CRASH_CHANNEL";
 const ENV_SECRET: &str = "MUR_ANCHOR_CRASH_SECRET_HEX";
 
 fn actor() -> ChannelActor {
-    ChannelActor::Human { name: "me".into() }
+    ChannelActor::Human {
+        name: "me".into(),
+        key: None,
+    }
 }
 
 fn anchor_one(svc: &ChannelService, ch: &str, id: &AgentIdentity, i: usize) {

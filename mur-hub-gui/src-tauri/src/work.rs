@@ -57,7 +57,7 @@ fn enum_str<T: Serialize>(v: &T) -> String {
 
 fn participant_of(actor: &ChannelActor, role_str: String) -> WorkParticipant {
     let (kind, id) = match actor {
-        ChannelActor::Human { name } => ("human", name.clone()),
+        ChannelActor::Human { name, .. } => ("human", name.clone()),
         ChannelActor::Agent { id } => ("agent", id.clone()),
         ChannelActor::System => ("system", String::new()),
     };

@@ -64,7 +64,10 @@ mod tests {
                 goal: Goal::default(),
                 state: ChannelState::Working,
                 purpose: None,
-                owner: ChannelActor::Human { name: "me".into() },
+                owner: ChannelActor::Human {
+                    name: "me".into(),
+                    key: None,
+                },
                 participants: vec![],
                 created_at: now,
                 updated_at: now,
@@ -82,7 +85,10 @@ mod tests {
         store
             .append_event(
                 "c9",
-                ChannelActor::Human { name: "me".into() },
+                ChannelActor::Human {
+                    name: "me".into(),
+                    key: None,
+                },
                 EventKind::Message,
                 serde_json::json!({"text":"hi"}),
                 None,

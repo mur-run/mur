@@ -28,6 +28,9 @@ const PEER: &str = "y";
 const FLEET: &str = "f";
 const PROBE: &str = "probe";
 const SEED: &[u8] = b"seed";
+const REKEYED: &[u8] = b"rekeyed";
+/// Long enough for the child to seal before the helper renames.
+const REKEY_DELAY_SECS: &str = "1";
 const CAPTURE_STORES: [&str; 5] = ["queue", "session", "conversations", "telemetry", "traces"];
 const CONVERSATIONS: &str = "conversations";
 const PRIVATE: &str = "private";
@@ -127,6 +130,16 @@ fn fleet_child_reads_commander_public_keys_only() {
 #[test]
 fn a_symlinked_grant_cannot_reach_secrets() {
     run_case("symlink_grant");
+}
+
+/// A0: `<mur_home>/identity/` is readable and never writable, under a write
+/// grant aimed right at it (refused) and with no grant at all (sealed). The
+/// public key is replaced by rename after the seal, the way `mur identity
+/// rekey` does it, and the new file must still read — a Landlock FILE grant
+/// would pin the old inode (`linux_read_grant_survives_identity_pub_rename`).
+#[test]
+fn human_identity_dir_is_readable_and_write_protected() {
+    run_case("human_identity");
 }
 
 // ── child side ─────────────────────────────────────────────────────────────
@@ -264,6 +277,7 @@ fn write_protected_seal_subprocess_main() {
         "capture_fleet" => capture_fleet(&l),
         "commander_fleet" => commander_fleet(&l),
         "symlink_grant" => symlink_grant(&l),
+        "human_identity" => human_identity(&l),
         other => fail(&format!("unknown case {other}")),
     }
 }
@@ -474,5 +488,61 @@ fn symlink_grant(l: &Layout) -> ! {
     e.write(&inside(&link), false);
     e.write(&inside(&overrides), false);
     e.write(&inside(&plain), true);
+    e.finish()
+}
+
+fn human_identity(l: &Layout) -> ! {
+    let dir = l.mur.join("identity");
+    let public = dir.join("identity.pub");
+    let chain = dir.join("rotations.jsonl");
+    seed_file(&public);
+    seed_file(&chain);
+    let human_key = l.mur.join("keys").join(".human").join("identity.key");
+    seed_file(&human_key);
+
+    let mut profile = mur_common::agent::AgentProfile::default_for_tests();
+    profile.entitlements.filesystem.write = vec![dir.display().to_string()];
+    match mur_agent_runtime::sandbox::apply(&profile.entitlements, &l.agent_home(), &[], &[], &[]) {
+        Err(e) if mur_agent_runtime::sandbox::protected::is_refusal(&e) => {}
+        other => fail(&format!(
+            "an identity/ write grant must be refused, got {other:?}"
+        )),
+    }
+
+    // `mur identity rekey` runs outside the sandbox and replaces the public
+    // key by rename. Model it with a helper spawned BEFORE the seal (so the
+    // seal does not reach it) that renames a staged file over `identity.pub`
+    // after the seal is in place.
+    let staged = dir.join("identity.pub.new");
+    std::fs::write(&staged, REKEYED).unwrap();
+    let mut rekey = Command::new("sh")
+        .arg("-c")
+        .arg(r#"sleep "$3"; mv "$1" "$2""#)
+        .arg("sh")
+        .arg(&staged)
+        .arg(&public)
+        .arg(REKEY_DELAY_SECS)
+        .spawn()
+        .unwrap_or_else(|e| fail(&format!("spawn rekey helper: {e}")));
+    seal(&[], &[], l);
+    let renamed = rekey.wait().is_ok_and(|s| s.success());
+
+    let mut e = Expect::default();
+    e.read(&public, true);
+    e.read(&chain, true);
+    e.list(&dir, true);
+    e.write(&public, false);
+    e.write(&chain, false);
+    e.write(&inside(&dir), false);
+    e.read(&human_key, false);
+    e.write(&human_key, false);
+    e.check(renamed, "rekey helper failed to rename identity.pub".into());
+    e.check(
+        std::fs::read(&public).is_ok_and(|b| b == REKEYED),
+        format!(
+            "{} unreadable or stale after the rekey rename",
+            public.display()
+        ),
+    );
     e.finish()
 }

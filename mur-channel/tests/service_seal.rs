@@ -28,7 +28,10 @@ fn recording_hook() -> (SharedSealHook, Seen) {
 }
 
 fn human() -> ChannelActor {
-    ChannelActor::Human { name: "me".into() }
+    ChannelActor::Human {
+        name: "me".into(),
+        key: None,
+    }
 }
 
 fn exercise_all_paths(svc: &ChannelService) -> String {

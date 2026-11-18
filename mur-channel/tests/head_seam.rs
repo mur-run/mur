@@ -21,7 +21,10 @@ const CH: &str = "head-seam-ch";
 const N: usize = 3;
 
 fn human() -> ChannelActor {
-    ChannelActor::Human { name: "me".into() }
+    ChannelActor::Human {
+        name: "me".into(),
+        key: None,
+    }
 }
 
 fn store_with_channel() -> (TempDir, ChannelStore) {

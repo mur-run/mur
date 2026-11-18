@@ -17,7 +17,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use mur_channel::store::AnchorMismatchKind;
 use mur_channel::store::ChannelStore;
-use mur_common::channel::ChannelActor;
+use mur_common::channel::{ChannelActor, EventKind};
 
 /// Exit code for a channel that verified clean.
 pub const EXIT_INTACT: i32 = 0;
@@ -52,9 +52,50 @@ pub struct IntegrityReport {
     pub anchor_dirty: bool,
     /// An earlier `mur channel repair` never finished (`repair_marker`).
     pub repair_pending: bool,
+    /// The agent whose key sealed the head, when it was not the router's:
+    /// a legacy head written by an agent's own anchored append (H1). Not
+    /// damage — it is reported so the operator can see who vouches for it.
+    pub legacy_sealer: Option<String>,
     /// The head file exists but could not be read or parsed. When set the
     /// other checks were skipped, because the reader refuses such a channel.
     pub head_error: Option<String>,
+    /// The channel's human-owner state (B4). Default on a channel with no
+    /// owner record, which is every legacy channel.
+    pub owner: OwnerReport,
+}
+
+/// What integrity sees of the owner record (B2's [`HumanTrust`]).
+///
+/// [`HumanTrust`]: mur_channel::verify::human::HumanTrust
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OwnerReport {
+    /// `seq` of the live `owner-key-enrolled` record, if any.
+    pub live_record_seq: Option<u64>,
+    /// `seq` of records that do not verify under the local human chain
+    /// (another machine's key, a retired key). Reported, never damage (D-7).
+    pub ignored_records: Vec<u64>,
+    /// The live record is not covered by the signed head (D-3). Damage.
+    pub unanchored: bool,
+    /// `human_cut` points past the head or at a line that does not hash to
+    /// it (D-6). Damage.
+    pub cut_mismatch: bool,
+}
+
+impl OwnerReport {
+    fn from_trust(trust: &mur_channel::verify::human::HumanTrust) -> Self {
+        use mur_channel::verify::human::OwnerDamage;
+        let has = |d: OwnerDamage| trust.damage().contains(&d);
+        Self {
+            live_record_seq: trust.live_record().map(|r| r.seq),
+            ignored_records: trust.ignored_records().to_vec(),
+            unanchored: has(OwnerDamage::Unanchored),
+            cut_mismatch: has(OwnerDamage::CutBeyondHead) || has(OwnerDamage::CutLineHashMismatch),
+        }
+    }
+
+    fn is_damaged(&self) -> bool {
+        self.unanchored || self.cut_mismatch
+    }
 }
 
 impl IntegrityReport {
@@ -68,6 +109,7 @@ impl IntegrityReport {
             && !self.anchor_dirty
             && !self.repair_pending
             && self.head_error.is_none()
+            && !self.owner.is_damaged()
     }
 
     pub fn exit_code(&self) -> i32 {
@@ -104,11 +146,15 @@ impl IntegrityReport {
             (Some(n), None) => {
                 let past = self.log_lines.saturating_sub(n);
                 out.push_str(&format!(
-                    "  head: covers {n} lines{}\n",
+                    "  head: covers {n} lines{}{}\n",
                     if past > 0 && self.anchor_mismatch.is_none() {
                         format!(" ({past} written past it, not yet anchored)")
                     } else {
                         String::new()
+                    },
+                    match &self.legacy_sealer {
+                        Some(agent) => format!(", sealed by agent `{agent}` (legacy, pre-router)"),
+                        None => String::new(),
                     }
                 ));
             }
@@ -132,6 +178,22 @@ impl IntegrityReport {
         }
         push_list(&mut out, "unparseable lines", &self.unparseable_lines);
         push_list(&mut out, "bad signature on seq", &self.unverified_seqs);
+        if let Some(seq) = self.owner.live_record_seq {
+            out.push_str(&format!("  owner: live record at seq {seq}\n"));
+        }
+        if self.owner.unanchored {
+            out.push_str("  owner record is not covered by the signed head\n");
+        }
+        if self.owner.cut_mismatch {
+            out.push_str(
+                "  owner record's human_cut does not match the log (past the head, or the line was rewritten)\n",
+            );
+        }
+        push_list(
+            &mut out,
+            "note: owner records under a key this machine does not hold (ignored, not damage) at seq",
+            &self.owner.ignored_records,
+        );
         push_list(&mut out, "broken hash chain at seq", &self.chain_breaks);
         push_list(
             &mut out,
@@ -239,11 +301,36 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
     // ignored (the per-actor pass below decides), so the key is inert here.
     let router_key = router_key.unwrap_or(NO_HEAD_INERT_KEY);
     // `require_sig` is applied by the per-actor pass below, not here.
-    let (events, damage) = store.load_events_with_damage(channel_id, &router_key, false)?;
+    let (events, mut damage) = store.load_events_with_damage(channel_id, &router_key, false)?;
+    // A head that fails under the router key may be a legacy one an agent
+    // sealed with its own key (H1): re-check it under that writer's key
+    // before calling it forged. Only the anchor verdict is taken from the
+    // second read; events and their per-actor verdicts stay from the first.
+    if let Some((agent, key)) = legacy_sealer_key(mur_home, &events, &damage, &router_key) {
+        let (_, again) = store.load_events_with_damage(channel_id, &key, false)?;
+        if again.anchor_mismatch.is_none() {
+            report.legacy_sealer = Some(agent);
+        }
+        damage.anchor_mismatch = again.anchor_mismatch;
+    }
+
+    // Owner state from the same bytes the line count came from (D-6 hashes
+    // the raw line). A non-UTF-8 log has unparseable lines already counted.
+    let trust = mur_channel::verify::human::HumanTrust::from_log(
+        mur_home,
+        channel_id,
+        &String::from_utf8_lossy(log.as_deref().unwrap_or_default()),
+        head.as_ref(),
+    );
+    report.owner = OwnerReport::from_trust(&trust);
+    let ignored = trust.ignored_records();
 
     report.events = events.len();
     report.unverified_seqs = events
         .iter()
+        // A foreign owner record fails its signature by construction; it is
+        // reported under `owner`, not as damage (D-7).
+        .filter(|ev| !(ev.kind == EventKind::OwnerKeyEnrolled && ignored.contains(&ev.seq)))
         .filter(|ev| !crate::channel_verify::verify_event(mur_home, channel_id, ev, require_sig))
         .map(|ev| ev.seq)
         .chain(
@@ -271,6 +358,36 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
     Ok(report)
 }
 
+/// The writer key a legacy agent-sealed head would verify under, when the
+/// head failed its signature under the router key.
+///
+/// Before H1 an agent's anchored append sealed the head with the same key
+/// that signed the event, so the sealer of a legacy head is the actor of the
+/// event at `head.seq`. Only an `Agent` actor qualifies: `System` and `Human`
+/// events resolve to the router key, which already failed. The key is the
+/// one that agent's directory gives the head's `key_version`.
+///
+/// C1 (owned channels) must gate this on "no live record yet", as the
+/// writer's transition arm does; PR 1 has no owned channels, so it is
+/// unconditional here.
+fn legacy_sealer_key(
+    mur_home: &Path,
+    events: &[mur_common::channel::ChannelEvent],
+    damage: &mur_channel::store::DamageReport,
+    tried: &[u8; 32],
+) -> Option<(String, [u8; 32])> {
+    let m = damage.anchor_mismatch.as_ref()?;
+    if m.kind != AnchorMismatchKind::BadSignature {
+        return None;
+    }
+    let sealed = events.iter().find(|ev| ev.seq == m.head.seq)?;
+    let ChannelActor::Agent { id } = &sealed.actor else {
+        return None;
+    };
+    let key = crate::channel_verify::actor_pubkey(mur_home, &sealed.actor, m.head.key_version)?;
+    (key != *tried).then(|| (id.clone(), key))
+}
+
 /// Run the command: print the report, return the process exit code.
 pub fn run(mur_home: &Path, channel_id: &str) -> Result<i32> {
     let report = check(mur_home, channel_id)?;
@@ -281,3 +398,7 @@ pub fn run(mur_home: &Path, channel_id: &str) -> Result<i32> {
 #[cfg(test)]
 #[path = "channel_integrity_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "channel_integrity_owner_tests.rs"]
+mod owner_tests;

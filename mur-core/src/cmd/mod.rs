@@ -93,6 +93,7 @@ pub mod skill_recombine;
 pub mod skill_registry;
 pub mod ssh_hint;
 // wired by Task A2 CLI (mur skill registry-index)
+pub mod identity;
 #[allow(dead_code)]
 pub mod skill_registry_index;
 pub mod skill_reindex_vec;

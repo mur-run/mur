@@ -84,7 +84,10 @@ impl CrashPoint {
 }
 
 fn actor() -> ChannelActor {
-    ChannelActor::Human { name: "me".into() }
+    ChannelActor::Human {
+        name: "me".into(),
+        key: None,
+    }
 }
 
 fn text(i: usize) -> serde_json::Value {
