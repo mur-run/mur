@@ -42,9 +42,10 @@ impl Shown {
         }
     }
 
-    /// A card over no entries, for UI tests that never settle.
-    #[cfg(test)]
-    pub(crate) fn for_test(agent: &str, request: PendingRequest, card: Card) -> Self {
+    /// A card over no entries, for UI tests (murmur, Hub) that never
+    /// settle: any answer against it is `Stale`.
+    #[doc(hidden)]
+    pub fn for_test(agent: &str, request: PendingRequest, card: Card) -> Self {
         Self {
             agent: agent.into(),
             request,

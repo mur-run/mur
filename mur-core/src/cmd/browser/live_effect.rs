@@ -57,7 +57,7 @@ impl Effect {
     }
 
     /// The line after a successful write.
-    pub(crate) fn applied_line(self) -> &'static str {
+    pub fn applied_line(self) -> &'static str {
         match self {
             Effect::NextTurn => APPLIED_HOT,
             Effect::Restart => APPLIED_COLD,
