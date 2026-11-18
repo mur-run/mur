@@ -93,8 +93,7 @@ impl CodebaseIndex {
     }
 
     pub(super) fn load_meta(&self) -> Option<IndexMetadata> {
-        let path = self.meta_path();
-        let data = std::fs::read_to_string(path).ok()?;
+        let data = read_meta_file(&self.meta_path())?;
         serde_json::from_str(&data).ok()
     }
 
@@ -224,3 +223,27 @@ impl CodebaseIndex {
 #[cfg(test)]
 #[path = "state_tests.rs"]
 mod tests;
+
+/// How many times a read that hit a transient Windows sharing error is retried.
+#[cfg(windows)]
+const META_READ_RETRIES: u32 = 20;
+/// Pause between those retries.
+#[cfg(windows)]
+const META_READ_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// Read the meta file. On Windows, opening a file at the instant `save_meta`'s
+/// `rename` replaces it fails with `PermissionDenied` (the old file is
+/// delete-pending), so that error is retried briefly before giving up; the
+/// next attempt sees the complete new document.
+fn read_meta_file(path: &Path) -> Option<String> {
+    #[cfg(windows)]
+    for _ in 0..META_READ_RETRIES {
+        match std::fs::read_to_string(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                std::thread::sleep(META_READ_RETRY_DELAY);
+            }
+            other => return other.ok(),
+        }
+    }
+    std::fs::read_to_string(path).ok()
+}
