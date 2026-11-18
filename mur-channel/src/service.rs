@@ -672,6 +672,7 @@ impl ChannelService {
 mod anchored;
 mod create;
 mod enroll;
+mod owned_seal;
 pub mod restart;
 #[cfg(test)]
 pub(crate) mod test_home;

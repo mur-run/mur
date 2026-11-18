@@ -53,3 +53,26 @@ fn preview_skips_owner_record() {
     let row = rows.iter().find(|r| r.id == id).expect("listed");
     assert_eq!(row.preview, "find the bug");
 }
+
+/// H1: on an owned session the agent's reply is router-sealed, not refused
+/// with "existing head fails signature verification" (the C2 blocker).
+#[test]
+fn agent_reply_after_enroll_is_router_sealed() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path();
+    let id = enrolled_session(home);
+    let mut s = Session::open_existing(home, "qa", &id).unwrap();
+    let seq = s.append("agent", "on it", None, &[]).unwrap();
+    let head = mur_channel::head_io::read_head(&mur_channel::anchor::heads_dir(home), &id)
+        .unwrap()
+        .expect("anchored");
+    assert_eq!(head.seq, seq, "the head covers the agent reply");
+    let router = mur_common::identity::AgentIdentity::load(
+        &home
+            .join("agents")
+            .join(crate::channel_writer::ROUTER_AGENT),
+    )
+    .unwrap();
+    assert!(head.verify(&router.verifying_key_bytes()));
+    assert!(!mur_channel::anchor::is_dirty(home, &id));
+}

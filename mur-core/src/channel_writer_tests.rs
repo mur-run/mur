@@ -270,6 +270,7 @@ fn a_handed_over_key_signs_but_does_not_anchor() {
     };
     let ev = append_with_key(
         &svc,
+        tmp.path(),
         &ch.id,
         key,
         tmp.path(),

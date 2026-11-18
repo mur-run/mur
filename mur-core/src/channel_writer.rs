@@ -450,7 +450,9 @@ fn append_as_writer_with(
     match writer_key_with(home, router_agent, require_sig)? {
         Some(key) => {
             let key_home = home.join("agents").join(router_agent);
-            append_with_key(svc, channel_id, key, &key_home, actor, kind, payload, idem)
+            append_with_key(
+                svc, home, channel_id, key, &key_home, actor, kind, payload, idem,
+            )
         }
         None => svc.append(channel_id, actor, kind, payload, idem),
     }
@@ -500,7 +502,9 @@ fn append_request_with(
     match resolve_writer_key(home, router_agent, refuse)? {
         Some(key) => {
             let key_home = home.join("agents").join(router_agent);
-            append_with_key(svc, channel_id, key, &key_home, actor, kind, payload, None)
+            append_with_key(
+                svc, home, channel_id, key, &key_home, actor, kind, payload, None,
+            )
         }
         None => svc.append(channel_id, actor, kind, payload, None),
     }
@@ -513,9 +517,14 @@ fn append_request_with(
 /// so the decision lives on the key, where it is a property of the process,
 /// and not at the call site, where it would be a property of whoever
 /// remembered to pick the right method.
+///
+/// On a channel with a live owner record the router seals the head (H1);
+/// when the router key cannot be read here the line is appended unanchored,
+/// never sealed under the writer's own key.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn append_with_key(
     svc: &ChannelService,
+    home: &Path,
     channel_id: &str,
     key: WriterKey,
     key_home: &Path,
@@ -527,7 +536,20 @@ pub(crate) fn append_with_key(
     let WriterKey { id, kv, source } = key;
     match source {
         KeySource::Disk => {
-            svc.append_and_anchor(channel_id, &id, kv, key_home, actor, kind, payload, idem)
+            let router_home = home.join("agents").join(ROUTER_AGENT);
+            let router = mur_common::identity::AgentIdentity::load(&router_home)
+                .ok()
+                .map(|r| (r, read_key_version(&router_home)));
+            let seal = router
+                .as_ref()
+                .map(|(r, rkv)| mur_channel::service::RouterSeal {
+                    identity: r,
+                    kv: *rkv,
+                    key_home: &router_home,
+                });
+            svc.append_and_anchor_routed(
+                channel_id, &id, kv, key_home, seal, actor, kind, payload, idem,
+            )
         }
         KeySource::Handoff => svc.append_signed(channel_id, &id, kv, actor, kind, payload, idem),
     }

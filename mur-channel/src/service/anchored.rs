@@ -23,6 +23,7 @@ use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use mur_common::identity::AgentIdentity;
 
 use super::ChannelService;
+use super::create::RouterSeal;
 use crate::anchor::{self, AnchorLagError};
 use crate::head::{Head, HeadFields, chain_log, chain_log_with_prefix};
 use crate::head_io;
@@ -47,6 +48,11 @@ pub(super) struct HeadSigner<'a> {
 pub(super) enum HeadSealer<'a> {
     /// Today's behaviour: the event signer seals its own head.
     EventSigner,
+    /// The event signer seals, unless the channel has a live owner record:
+    /// then `router` seals, or with no router key the line is appended
+    /// unanchored (H1). Resolved under the append lock by
+    /// [`super::owned_seal::resolve`] before anything is sealed.
+    Writer { router: Option<RouterSeal<'a>> },
     /// The channel router seals every head on an owned channel. Nothing
     /// selects this until C1/C5/C2 exist.
     Router {
@@ -58,6 +64,25 @@ pub(super) enum HeadSealer<'a> {
         /// event signer's chain; before that it is, once, and is resealed.
         live_record: bool,
     },
+}
+
+/// An anchored write by a non-human writer: its own key home, plus the
+/// router key that seals instead once the channel is owned (H1).
+#[derive(Clone, Copy)]
+pub(super) struct Anchored<'a> {
+    pub key_home: &'a Path,
+    pub router: Option<RouterSeal<'a>>,
+}
+
+impl<'a> Anchored<'a> {
+    fn signer(self, identity: &'a AgentIdentity, kv: u32) -> HeadSigner<'a> {
+        HeadSigner {
+            sealer: HeadSealer::Writer {
+                router: self.router,
+            },
+            ..HeadSigner::event(identity, kv, self.key_home)
+        }
+    }
 }
 
 impl<'a> HeadSigner<'a> {
@@ -74,7 +99,9 @@ impl<'a> HeadSigner<'a> {
     /// The identity, key version and home that seal the head.
     fn sealing(&self) -> (&'a AgentIdentity, u32, &'a Path) {
         match self.sealer {
-            HeadSealer::EventSigner => (self.identity, self.kv, self.key_home),
+            HeadSealer::EventSigner | HeadSealer::Writer { .. } => {
+                (self.identity, self.kv, self.key_home)
+            }
             HeadSealer::Router {
                 identity,
                 kv,
@@ -127,7 +154,7 @@ impl<'a> HeadSigner<'a> {
 /// Pre-write half: the dirty marker must be on disk before the line is, so a
 /// crash between the write and the head leaves evidence. Failing here aborts
 /// the append with nothing written. Not run on a dedup hit: no new line.
-fn mark(mur_home: &Path, input: &PreSealInput<'_>) -> Result<()> {
+pub(super) fn mark(mur_home: &Path, input: &PreSealInput<'_>) -> Result<()> {
     anchor::mark_dirty(mur_home, input.channel_id)
         .with_context(|| format!("mark channel head dirty for {}", input.channel_id))
 }
@@ -314,9 +341,25 @@ impl ChannelService {
         let Some(signer) = signer else {
             return f(SealHooks::post(seal.map(|h| h as &SealHook<'_>)));
         };
-        let pre = |i: &PreSealInput<'_>| mark(home, i);
+        // `Writer` is decided once, under the lock, before the dirty marker:
+        // a line left unanchored by design must not leave crash evidence.
+        let decided = std::cell::Cell::new(None::<Option<HeadSigner<'_>>>);
+        let effective = |id: &str| -> Result<Option<HeadSigner<'_>>> {
+            if let Some(d) = decided.get() {
+                return Ok(d);
+            }
+            let d = super::owned_seal::resolve(&self.store, id, signer)?;
+            decided.set(Some(d));
+            Ok(d)
+        };
+        let pre = |i: &PreSealInput<'_>| match effective(i.channel_id)? {
+            Some(_) => mark(home, i),
+            None => Ok(()),
+        };
         let post = |i: &SealInput<'_>| {
-            advance(home, &self.store.events_path(i.channel_id)?, signer, i)?;
+            if let Some(s) = effective(i.channel_id)? {
+                advance(home, &self.store.events_path(i.channel_id)?, s, i)?;
+            }
             seal.map_or(Ok(()), |s| s(i))
         };
         f(SealHooks {
@@ -336,9 +379,9 @@ impl ChannelService {
         kind: EventKind,
         payload: serde_json::Value,
         idempotency_key: Option<String>,
-        anchored: Option<&Path>,
+        anchored: Option<Anchored<'_>>,
     ) -> Result<ChannelEvent> {
-        let signer = anchored.map(|key_home| HeadSigner::event(identity, kv, key_home));
+        let signer = anchored.map(|a| a.signer(identity, kv));
         let ev = self.with_hooks(signer, |hooks| {
             self.store.append_signed_event_with(
                 channel_id,
@@ -367,9 +410,9 @@ impl ChannelService {
         kind: EventKind,
         payload: serde_json::Value,
         idempotency_key: Option<String>,
-        anchored: Option<&Path>,
+        anchored: Option<Anchored<'_>>,
     ) -> Result<ChannelEvent> {
-        let signer = anchored.map(|key_home| HeadSigner::event(identity, kv, key_home));
+        let signer = anchored.map(|a| a.signer(identity, kv));
         let sig = crate::sign::sign_event(
             identity,
             channel_id,
@@ -431,7 +474,40 @@ impl ChannelService {
             kind,
             payload,
             idempotency_key,
-            Some(key_home),
+            Some(Anchored {
+                key_home,
+                router: None,
+            }),
+        )
+    }
+
+    /// [`append_and_anchor`](Self::append_and_anchor) for a writer that can
+    /// also read the router key: on a channel with a live owner record the
+    /// router seals the head instead of the writer (H1). Without `router`
+    /// such a write is appended unanchored; it is never sealed under the
+    /// writer's own key once a record is live.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_and_anchor_routed(
+        &self,
+        channel_id: &str,
+        identity: &AgentIdentity,
+        kv: u32,
+        key_home: &Path,
+        router: Option<RouterSeal<'_>>,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+    ) -> Result<ChannelEvent> {
+        self.signed_v2(
+            channel_id,
+            identity,
+            kv,
+            actor,
+            kind,
+            payload,
+            idempotency_key,
+            Some(Anchored { key_home, router }),
         )
     }
 
@@ -457,7 +533,10 @@ impl ChannelService {
             kind,
             payload,
             idempotency_key,
-            Some(key_home),
+            Some(Anchored {
+                key_home,
+                router: None,
+            }),
         )
     }
 }
