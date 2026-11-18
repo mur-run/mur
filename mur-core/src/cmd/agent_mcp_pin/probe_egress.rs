@@ -38,6 +38,9 @@ pub fn probe_as_runtime_would(
                 .enable_all()
                 .build()
                 .map_err(|e| ProbeError::Setup(format!("build probe runtime: {e}")))?;
+            if needs_browser_key(entry) {
+                cache_browser_key(timeout);
+            }
             rt.block_on(async {
                 let proxy = if mur_common::agent::entries_need_egress(std::slice::from_ref(entry)) {
                     Some(
@@ -56,4 +59,66 @@ pub fn probe_as_runtime_would(
         .join()
         .unwrap_or_else(|_| Err(ProbeError::Setup("probe thread panicked".into())))
     })
+}
+
+/// Whether the probe must read the browser state key before spawning `entry`:
+/// the same live-browser-with-a-profile shape the runtime hands the key to
+/// (`mcp_client::state_key`). Without it the sandboxed child falls back to
+/// the Keychain it cannot reach, so the probe tests a configuration the
+/// runtime never runs (#2468).
+fn needs_browser_key(entry: &McpServerEntry) -> bool {
+    mur_common::browser_state_key::wants_state_key(&entry.args)
+}
+
+/// Read the key into the pre-seal cache, mirroring the runtime's
+/// `supervisor::browser_key::cache_before_seal`. Bounded on its own thread:
+/// an unauthorised Keychain item raises a modal prompt that blocks until
+/// clicked, and the probe must not outlive its own timeout over it. Never
+/// fails the probe — a miss leaves the child on the Keychain fallback, which
+/// is exactly what the probe did before.
+fn cache_browser_key(timeout: std::time::Duration) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let r = mur_common::browser_state_key::keychain_ref();
+        let _ = tx.send(mur_common::secret::cache_before_seal(&r));
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(())) => tracing::debug!("probe: browser state key resolved before spawn"),
+        Ok(Err(e)) => tracing::debug!(error = %e, "probe: browser state key not available"),
+        Err(_) => tracing::warn!(
+            timeout_secs = timeout.as_secs(),
+            "probe: keychain did not answer for the browser state key in time"
+        ),
+    }
+}
+
+#[cfg(test)]
+mod browser_key_tests {
+    use super::needs_browser_key;
+    use mur_common::agent::McpServerEntry;
+
+    fn entry(args: &[&str]) -> McpServerEntry {
+        McpServerEntry {
+            name: "browser".into(),
+            command: "mur".into(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// The probe must read the browser key before spawning a live browser,
+    /// exactly as the supervisor does before its seal (#2468) — or it probes
+    /// a configuration the runtime never runs.
+    #[test]
+    fn a_live_browser_probe_reads_the_key_first_and_nothing_else_does() {
+        assert!(needs_browser_key(&entry(&[
+            "browser",
+            "record",
+            "--mode",
+            "live",
+            "--profile",
+            "g"
+        ])));
+        assert!(!needs_browser_key(&entry(&["serve"])));
+    }
 }

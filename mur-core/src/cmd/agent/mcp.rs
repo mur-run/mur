@@ -54,6 +54,12 @@ pub fn cmd_mcp_remove(name: &str, server_id: &str) -> Result<()> {
         .iter()
         .find(|s| s.name == server_id)
         .map(|s| s.command.clone());
+    let dropped_note = profile
+        .mcp_servers
+        .iter()
+        .find(|s| s.name == server_id)
+        .and_then(|s| s.network.as_ref())
+        .and_then(|n| dropped_network_note(name, server_id, n));
     profile.mcp_servers.retain(|s| s.name != server_id);
     if profile.mcp_servers.len() == before {
         bail!("MCP server '{server_id}' not found on '{name}'");
@@ -70,7 +76,43 @@ pub fn cmd_mcp_remove(name: &str, server_id: &str) -> Result<()> {
             .allowed
             .retain(|a| a != &cmd);
     }
-    save_profile(&path, &mut profile)
+    save_profile(&path, &mut profile)?;
+    if let Some(note) = dropped_note {
+        eprintln!("{note}");
+    }
+    Ok(())
+}
+
+/// What `remove` throws away with the entry's network policy, and the command
+/// that puts it back after a re-add (#2468). The policy lives inside the entry,
+/// so removing it used to drop a hand-built allowlist without a word. `None`
+/// for `Inherit`: no host bound, nothing lost.
+pub(crate) fn dropped_network_note(
+    agent: &str,
+    server_id: &str,
+    net: &mur_common::agent::McpServerNetwork,
+) -> Option<String> {
+    use mur_common::agent::McpNetMode;
+    let flags = |flag: &str, hosts: &[String]| -> String {
+        hosts.iter().map(|h| format!(" {flag} '{h}'")).collect()
+    };
+    let (what, args) = match net.mode {
+        McpNetMode::Inherit => return None,
+        McpNetMode::Off => ("network: off".to_string(), " --off".to_string()),
+        McpNetMode::Restricted => (
+            format!("allowlist: {}", net.allow_hosts.join(", ")),
+            flags("--allow-host", &net.allow_hosts),
+        ),
+        McpNetMode::BroadAudited => (
+            format!("broad-audited, deny: {}", net.deny_hosts.join(", ")),
+            format!(" --broad-audited{}", flags("--deny-host", &net.deny_hosts)),
+        ),
+    };
+    Some(format!(
+        "note: '{server_id}' had a network policy that was removed with it ({what}).\n\
+         To restore it after re-adding '{server_id}':\n  \
+         mur agent mcp set-network {agent} {server_id}{args}"
+    ))
 }
 
 pub fn cmd_mcp_rename(name: &str, old: &str, new: &str) -> Result<()> {
@@ -233,5 +275,58 @@ mod tests {
         assert!(output.contains("local\tlocal-mcp"));
         assert!(!output.contains("BROAD EGRESS"));
         assert!(!output.contains("authorized by"));
+    }
+}
+
+#[cfg(test)]
+mod dropped_network_tests {
+    use super::dropped_network_note;
+    use mur_common::agent::{McpNetMode, McpServerNetwork};
+
+    fn net(mode: McpNetMode, allow: &[&str], deny: &[&str]) -> McpServerNetwork {
+        McpServerNetwork {
+            mode,
+            allow_hosts: allow.iter().map(|s| s.to_string()).collect(),
+            deny_hosts: deny.iter().map(|s| s.to_string()).collect(),
+            authorization: None,
+        }
+    }
+
+    /// Removing an entry deletes its allowlist with it (#2468). The note must
+    /// name every dropped host and hand back a command that restores them.
+    #[test]
+    fn a_restricted_allowlist_is_named_with_a_restore_command() {
+        let n = dropped_network_note(
+            "card",
+            "browser",
+            &net(McpNetMode::Restricted, &["github.com", "*.github.com"], &[]),
+        )
+        .expect("a restricted policy is worth a note");
+        assert!(n.contains("github.com, *.github.com"), "{n}");
+        assert!(
+            n.contains(
+                "mur agent mcp set-network card browser --allow-host 'github.com' \
+                 --allow-host '*.github.com'"
+            ),
+            "{n}"
+        );
+    }
+
+    #[test]
+    fn off_and_broad_audited_restore_to_their_own_flags() {
+        let off = dropped_network_note("a", "s", &net(McpNetMode::Off, &[], &[])).unwrap();
+        assert!(off.contains("set-network a s --off"), "{off}");
+        let broad = dropped_network_note("a", "s", &net(McpNetMode::BroadAudited, &[], &["x.com"]))
+            .unwrap();
+        assert!(
+            broad.contains("set-network a s --broad-audited --deny-host 'x.com'"),
+            "{broad}"
+        );
+    }
+
+    /// `Inherit` carries no host bound, so there is nothing lost to report.
+    #[test]
+    fn inherit_drops_nothing_worth_saying() {
+        assert!(dropped_network_note("a", "s", &net(McpNetMode::Inherit, &[], &[])).is_none());
     }
 }
