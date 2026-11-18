@@ -144,7 +144,10 @@ fn a_replace_only_login_port_line_carries_replace_and_a_disabled_one_is_dropped(
         };
         let card = Card::Login {
             rows: Vec::new(),
-            login_again: LoginAgain { exists: true, ..login_again },
+            login_again: LoginAgain {
+                exists: true,
+                ..login_again
+            },
             login_offer,
             port: Some(3000),
         };
@@ -159,7 +162,9 @@ fn a_replace_only_login_port_line_carries_replace_and_a_disabled_one_is_dropped(
             drops: vec!["vercel".into()],
             adds: Vec::new(),
         }),
-        vec!["mur browser answer asker http://gitea.example:3000 --login --reauth --replace --open-port"]
+        vec![
+            "mur browser answer asker http://gitea.example:3000 --login --reauth --replace --open-port"
+        ]
     );
     assert!(with(Offer::Disabled { why: "no".into() }).is_empty());
 }

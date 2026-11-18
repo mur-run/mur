@@ -350,6 +350,7 @@ fn every_port_step_command_parses_as_a_browser_answer() {
         domains: vec!["gitea.example".into()],
         shared_with: vec![],
         offer,
+        session_elsewhere: None,
     };
     let cards = [
         Card::Login {
@@ -376,6 +377,14 @@ fn every_port_step_command_parses_as_a_browser_answer() {
             login_again: LoginAgain {
                 name: "g".into(),
                 exists: true,
+            },
+            // #2461: the login line then carries --reauth --replace; it
+            // must still parse.
+            login_offer: Offer::ReplaceOnly {
+                with: "g".into(),
+                domains: vec![],
+                drops: vec!["a".into()],
+                adds: vec![],
             },
             port: Some(3000),
         },
