@@ -135,7 +135,7 @@ pub fn repair(mur_home: &Path, channel_id: &str, confirm: Confirm<'_>) -> Result
         bail!(
             "refusing to repair: channel {channel_id} is agent `{}`'s HITL decision channel \
              but carries a human owner record. Gate B's fresh chain is agent-sealed and cannot \
-             carry an owner; nothing was touched. Inspect it with `mur channel verify \
+             carry an owner; nothing was touched. See `mur channel repair \
              {channel_id}`",
             g.agent
         );

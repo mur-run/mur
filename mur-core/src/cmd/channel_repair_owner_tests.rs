@@ -75,7 +75,7 @@ fn owned_repair_without_the_human_key_touches_nothing() {
 }
 
 /// Gate B's fresh chain is agent-sealed and cannot carry an owner, so an
-/// owned decision channel is refused and pointed at `mur channel verify`.
+/// owned decision channel is refused and pointed at `mur channel repair`.
 #[test]
 fn gate_b_refuses_on_owned_channel() {
     let (tmp, ch) = owned();
@@ -89,7 +89,7 @@ fn gate_b_refuses_on_owned_channel() {
     let err = repair(tmp.path(), &ch, Confirm::Yes).unwrap_err();
     let msg = format!("{err:#}");
     assert!(msg.contains("human owner record"), "{msg}");
-    assert!(msg.contains("mur channel verify"), "{msg}");
+    assert!(msg.contains(&format!("mur channel repair {ch}")), "{msg}");
     assert!(mur_channel::anchor::is_dirty(tmp.path(), &ch), "untouched");
 }
 
