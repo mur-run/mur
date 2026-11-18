@@ -328,3 +328,79 @@ fn cli_parses_browser_answer() {
         assert!(Cli::try_parse_from(bad).is_err(), "{bad:?}");
     }
 }
+
+/// D1: every line a card offers for its port step is a complete command
+/// the CLI accepts — an answer choice plus `--open-port`, no prose.
+#[test]
+fn every_port_step_command_parses_as_a_browser_answer() {
+    use crate::cmd::browser::request_card::front::{
+        Card, LoginAgain, Offer, ProfileRow, Reach, Shown, port_step,
+    };
+    use clap::Parser;
+    let dir = tempfile::tempdir().unwrap();
+    let site = mur_browser_request::Site::parse("http://gitea.example:3000").unwrap();
+    let r =
+        mur_browser_request::BrowserRequest::new(&site, true, "PR", chrono::Utc::now()).unwrap();
+    mur_browser_request::write(dir.path(), &r).unwrap();
+    let req = mur_browser_request::read_pending(dir.path(), chrono::Utc::now())
+        .pop()
+        .unwrap();
+    let row = |name: &str, offer| ProfileRow {
+        name: name.into(),
+        domains: vec!["gitea.example".into()],
+        shared_with: vec![],
+        offer,
+    };
+    let cards = [
+        Card::Login {
+            rows: vec![
+                row("a", Offer::AlreadyBound),
+                row("b", Offer::Offered),
+                row(
+                    "c",
+                    Offer::AddsHosts {
+                        missing: vec!["x.example".into()],
+                    },
+                ),
+                row(
+                    "d",
+                    Offer::ReplaceOnly {
+                        with: "a".into(),
+                        domains: vec![],
+                        drops: vec!["a".into()],
+                        adds: vec![],
+                    },
+                ),
+                row("e", Offer::Disabled { why: "no".into() }),
+            ],
+            login_again: LoginAgain {
+                name: "g".into(),
+                exists: true,
+            },
+            port: Some(3000),
+        },
+        Card::Reach {
+            reach: Reach::Allowed,
+            port: Some(3000),
+        },
+    ];
+    let mut seen = 0;
+    for card in cards {
+        let s = Shown::for_test("rev", req.clone(), card);
+        for cmd in port_step(&s).expect("port step").commands {
+            seen += 1;
+            assert!(!cmd.contains("profile e "), "disabled row offered: {cmd}");
+            let cli = Cli::try_parse_from(cmd.split_whitespace())
+                .unwrap_or_else(|e| panic!("{cmd}: {e}"));
+            let Commands::Browser {
+                action: crate::cli::actions::BrowserAction::Answer { open_port, .. },
+            } = cli.command
+            else {
+                panic!("not browser answer: {cmd}")
+            };
+            assert!(open_port, "{cmd}");
+        }
+    }
+    // a, b, c, d, the login; then --allow.
+    assert_eq!(seen, 6);
+}

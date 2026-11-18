@@ -7,6 +7,7 @@
 
 mod bootstrap;
 pub mod brain_badge;
+pub mod browser_admin;
 pub mod chat;
 pub mod chat_window;
 pub mod chatgpt_subscription;
@@ -49,6 +50,7 @@ pub mod seed_mur;
 pub mod session_allow;
 pub mod skills_installed;
 pub mod ssh_admin;
+pub mod tool_step;
 pub mod upgrade_status;
 pub mod work;
 pub mod workflows_list;
@@ -176,6 +178,7 @@ pub fn run() {
         .manage(BridgeState::default())
         .manage(panel::PanelState::default())
         .manage(ssh_admin::SshPlans::default())
+        .manage(browser_admin::HeldCards::default())
         .manage(panel::preview::PreviewWatch::default())
         .manage(panel::follow::FollowState::default())
         // OS file-drop onto a desktop pet (`pet-<agent>` window) → forward the
@@ -676,6 +679,11 @@ pub fn run() {
             ssh_admin::agent_ssh_revoke,
             ssh_admin::agent_ssh_dismiss,
             ssh_admin::ssh_pending_all,
+            browser_admin::agent_browser_pending,
+            browser_admin::agent_browser_card,
+            browser_admin::agent_browser_answer,
+            browser_admin::agent_browser_logged_in,
+            browser_admin::agent_browser_close,
             mcp_skills::agent_skill_toggle,
             mcp_skills::agent_mcp_toggle,
             mcp_skills::agent_addon_import,

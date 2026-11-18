@@ -11,12 +11,19 @@ pub(crate) use model::{LoginAgain, ProfileRow};
 
 mod apply;
 
-pub(crate) use apply::{Answer, Answered, Choice, answer, use_offer};
+#[cfg(test)]
+pub(crate) use apply::Choice;
+pub(crate) use apply::{Answered, answer, use_offer};
 
 mod login;
 
-pub(crate) use login::{login, login_plan};
+pub(crate) use login::{LoginPlan, login, login_plan};
 
 mod ops;
 
 pub(crate) use ops::{AgentPorts, card_for, card_for_in, live_entries, open_requests, shared_with};
+
+// Hub calls this through the lib; the `mur` binary compiles the module too
+// and uses only part of it.
+#[allow(dead_code, unused_imports)]
+pub mod front;

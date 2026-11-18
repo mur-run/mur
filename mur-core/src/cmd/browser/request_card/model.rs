@@ -19,7 +19,7 @@ pub(crate) struct Profile {
 
 /// What picking a profile row does.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Offer {
+pub enum Offer {
     /// The live entry already launches with it and reaches every host:
     /// nothing to write.
     AlreadyBound,
@@ -52,7 +52,7 @@ impl Offer {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProfileRow {
+pub struct ProfileRow {
     pub name: String,
     /// The profile's hosts, as planned; the answer binds with exactly these.
     pub domains: Vec<String>,
@@ -63,7 +63,7 @@ pub(crate) struct ProfileRow {
 
 /// A `login: false` request (D7): can the live entry reach the host?
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Reach {
+pub enum Reach {
     Allowed,
     NeedsHost {
         missing: Vec<String>,
@@ -82,13 +82,13 @@ pub(crate) enum Reach {
 /// The profile "log in again" saves under (D6), and whether one of that
 /// name exists already (then `--reauth` is needed).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LoginAgain {
+pub struct LoginAgain {
     pub name: String,
     pub exists: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Card {
+pub enum Card {
     /// The agent has no live browser entry; creating one stays with
     /// `/browser live` (S:§The card, `NoLiveEntry`).
     NoLiveEntry,

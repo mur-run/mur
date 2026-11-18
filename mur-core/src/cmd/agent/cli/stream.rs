@@ -118,6 +118,8 @@ pub enum StreamMsg {
     ManageDone(Result<super::manage::Managed, String>),
     /// A `/ssh` plan or apply finished off the UI thread.
     SshCard(super::ssh_card::CardMsg),
+    /// A browser card read or settle finished off the UI thread.
+    BrowserCard(super::browser_card::CardMsg),
 }
 
 impl StreamMsg {
@@ -142,7 +144,8 @@ impl StreamMsg {
             | StreamMsg::ReviewFinished(_)
             | StreamMsg::ReviewCancelFailed(_)
             | StreamMsg::ManageDone(_)
-            | StreamMsg::SshCard(_) => None,
+            | StreamMsg::SshCard(_)
+            | StreamMsg::BrowserCard(_) => None,
         }
     }
 }

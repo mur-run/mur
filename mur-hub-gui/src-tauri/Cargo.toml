@@ -46,6 +46,7 @@ mur-core = { path = "../../mur-core" }
 mur-agent-runtime = { path = "../../mur-agent-runtime" }
 mur-gui-core = { path = "../../mur-gui-core" }
 mur-channel = { path = "../../mur-channel" }
+mur-browser-request = { path = "../../mur-browser-request" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

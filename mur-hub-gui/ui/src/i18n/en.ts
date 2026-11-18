@@ -1,7 +1,9 @@
+import { browserEn } from "./browser";
 import { sshEn } from "./ssh";
 
 export const en = {
   ...sshEn,
+  ...browserEn,
   "app.newAgent": "New Agent",
   "app.importAgent": "Import Agent",
   "app.importAgentTooltip": "Install an agent from a signed .muragent package",

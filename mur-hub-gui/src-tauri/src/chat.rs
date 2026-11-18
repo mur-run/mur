@@ -167,6 +167,7 @@ pub async fn agent_chat_send(
         let app4 = app.clone();
         let app5 = app.clone();
         let mut ssh_steps = std::collections::HashSet::new();
+        let mut browser_steps = std::collections::HashSet::new();
         // Stream over the running agent's socket; fall back to a one-shot
         // ephemeral dial if it isn't running.
         match dial_message_streaming(
@@ -189,8 +190,19 @@ pub async fn agent_chat_send(
                 if let Some(chip) = crate::proposal_chip::chip_from_step(&agent, &step) {
                     let _ = app3.emit(crate::proposal_chip::PROPOSAL_EVENT, chip);
                 }
-                if crate::ssh_admin::is_ssh_request_done(&mut ssh_steps, &step) {
+                if crate::tool_step::is_tool_done(
+                    &mut ssh_steps,
+                    &step,
+                    mur_agent_runtime::tools::ssh_request::SSH_REQUEST,
+                ) {
                     let _ = app4.emit(crate::ssh_admin::SSH_REQUEST_EVENT, agent.clone());
+                }
+                if crate::tool_step::is_tool_done(
+                    &mut browser_steps,
+                    &step,
+                    mur_agent_runtime::tools::browser_request::BROWSER_REQUEST,
+                ) {
+                    let _ = app4.emit(crate::browser_admin::BROWSER_REQUEST_EVENT, agent.clone());
                 }
             },
         ) {
@@ -199,10 +211,14 @@ pub async fn agent_chat_send(
                 // No steps stream on a one-shot dial: compare the agent's
                 // open SSH requests around the turn instead.
                 let before = crate::ssh_admin::pending_stamp(&home, &name);
+                let web_before = crate::browser_admin::pending_stamp(&home, &name);
                 let r = dial_method(&home, &name, "message/send", params, DialMode::Auto)
                     .map(|v| (v, false));
                 if crate::ssh_admin::pending_stamp(&home, &name) != before {
                     let _ = app5.emit(crate::ssh_admin::SSH_REQUEST_EVENT, agent.clone());
+                }
+                if crate::browser_admin::pending_stamp(&home, &name) != web_before {
+                    let _ = app5.emit(crate::browser_admin::BROWSER_REQUEST_EVENT, agent.clone());
                 }
                 r
             }

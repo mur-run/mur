@@ -10,7 +10,7 @@ use mur_common::agent::McpNetMode;
 
 /// When the write reaches the running agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Effect {
+pub enum Effect {
     /// Every changed field is hot: the next turn uses it.
     NextTurn,
     /// Something cold changed (or the entry is new): restart the agent.
@@ -57,7 +57,7 @@ impl Effect {
     }
 
     /// The line after a successful write.
-    pub(crate) fn applied_line(self) -> &'static str {
+    pub fn applied_line(self) -> &'static str {
         match self {
             Effect::NextTurn => APPLIED_HOT,
             Effect::Restart => APPLIED_COLD,

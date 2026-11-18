@@ -9,6 +9,8 @@ import type {
   RawBlockedItem,
 } from "./useInbox";
 import { SshInboxCard } from "../ssh/SshInboxCard";
+import { BrowserInboxCard } from "../browser/BrowserInboxCard";
+import type { PendingView as BrowserPendingView } from "../browser/browserApi";
 import type { PendingView } from "../ssh/sshApi";
 
 interface Props {
@@ -81,6 +83,16 @@ export function NeedsYou({ items, onRefresh, onDismiss, onPeekAgent }: Props) {
                   key={`ssh:${it.id}`}
                   item={it}
                   raw={it.payload as PendingView}
+                  onResolved={onRefresh}
+                  onPeekAgent={onPeekAgent}
+                />
+              );
+            case "browser_request":
+              return (
+                <BrowserInboxCard
+                  key={`browser:${it.id}`}
+                  item={it}
+                  raw={it.payload as BrowserPendingView}
                   onResolved={onRefresh}
                   onPeekAgent={onPeekAgent}
                 />

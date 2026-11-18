@@ -1,12 +1,10 @@
 use mur_common::agent::SshKnownHost;
-use mur_core::a2a_dial::StepEvent;
 use mur_core::cmd::agent::ssh_setup::plan::Dedicated;
 use mur_core::cmd::agent::ssh_setup::probe::AgentKey;
 use mur_core::cmd::agent::ssh_setup::{ScannedKey, SetupPlan, SpawnChange, Verdict, front};
-use std::collections::HashSet;
 
 use super::view::{plan_view, sh_quote};
-use super::{MAX_PLANS, SshPlans, is_ssh_request_done};
+use super::{MAX_PLANS, SshPlans};
 
 fn fp(c: char) -> String {
     format!("SHA256:{}", c.to_string().repeat(43))
@@ -95,27 +93,6 @@ fn plans_are_capped_and_a_missing_one_says_how_to_recover() {
     assert_eq!(plans.len(), MAX_PLANS);
     let e = plans.with("nope", |_| ()).unwrap_err();
     assert!(e.contains("open it again"), "{e}");
-}
-
-#[test]
-fn only_a_finished_ssh_request_step_counts() {
-    let started = |id: &str, name: &str| StepEvent::Started {
-        step_id: id.into(),
-        task_id: "t".into(),
-        name: name.into(),
-        args: serde_json::Value::Null,
-    };
-    let completed =
-        |id: &str| mur_core::a2a_dial::parse_step(&serde_json::json!({ "step_id": id }), true);
-    let mut seen = HashSet::new();
-    assert!(!is_ssh_request_done(&mut seen, &started("1", "bash")));
-    assert!(!is_ssh_request_done(&mut seen, &completed("1")));
-    assert!(!is_ssh_request_done(
-        &mut seen,
-        &started("2", "ssh_request")
-    ));
-    assert!(is_ssh_request_done(&mut seen, &completed("2")));
-    assert!(!is_ssh_request_done(&mut seen, &completed("2")), "once");
 }
 
 #[test]

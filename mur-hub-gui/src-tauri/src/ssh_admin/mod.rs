@@ -13,8 +13,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use mur_agent_runtime::tools::ssh_request::SSH_REQUEST;
-use mur_core::a2a_dial::{StepEvent, canonicalize_agent_name};
+use mur_core::a2a_dial::canonicalize_agent_name;
 use mur_core::cmd::agent::ssh_setup::advisory::AdvisoryResult;
 use mur_core::cmd::agent::ssh_setup::apply::{Lifecycle, approved_known_hosts};
 use mur_core::cmd::agent::ssh_setup::choices::{Choices, build_approval};
@@ -211,18 +210,6 @@ async fn blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(f)
         .await
         .map_err(|e| format!("task failed: {e}"))?
-}
-
-/// Track `ssh_request` steps of one streamed turn; true when one finishes.
-pub fn is_ssh_request_done(seen: &mut HashSet<String>, step: &StepEvent) -> bool {
-    match step {
-        StepEvent::Started { name, step_id, .. } if name == SSH_REQUEST => {
-            seen.insert(step_id.clone());
-            false
-        }
-        StepEvent::Completed { step_id, .. } => seen.remove(step_id),
-        _ => false,
-    }
 }
 
 /// What the agent's open requests look like now: one entry per request,
