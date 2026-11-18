@@ -109,7 +109,17 @@ pub fn assess_locked(
     let retracts = super::retract::scan(&events, keys.agent, channel_seq);
     let mut projected = super::project::project(&events, keys.agent, channel_seq);
     mark_untrusted(channel_id, keys, &trust, &events, &mut projected);
+    // `watermark` above proved the event exists.
+    let chain = mur_common::identity::human::rotation_chain(keys.mur_home).ok();
+    let turn_originator = events
+        .iter()
+        .find(|e| e.seq == channel_seq)
+        .map(|ev| {
+            super::originator::classify(keys.mur_home, channel_id, &trust, chain.as_ref(), ev)
+        })
+        .unwrap_or(super::originator::Originator::System);
     Ok(Verdict::Ok(Assessment {
+        turn_originator,
         projected,
         retracted: retracts.targets.into_iter().collect(),
         ignored_retracts: retracts.ignored,

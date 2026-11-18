@@ -25,6 +25,7 @@ fn assessment(projected: Vec<ProjectedMessage>, last: u64, retracted: Vec<u64>) 
         anchor_dirty: false,
         retracted,
         ignored_retracts: vec![],
+        turn_originator: mur_channel::conversation::originator::Originator::Human { key: None },
     }
 }
 

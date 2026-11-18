@@ -27,6 +27,7 @@ fn ok(projected: Vec<ProjectedMessage>, log_last_seq: u64) -> Assessment {
         anchor_dirty: false,
         retracted: vec![],
         ignored_retracts: vec![],
+        turn_originator: mur_channel::conversation::originator::Originator::Human { key: None },
     }
 }
 
@@ -434,6 +435,31 @@ mod gate {
             "{err}"
         );
         assert_eq!(err.code(), -32602);
+    }
+
+    /// E1: who wrote the turn is read from its signature, never told.
+    #[tokio::test]
+    async fn caller_supplied_originator_is_invalid_params() {
+        let handler = MessageSendHandler::new(Arc::new(TaskRunner::new_stub_echo()));
+        let p = json!({
+            "message": { "role": "user", "parts": [{ "kind": "text", "text": "hi" }] },
+            "context": { "channel_id": "c1", "channel_seq": 0, "originator": "human" }
+        });
+        let err = handler
+            .handle(Some(p), &RequestContext::none())
+            .await
+            .expect_err("refused");
+        assert!(
+            matches!(&err, HandlerError::InvalidParams(m) if m.contains("originator")),
+            "{err}"
+        );
+        assert_eq!(err.code(), -32602);
+        // Even with no channel named: the field is refused, not ignored.
+        let bare = json!({ "context": { "originator": { "Human": {} } } });
+        assert!(matches!(
+            parse_channel_context(&bare),
+            Err(HandlerError::InvalidParams(_))
+        ));
     }
 
     #[test]

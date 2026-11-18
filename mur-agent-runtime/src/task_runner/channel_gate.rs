@@ -219,6 +219,7 @@ impl TaskRunner {
             assess(&open(&home)?, &g, &cache)
         })
         .await?;
+        audit_originator(&ctx.channel_id, ctx.channel_seq, &a.turn_originator);
         if a.anchor_dirty {
             tracing::info!(
                 target: AUDIT,
@@ -255,5 +256,37 @@ impl TaskRunner {
             }
         }
         Ok(prior)
+    }
+}
+
+/// E1: record who the turn's event came from, by signature. A human claim
+/// the signature does not back is audited with its reason so a forgery
+/// (`SIGNATURE_INVALID`) reads apart from policy (`KEY_VERSION_STALE`).
+///
+/// Audit only, for now: the turn still runs as it would have. Routing an
+/// untrusted claim to the consult path lands with C2, the change that makes
+/// murmur sign its own turns with the human key — until then every murmur
+/// turn to a non-router agent is writer-signed and would classify here.
+pub(crate) fn audit_originator(
+    channel_id: &str,
+    channel_seq: u64,
+    o: &mur_channel::conversation::originator::Originator,
+) {
+    use mur_channel::conversation::originator::Originator;
+    match o {
+        Originator::UntrustedHumanClaim { reason } => tracing::warn!(
+            target: AUDIT,
+            channel_id,
+            seq = channel_seq,
+            reason = reason.code(),
+            "untrusted human claim: agent-originated turn"
+        ),
+        other => tracing::debug!(
+            target: AUDIT,
+            channel_id,
+            seq = channel_seq,
+            originator = ?other,
+            "turn originator"
+        ),
     }
 }

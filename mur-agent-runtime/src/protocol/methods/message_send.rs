@@ -92,6 +92,13 @@ pub struct ChannelContext {
 /// sees no change.
 pub(crate) fn parse_channel_context(p: &Value) -> Result<Option<ChannelContext>, HandlerError> {
     let ctx = p.get("context");
+    // E1: who wrote a turn is read from its signature, never told.
+    if ctx.is_some_and(|c| c.get("originator").is_some()) {
+        return Err(HandlerError::InvalidParams(
+            "context.originator is not accepted: the runtime classifies the turn by its signature"
+                .into(),
+        ));
+    }
     let id = ctx
         .and_then(|c| c.get("channel_id"))
         .and_then(Value::as_str);

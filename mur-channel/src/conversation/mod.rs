@@ -10,6 +10,9 @@ use serde::Serialize;
 
 pub mod assess;
 mod head;
+pub mod originator;
+#[cfg(test)]
+mod originator_tests;
 #[cfg(test)]
 mod owner_tests;
 pub mod project;
@@ -124,6 +127,9 @@ pub struct Assessment {
     /// Seqs of `Retract` events below `channel_seq` that withdrew nothing
     /// (other actor, answered, forward seq…): audit only.
     pub ignored_retracts: Vec<u64>,
+    /// Who wrote the event at `channel_seq`, by signature (E1). Classified
+    /// on this same load; the runtime audits it and never re-derives it.
+    pub turn_originator: originator::Originator,
 }
 
 /// One message of the projected history.
