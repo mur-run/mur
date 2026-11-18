@@ -6,6 +6,8 @@ import { translate, useT } from "../../i18n";
 import { mergeInbox, type InboxItem } from "./inbox";
 import { SSH_REQUEST_EVENT, type PendingView, sshApi } from "../ssh/sshApi";
 import { pendingToItem } from "../ssh/sshModel";
+import { BROWSER_REQUEST_EVENT, type PendingView as BrowserPending, browserApi } from "../browser/browserApi";
+import { pendingToItem as browserPendingToItem } from "../browser/browserModel";
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -175,6 +177,7 @@ export function useInbox(): { items: InboxItem[]; refresh: () => void } {
   const [companionItems, setCompanionItems] = useState<InboxItem[]>([]);
   const [blockedItems, setBlockedItems] = useState<InboxItem[]>([]);
   const [sshItems, setSshItems] = useState<InboxItem[]>([]);
+  const [browserItems, setBrowserItems] = useState<InboxItem[]>([]);
   const agentNamesRef = useRef<string[]>([]);
   agentNamesRef.current = agents.map((a) => a.name);
 
@@ -219,27 +222,41 @@ export function useInbox(): { items: InboxItem[]; refresh: () => void } {
       .catch(() => {});
   }, [lang]);
 
+  const refreshBrowser = useCallback(() => {
+    // Per agent, like companion: results are attributed by the names captured now.
+    const names = agentNamesRef.current;
+    Promise.all(names.map((n) => browserApi.pending(n).catch((): BrowserPending[] => [])))
+      .then((per) =>
+        setBrowserItems(filterNulls(per.flat().map((r) => browserPendingToItem(r, lang)))),
+      )
+      .catch(() => {});
+  }, [lang]);
+
   const refresh = useCallback(() => {
     refreshHitl();
     refreshInstall();
     refreshCompanion();
     refreshBlocked();
     refreshSsh();
-  }, [refreshHitl, refreshInstall, refreshCompanion, refreshBlocked, refreshSsh]);
+    refreshBrowser();
+  }, [refreshHitl, refreshInstall, refreshCompanion, refreshBlocked, refreshSsh, refreshBrowser]);
 
   useEffect(() => {
     // No initial refresh() here — the [lang] effect below covers mount too.
     const unlistenHitl = listen("hitl-approval-needed", () => refreshHitl());
     const unlistenSsh = listen(SSH_REQUEST_EVENT, () => refreshSsh());
+    const unlistenBrowser = listen(BROWSER_REQUEST_EVENT, () => refreshBrowser());
     const interval = setInterval(() => {
       refreshInstall();
       refreshBlocked();
       refreshSsh();
+      refreshBrowser();
     }, POLL_INTERVAL_MS);
 
     return () => {
       unlistenHitl.then((fn) => fn()).catch(() => {});
       unlistenSsh.then((fn) => fn()).catch(() => {});
+      unlistenBrowser.then((fn) => fn()).catch(() => {});
       clearInterval(interval);
     };
     // Re-subscribe on a language switch: the listener and the interval close
@@ -260,10 +277,11 @@ export function useInbox(): { items: InboxItem[]; refresh: () => void } {
 
   useEffect(() => {
     refreshCompanion();
+    refreshBrowser();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentIdentityKey]);
 
-  const items = mergeInbox([hitlItems, installItems, companionItems, blockedItems, sshItems]);
+  const items = mergeInbox([hitlItems, installItems, companionItems, blockedItems, sshItems, browserItems]);
 
   return { items, refresh };
 }
