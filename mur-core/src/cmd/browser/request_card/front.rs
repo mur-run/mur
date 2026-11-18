@@ -4,8 +4,8 @@
 //! answer only ever lands on the card the user saw (S3:D11).
 //!
 //! No public path here grants a port (D1, #2456): `--open-port` opens the
-//! port to any host, so it stays a typed CLI flag. [`port_line`] gives the
-//! UIs the line to show instead.
+//! port to any host, so it stays a typed CLI flag. [`port_step`] gives the
+//! UIs the lines to show instead.
 
 use std::future::Future;
 use std::path::Path;
@@ -113,16 +113,56 @@ pub fn show(home: &Path, agent: &str, site: &Site) -> Result<Shown> {
     })
 }
 
-/// D1: the line a UI shows for the port step — the CLI command, and that
-/// it opens the port to ANY host. `None` when there is no port step.
-pub fn port_line(s: &Shown) -> Option<String> {
-    s.port().map(|p| {
-        format!(
-            "port {p} is not open. This opens port {p} to ANY host, so it is a CLI step: \
-             mur browser answer {} {} --open-port (restart needed)",
-            s.agent,
-            s.request.site.origin()
-        )
+/// D1: what a UI shows for the port step. The port opens only together
+/// with an answer, so `commands` holds one complete, runnable CLI line per
+/// choice the card offers; `warning` is the ANY-host sentence, kept apart
+/// so a copied line is a command and nothing else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortStep {
+    pub port: u16,
+    pub warning: String,
+    pub commands: Vec<String>,
+}
+
+/// The [`PortStep`] for `s`, or `None` when there is no port step.
+pub fn port_step(s: &Shown) -> Option<PortStep> {
+    let port = s.port()?;
+    let base = format!("mur browser answer {} {}", s.agent, s.request.site.origin());
+    let picks: Vec<String> = match &s.card {
+        Card::NoLiveEntry => Vec::new(),
+        Card::Login {
+            rows, login_again, ..
+        } => rows
+            .iter()
+            .filter_map(|r| match r.offer {
+                Offer::Disabled { .. } => None,
+                Offer::ReplaceOnly { .. } => Some(format!("--profile {} --replace", r.name)),
+                _ => Some(format!("--profile {}", r.name)),
+            })
+            .chain(std::iter::once(
+                if login_again.exists {
+                    "--login --reauth"
+                } else {
+                    "--login"
+                }
+                .to_owned(),
+            ))
+            .collect(),
+        Card::Reach { reach, .. } => match reach {
+            Reach::Disabled { .. } => Vec::new(),
+            _ => vec!["--allow".to_owned()],
+        },
+    };
+    Some(PortStep {
+        port,
+        warning: format!(
+            "port {port} is not open. Opening it opens port {port} to ANY host, so it is a \
+             CLI step: run one of these instead of answering here (restart needed)."
+        ),
+        commands: picks
+            .into_iter()
+            .map(|p| format!("{base} {p} --open-port"))
+            .collect(),
     })
 }
 

@@ -56,9 +56,12 @@ pub fn lines(c: &State, t: &'static Theme) -> Vec<Line<'static>> {
         }
         _ => body(c, t, &mut out),
     }
-    if let Some(line) = front::port_line(&c.shown) {
+    if let Some(step) = front::port_step(&c.shown) {
         out.push(Line::from(""));
-        out.push(Line::styled(line, t.warn));
+        out.push(Line::styled(step.warning, t.warn));
+        for cmd in step.commands {
+            out.push(Line::styled(format!("  {cmd}"), t.warn));
+        }
     }
     if let Some(n) = &c.note {
         out.push(Line::from(""));

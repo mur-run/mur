@@ -110,19 +110,47 @@ fn show_without_a_request_points_at_mur_browser_requests() {
 }
 
 #[test]
-fn show_reads_the_card_and_port_line_says_any_host() {
+fn show_reads_the_card_and_the_port_step_says_any_host() {
     let t = tempfile::tempdir().unwrap();
     saved(t.path(), "gitea", None);
     asker(t.path(), true);
     let s = show(t.path(), "asker", &site()).unwrap();
     assert!(matches!(s.card, Card::Login { .. }));
     assert_eq!(s.port(), Some(3000));
-    let line = port_line(&s).unwrap();
-    assert!(line.contains("ANY host"), "{line}");
-    assert!(
-        line.contains("mur browser answer asker http://gitea.example:3000 --open-port"),
-        "{line}"
+    let step = port_step(&s).unwrap();
+    assert_eq!(step.port, 3000);
+    assert!(step.warning.contains("ANY host"), "{}", step.warning);
+    // Each copied line is a complete command: an answer choice plus
+    // --open-port, no prose (D1).
+    assert_eq!(
+        step.commands,
+        vec![
+            "mur browser answer asker http://gitea.example:3000 --profile gitea --open-port",
+            "mur browser answer asker http://gitea.example:3000 --login --open-port",
+        ]
     );
+}
+
+#[test]
+fn a_reach_port_step_offers_allow_and_a_disabled_one_offers_nothing() {
+    let t = tempfile::tempdir().unwrap();
+    saved(t.path(), "gitea", None);
+    asker(t.path(), false);
+    let s = show(t.path(), "asker", &site()).unwrap();
+    let step = port_step(&s).unwrap();
+    assert_eq!(
+        step.commands,
+        vec!["mur browser answer asker http://gitea.example:3000 --allow --open-port"]
+    );
+    let off = Shown::for_test(
+        "asker",
+        s.request.clone(),
+        Card::Reach {
+            reach: Reach::Disabled { why: "no".into() },
+            port: Some(3000),
+        },
+    );
+    assert!(port_step(&off).unwrap().commands.is_empty());
 }
 
 #[test]

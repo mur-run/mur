@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useT } from "../../i18n";
-import type { AnsweredView, CardView, OfferView, PickArg, RowView } from "./browserApi";
+import type { AnsweredView, CardView, OfferView, PickArg, PortStepView, RowView } from "./browserApi";
 
 interface Props {
   card: CardView;
@@ -14,21 +14,36 @@ interface Props {
   onLoggedIn: () => void;
 }
 
-function PortLine({ line }: { line: string }) {
+function PortCommand({ cmd }: { cmd: string }) {
   const { t } = useT();
   const [copied, setCopied] = useState(false);
   return (
-    <>
-      <code className="ssh-card__cmd">{line}</code>
+    <li className="perm__row">
+      <code className="ssh-card__cmd">{cmd}</code>
       <button
         type="button"
         className="btn btn--sm btn--secondary"
         onClick={() =>
-          void navigator.clipboard.writeText(line).then(() => setCopied(true)).catch(() => {})
+          void navigator.clipboard.writeText(cmd).then(() => setCopied(true)).catch(() => {})
         }
       >
         {copied ? t("browser.port.copied") : t("browser.port.copy")}
       </button>
+    </li>
+  );
+}
+
+/** D1: the port opens only from the CLI. The warning stays outside the
+ *  copied text, so each copy button copies a runnable command. */
+function PortStep({ step }: { step: PortStepView }) {
+  return (
+    <>
+      <p className="field-muted">{step.warning}</p>
+      <ul className="perm__list">
+        {step.commands.map((c) => (
+          <PortCommand key={c} cmd={c} />
+        ))}
+      </ul>
     </>
   );
 }
@@ -52,7 +67,7 @@ function Row({ row, busy, onAnswer }: { row: RowView; busy: boolean; onAnswer: (
       )}
       {detail && <div className="field-muted">{detail}</div>}
       {o.kind === "already_bound" && <span className="field-muted"> {t("browser.row.bound")}</span>}
-      {(o.kind === "offered" || o.kind === "adds_hosts") && (
+      {(o.kind === "offered" || o.kind === "adds_hosts" || o.kind === "already_bound") && (
         <button
           type="button"
           className="btn btn--sm btn--primary"
@@ -106,7 +121,9 @@ export function BrowserCardBody({ card, busy, loggingIn, result, note, onAnswer,
               onClick={() => {
                 if (b.login_again_exists && !confirm) return setConfirm(true);
                 setConfirm(false);
-                onAnswer({ kind: "login", reauth: b.login_again_exists, replace: b.login_again_exists });
+                // `reauth` overwrites the saved login of that name; it is
+                // not a binding replace, which a bound profile refuses.
+                onAnswer({ kind: "login", reauth: b.login_again_exists, replace: false });
               }}
             >
               {confirm
@@ -123,6 +140,16 @@ export function BrowserCardBody({ card, busy, loggingIn, result, note, onAnswer,
           {b.reach.kind === "allowed" && <p className="field-muted">{t("browser.reach.allowed")}</p>}
           {b.reach.kind === "unscoped" && (
             <p className="field-muted">{t("browser.reach.unscoped", { mode: b.reach.mode })}</p>
+          )}
+          {(b.reach.kind === "allowed" || b.reach.kind === "unscoped") && (
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={busy}
+              onClick={() => onAnswer({ kind: "allow" })}
+            >
+              {t("browser.reach.continue")}
+            </button>
           )}
           {b.reach.kind === "disabled" && <p className="field-muted">{b.reach.why}</p>}
           {b.reach.kind === "needs_host" && (
@@ -147,7 +174,7 @@ export function BrowserCardBody({ card, busy, loggingIn, result, note, onAnswer,
           {t("browser.dismiss")}
         </button>
       )}
-      {card.port_line && <PortLine line={card.port_line} />}
+      {!finished && card.port_step && <PortStep step={card.port_step} />}
       {result && (
         <>
           <ul className="perm__list">

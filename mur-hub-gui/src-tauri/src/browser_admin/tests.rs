@@ -110,9 +110,15 @@ fn the_view_keeps_replace_explicit_and_the_port_cli_only() {
         panic!("login body");
     };
     assert!(matches!(rows[0].offer, OfferView::ReplaceOnly { .. }));
-    let line = v.port_line.expect("port step");
-    assert!(
-        line.contains("ANY host") && line.contains("--open-port"),
-        "{line}"
+    let step = v.port_step.expect("port step");
+    assert!(step.warning.contains("ANY host"), "{}", step.warning);
+    // The copyable lines are commands only: the replace row needs its
+    // explicit --replace, and every line carries --open-port.
+    assert_eq!(
+        step.commands,
+        vec![
+            "mur browser answer qa https://git.example.com:8443 --profile work --replace --open-port",
+            "mur browser answer qa https://git.example.com:8443 --login --open-port",
+        ]
     );
 }

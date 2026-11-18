@@ -39,6 +39,13 @@ export type BodyView =
   | { kind: "login"; rows: RowView[]; login_again: string; login_again_exists: boolean }
   | { kind: "reach"; reach: ReachView };
 
+/** D1: the ANY-host sentence, and one complete CLI line per answer choice. */
+export interface PortStepView {
+  port: number;
+  warning: string;
+  commands: string[];
+}
+
 export interface CardView {
   id: string;
   agent: string;
@@ -46,8 +53,8 @@ export interface CardView {
   login: boolean;
   reason: string;
   body: BodyView;
-  /** D1: the port step is CLI-only; this is the line to show for it. */
-  port_line: string | null;
+  /** D1: the port step is CLI-only; this is what to show for it. */
+  port_step: PortStepView | null;
 }
 
 export type PickArg =

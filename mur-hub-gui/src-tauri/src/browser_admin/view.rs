@@ -3,7 +3,7 @@
 
 use mur_core::cmd::browser::request_card::front::{
     Answered, Card, Effect, LoginAgain, Offer, PendingRequest, ProfileRow, Reach, Settled, Shown,
-    Status, port_line,
+    Status, port_step,
 };
 use serde::Serialize;
 
@@ -80,6 +80,15 @@ pub enum BodyView {
     },
 }
 
+/// D1: the ANY-host sentence, and one complete CLI line per answer choice.
+/// Each `commands` entry is what the copy button copies.
+#[derive(Debug, Serialize)]
+pub struct PortStepView {
+    pub port: u16,
+    pub warning: String,
+    pub commands: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct CardView {
     pub id: String,
@@ -88,8 +97,8 @@ pub struct CardView {
     pub login: bool,
     pub reason: String,
     pub body: BodyView,
-    /// D1: the port step is CLI-only; this is the line to show for it.
-    pub port_line: Option<String>,
+    /// D1: the port step is CLI-only; this is what to show for it.
+    pub port_step: Option<PortStepView>,
 }
 
 fn offer_view(o: &Offer) -> OfferView {
@@ -153,7 +162,11 @@ pub fn card_view(id: &str, s: &Shown) -> CardView {
         login: s.request.login,
         reason: s.request.reason.clone(),
         body,
-        port_line: port_line(s),
+        port_step: port_step(s).map(|p| PortStepView {
+            port: p.port,
+            warning: p.warning,
+            commands: p.commands,
+        }),
     }
 }
 
