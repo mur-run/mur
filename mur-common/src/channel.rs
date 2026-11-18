@@ -29,7 +29,10 @@ use serde::{Deserialize, Serialize};
 /// Schema version for the manifest + event log; breaking changes bump this.
 /// v2: `HitlResponse` events carry approval authority — a reader that silently
 /// skips one could re-apply a gated effect (v3c).
-pub const CHANNEL_SCHEMA_VERSION: u32 = 2;
+/// v3: the log may carry a human-signed `owner-key-enrolled` record, the
+/// channel's trust root — a reader that skips it would trust or distrust
+/// human events wrongly (at-mention phase 2).
+pub const CHANNEL_SCHEMA_VERSION: u32 = 3;
 
 /// A2A v0.3 lifecycle vocabulary, serialized on the wire as kebab-case
 /// (`input-required`, `canceled`, etc.).

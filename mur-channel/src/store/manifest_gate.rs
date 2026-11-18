@@ -61,12 +61,18 @@ struct VersionOnly {
 
 /// Parse `yaml` as a manifest: TooNew is decided before the full parse.
 pub(super) fn parse_manifest(yaml: &str) -> Result<Channel> {
+    parse_manifest_as(yaml, CHANNEL_SCHEMA_VERSION)
+}
+
+/// [`parse_manifest`] as a build that supports schema `supported` would run
+/// it. Split out so tests can stand in for an older reader.
+fn parse_manifest_as(yaml: &str, supported: u32) -> Result<Channel> {
     let head: VersionOnly =
         serde_yaml::from_str(yaml).map_err(|e| ManifestError::Unparseable(e.to_string()))?;
-    if head.v > CHANNEL_SCHEMA_VERSION {
+    if head.v > supported {
         return Err(ManifestError::TooNew {
             found: head.v,
-            supported: CHANNEL_SCHEMA_VERSION,
+            supported,
         }
         .into());
     }
@@ -113,6 +119,46 @@ impl ChannelStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn manifest_yaml(v: u32) -> String {
+        let now = chrono::Utc::now();
+        serde_yaml::to_string(&Channel {
+            v,
+            id: "c1".into(),
+            title: "t".into(),
+            goal: mur_common::channel::Goal::default(),
+            state: mur_common::channel::ChannelState::Working,
+            purpose: None,
+            owner: ChannelActor::System,
+            participants: vec![],
+            created_at: now,
+            updated_at: now,
+        })
+        .unwrap()
+    }
+
+    /// D1: what this build writes is what an older (v2) reader must refuse
+    /// as TooNew — never Unparseable, which would read as damage.
+    #[test]
+    fn v3_manifest_on_v2_reader_is_too_new_not_damaged() {
+        assert_eq!(CHANNEL_SCHEMA_VERSION, 3);
+        let older = CHANNEL_SCHEMA_VERSION - 1;
+        let err = parse_manifest_as(&manifest_yaml(CHANNEL_SCHEMA_VERSION), older).unwrap_err();
+        match err.downcast_ref::<ManifestError>() {
+            Some(ManifestError::TooNew { found, supported }) => {
+                assert_eq!((*found, *supported), (CHANNEL_SCHEMA_VERSION, older));
+            }
+            other => panic!("expected TooNew, got {other:?}: {err}"),
+        }
+    }
+
+    /// D1: every v2 manifest stays readable, and parsing does not raise `v`.
+    #[test]
+    fn v2_channel_still_readable() {
+        let ch = parse_manifest(&manifest_yaml(2)).unwrap();
+        assert_eq!(ch.v, 2);
+        assert_eq!(ch.id, "c1");
+    }
 
     #[test]
     fn too_new_wins_over_unknown_fields() {
