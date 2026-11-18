@@ -63,6 +63,7 @@ mod search;
 mod secret_cmd;
 mod settlement;
 // Consumed by mur-hub-gui through the lib; the `mur` bin never calls it.
+mod browser_card;
 #[allow(dead_code)]
 pub mod session_grant;
 mod shell;

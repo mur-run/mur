@@ -41,6 +41,17 @@ impl Shown {
             Card::NoLiveEntry => None,
         }
     }
+
+    /// A card over no entries, for UI tests that never settle.
+    #[cfg(test)]
+    pub(crate) fn for_test(agent: &str, request: PendingRequest, card: Card) -> Self {
+        Self {
+            agent: agent.into(),
+            request,
+            card,
+            snapshot: Vec::new(),
+        }
+    }
 }
 
 /// What the user picked on the card.

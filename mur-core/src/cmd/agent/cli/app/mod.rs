@@ -442,6 +442,8 @@ pub struct App {
     pub pending_secret_delete: Option<String>,
     /// The `/ssh` card, its background work, and the streamed call.
     pub ssh: super::ssh_card::SshSlot,
+    /// The browser request card, its background work, and the streamed call.
+    pub browser: super::browser_card::BrowserSlot,
     /// A destructive memory operation waiting for a typed yes/no.
     ///
     /// Delete and demote of a **permanent instruction**, and an edit that
@@ -578,6 +580,7 @@ impl App {
             pending_secret_prompt: None,
             pending_secret_delete: None,
             ssh: Default::default(),
+            browser: Default::default(),
             pending_memory_confirm: None,
             monitor_total: 0,
             monitor_conditions: 0,

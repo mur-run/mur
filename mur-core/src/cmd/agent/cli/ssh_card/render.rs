@@ -276,7 +276,7 @@ pub fn inner_width(width: u16) -> u16 {
 
 /// Rows `line` takes once wrapped at `width` columns, exactly as `draw`
 /// paints it.
-fn rows(line: &Line<'static>, width: u16) -> u16 {
+pub fn rows(line: &Line<'static>, width: u16) -> u16 {
     use ratatui::widgets::{Paragraph, Wrap};
     let n = Paragraph::new(line.clone())
         .wrap(Wrap { trim: false })

@@ -299,6 +299,7 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             super::slash_cmds::apply_managed(app, res);
         }
         StreamMsg::SshCard(m) => super::ssh_card::on_msg(app, m, tx),
+        StreamMsg::BrowserCard(m) => super::browser_card::on_msg(app, m, tx),
     }
 }
 
