@@ -7,6 +7,7 @@
 //! turns owned by other agents in the same project.
 
 use super::WORKTREES_DIR;
+use crate::backend::cow::TMP_SUFFIX;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -80,8 +81,23 @@ pub struct SweepReport {
     pub failed: Vec<(PathBuf, String)>,
 }
 
+/// The turn a dir under `target/<subdir>/` belongs to: its own name, or for a
+/// warm-cache scratch dir `<turn>.tmp-<pid>`, the `<turn>` part.
+fn owning_turn(name: &std::ffi::OsStr) -> std::ffi::OsString {
+    let lossy = name.to_string_lossy();
+    match lossy.rsplit_once(TMP_SUFFIX) {
+        Some((turn, pid))
+            if !turn.is_empty() && !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            turn.into()
+        }
+        _ => name.to_os_string(),
+    }
+}
+
 /// Remove every turn dir under `<project>/target/<subdir>/` whose worktree
-/// `<project>/.worktrees/<name>` is gone, plus leftover `.trash-*` dirs from an
+/// `<project>/.worktrees/<name>` is gone (a `<name>.tmp-<pid>` warm-cache
+/// scratch dir is judged by `<name>`), plus leftover `.trash-*` dirs from an
 /// interrupted delete. A missing `<subdir>` is an empty report, not an error.
 pub fn sweep_orphan_turn_targets(project: &Path, subdir: &str) -> SweepReport {
     let mut report = SweepReport::default();
@@ -99,7 +115,9 @@ pub fn sweep_orphan_turn_targets(project: &Path, subdir: &str) -> SweepReport {
             let _ = std::fs::remove_dir_all(&path);
             continue;
         }
-        if worktrees.join(&name).exists() {
+        // A warm-cache clone in flight is `<turn>.tmp-<pid>`; it belongs to
+        // `<turn>`, so it is live exactly while that turn's worktree is.
+        if worktrees.join(owning_turn(&name)).exists() {
             continue;
         }
         match remove_turn_target(&path) {
