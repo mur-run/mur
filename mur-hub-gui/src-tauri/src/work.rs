@@ -83,7 +83,7 @@ pub fn summary_of(ch: &Channel, events: &[ChannelEvent], ordinal: i64) -> Channe
         .collect();
     let preview = events
         .iter()
-        .find(|e| matches!(e.actor, ChannelActor::Human { .. }))
+        .find(|e| e.is_human_message())
         .and_then(|e| e.payload.get("text").and_then(|v| v.as_str()))
         .unwrap_or("")
         .chars()
@@ -181,6 +181,38 @@ mod tests {
         assert_eq!(s.turns, 1);
         // v1 freezes state at its initial value; just assert it round-trips kebab.
         assert!(!s.state.is_empty() && !s.state.contains('"'));
+    }
+
+    /// C7: the owner record is a `Human` line with no text; the preview takes
+    /// the first human `Message`, not the first human line.
+    #[test]
+    fn preview_skips_owner_record() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc
+            .create_for_agent("qa", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
+        let manifest = svc.store().load_manifest(&ch.id).unwrap();
+        let line = |seq, kind, payload| ChannelEvent {
+            seq,
+            ts: chrono::Utc::now(),
+            actor: ChannelActor::local_human(),
+            kind,
+            payload,
+            idempotency_key: None,
+            sig: None,
+            key_version: None,
+            prev_hash: None,
+        };
+        let events = vec![
+            line(0, EventKind::OwnerKeyEnrolled, serde_json::json!({})),
+            line(
+                1,
+                EventKind::Message,
+                serde_json::json!({ "text": "find the bug" }),
+            ),
+        ];
+        assert_eq!(summary_of(&manifest, &events, 1).preview, "find the bug");
     }
 
     #[test]

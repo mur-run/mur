@@ -240,6 +240,9 @@ pub fn load(home: &Path, channel_id: &str, agent: &str) -> Result<Vec<TurnRecord
     let withdrawn = mur_channel::conversation::retract::scan(&events, agent, u64::MAX).targets;
     Ok(events
         .iter()
+        // A human line that is not a `Message` (owner record, HITL answer,
+        // retract) is control, never a user turn (C7).
+        .filter(|e| !matches!(e.actor, ChannelActor::Human { .. }) || e.is_human_message())
         .filter(|e| e.kind != EventKind::Retract && !withdrawn.contains(&e.seq))
         .map(|e| {
             let mut t = event_to_turn(e);
@@ -282,7 +285,7 @@ pub fn list_recent(home: &Path, agent: &str, limit: usize) -> Result<Vec<Session
         }
         let preview = evs
             .iter()
-            .find(|e| matches!(e.actor, ChannelActor::Human { .. }))
+            .find(|e| e.is_human_message())
             .and_then(|e| e.payload.get("text").and_then(|v| v.as_str()))
             .unwrap_or("")
             .chars()
@@ -442,3 +445,7 @@ mod tests {
         assert!(agent_evs[1].payload.get("suggested_replies").is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "persist_owner_tests.rs"]
+mod owner_tests;

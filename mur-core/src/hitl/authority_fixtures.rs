@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use mur_channel::ChannelService;
-use mur_channel::service::{ChannelOwner, EnrollGate, HumanSign};
+use mur_channel::service::{ChannelOwner, EnrollGate, HumanSign, LegacySealer};
 use mur_common::channel::{ChannelEvent, EventKind};
 use mur_common::identity::{AgentIdentity, RotationAttestation, RotationReason};
 
@@ -87,13 +87,32 @@ pub(crate) fn owned_workflow(home: &Path) -> String {
 /// Enroll the local human on a legacy channel (C1) without writing an event
 /// of its own: `human_cut` is the log's current last line.
 pub(crate) fn enroll(home: &Path, ch: &str) {
+    enroll_with(home, ch, open_gate());
+}
+
+/// [`enroll`] on an agent session channel whose head `agent` (key v0)
+/// sealed, the shape a pre-phase-2 `murmur` session leaves.
+pub(crate) fn enroll_agent_sealed(home: &Path, ch: &str, agent: &str, sealer: &AgentIdentity) {
+    let key_home = home.join("agents").join(agent);
+    let gate = EnrollGate {
+        legacy_sealer: Some(LegacySealer {
+            identity: sealer,
+            kv: 0,
+            key_home: &key_home,
+        }),
+        ..open_gate()
+    };
+    enroll_with(home, ch, gate);
+}
+
+fn enroll_with(home: &Path, ch: &str, gate: EnrollGate<'_>) {
     let owner = HumanOwner::load(home).unwrap();
     let ChannelOwner::Human { signer, router } = owner.owner() else {
         unreachable!()
     };
     ChannelService::open(home)
         .unwrap()
-        .enroll_owner_key_if_absent(ch, signer, router, &open_gate())
+        .enroll_owner_key_if_absent(ch, signer, router, &gate)
         .unwrap()
         .expect("enrolled");
 }

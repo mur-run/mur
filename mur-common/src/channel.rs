@@ -335,6 +335,16 @@ pub struct ChannelEvent {
     pub prev_hash: Option<String>,
 }
 
+impl ChannelEvent {
+    /// True for a human-authored `Message`: something the user typed. Other
+    /// human kinds (`OwnerKeyEnrolled`, `HitlResponse`, `Retract`) are control
+    /// lines, so a history reader that replays or previews human turns takes
+    /// only these (at-mention phase 2, C7).
+    pub fn is_human_message(&self) -> bool {
+        self.kind == EventKind::Message && matches!(self.actor, ChannelActor::Human { .. })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
