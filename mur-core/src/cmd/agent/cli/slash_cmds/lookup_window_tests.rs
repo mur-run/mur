@@ -6,6 +6,7 @@ use tempfile::TempDir;
 fn a_channel_pushed_off_the_listing_is_still_reachable_by_its_number() {
     let tmp = TempDir::new().unwrap();
     crate::channel_writer::plant_identity_for(tmp.path(), "qa");
+    crate::channel_writer::plant_human_identity(tmp.path());
     // The oldest channel is #1 and will be far off the end of a
     // newest-first listing of RECENT_LIMIT rows.
     for i in 0..(RECENT_LIMIT + 5) {

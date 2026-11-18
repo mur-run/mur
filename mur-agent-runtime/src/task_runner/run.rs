@@ -19,7 +19,7 @@ impl TaskRunner {
 
     pub(super) async fn run_sync_inner(
         &self,
-        spec: TaskSpec,
+        mut spec: TaskSpec,
         sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
         steer_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     ) -> TaskOutcome {
@@ -133,6 +133,36 @@ impl TaskRunner {
             },
             None => (None, None),
         };
+        // §3.1/§3.11 (E1, live since C2): an event that only claims to be the
+        // human's runs as an agent-originated turn — read-only, nobody to
+        // approve — whatever the caller asked for. A backend that cannot
+        // confine its tools refuses it instead.
+        if channel_turn
+            .as_ref()
+            .is_some_and(|t| channel_gate::demote(&t.originator))
+        {
+            if let Some(backend) = self.backend.non_confining_name() {
+                self.cancel_signals
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&id);
+                self.set_state(&id, TaskState::Failed);
+                return TaskOutcome::Failed(
+                    crate::protocol::methods::message_send::failed_task_before_start(
+                        Some(id),
+                        spec.input,
+                        "backend_cannot_confine",
+                        &format!(
+                            "this turn's channel event is not signed by the human, so it runs \
+                             read-only; the `{backend}` backend runs tools MUR cannot confine"
+                        ),
+                    ),
+                );
+            }
+            spec.tool_allowlist = Some(channel_gate::confined_tools());
+            spec.attended = false;
+            self.mark_unattended(&id).await;
+        }
         // Held to the end of the turn: dropping it admits the next waiter.
         let (_channel_permit, channel_prior) = match channel_turn {
             Some(t) => (Some(t.permit), Some(t.prior)),

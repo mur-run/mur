@@ -43,6 +43,22 @@ pub(crate) fn plant_identity_for(home: &Path, agent: &str) -> mur_common::identi
     id
 }
 
+/// What a human write needs (C2): the router key that seals the head and an
+/// enrolled human identity. Plant it in any fixture that appends a `Human`
+/// event through `human_writer`. Idempotent.
+#[cfg(test)]
+pub(crate) fn plant_human_identity(home: &Path) {
+    if !home
+        .join("agents")
+        .join(ROUTER_AGENT)
+        .join("identity.pub")
+        .exists()
+    {
+        plant_writer_identity(home);
+    }
+    crate::identity_enroll::ensure_enrolled(home).expect("enroll the human");
+}
+
 /// [`plant_identity_for`] with the router — the common case, since the router
 /// signs every workflow/HITL event MUR writes on a channel's behalf.
 #[cfg(test)]

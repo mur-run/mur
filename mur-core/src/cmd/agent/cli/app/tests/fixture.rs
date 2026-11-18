@@ -12,6 +12,7 @@ impl App {
     pub fn test_fixture() -> Self {
         let home = tempfile::tempdir().unwrap();
         crate::channel_writer::plant_identity_for(home.path(), "a");
+        crate::channel_writer::plant_human_identity(home.path());
         let session = Session::create(home.path(), "a").unwrap();
         let mut app = App::new(
             home.path().to_path_buf(),

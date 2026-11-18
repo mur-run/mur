@@ -163,12 +163,11 @@ pub fn prepare_send(home: &Path, target: &str, text: &str) -> Result<PreparedSen
         },
     };
     let text = mur_channel::conversation::normalize_user_text(text);
-    let ev = crate::channel_writer::append_as_writer(
+    // C2: an `@` send is the human speaking; it carries the human key.
+    let ev = crate::human_writer::append_as_human(
         &svc,
         home,
         &channel_id,
-        &agent,
-        ChannelActor::local_human(),
         mur_common::channel::EventKind::Message,
         serde_json::json!({ "text": text }),
         None,

@@ -6,10 +6,8 @@ use std::path::Path;
 
 use anyhow::Result;
 use mur_channel::ChannelService;
-use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
+use mur_common::channel::{ChannelEvent, EventKind};
 use mur_common::hitl::{HitlRequest, HitlResponse, RiskTier};
-
-use crate::channel_writer::ROUTER_AGENT;
 
 /// One unresolved HITL gate, surfaced to a UI (Hub Home inbox, mobile, etc).
 /// Deliberately flat/serde-friendly rather than re-exporting `HitlRequest`
@@ -137,16 +135,13 @@ pub(crate) fn approve_in(
         issued_at: Some(chrono::Utc::now()),
         label: None,
     };
-    // The actor is the local human who approved, but the channel's WRITER signs
-    // the event (v3d) so the gate can verify authority before releasing — a
-    // forged HitlResponse from a non-router key is rejected. The router for
-    // workflow/HITL channels is the concierge "mur".
-    crate::channel_writer::append_as_writer(
+    // C2: the human's own key signs the decision (router-sealed, enrolling
+    // the owner on first write). `hitl::authority` accepts it only under the
+    // human chain's head key on an owned channel, so no agent can forge it.
+    crate::human_writer::append_as_human(
         &svc,
         home,
         channel_id,
-        ROUTER_AGENT,
-        ChannelActor::local_human(),
         EventKind::HitlResponse,
         serde_json::to_value(&resp)?,
         None,
@@ -375,6 +370,7 @@ mod pending_hitl_tests {
 #[cfg(test)]
 mod approve_tests {
     use super::*;
+    use crate::channel_writer::ROUTER_AGENT;
     use mur_channel::ChannelService;
     use mur_common::channel::{ChannelActor, EventKind};
     use tempfile::TempDir;

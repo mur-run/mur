@@ -180,7 +180,7 @@ pub fn repair(mur_home: &Path, channel_id: &str, confirm: Confirm<'_>) -> Result
         Ok(serde_json::json!({
             "type": REPAIR_EVENT_TYPE,
             "text": format!("channel log repaired: {reason}"),
-            "repaired_by": ChannelActor::local_human(),
+            "repaired_by": crate::human_writer::human_actor(mur_home),
             "repaired_at": now,
             "reason": reason,
             "report": rendered,

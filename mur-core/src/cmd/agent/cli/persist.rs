@@ -153,16 +153,23 @@ impl Session {
         if role == "agent" && !suggested.is_empty() {
             payload["suggested_replies"] = suggestions_to_json(suggested);
         }
-        let ev = crate::channel_writer::append_as_writer(
-            &self.svc,
-            &self.home,
-            &id,
-            &self.agent,
-            actor,
-            kind,
-            payload,
-            None,
-        )?;
+        // C2: a typed turn is signed with the human key (router-sealed,
+        // enrolling the owner on first write); the reply and the `!cmd`
+        // card stay signed by the session agent.
+        let ev = if matches!(actor, ChannelActor::Human { .. }) {
+            crate::human_writer::append_as_human(&self.svc, &self.home, &id, kind, payload, None)?
+        } else {
+            crate::channel_writer::append_as_writer(
+                &self.svc,
+                &self.home,
+                &id,
+                &self.agent,
+                actor,
+                kind,
+                payload,
+                None,
+            )?
+        };
         Ok(ev.seq)
     }
 
@@ -174,12 +181,12 @@ impl Session {
             target_seq,
             reason: mur_common::channel::RetractReason::Cancelled,
         };
-        let ev = crate::channel_writer::append_as_writer(
+        // Signed by the same human key as the turn it withdraws: a retract
+        // is honoured only when its actor equals the target's.
+        let ev = crate::human_writer::append_as_human(
             &self.svc,
             &self.home,
             channel_id,
-            &self.agent,
-            ChannelActor::local_human(),
             EventKind::Retract,
             serde_json::to_value(payload)?,
             Some(mur_common::channel::retract_idempotency_key(target_seq)),
@@ -294,7 +301,12 @@ pub fn list_recent(home: &Path, agent: &str, limit: usize) -> Result<Vec<Session
         out.push(SessionInfo {
             id: row.id,
             preview,
-            turns: evs.len(),
+            // The owner record C2 writes ahead of the first human line is
+            // bookkeeping, not a turn.
+            turns: evs
+                .iter()
+                .filter(|e| e.kind != EventKind::OwnerKeyEnrolled)
+                .count(),
             // No clamp: `ChannelIndex::list` rejects a negative ordinal before
             // it gets here, so this cast cannot silently produce 0 (which
             // already means "not numbered yet").
@@ -323,6 +335,7 @@ mod tests {
     fn image_only_user_turn_is_never_saved_blank() {
         let tmp = TempDir::new().unwrap();
         crate::channel_writer::plant_identity_for(tmp.path(), "qa");
+        crate::channel_writer::plant_human_identity(tmp.path());
         let mut s = Session::create(tmp.path(), "qa").unwrap();
         s.append("user", "", None, &[]).unwrap();
         s.append("user", "  \n ", None, &[]).unwrap();
@@ -356,6 +369,7 @@ mod tests {
     fn append_returns_the_written_events_seq() {
         let tmp = TempDir::new().unwrap();
         crate::channel_writer::plant_identity_for(tmp.path(), "qa");
+        crate::channel_writer::plant_human_identity(tmp.path());
         let mut s = Session::create(tmp.path(), "qa").unwrap();
         let first = s.append("user", "one", None, &[]).unwrap();
         let second = s.append("agent", "two", None, &[]).unwrap();
@@ -377,6 +391,7 @@ mod tests {
     fn current_is_none_until_first_append_then_some() {
         let tmp = TempDir::new().unwrap();
         crate::channel_writer::plant_identity_for(tmp.path(), "qa");
+        crate::channel_writer::plant_human_identity(tmp.path());
         let mut s = Session::create(tmp.path(), "qa").unwrap();
         assert!(s.current().is_none(), "no channel before first append");
         s.append("user", "hi", None, &[]).unwrap();
@@ -391,6 +406,7 @@ mod tests {
     fn agent_append_persists_offered_suggestions() {
         let tmp = TempDir::new().unwrap();
         crate::channel_writer::plant_identity_for(tmp.path(), "qa");
+        crate::channel_writer::plant_human_identity(tmp.path());
         let mut s = Session::create(tmp.path(), "qa").unwrap();
         s.append("user", "run the fleet?", None, &[]).unwrap();
         let offered = vec![

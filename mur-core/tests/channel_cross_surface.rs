@@ -9,6 +9,7 @@ use tempfile::TempDir;
 fn cli_write_is_visible_to_a_second_reader() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path();
+    plant_human(home);
 
     // CLI side writes.
     let mut sess = Session::create(home, "qa").unwrap();
@@ -17,7 +18,13 @@ fn cli_write_is_visible_to_a_second_reader() {
 
     // Hub side reads the same on-disk store.
     let hub = ChannelService::open(home).unwrap();
-    let evs = hub.load_events(&cid).unwrap();
+    // Messages only: since C2 the owner record precedes the first human line.
+    let evs: Vec<_> = hub
+        .load_events(&cid)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == mur_common::channel::EventKind::Message)
+        .collect();
     assert_eq!(evs.len(), 1);
     assert_eq!(evs[0].payload["text"], "shared message");
 
@@ -33,6 +40,7 @@ fn cli_write_is_visible_to_a_second_reader() {
 fn index_is_rebuildable_from_logs() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path();
+    plant_human(home);
     let mut sess = Session::create(home, "qa").unwrap();
     sess.append("user", "x", None, &[]).unwrap();
 
@@ -48,4 +56,17 @@ fn index_is_rebuildable_from_logs() {
     let n = index.rebuild_from(&store).unwrap();
     assert_eq!(n, 1);
     assert_eq!(index.list(10).unwrap().len(), 1);
+}
+
+/// What a human write needs since C2: the router key that seals the head
+/// and an enrolled human identity.
+fn plant_human(home: &std::path::Path) {
+    let router = home.join("agents").join("mur");
+    if !router.join("identity.pub").exists() {
+        std::fs::create_dir_all(&router).unwrap();
+        mur_common::identity::AgentIdentity::generate()
+            .save(&router)
+            .unwrap();
+    }
+    mur_core::identity_enroll::ensure_enrolled(home).unwrap();
 }

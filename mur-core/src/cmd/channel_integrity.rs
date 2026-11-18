@@ -306,7 +306,9 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
     // sealed with its own key (H1): re-check it under that writer's key
     // before calling it forged. Only the anchor verdict is taken from the
     // second read; events and their per-actor verdicts stay from the first.
-    if let Some((agent, key)) = legacy_sealer_key(mur_home, &events, &damage, &router_key) {
+    if let Some((agent, key)) =
+        legacy_sealer_key(mur_home, &store, channel_id, &events, &damage, &router_key)
+    {
         let (_, again) = store.load_events_with_damage(channel_id, &key, false)?;
         if again.anchor_mismatch.is_none() {
             report.legacy_sealer = Some(agent);
@@ -362,16 +364,16 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
 /// head failed its signature under the router key.
 ///
 /// Before H1 an agent's anchored append sealed the head with the same key
-/// that signed the event, so the sealer of a legacy head is the actor of the
-/// event at `head.seq`. Only an `Agent` actor qualifies: `System` and `Human`
-/// events resolve to the router key, which already failed. The key is the
-/// one that agent's directory gives the head's `key_version`.
-///
-/// C1 (owned channels) must gate this on "no live record yet", as the
-/// writer's transition arm does; PR 1 has no owned channels, so it is
-/// unconditional here.
+/// that signed the event, so the sealer of a legacy head is the writer of
+/// the event at `head.seq`. For an `Agent` actor that is the agent itself.
+/// A `Human` or `System` line there was written by the session agent too
+/// (murmur's typed turn and `!cmd` card, before C2), so on a channel with no
+/// owner record yet the channel's agent participants are tried in turn. On
+/// an owned channel heads are router-sealed (H1) and nothing is tried.
 fn legacy_sealer_key(
     mur_home: &Path,
+    store: &ChannelStore,
+    channel_id: &str,
     events: &[mur_common::channel::ChannelEvent],
     damage: &mur_channel::store::DamageReport,
     tried: &[u8; 32],
@@ -381,11 +383,25 @@ fn legacy_sealer_key(
         return None;
     }
     let sealed = events.iter().find(|ev| ev.seq == m.head.seq)?;
-    let ChannelActor::Agent { id } = &sealed.actor else {
-        return None;
+    let candidates: Vec<String> = match &sealed.actor {
+        ChannelActor::Agent { id } => vec![id.clone()],
+        _ if events.iter().any(|e| e.kind == EventKind::OwnerKeyEnrolled) => return None,
+        _ => store
+            .load_manifest(channel_id)
+            .ok()?
+            .participants
+            .into_iter()
+            .filter_map(|p| match p.actor {
+                ChannelActor::Agent { id } => Some(id),
+                _ => None,
+            })
+            .collect(),
     };
-    let key = crate::channel_verify::actor_pubkey(mur_home, &sealed.actor, m.head.key_version)?;
-    (key != *tried).then(|| (id.clone(), key))
+    candidates.into_iter().find_map(|id| {
+        let actor = ChannelActor::Agent { id: id.clone() };
+        let key = crate::channel_verify::actor_pubkey(mur_home, &actor, m.head.key_version)?;
+        (key != *tried && m.head.verify(&key)).then_some((id, key))
+    })
 }
 
 /// Run the command: print the report, return the process exit code.

@@ -14,6 +14,7 @@ fn app() -> App {
 /// `MUR_CHANNEL_REQUIRE_SIG` and the refusal lands in the transcript (#2145).
 fn persisting_app(home: &tempfile::TempDir) -> App {
     crate::channel_writer::plant_identity_for(home.path(), "a");
+    crate::channel_writer::plant_human_identity(home.path());
     let session = Session::create(home.path(), "a").unwrap();
     App::new(
         home.path().to_path_buf(),
@@ -156,8 +157,8 @@ fn the_headline_says_stopped_when_the_rail_reports_a_stop() {
     .unwrap();
     // The rail verifies before it folds: an unsigned stop event is dropped
     // under enforcement and the headline would say "finished" for the wrong
-    // reason. Sign it as the router, the way a real run does.
-    crate::channel_writer::plant_writer_identity(&a.home);
+    // reason. Sign it as the router, the way a real run does; the fixture
+    // already planted the router key (for human writes, C2).
     crate::channel_writer::append_as_writer(
         &svc,
         &a.home,

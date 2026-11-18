@@ -13,6 +13,7 @@
 use std::path::Path;
 
 use mur_channel::ChannelService;
+use mur_channel::conversation::originator::Originator;
 use mur_channel::conversation::{
     Assessment, CacheState, ConversationDamage, Keys, Verdict, assess_locked,
 };
@@ -118,6 +119,8 @@ pub(crate) fn wire_code(e: &HandlerError) -> &'static str {
 pub(crate) struct ChannelTurn {
     pub(crate) permit: tokio::sync::OwnedSemaphorePermit,
     pub(crate) prior: Vec<RichMessage>,
+    /// Who the turn's event came from, by signature (E1).
+    pub(crate) originator: Originator,
 }
 
 /// Channel reads are file and SQLite I/O: off the async worker.
@@ -176,8 +179,12 @@ impl TaskRunner {
                 return Err(HandlerError::ConversationBusy(ctx.channel_id.clone()));
             }
         };
-        let prior = self.channel_prior(ctx, input).await?;
-        Ok(Some(ChannelTurn { permit, prior }))
+        let (prior, originator) = self.channel_assessed(ctx, input).await?;
+        Ok(Some(ChannelTurn {
+            permit,
+            prior,
+            originator,
+        }))
     }
 
     /// The history a channel turn sends: the log assessed under one shared
@@ -188,8 +195,18 @@ impl TaskRunner {
         ctx: &ChannelContext,
         input: &str,
     ) -> Result<Vec<RichMessage>, HandlerError> {
+        Ok(self.channel_assessed(ctx, input).await?.0)
+    }
+
+    /// [`Self::channel_prior`] plus the turn event's originator, from the
+    /// same locked read.
+    async fn channel_assessed(
+        &self,
+        ctx: &ChannelContext,
+        input: &str,
+    ) -> Result<(Vec<RichMessage>, Originator), HandlerError> {
         let Some(cc) = &self.channel_conversations else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Originator::System));
         };
         let writer_pubkey = cc.writer_pubkey(&self.agent_name).ok_or_else(|| {
             HandlerError::Internal(format!(
@@ -255,18 +272,13 @@ impl TaskRunner {
                 ),
             }
         }
-        Ok(prior)
+        Ok((prior, a.turn_originator))
     }
 }
 
 /// E1: record who the turn's event came from, by signature. A human claim
-/// the signature does not back is audited with its reason so a forgery
-/// (`SIGNATURE_INVALID`) reads apart from policy (`KEY_VERSION_STALE`).
-///
-/// Audit only, for now: the turn still runs as it would have. Routing an
-/// untrusted claim to the consult path lands with C2, the change that makes
-/// murmur sign its own turns with the human key — until then every murmur
-/// turn to a non-router agent is writer-signed and would classify here.
+/// the signature does not back is audited with its reason; the caller then
+/// confines the turn ([`demote`]).
 pub(crate) fn audit_originator(
     channel_id: &str,
     channel_seq: u64,
@@ -279,7 +291,7 @@ pub(crate) fn audit_originator(
             channel_id,
             seq = channel_seq,
             reason = reason.code(),
-            "untrusted human claim: agent-originated turn"
+            "untrusted human claim: agent-originated turn, confined to read_file"
         ),
         other => tracing::debug!(
             target: AUDIT,
@@ -289,4 +301,17 @@ pub(crate) fn audit_originator(
             "turn originator"
         ),
     }
+}
+
+/// The tools a turn keeps when its event only claims to be the human's
+/// (§3.1, §3.11): the consult shape, read-only.
+pub(crate) fn confined_tools() -> Vec<String> {
+    vec![crate::tools::read_file::READ_FILE.to_string()]
+}
+
+/// Whether a turn with this originator must run confined. Only a human
+/// claim the signature does not back: agent and system turns keep whatever
+/// the caller allowed, as before phase 2.
+pub(crate) fn demote(o: &Originator) -> bool {
+    matches!(o, Originator::UntrustedHumanClaim { .. })
 }

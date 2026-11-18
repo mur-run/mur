@@ -5,6 +5,7 @@ use tempfile::TempDir;
 fn cli_turns_persist_to_channel_and_resume() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path();
+    plant_human(home);
 
     let mut sess = Session::create(home, "qa").unwrap();
     sess.append("user", "find the bug", None, &[]).unwrap();
@@ -28,6 +29,7 @@ fn cli_turns_persist_to_channel_and_resume() {
 fn empty_session_creates_no_channel_and_resume_skips_it() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path();
+    plant_human(home);
 
     // Launch a session and type nothing (lazy create => no channel on disk).
     let sess = Session::create(home, "qa").unwrap();
@@ -49,4 +51,17 @@ fn empty_session_creates_no_channel_and_resume_skips_it() {
         .expect("the real session");
     assert_eq!(latest.id, real_id);
     assert_eq!(latest.turns, 1);
+}
+
+/// What a human write needs since C2: the router key that seals the head
+/// and an enrolled human identity.
+fn plant_human(home: &std::path::Path) {
+    let router = home.join("agents").join("mur");
+    if !router.join("identity.pub").exists() {
+        std::fs::create_dir_all(&router).unwrap();
+        mur_common::identity::AgentIdentity::generate()
+            .save(&router)
+            .unwrap();
+    }
+    mur_core::identity_enroll::ensure_enrolled(home).unwrap();
 }

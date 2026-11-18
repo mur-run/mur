@@ -18,7 +18,21 @@ fn home_with_agents(names: &[&str]) -> TempDir {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("profile.yaml"), format!("name: {n}\n")).unwrap();
     }
+    plant_human(tmp.path());
     tmp
+}
+
+/// What a human write needs since C2: the router key that seals the head
+/// and an enrolled human identity.
+fn plant_human(home: &std::path::Path) {
+    let router = home.join("agents").join("mur");
+    if !router.join("identity.pub").exists() {
+        std::fs::create_dir_all(&router).unwrap();
+        mur_common::identity::AgentIdentity::generate()
+            .save(&router)
+            .unwrap();
+    }
+    mur_core::identity_enroll::ensure_enrolled(home).unwrap();
 }
 
 /// `prepare_send` refuses an agent with no `running.lock` before it writes;
