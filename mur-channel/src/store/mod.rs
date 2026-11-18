@@ -39,6 +39,8 @@ pub(crate) use append::line_seq;
 pub use append::{PreSealHook, PreSealInput, SealHook, SealHooks, SealInput};
 pub use chain::{GENESIS_PREV_HASH, line_hash};
 #[cfg(test)]
+pub(crate) use load::EVENT_FILE_READS;
+#[cfg(test)]
 use load::check_absence_is_not_corruption;
 pub use load::{AnchorMismatch, AnchorMismatchKind, DamageReport};
 pub use manifest_gate::{ManifestError, ManifestPolicy};

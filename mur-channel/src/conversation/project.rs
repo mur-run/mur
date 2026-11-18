@@ -31,6 +31,7 @@ pub fn project(events: &[ChannelEvent], agent: &str, before: u64) -> Vec<Project
                 seq: e.seq,
                 role,
                 text,
+                untrusted: false,
             })
         })
         .collect()

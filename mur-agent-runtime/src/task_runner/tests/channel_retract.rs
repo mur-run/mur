@@ -13,6 +13,7 @@ fn pm(seq: u64, role: Role, text: &str) -> ProjectedMessage {
         seq,
         role,
         text: text.into(),
+        untrusted: false,
     }
 }
 

@@ -13,7 +13,7 @@ use super::{ChannelOwner, ChannelService, EnrollGate, HumanSign, RouterSeal};
 use crate::head_io::read_head;
 use crate::verify::human::HumanTrust;
 
-pub(super) struct TestHuman(pub(super) AgentIdentity, pub(super) u32);
+pub(crate) struct TestHuman(pub(crate) AgentIdentity, pub(crate) u32);
 
 impl HumanSign for TestHuman {
     fn pubkey(&self) -> [u8; 32] {
@@ -27,13 +27,13 @@ impl HumanSign for TestHuman {
     }
 }
 
-pub(super) struct Home {
-    pub(super) dir: TempDir,
-    pub(super) human: TestHuman,
-    pub(super) router: AgentIdentity,
+pub(crate) struct Home {
+    pub(crate) dir: TempDir,
+    pub(crate) human: TestHuman,
+    pub(crate) router: AgentIdentity,
 }
 
-pub(super) fn bootstrap(h: &AgentIdentity) -> RotationAttestation {
+pub(crate) fn bootstrap(h: &AgentIdentity) -> RotationAttestation {
     RotationAttestation::new(
         "u",
         "",
@@ -47,7 +47,7 @@ pub(super) fn bootstrap(h: &AgentIdentity) -> RotationAttestation {
 }
 
 impl Home {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let dir = TempDir::new().unwrap();
         let h = AgentIdentity::generate();
         h.save_split(&human_identity_dir(dir.path()), &human_key_dir(dir.path()))
@@ -68,19 +68,19 @@ impl Home {
         }
     }
 
-    pub(super) fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         self.dir.path()
     }
 
-    pub(super) fn router_home(&self) -> std::path::PathBuf {
+    pub(crate) fn router_home(&self) -> std::path::PathBuf {
         self.path().join("agents").join(crate::verify::ROUTER_AGENT)
     }
 
-    pub(super) fn svc(&self) -> ChannelService {
+    pub(crate) fn svc(&self) -> ChannelService {
         ChannelService::open(self.path()).unwrap()
     }
 
-    pub(super) fn seal<'a>(&'a self, rh: &'a Path) -> RouterSeal<'a> {
+    pub(crate) fn seal<'a>(&'a self, rh: &'a Path) -> RouterSeal<'a> {
         RouterSeal {
             identity: &self.router,
             kv: 0,
@@ -90,7 +90,7 @@ impl Home {
 
     /// A legacy conversation with `n` agent-signed messages (no owner record,
     /// no head: what every pre-phase-2 channel is).
-    pub(super) fn legacy_channel(&self, n: usize) -> String {
+    pub(crate) fn legacy_channel(&self, n: usize) -> String {
         let svc = self.svc();
         let ch = svc.create_for_agent("qa", ChannelOwner::Legacy).unwrap();
         for i in 0..n {
@@ -109,21 +109,21 @@ impl Home {
         ch.id
     }
 
-    pub(super) fn log(&self, id: &str) -> String {
+    pub(crate) fn log(&self, id: &str) -> String {
         fs::read_to_string(self.svc().store().events_path(id).unwrap()).unwrap_or_default()
     }
 
-    pub(super) fn trust(&self, id: &str) -> HumanTrust {
+    pub(crate) fn trust(&self, id: &str) -> HumanTrust {
         let head = read_head(&crate::anchor::heads_dir(self.path()), id).unwrap();
         HumanTrust::from_log(self.path(), id, &self.log(id), head.as_ref())
     }
 }
 
-pub(super) fn manifest_path(h: &Home, id: &str) -> std::path::PathBuf {
+pub(crate) fn manifest_path(h: &Home, id: &str) -> std::path::PathBuf {
     h.path().join("channels").join(id).join("channel.yaml")
 }
 
-pub(super) fn open_gate() -> EnrollGate<'static> {
+pub(crate) fn open_gate() -> EnrollGate<'static> {
     EnrollGate {
         identity_protected: true,
         log_intact: &|| Ok(true),
@@ -131,7 +131,7 @@ pub(super) fn open_gate() -> EnrollGate<'static> {
     }
 }
 
-pub(super) fn say(
+pub(crate) fn say(
     h: &Home,
     id: &str,
     gate: &EnrollGate<'_>,

@@ -156,6 +156,7 @@ fn msg(seq: u64, role: Role, text: &str) -> ProjectedMessage {
         seq,
         role,
         text: text.into(),
+        untrusted: false,
     }
 }
 
@@ -449,10 +450,11 @@ fn unsigned_legacy_events_are_projected() {
     fx.unsigned(ChannelActor::Agent { id: "mur".into() }, "old a");
     fx.unsigned(ChannelActor::local_human(), "new q");
     let a = ok(fx.assess(None, 2, "new q"));
-    assert_eq!(
-        a.projected,
-        vec![msg(0, Role::User, "old q"), msg(1, Role::Agent, "old a")]
-    );
+    // Projected, not refused; the unsigned human line is marked untrusted
+    // (design §3.4: "projected as untrusted text").
+    let mut old_q = msg(0, Role::User, "old q");
+    old_q.untrusted = true;
+    assert_eq!(a.projected, vec![old_q, msg(1, Role::Agent, "old a")]);
 }
 
 #[test]
