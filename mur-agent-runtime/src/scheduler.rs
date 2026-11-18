@@ -231,6 +231,34 @@ async fn record_reply(sink: &ScheduleSink, task: &mur_common::a2a::Task, entry: 
         );
     }
 
+    // #2464: the conversation the reminder was asked in. The schedule channel
+    // above is the record; this is where the person who asked is looking.
+    // Best-effort and independent of the record: a deleted conversation must
+    // not cost the reply its record, and no channel is created in its place —
+    // a conversation that reappears empty would be a stranger thing to find.
+    if let Some(chat) = entry.reply_to.as_deref() {
+        let deliver = || -> Result<()> {
+            let svc = ChannelService::open(&sink.mur_home)?;
+            anyhow::ensure!(svc.exists(chat), "conversation {chat} no longer exists");
+            crate::protocol::methods::channel_delegate::append_self_reply(
+                &sink.mur_home,
+                chat,
+                &sink.agent,
+                &sink.identity,
+                sink.key_version,
+                &text,
+                &task.id,
+                Some(format!("sched-reply-to:{}", task.id)),
+            )
+        };
+        if let Err(e) = deliver() {
+            warn!(
+                error = %e, cron = %cron, task_id = %task.id,
+                "scheduled reply could not be delivered to the conversation it was asked in"
+            );
+        }
+    }
+
     // The channel makes the reply findable; the inbox is where a person is
     // already looking. Both, because neither replaces the other — and the
     // inbox attempt does not depend on the channel write having succeeded.
@@ -490,9 +518,8 @@ mod tests {
         assert_eq!(
             spec.intent,
             RequestIntent::Background(BackgroundKind::Scheduled),
-            "cron-fired turns are unambiguously runtime-initiated — nobody is \
-             synchronously waiting on them, so they must route through Smart \
-             background candidates rather than the interactive default"
+            "cron-fired turns are runtime-initiated and tagged as such; \
+             routing reads the kind and keeps them off Smart's cheap model (#2464)"
         );
     }
 
@@ -641,6 +668,7 @@ mod tests {
             message: "m".into(),
             sends_to: None,
             not_after: None,
+            reply_to: None,
         }
     }
 

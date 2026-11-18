@@ -323,7 +323,7 @@ fn candidates_smart_background_prepends_cheap() {
     );
     // Background + smart → cheap first, then phase-1 candidates, deduped.
     let bg = LlmRequest {
-        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        intent: RequestIntent::Background(BackgroundKind::Companion),
         ..Default::default()
     };
     assert_eq!(
@@ -415,7 +415,7 @@ async fn cascade_escalates_structural_fail_under_background_smart() {
     );
 
     let bg = LlmRequest {
-        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        intent: RequestIntent::Background(BackgroundKind::Companion),
         ..Default::default()
     };
     assert_eq!(fb.generate(bg).await.unwrap().text, "primary");
@@ -469,7 +469,7 @@ async fn cascade_respects_max_escalations() {
     );
 
     let bg = LlmRequest {
-        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        intent: RequestIntent::Background(BackgroundKind::Companion),
         ..Default::default()
     };
     let err = fb.generate(bg).await.unwrap_err();
@@ -521,7 +521,7 @@ async fn routed_generate_emits_routing_event_on_escalation() {
     .with_telemetry(tx, "coach");
 
     let bg = LlmRequest {
-        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        intent: RequestIntent::Background(BackgroundKind::Companion),
         messages: vec![RichMessage::Text {
             role: "user".into(),
             content: "do the thing".into(),
@@ -545,7 +545,7 @@ async fn routed_generate_emits_routing_event_on_escalation() {
             ..
         } => {
             assert_eq!(agent, "coach");
-            assert_eq!(intent, "background/scheduled");
+            assert_eq!(intent, "background/companion");
             assert_eq!(model_ref, "primary");
             assert_eq!(reason, "smart-background");
             assert_eq!(outcome, "escalated");
@@ -599,7 +599,7 @@ fn background_image_turn_drops_a_cheap_model_that_cannot_see() {
     );
 
     let text_turn = LlmRequest {
-        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        intent: RequestIntent::Background(BackgroundKind::Companion),
         ..Default::default()
     };
     assert_eq!(
@@ -609,7 +609,7 @@ fn background_image_turn_drops_a_cheap_model_that_cannot_see() {
     );
 
     let image_turn = LlmRequest {
-        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        intent: RequestIntent::Background(BackgroundKind::Companion),
         messages: vec![RichMessage::ImageText {
             role: "user".into(),
             media_type: "image/png".into(),
@@ -630,7 +630,7 @@ fn background_image_turn_drops_a_cheap_model_that_cannot_see() {
     // adapter renders those as real image blocks. Checking only the user turn
     // left automated work — the exact case this gate exists for — unprotected.
     let tool_image_turn = LlmRequest {
-        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        intent: RequestIntent::Background(BackgroundKind::Companion),
         messages: vec![RichMessage::ToolResults {
             results: vec![crate::llm::ToolResultEntry {
                 call_id: "c1".into(),
@@ -655,7 +655,7 @@ fn background_image_turn_drops_a_cheap_model_that_cannot_see() {
     // so Smart still downgrades. Otherwise the check above would pass for the
     // wrong reason — every tool-using turn would look like vision.
     let tool_text_turn = LlmRequest {
-        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        intent: RequestIntent::Background(BackgroundKind::Companion),
         messages: vec![RichMessage::ToolResults {
             results: vec![crate::llm::ToolResultEntry {
                 call_id: "c1".into(),
@@ -927,4 +927,50 @@ fn task_summary_skips_a_turn_ledger_and_tokens_count_it() {
         estimate_input_tokens(&req) as usize,
         (rendered + "hello there".len()) / 4
     );
+}
+
+/// #2464: a reminder the user set is their work, not housekeeping. Smart sent
+/// one to a 4B local model with ~29k tokens of context and the full tool list;
+/// it called a tool that did not exist, gave up, and the turn recorded `ok`.
+/// Companion chatter and maintenance still downgrade — that is what Smart is for.
+#[test]
+fn scheduled_turns_are_not_downgraded_by_smart() {
+    use mur_common::agent::AgentProfile;
+    use mur_common::config::{ModelSwitchConfig, SmartConfig};
+    let cfg = ModelSwitchConfig {
+        default: Some("primary".into()),
+        fallback_chain: vec!["primary".into(), "mid".into()],
+        smart: SmartConfig {
+            enabled: true,
+            cheap: Some("cheap".into()),
+            max_escalations: 1,
+        },
+        ..Default::default()
+    };
+    let fb = FallbackLlmClient::new_routed(
+        AgentProfile::default_for_tests(),
+        cfg,
+        factory_for(Default::default()),
+        retry0(),
+    );
+    let scheduled = LlmRequest {
+        intent: RequestIntent::Background(BackgroundKind::Scheduled),
+        ..Default::default()
+    };
+    assert_eq!(
+        fb.candidates_for(&scheduled),
+        vec!["primary".to_string(), "mid".into()]
+    );
+    assert_eq!(fb.selection_reason(&scheduled), "fallback-advance");
+    for kind in [BackgroundKind::Companion, BackgroundKind::Maintenance] {
+        let bg = LlmRequest {
+            intent: RequestIntent::Background(kind),
+            ..Default::default()
+        };
+        assert_eq!(
+            fb.candidates_for(&bg)[0],
+            "cheap",
+            "{kind:?} still downgrades"
+        );
+    }
 }

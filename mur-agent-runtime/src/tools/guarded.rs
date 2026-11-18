@@ -287,12 +287,13 @@ impl GuardedToolCall {
             .cloned();
 
         if tool.is_none() {
+            let msg = unknown_tool_message(&call.tool_name, self.tools.iter().map(|t| t.name()));
             return Ok(ToolResultEntry {
                 call_id: call.call_id.clone(),
-                content: format!("unknown tool: {}", call.tool_name),
+                content: msg.clone(),
                 is_error: true,
                 status: crate::tools::ToolStatus::Denied {
-                    detail: format!("unknown tool: {}", call.tool_name),
+                    detail: msg,
                     // Not `Tool`: an unknown name was never in the request
                     // list, so there is nothing to withdraw. This used to be
                     // special-cased by sniffing the content string for
@@ -590,6 +591,31 @@ impl GuardedToolCall {
             images,
         })
     }
+}
+
+/// The error for a call naming no registered tool (#2464).
+///
+/// A bare MCP name (`mur_job_status`) is the common miss: runtime-authored
+/// descriptions teach it ("Poll mur_job_status <run_id>"), while the sandbox
+/// registers `mcp__<server>__mur_job_status`. A plain "unknown tool" made a 4B
+/// scheduled turn give up. The hint only NAMES the candidates — it never runs
+/// one, so a policy rule written against the full name cannot be sidestepped
+/// by calling the bare one.
+pub(crate) fn unknown_tool_message<'a>(
+    called: &str,
+    registered: impl Iterator<Item = &'a str>,
+) -> String {
+    let suffix = format!("__{called}");
+    let matches: Vec<&str> = registered
+        .filter(|n| n.starts_with("mcp__") && n.ends_with(&suffix))
+        .collect();
+    if matches.is_empty() {
+        return format!("unknown tool: {called}");
+    }
+    format!(
+        "unknown tool: {called} — call it by its full name: {}",
+        matches.join(" or ")
+    )
 }
 
 #[cfg(test)]

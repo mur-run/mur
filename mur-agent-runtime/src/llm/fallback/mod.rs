@@ -125,7 +125,7 @@ impl FallbackLlmClient {
         }
         if let CandidateSource::PerRequest { profile, cfg } = &self.source {
             let smart = profile.effective_smart(cfg);
-            if matches!(req.intent, RequestIntent::Background(_)) && smart.enabled {
+            if smart_eligible(req.intent) && smart.enabled {
                 return "smart-background".to_string();
             }
         }
@@ -166,7 +166,7 @@ impl FallbackLlmClient {
                 // Smart background: cheap model first, base (primary + chain)
                 // behind it (cascade). Per-agent Smart config overrides global.
                 let smart = profile.effective_smart(cfg);
-                if matches!(req.intent, RequestIntent::Background(_)) && smart.enabled {
+                if smart_eligible(req.intent) && smart.enabled {
                     let cheap = smart
                         .cheap
                         .clone()
@@ -267,9 +267,7 @@ impl FallbackLlmClient {
         // Fatal (Phase-1 security boundary: a malformed response on the
         // user's chosen model must surface, never silently switch models).
         let max_esc: u32 = match &self.source {
-            CandidateSource::PerRequest { profile, cfg }
-                if matches!(req.intent, RequestIntent::Background(_)) =>
-            {
+            CandidateSource::PerRequest { profile, cfg } if smart_eligible(req.intent) => {
                 let smart = profile.effective_smart(cfg);
                 if smart.enabled {
                     smart.max_escalations
@@ -493,6 +491,21 @@ impl FallbackLlmClient {
             let _ = tx.try_send(ev);
         }
     }
+}
+
+/// May Smart put a cheap model in front of this request?
+///
+/// Companion chatter and maintenance: yes — nobody asked for them by name, and
+/// a weak answer costs little. A scheduled turn: no (#2464). It is a request the
+/// user wrote and then walked away from, so nobody is there to notice a cheap
+/// model fumbling it; it carries the full tool list and conversation-sized
+/// context, and a 4B local model given exactly that called a tool that does not
+/// exist, gave up, and was recorded `ok`.
+fn smart_eligible(intent: RequestIntent) -> bool {
+    matches!(
+        intent,
+        RequestIntent::Background(BackgroundKind::Companion | BackgroundKind::Maintenance)
+    )
 }
 
 /// Label for `Event::Routing::intent` — `"interactive"` or

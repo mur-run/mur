@@ -239,6 +239,7 @@ mod tool_allowlist;
 mod truncation;
 mod turn_track;
 mod turn_track_target;
+mod unknown_tool_hint;
 
 /// Lives in `task_runner/tests/` so this file stops growing.
 mod sandbox_gate;

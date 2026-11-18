@@ -30,6 +30,7 @@ mod conversation;
 pub(crate) mod deny_hint;
 mod helpers;
 mod mcp_reload;
+pub(crate) mod origin_channel;
 mod run;
 mod step;
 mod system_prompt;

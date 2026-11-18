@@ -114,6 +114,7 @@ accept` to grant it, so say that you have asked rather than that it is set."
             message: message.clone(),
             asked_for: field("asked_for"),
             not_after,
+            reply_to: crate::task_runner::origin_channel::current(),
             proposed_at: chrono::Utc::now().to_rfc3339(),
         };
         // Derived from the content, so the same request restated in one
@@ -284,6 +285,36 @@ mod tests {
         assert_eq!(p.cron, "0 10 9 8 *");
         // The user's words survive: a cron expression alone is not reviewable.
         assert_eq!(p.asked_for.as_deref(), Some("明天早上 10:00 提醒我吃早餐"));
+    }
+
+    /// #2464: a reminder asked for inside a conversation remembers which one,
+    /// so its reply can be delivered back there instead of only to the
+    /// schedule channel nobody was looking at.
+    #[tokio::test]
+    async fn a_proposal_made_in_a_channel_remembers_it() {
+        let d = tempfile::tempdir().unwrap();
+        crate::task_runner::origin_channel::scope(
+            Some("01a1ee17-9cc2-71e1-a016-dd488a58de85".to_string()),
+            tool(d.path()).execute(serde_json::json!({
+                "cron": "47 21 18 11 *", "message": "查 council", "once": true
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            only_proposal(d.path()).await.reply_to.as_deref(),
+            Some("01a1ee17-9cc2-71e1-a016-dd488a58de85")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_proposal_made_outside_a_channel_has_no_reply_to() {
+        let d = tempfile::tempdir().unwrap();
+        tool(d.path())
+            .execute(serde_json::json!({"cron": "0 9 * * 1-5", "message": "standup"}))
+            .await
+            .unwrap();
+        assert!(only_proposal(d.path()).await.reply_to.is_none());
     }
 
     /// Restating the same reminder must not stack proposals — the same failure

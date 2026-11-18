@@ -14,12 +14,14 @@ async fn cron_scheduler_spawns_and_aborts() {
             message: "ping".into(),
             sends_to: None,
             not_after: None,
+            reply_to: None,
         },
         ScheduleEntry {
             cron: "0 9 * * 1-5".into(),
             message: "morning brief".into(),
             sends_to: None,
             not_after: None,
+            reply_to: None,
         },
     ];
     let runner = Arc::new(TaskRunner::new_stub_echo());
@@ -38,6 +40,7 @@ async fn cron_scheduler_skips_bad_entry() {
         message: "should be skipped".into(),
         sends_to: None,
         not_after: None,
+        reply_to: None,
     }];
     let runner = Arc::new(TaskRunner::new_stub_echo());
     let handle = CronScheduler::new(entries, runner).spawn();
