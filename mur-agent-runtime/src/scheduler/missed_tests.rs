@@ -322,7 +322,7 @@ async fn a_reply_goes_back_to_the_conversation_it_was_asked_in() {
     let tmp = tempfile::tempdir().unwrap();
     let chat = ChannelService::open(tmp.path())
         .unwrap()
-        .create_for_agent("probe")
+        .create_for_agent("probe", mur_channel::service::ChannelOwner::Legacy)
         .unwrap()
         .id;
     let entry = ScheduleEntry {
