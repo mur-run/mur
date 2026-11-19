@@ -67,9 +67,12 @@ jobs:
     timeout-minutes: 120 # hung build ≠ 6h default
     # sccache: compile-level cache that survives the per-release Cargo.lock
     # version bump (which invalidates rust-cache's exact key every time).
+    # Windows is excluded: sccache spawning rustc for lance-io fails with
+    # "The filename or extension is too long (os error 206)" (v2.102.0).
+    # An empty RUSTC_WRAPPER is treated by cargo as unset.
     env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: ${{ !contains(matrix.os, 'windows') && 'true' || 'false' }}
+      RUSTC_WRAPPER: ${{ !contains(matrix.os, 'windows') && 'sccache' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -117,6 +120,7 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - name: Run sccache
+        if: runner.os != 'Windows'
         uses: mozilla/sccache-action@v0.0.9
 
       - name: Install protobuf (Linux)
