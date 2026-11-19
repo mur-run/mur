@@ -32,11 +32,14 @@ const EXIT_CARVED_SIBLING_RAN: i32 = 26;
 /// Allowlisted: must run. Unlisted, but under the `/usr` read grant: must not.
 const ALLOWED: &str = "true";
 const UNLISTED: &str = "id";
-const COPIED: &str = "copied-binary";
+/// Copies of `UNLISTED` keep its basename: on a multicall coreutils (uutils,
+/// Ubuntu 26.04+) the binary dispatches on `argv[0]` and a renamed copy
+/// refuses to run at all, which breaks the unsandboxed control (#2471).
+const COPIED: &str = UNLISTED;
 /// Read-only dir holding a file named like the `mur` CLI (so the carve-out
 /// splits this grant) next to an unlisted binary that must stay refused.
 const CARVED_DIR: &str = "ro";
-const CARVED_SIBLING: &str = "sibling-binary";
+const CARVED_SIBLING: &str = UNLISTED;
 
 fn system_binary(name: &str) -> PathBuf {
     ["/usr/bin", "/bin"]
