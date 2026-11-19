@@ -21,7 +21,10 @@ fn raw(home: &Path) -> Connection {
 /// post-migration rebuild fails partway.
 fn legacy_install(home: &Path, poisoned: bool) -> String {
     let svc = ChannelService::open(home).unwrap();
-    let id = svc.create_for_agent("mur").unwrap().id;
+    let id = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap()
+        .id;
     svc.append_message(
         &id,
         ChannelActor::Agent { id: "mur".into() },
@@ -93,7 +96,10 @@ fn folded_rows_without_a_ledger_heal_on_open_so_a_rerun_is_not_double_counted() 
     // rebuild never completed: rows folded, ledger empty, marker present.
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let id = svc.create_for_agent("mur").unwrap().id;
+    let id = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap()
+        .id;
     let ev = svc
         .append_message(
             &id,

@@ -8,6 +8,8 @@ mod auth;
 mod bridge_keychain;
 mod capabilities;
 mod capture;
+#[allow(dead_code)] // `owner()` is used by the lib (creators), not the bin yet
+mod channel_owner;
 mod channel_verify;
 mod channel_writer;
 mod codebase;
@@ -44,6 +46,7 @@ mod extract_llm;
 mod federation;
 mod harvest;
 mod hitl;
+mod human_writer;
 // `ensure_enrolled` and `HumanSigner::sign_bytes` are for later phases (D-2, B3);
 // the CLI only mints and rotates.
 #[allow(dead_code)]

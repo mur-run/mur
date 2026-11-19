@@ -15,6 +15,7 @@ fn pm(seq: u64, role: Role, text: &str) -> ProjectedMessage {
         seq,
         role,
         text: text.into(),
+        untrusted: false,
     }
 }
 
@@ -26,6 +27,7 @@ fn ok(projected: Vec<ProjectedMessage>, log_last_seq: u64) -> Assessment {
         anchor_dirty: false,
         retracted: vec![],
         ignored_retracts: vec![],
+        turn_originator: mur_channel::conversation::originator::Originator::Human { key: None },
     }
 }
 
@@ -435,6 +437,31 @@ mod gate {
         assert_eq!(err.code(), -32602);
     }
 
+    /// E1: who wrote the turn is read from its signature, never told.
+    #[tokio::test]
+    async fn caller_supplied_originator_is_invalid_params() {
+        let handler = MessageSendHandler::new(Arc::new(TaskRunner::new_stub_echo()));
+        let p = json!({
+            "message": { "role": "user", "parts": [{ "kind": "text", "text": "hi" }] },
+            "context": { "channel_id": "c1", "channel_seq": 0, "originator": "human" }
+        });
+        let err = handler
+            .handle(Some(p), &RequestContext::none())
+            .await
+            .expect_err("refused");
+        assert!(
+            matches!(&err, HandlerError::InvalidParams(m) if m.contains("originator")),
+            "{err}"
+        );
+        assert_eq!(err.code(), -32602);
+        // Even with no channel named: the field is refused, not ignored.
+        let bare = json!({ "context": { "originator": { "Human": {} } } });
+        assert!(matches!(
+            parse_channel_context(&bare),
+            Err(HandlerError::InvalidParams(_))
+        ));
+    }
+
     #[test]
     fn conversation_error_codes_are_stable() {
         let d = ConversationDamage::Signature;
@@ -505,7 +532,10 @@ mod gate {
     #[test]
     fn fleet_channel_is_not_conversation() {
         let h = home();
-        let ch = h.svc.create_for_fleet("f", AGENT, &[]).expect("fleet");
+        let ch = h
+            .svc
+            .create_for_fleet("f", AGENT, &[], mur_channel::service::ChannelOwner::Legacy)
+            .expect("fleet");
         assert!(matches!(
             check(&h, &ctx(&ch.id, 0)),
             Err(HandlerError::ChannelNotConversation(_))
@@ -515,7 +545,10 @@ mod gate {
     #[test]
     fn non_member_damaged_channel_is_not_a_participant_and_log_untouched() {
         let h = home();
-        let mut ch = h.svc.create_for_agent("someone-else").expect("ch");
+        let mut ch = h
+            .svc
+            .create_for_agent("someone-else", mur_channel::service::ChannelOwner::Legacy)
+            .expect("ch");
         h.svc
             .append_message(
                 &ch.id,
@@ -548,7 +581,10 @@ mod gate {
     #[test]
     fn too_new_manifest_is_channel_too_new() {
         let h = home();
-        let mut ch = h.svc.create_for_agent(AGENT).expect("ch");
+        let mut ch = h
+            .svc
+            .create_for_agent(AGENT, mur_channel::service::ChannelOwner::Legacy)
+            .expect("ch");
         ch.v = CHANNEL_SCHEMA_VERSION + 1;
         h.svc.store().save_manifest(&ch).expect("save");
         assert!(matches!(
@@ -560,7 +596,10 @@ mod gate {
     #[test]
     fn missing_manifest_with_log_is_damaged_manifest() {
         let h = home();
-        let ch = h.svc.create_for_agent(AGENT).expect("ch");
+        let ch = h
+            .svc
+            .create_for_agent(AGENT, mur_channel::service::ChannelOwner::Legacy)
+            .expect("ch");
         h.svc
             .append_message(
                 &ch.id,
@@ -583,7 +622,10 @@ mod gate {
     #[test]
     fn legacy_purpose_none_resolves_as_conversation() {
         let h = home();
-        let mut ch = h.svc.create_for_agent(AGENT).expect("ch");
+        let mut ch = h
+            .svc
+            .create_for_agent(AGENT, mur_channel::service::ChannelOwner::Legacy)
+            .expect("ch");
         ch.purpose = None;
         h.svc.store().save_manifest(&ch).expect("save");
         check(&h, &ctx(&ch.id, 0)).expect("legacy chat is a conversation");
@@ -592,7 +634,10 @@ mod gate {
     #[test]
     fn member_added_later_passes_the_gate() {
         let h = home();
-        let ch = h.svc.create_for_agent("someone-else").expect("ch");
+        let ch = h
+            .svc
+            .create_for_agent("someone-else", mur_channel::service::ChannelOwner::Legacy)
+            .expect("ch");
         h.svc
             .add_participant(&ch.id, AGENT, ParticipantRole::Delegate)
             .expect("add");
@@ -614,7 +659,10 @@ mod gate {
     #[test]
     fn assess_returns_history_below_channel_seq() {
         let h = home();
-        let ch = h.svc.create_for_agent(AGENT).expect("ch");
+        let ch = h
+            .svc
+            .create_for_agent(AGENT, mur_channel::service::ChannelOwner::Legacy)
+            .expect("ch");
         for t in ["one", "two"] {
             h.svc
                 .append_message(
@@ -641,7 +689,10 @@ mod gate {
     #[test]
     fn assess_maps_watermark_damage() {
         let h = home();
-        let ch = h.svc.create_for_agent(AGENT).expect("ch");
+        let ch = h
+            .svc
+            .create_for_agent(AGENT, mur_channel::service::ChannelOwner::Legacy)
+            .expect("ch");
         let err = assess_at(&h, &ctx(&ch.id, 9), "hi").expect_err("no event at 9");
         assert!(
             matches!(
@@ -739,7 +790,10 @@ mod turns {
             me.save(&tmp.path().join("agents").join(AGENT))
                 .expect("plant");
             let svc = ChannelService::open(tmp.path()).expect("open");
-            let ch = svc.create_for_agent(AGENT).expect("ch").id;
+            let ch = svc
+                .create_for_agent(AGENT, mur_channel::service::ChannelOwner::Legacy)
+                .expect("ch")
+                .id;
             Self { tmp, svc, me, ch }
         }
 
@@ -1107,7 +1161,11 @@ mod turns {
     async fn delegate_into_fleet_creates_no_channel_conversation() {
         let fx = Fx::new();
         let runner = fx.runner(Arc::new(Recorder::default()), Some(fx.conv_dir()), 4);
-        let fleet = fx.svc.create_for_fleet("f", AGENT, &[]).expect("fleet").id;
+        let fleet = fx
+            .svc
+            .create_for_fleet("f", AGENT, &[], mur_channel::service::ChannelOwner::Legacy)
+            .expect("fleet")
+            .id;
         let handler = ChannelDelegateHandler::new(
             Arc::clone(&runner),
             Arc::new(AgentIdentity::from_secret_bytes(

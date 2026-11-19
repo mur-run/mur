@@ -9,6 +9,7 @@ use std::path::Path;
 
 use anyhow::{Result, anyhow, bail};
 use mur_channel::ChannelService;
+use mur_channel::service::ChannelOwner;
 use mur_common::config::Config;
 use mur_common::pipeline::PipelineOutput;
 use mur_common::skill::manifest::{Procedure, ProcedureStep};
@@ -214,12 +215,17 @@ pub async fn dispatch_parallel_jobs_as(
                 "invalid run id {:?}",
                 p.run_id
             );
-            let ch = svc.create_for_workflow_with_id("parallel-jobs", &p.channel_id)?;
+            let ch = svc.create_for_workflow_with_id(
+                "parallel-jobs",
+                &p.channel_id,
+                ChannelOwner::Legacy,
+            )?;
             (p.run_id, ch.id)
         }
         None => (
             format!("run-{}", uuid::Uuid::now_v7()),
-            svc.create_for_workflow("parallel-jobs")?.id,
+            svc.create_for_workflow("parallel-jobs", ChannelOwner::Legacy)?
+                .id,
         ),
     };
     let ctx = GrantContext {

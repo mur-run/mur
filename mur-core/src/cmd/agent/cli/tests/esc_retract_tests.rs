@@ -17,6 +17,7 @@ fn key(code: KeyCode) -> Event {
 
 fn app_in(home: &tempfile::TempDir) -> App {
     crate::channel_writer::plant_identity_for(home.path(), "a");
+    crate::channel_writer::plant_human_identity(home.path());
     let session = Session::create(home.path(), "a").unwrap();
     App::new(
         home.path().to_path_buf(),
@@ -76,12 +77,18 @@ async fn esc_cancel_with_empty_composer_retracts_the_user_event() {
         .into_iter()
         .find(|e| e.kind == EventKind::Retract)
         .unwrap();
-    assert_eq!(r.actor, ChannelActor::local_human());
+    // C2: signed by the human key, the same actor as the turn it withdraws.
+    let target = events(&app).into_iter().find(|e| e.seq == seq).unwrap();
+    assert!(matches!(&r.actor, ChannelActor::Human { key: Some(_), .. }));
+    assert_eq!(
+        r.actor, target.actor,
+        "a retract's actor must equal its target's"
+    );
     assert_eq!(
         r.idempotency_key.as_deref(),
         Some(format!("retract:{seq}").as_str())
     );
-    assert!(r.sig.is_some(), "signed by the channel writer");
+    assert!(r.sig.is_some(), "signed by the human key");
     assert!(app.pending_channel.is_none());
     assert!(app.inflight_params.is_none());
 }

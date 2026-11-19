@@ -110,6 +110,7 @@ impl GateB {
             identity: &self.identity,
             kv: self.key_version,
             anchor_home: None,
+            owner: None,
         }
     }
 

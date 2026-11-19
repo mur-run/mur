@@ -213,9 +213,11 @@ fn restrict_dirs(_: &Path, _: &Path) -> Result<()> {
 /// The human's signing key, loaded from `keys/.human/`.
 ///
 /// Only a process outside the sandbox can build one: every agent is denied
-/// `keys/`. Implements B3's `HumanSign` once that trait lands.
+/// `keys/`. Implements [`mur_channel::service::HumanSign`].
 pub struct HumanSigner {
     identity: AgentIdentity,
+    /// The rotation chain's head version at load time.
+    key_version: u32,
 }
 
 impl HumanSigner {
@@ -240,7 +242,13 @@ impl HumanSigner {
             ),
             other => anyhow::anyhow!("load the human private key: {other}"),
         })?;
-        Ok(Self { identity })
+        let key_version = rotation_chain(mur_home)
+            .context("human rotation chain")?
+            .head_key_version();
+        Ok(Self {
+            identity,
+            key_version,
+        })
     }
 
     pub fn pubkey(&self) -> [u8; 32] {
@@ -252,6 +260,20 @@ impl HumanSigner {
     }
 
     pub fn sign_bytes(&self, msg: &[u8]) -> [u8; 64] {
+        self.identity.sign_bytes(msg)
+    }
+}
+
+impl mur_channel::service::HumanSign for HumanSigner {
+    fn pubkey(&self) -> [u8; 32] {
+        self.identity.verifying_key_bytes()
+    }
+
+    fn key_version(&self) -> u32 {
+        self.key_version
+    }
+
+    fn sign(&self, msg: &[u8]) -> [u8; 64] {
         self.identity.sign_bytes(msg)
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use mur_common::channel::{CHANNEL_SCHEMA_VERSION, Goal};
 use tempfile::TempDir;
 
 #[test]
@@ -6,10 +7,14 @@ fn creation_paths_write_explicit_purpose() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
 
-    let chat = svc.create_for_agent("mur").unwrap();
+    let chat = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     assert_eq!(chat.purpose, Some(ChannelPurpose::Conversation));
 
-    let wf = svc.create_for_workflow("release").unwrap();
+    let wf = svc
+        .create_for_workflow("release", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     assert_eq!(wf.purpose, Some(ChannelPurpose::WorkflowRun));
     assert_eq!(
         wf.title, "workflow: release",
@@ -17,7 +22,12 @@ fn creation_paths_write_explicit_purpose() {
     );
 
     let fleet = svc
-        .create_for_fleet("projectx", "lead", &["a".into()])
+        .create_for_fleet(
+            "projectx",
+            "lead",
+            &["a".into()],
+            crate::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     assert_eq!(fleet.purpose, Some(ChannelPurpose::FleetRun));
     assert_eq!(fleet.id, "fleet-projectx");
@@ -119,7 +129,9 @@ fn new_conversation_starts_with_an_empty_title() {
     // useless "chat with {agent}" placeholder that made every row identical.
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     assert_eq!(ch.title, "");
 }
 
@@ -127,7 +139,9 @@ fn new_conversation_starts_with_an_empty_title() {
 fn purpose_survives_a_manifest_round_trip() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     let reloaded = svc.store().load_manifest(&ch.id).unwrap();
     assert_eq!(reloaded.purpose, Some(ChannelPurpose::Conversation));
 }
@@ -136,7 +150,9 @@ fn purpose_survives_a_manifest_round_trip() {
 fn append_delegation_writes_typed_event() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("delegating-wf").unwrap();
+    let ch = svc
+        .create_for_workflow("delegating-wf", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     let ev = svc
         .append_delegation(&ch.id, "qa", "child-task-1", Some("idem-1".into()), None)
         .unwrap();
@@ -152,7 +168,9 @@ fn append_delegation_writes_typed_event() {
 fn append_structured_and_transition() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("deploy").unwrap();
+    let ch = svc
+        .create_for_workflow("deploy", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     assert_eq!(ch.state, ChannelState::Working);
     assert!(
         ch.participants.is_empty(),
@@ -182,7 +200,9 @@ fn append_structured_and_transition() {
 fn delegation_and_transition_payloads_carry_run_id_when_given() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("run-stamped").unwrap();
+    let ch = svc
+        .create_for_workflow("run-stamped", crate::service::ChannelOwner::Legacy)
+        .unwrap();
 
     let del = svc
         .append_delegation(&ch.id, "qa", "child-task-9", None, Some("run-9"))
@@ -210,7 +230,9 @@ fn delegation_and_transition_payloads_carry_run_id_when_given() {
 fn payloads_without_run_id_omit_the_field() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("run-unstamped").unwrap();
+    let ch = svc
+        .create_for_workflow("run-unstamped", crate::service::ChannelOwner::Legacy)
+        .unwrap();
 
     let del = svc
         .append_delegation(&ch.id, "qa", "child-task-9", None, None)
@@ -240,7 +262,9 @@ fn transition_signed_stores_verifiable_sig() {
     let tmp = TempDir::new().unwrap();
     let id = mur_common::identity::AgentIdentity::generate();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("signed-transition").unwrap();
+    let ch = svc
+        .create_for_workflow("signed-transition", crate::service::ChannelOwner::Legacy)
+        .unwrap();
 
     let ev = svc
         .transition_signed(
@@ -277,7 +301,9 @@ fn append_signed_stores_verifiable_sig() {
     let tmp = TempDir::new().unwrap();
     let id = mur_common::identity::AgentIdentity::generate();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("signed").unwrap();
+    let ch = svc
+        .create_for_workflow("signed", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     let ev = svc
         .append_signed(
             &ch.id,
@@ -328,7 +354,9 @@ fn append_survives_readonly_index() {
     let mur_home = tmp.path();
     let identity = mur_common::identity::AgentIdentity::generate();
     let svc = ChannelService::open(mur_home).unwrap();
-    let ch = svc.create_for_workflow("signed").unwrap();
+    let ch = svc
+        .create_for_workflow("signed", crate::service::ChannelOwner::Legacy)
+        .unwrap();
 
     // Warm-up append so events.jsonl / events.lock already exist before we
     // freeze the channel directory (their re-opens then need no directory
@@ -389,7 +417,9 @@ fn append_survives_readonly_index() {
 fn create_append_resume_roundtrip() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("qa").unwrap();
+    let ch = svc
+        .create_for_agent("qa", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     svc.append_message(
         &ch.id,
         ChannelActor::local_human(),
@@ -423,7 +453,12 @@ fn add_remove_participant_and_delete_channel() {
     let home = tmp.path();
     let svc = ChannelService::open(home).unwrap();
     let ch = svc
-        .create_for_fleet("dev", "mur", &["pm".to_string()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["pm".to_string()],
+            crate::service::ChannelOwner::Legacy,
+        )
         .unwrap();
 
     // add a Delegate member (idempotent)
@@ -458,7 +493,12 @@ fn create_for_fleet_sets_roles_and_id() {
     let tmp = tempfile::tempdir().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
     let ch = svc
-        .create_for_fleet("dev", "mur", &["pm".to_string(), "qa".to_string()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["pm".to_string(), "qa".to_string()],
+            crate::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     assert_eq!(ch.id, "fleet-dev");
     // owner human + router + 2 delegates = 4 participants
@@ -484,7 +524,9 @@ fn create_for_fleet_sets_roles_and_id() {
 fn first_human_message_titles_the_conversation() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
 
     svc.append_message(
         &ch.id,
@@ -505,7 +547,9 @@ fn first_human_message_titles_the_conversation() {
 fn the_title_is_set_once_and_never_rewritten() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     for text in ["first question", "second question"] {
         svc.append_message(
             &ch.id,
@@ -526,7 +570,9 @@ fn the_title_is_set_once_and_never_rewritten() {
 fn long_titles_are_truncated_at_the_shared_limit() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     let long = "x".repeat(200);
     svc.append_message(
         &ch.id,
@@ -546,7 +592,9 @@ fn cjk_titles_truncate_by_character_not_byte() {
     // Byte-slicing multibyte text panics; this is the regression guard.
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     let long = "說".repeat(200);
     svc.append_message(
         &ch.id,
@@ -572,7 +620,12 @@ fn a_fleet_channel_is_never_auto_titled() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
     let fleet = svc
-        .create_for_fleet("projectx", "lead", &["a".into()])
+        .create_for_fleet(
+            "projectx",
+            "lead",
+            &["a".into()],
+            crate::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     svc.append_message(
         &fleet.id,
@@ -592,7 +645,9 @@ fn a_fleet_channel_is_never_auto_titled() {
 fn appends_advance_preview_count_and_seq() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     svc.append_message(
         &ch.id,
         ChannelActor::local_human(),
@@ -629,7 +684,9 @@ fn internal_events_advance_seq_but_do_not_count_as_messages() {
     // Tool chatter must never inflate a chat's unread badge.
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     svc.append_message(
         &ch.id,
         ChannelActor::local_human(),
@@ -666,7 +723,9 @@ fn internal_events_advance_seq_but_do_not_count_as_messages() {
 fn unread_counts_only_messages_the_human_did_not_write() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
 
     svc.append_message(
         &ch.id,
@@ -708,7 +767,9 @@ fn unread_counts_only_messages_the_human_did_not_write() {
 fn mark_read_clears_unread() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     svc.append_message(
         &ch.id,
         ChannelActor::local_human(),
@@ -742,7 +803,9 @@ fn the_watermark_never_moves_backwards() {
     // unread state that a focused window already cleared.
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     for _ in 0..3 {
         svc.append_message(
             &ch.id,
@@ -768,7 +831,9 @@ fn the_watermark_never_moves_backwards() {
 fn a_new_agent_message_after_reading_is_unread_again() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     let first = svc
         .append_message(
             &ch.id,
@@ -803,7 +868,8 @@ fn replaying_an_old_idempotency_key_never_moves_updated_at_backwards() {
     // activity since. Refreshing the manifest from it must not rewind recency.
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    svc.create_for_fleet("dev", "mur", &[]).unwrap();
+    svc.create_for_fleet("dev", "mur", &[], crate::service::ChannelOwner::Legacy)
+        .unwrap();
     let id = "fleet-dev";
     let append = |key: &str| {
         svc.append_presigned(
@@ -855,7 +921,9 @@ fn an_agent_message_at_seq_zero_is_unread_until_marked_read() {
     // watermark default would compute `0 > 0 == false` and hide it.
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     let first = svc
         .append_message(
             &ch.id,

@@ -126,6 +126,27 @@ pub fn repair(mur_home: &Path, channel_id: &str, confirm: Confirm<'_>) -> Result
         Some(_) => None,
         None => Some(router_key(mur_home)?),
     };
+    // C5: an owned channel's fresh chain carries the owner, so the human key
+    // is loaded up front too. A resumed repair asks its marker: the log that
+    // had the record is already aside.
+    let owned = report.owner.live_record_seq.is_some()
+        || mur_channel::repair_marker::is_owned(mur_home, channel_id);
+    if owned && let Some(g) = &gate_b {
+        bail!(
+            "refusing to repair: channel {channel_id} is agent `{}`'s HITL decision channel \
+             but carries a human owner record. Gate B's fresh chain is agent-sealed and cannot \
+             carry an owner; nothing was touched. See `mur channel repair \
+             {channel_id}`",
+            g.agent
+        );
+    }
+    let human = owned
+        .then(|| crate::channel_owner::HumanOwner::load(mur_home))
+        .transpose()
+        .context(
+            "refusing to repair: this channel has a human owner, and its fresh chain must \
+             carry it over, which needs the human key; nothing was touched",
+        )?;
     if !confirmed(confirm)? {
         return Ok(Outcome::Declined);
     }
@@ -159,7 +180,7 @@ pub fn repair(mur_home: &Path, channel_id: &str, confirm: Confirm<'_>) -> Result
         Ok(serde_json::json!({
             "type": REPAIR_EVENT_TYPE,
             "text": format!("channel log repaired: {reason}"),
-            "repaired_by": ChannelActor::local_human(),
+            "repaired_by": crate::human_writer::human_actor(mur_home),
             "repaired_at": now,
             "reason": reason,
             "report": rendered,
@@ -197,6 +218,7 @@ pub fn repair(mur_home: &Path, channel_id: &str, confirm: Confirm<'_>) -> Result
         ),
         (None, Some(w)) => {
             let key_home = mur_home.join("agents").join(ROUTER_AGENT);
+            let protected = crate::channel_owner::identity_protected(mur_home);
             ChannelService::open(mur_home)?.restart_chain(
                 channel_id,
                 now,
@@ -205,6 +227,7 @@ pub fn repair(mur_home: &Path, channel_id: &str, confirm: Confirm<'_>) -> Result
                     identity: &w.id,
                     kv: w.kv,
                     anchor_home: Some(&key_home),
+                    owner: human.as_ref().map(|h| h.restart_owner(protected)),
                 },
                 still_damaged,
                 prepare,
@@ -299,3 +322,7 @@ fn gate_b_owner(mur_home: &Path, channel_id: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "channel_repair_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "channel_repair_owner_tests.rs"]
+mod owner_tests;

@@ -121,7 +121,9 @@ async fn a_stopped_run_is_canceled_in_the_channel_and_stopped_in_the_record() {
     let tmp = tempfile::TempDir::new().unwrap();
     crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("t").unwrap();
+    let ch = svc
+        .create_for_workflow("t", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let (f, stop) = flag();
     f.store(true, Ordering::SeqCst);
     let proc = Procedure {
@@ -179,7 +181,9 @@ async fn a_stop_mid_turn_cancels_the_member_task_and_returns_promptly() {
     let tmp = tempfile::TempDir::new().unwrap();
     let home = tmp.path();
     let svc = ChannelService::open(home).unwrap();
-    let ch = svc.create_for_workflow("t").unwrap();
+    let ch = svc
+        .create_for_workflow("t", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
 
     // Fake member: holds `channel/delegate` open (a long member turn) until
     // `tasks/cancel` arrives, then answers the delegate with a canceled task —
@@ -309,7 +313,9 @@ async fn a_failed_delegate_dial_still_reports_what_the_member_spent() {
     let tmp = tempfile::TempDir::new().unwrap();
     let home = tmp.path();
     let svc = ChannelService::open(home).unwrap();
-    let ch = svc.create_for_workflow("t").unwrap();
+    let ch = svc
+        .create_for_workflow("t", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
 
     // Fake member: the delegate reply is lost (an RPC error stands in for a
     // timeout or a cut socket), but the turn ran and `tasks/get` says so.

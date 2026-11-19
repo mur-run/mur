@@ -16,7 +16,9 @@ fn req(tier: RiskTier) -> ActionRequest {
 async fn read_tier_runs_unattended() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let d = gate(
         tmp.path(),
         &ch.id,
@@ -43,7 +45,9 @@ async fn gate_transitions_are_stamped_with_the_run_that_paused() {
     let tmp = TempDir::new().unwrap();
     crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     drop(svc);
 
     // `yes` auto-approves, so the gate runs to completion and writes BOTH
@@ -98,7 +102,9 @@ async fn high_tier_approved_via_prewritten_response() {
     let tmp = TempDir::new().unwrap();
     crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let r = req(RiskTier::Destructive);
     let hash = action_hash(
         &r.tool_name,
@@ -139,7 +145,9 @@ async fn high_tier_approved_via_prewritten_response() {
 async fn drift_denies_fail_closed() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let r = req(RiskTier::Spend);
     let resp = HitlResponse {
         hitl_id: "h-x".into(),
@@ -209,7 +217,9 @@ async fn router_signed_response_releases() {
     let tmp = TempDir::new().unwrap();
     let id = plant_router_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     // The request it answers: an answer binds only to a request the router
     // signed (#1764), so a bare response no longer releases anything.
     svc.append_signed(
@@ -270,7 +280,9 @@ async fn forged_signature_does_not_release() {
     let _router = plant_router_identity(tmp.path());
     let attacker = AgentIdentity::generate();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let resp = resp_with_hash("h-forge", "EXPECTED");
     // Signed by the attacker, not the router → verify_one rejects it.
     svc.append_signed(
@@ -309,7 +321,9 @@ async fn unsigned_response_does_not_release() {
     let tmp = TempDir::new().unwrap();
     let _router = plant_router_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let resp = resp_with_hash("h-unsigned", "EXPECTED");
     svc.append(
         &ch.id,
@@ -344,7 +358,7 @@ async fn an_agent_cannot_approve_its_own_gated_action() {
     let qa = crate::channel_writer::plant_identity_for(tmp.path(), "qa");
     let ch = ChannelService::open(tmp.path())
         .unwrap()
-        .create_for_workflow("g")
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
         .unwrap();
     let policy = GatePolicy {
         yes: false,
@@ -462,7 +476,9 @@ async fn defer_parks_immediately_instead_of_waiting() {
     let tmp = TempDir::new().unwrap();
     crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     drop(svc);
 
     let t0 = Instant::now();
@@ -503,7 +519,9 @@ async fn approval_from_an_earlier_run_releases_a_later_one() {
     let tmp = TempDir::new().unwrap();
     let _router = plant_router_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     drop(svc);
 
     let first = gate(
@@ -555,7 +573,9 @@ async fn denial_persists_and_is_not_re_asked() {
     let tmp = TempDir::new().unwrap();
     let _router = plant_router_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     drop(svc);
 
     gate(
@@ -604,7 +624,9 @@ async fn repeated_defers_reuse_the_parked_request() {
     let tmp = TempDir::new().unwrap();
     let _router = plant_router_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     drop(svc);
 
     for run in 0..3 {
@@ -641,7 +663,9 @@ async fn an_approval_does_not_carry_to_a_different_action() {
     // and this test would pass without testing anything.
     let _router = plant_router_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     drop(svc);
 
     gate(
@@ -694,7 +718,9 @@ async fn deny_mode_outranks_an_existing_approval() {
     // and this test would pass without testing anything.
     let _router = plant_router_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     drop(svc);
 
     // Park a request and approve it under the permissive policy.
@@ -746,7 +772,9 @@ async fn deny_mode_outranks_an_existing_approval() {
 async fn deny_mode_outranks_yes() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     drop(svc);
 
     let d = gate(
@@ -788,7 +816,9 @@ async fn granted_write_tier_runs_and_is_audited() {
     let tmp = TempDir::new().unwrap();
     crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     drop(svc);
 
     let mut r = req(RiskTier::Write);
@@ -835,7 +865,9 @@ async fn a_human_denial_outranks_a_tier_grant() {
     let tmp = TempDir::new().unwrap();
     let _router = plant_router_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     drop(svc);
 
     // Ask under a no-grant policy, and get denied.
@@ -873,7 +905,9 @@ async fn an_ungrantable_tier_is_ignored_even_if_listed() {
     let tmp = TempDir::new().unwrap();
     crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("g").unwrap();
+    let ch = svc
+        .create_for_workflow("g", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     drop(svc);
 
     let policy = GatePolicy {

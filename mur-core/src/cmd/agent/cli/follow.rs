@@ -364,7 +364,9 @@ mod tests {
     fn follows_from_head_without_replaying_or_repeating() {
         let home = tempdir().unwrap();
         let svc = ChannelService::open(home.path()).unwrap();
-        let ch = svc.create_for_agent("rustsmith").unwrap();
+        let ch = svc
+            .create_for_agent("rustsmith", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         append(
             home.path(),
             &ch.id,
@@ -403,7 +405,9 @@ mod tests {
     fn raw_follow_hides_retract_lines() {
         let home = tempdir().unwrap();
         let svc = ChannelService::open(home.path()).unwrap();
-        let ch = svc.create_for_agent("rustsmith").unwrap();
+        let ch = svc
+            .create_for_agent("rustsmith", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         let now = Instant::now();
         let mut f = Follow::start(home.path(), &ch.id, now).unwrap();
 

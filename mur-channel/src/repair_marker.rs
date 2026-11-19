@@ -46,6 +46,11 @@ struct Body {
     /// File names (not paths) inside the channel directory, oldest first.
     #[serde(default)]
     quarantined: Vec<String>,
+    /// The channel had a live owner record when this repair began, so the
+    /// fresh chain must carry the owner (C5). Decided before the log moves
+    /// and kept here: a resumed repair finds no log left to look at.
+    #[serde(default)]
+    owned: bool,
 }
 
 /// `<mur_home>/channel-heads/<id>.repair`.
@@ -63,6 +68,13 @@ pub fn marker_path(mur_home: &Path, channel_id: &str) -> Result<PathBuf> {
 /// A marker already down belongs to an interrupted repair being resumed; it
 /// is kept as is, so the logs that run moved aside stay referenced.
 pub fn mark(mur_home: &Path, channel_id: &str, started_at: &str) -> Result<()> {
+    mark_owned(mur_home, channel_id, started_at, false)
+}
+
+/// [`mark`], also recording whether the channel is owned (C5). A marker
+/// already down keeps its own answer: it was decided against the log this
+/// repair moved aside, which a resumed run can no longer read.
+pub fn mark_owned(mur_home: &Path, channel_id: &str, started_at: &str, owned: bool) -> Result<()> {
     if is_pending(mur_home, channel_id) {
         return Ok(());
     }
@@ -72,8 +84,15 @@ pub fn mark(mur_home: &Path, channel_id: &str, started_at: &str) -> Result<()> {
         &Body {
             started_at: started_at.to_owned(),
             quarantined: Vec::new(),
+            owned,
         },
     )
+}
+
+/// Whether the pending repair must carry the owner over. `false` without a
+/// marker.
+pub fn is_owned(mur_home: &Path, channel_id: &str) -> bool {
+    is_pending(mur_home, channel_id) && read(mur_home, channel_id).owned
 }
 
 /// Record, durably, that `file_name` is about to be (or was) moved aside.

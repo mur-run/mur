@@ -24,7 +24,10 @@ impl Fixture {
         std::fs::create_dir_all(&agent_home).unwrap();
         AgentIdentity::generate().save(&agent_home).unwrap();
         let svc = ChannelService::open(home.path()).unwrap();
-        let id = svc.create_for_workflow("verify").unwrap().id;
+        let id = svc
+            .create_for_workflow("verify", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         let f = Self { home, svc, id };
         for i in 0..n {
             f.append(i);
@@ -41,7 +44,10 @@ impl Fixture {
     fn unanchored(n: usize) -> Self {
         let home = TempDir::new().unwrap();
         let svc = ChannelService::open(home.path()).unwrap();
-        let id = svc.create_for_workflow("verify").unwrap().id;
+        let id = svc
+            .create_for_workflow("verify", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         for i in 0..n {
             svc.append(
                 &id,
@@ -191,7 +197,11 @@ fn an_edited_head_fails_its_signature() {
 #[test]
 fn a_head_copied_from_another_channel_is_the_wrong_channel() {
     let a = Fixture::anchored(2);
-    let b_id = a.svc.create_for_workflow("other").unwrap().id;
+    let b_id = a
+        .svc
+        .create_for_workflow("other", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap()
+        .id;
     for i in 0..2 {
         append_as_writer(
             &a.svc,

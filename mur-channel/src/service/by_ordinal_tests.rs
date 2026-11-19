@@ -6,7 +6,9 @@ use tempfile::TempDir;
 fn conversation_by_ordinal_checks_purpose_and_membership() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     let n = svc.index().ordinal_of(&ch.id).unwrap().unwrap();
     assert_eq!(
         svc.conversation_by_ordinal(n, "mur").unwrap().map(|c| c.id),
@@ -24,7 +26,9 @@ fn conversation_by_ordinal_checks_purpose_and_membership() {
         "no participant added"
     );
     // A fleet channel is never a conversation, even for its members.
-    let fleet = svc.create_for_fleet("x", "mur", &[]).unwrap();
+    let fleet = svc
+        .create_for_fleet("x", "mur", &[], crate::service::ChannelOwner::Legacy)
+        .unwrap();
     let fleet_n = svc.index().ordinal_of(&fleet.id).unwrap().unwrap();
     assert!(
         svc.conversation_by_ordinal(fleet_n, "mur")
@@ -42,7 +46,9 @@ fn conversation_by_ordinal_resolves_after_the_index_row_is_removed() {
     // ordinal stay; `#N` must keep pointing at the same conversation.
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_agent("mur").unwrap();
+    let ch = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     let n = svc.index().ordinal_of(&ch.id).unwrap().unwrap();
     svc.index().remove(&ch.id).unwrap();
     assert_eq!(

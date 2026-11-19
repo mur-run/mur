@@ -61,6 +61,7 @@ fn repair(tmp: &TempDir, id: &str) -> Result<()> {
                 identity: &identity,
                 kv: 1,
                 anchor_home: None,
+                owner: None,
             },
             || Ok(true),
             |_| Ok(serde_json::json!({ "type": crate::repair_record::REPAIR_EVENT_TYPE })),

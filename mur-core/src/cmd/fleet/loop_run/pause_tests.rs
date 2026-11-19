@@ -52,7 +52,12 @@ async fn a_pause_during_an_iteration_checkpoints_and_leaves_the_job_running() {
     crate::cmd::fleet::store::save_fleet(&home, &fleet).unwrap();
     mur_channel::ChannelService::open(&home)
         .unwrap()
-        .create_for_fleet("dev", "mur", &["member".into()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["member".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
 
     let job = crate::cmd::fleet::jobs::enqueue_job(&home, "dev", "the job", "cli").unwrap();
@@ -240,7 +245,12 @@ async fn a_paused_run_resumes_under_its_run_id_and_finishes() {
     crate::cmd::fleet::store::save_fleet(&home, &fleet).unwrap();
     mur_channel::ChannelService::open(&home)
         .unwrap()
-        .create_for_fleet("dev", "mur", &["member".into()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["member".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     let job = crate::cmd::fleet::jobs::enqueue_job(&home, "dev", "the job", "cli").unwrap();
     let other = crate::cmd::fleet::jobs::enqueue_job(&home, "dev", "later job", "cli").unwrap();
@@ -426,7 +436,12 @@ async fn a_pause_between_iterations_names_the_next_one_and_resumes_there() {
     crate::cmd::fleet::store::save_fleet(&home, &fleet).unwrap();
     mur_channel::ChannelService::open(&home)
         .unwrap()
-        .create_for_fleet("dev", "mur", &["member".into()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["member".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
 
     // One fake socket answers as both the member and the router (`mur`).

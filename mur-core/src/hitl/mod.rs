@@ -1,5 +1,7 @@
 //! Risk-tiered, hash-pinned HITL gate for the channel executor (v3c).
 pub mod authority;
+#[cfg(test)]
+pub(crate) mod authority_fixtures;
 pub mod binding;
 pub mod gate;
 /// The pin lives in `mur-common` since P3 so the agent runtime can share the

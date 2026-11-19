@@ -9,6 +9,7 @@ use mur_common::channel::{ChannelActor, EventKind};
 /// tempdir), with a signing identity for agent `a` planted.
 fn app_in(home: &tempfile::TempDir) -> App {
     crate::channel_writer::plant_identity_for(home.path(), "a");
+    crate::channel_writer::plant_human_identity(home.path());
     let session = Session::create(home.path(), "a").unwrap();
     App::new(
         home.path().to_path_buf(),

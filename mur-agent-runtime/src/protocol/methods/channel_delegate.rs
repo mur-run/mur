@@ -595,7 +595,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let id = AgentIdentity::generate();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("qa").unwrap();
+        let ch = svc
+            .create_for_agent("qa", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         append_self_reply(tmp.path(), &ch.id, "qa", &id, 0, "the answer", "t-1", None).unwrap();
         let evs = svc.load_events(&ch.id).unwrap();
         let reply = evs

@@ -136,15 +136,27 @@ pub(super) struct SignedPause {
 ///
 /// `verify_event` is not enough: it checks an event against its OWN actor's
 /// key, so a member signing a forged pause as itself would pass and its
-/// bounds would replace the originals. `is_router_signed` requires a
-/// non-agent actor and `ROUTER_AGENT`'s key — the identity `record_pause`
+/// bounds would replace the originals. `is_durable_router_record` requires a
+/// non-agent actor and a `ROUTER_AGENT` key — the identity `record_pause`
 /// writes with for every fleet, including one with a custom `router:`.
+///
+/// D-10 (A1): a paused run can outlive a router rekey, so the note verifies
+/// under the head key or any key a routine rekey retired; a compromise rekey
+/// revokes it and resume falls back to the checkpoint with its warning. The
+/// note's `key_version` label is never consulted.
 fn signed_pause(
     mur_home: &Path,
     channel_id: &str,
     events: &[ChannelEvent],
     run_id: &str,
 ) -> Option<SignedPause> {
+    let ctx = match crate::hitl::authority::AuthorityCtx::load(mur_home, channel_id) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            tracing::warn!(channel_id, error = %e, "cannot read the channel to verify run_paused");
+            return None;
+        }
+    };
     events
         .iter()
         .rev()
@@ -158,9 +170,7 @@ fn signed_pause(
                     iteration,
                     bounds,
                     ..
-                } if id == run_id
-                    && crate::hitl::authority::is_router_signed(mur_home, channel_id, e) =>
-                {
+                } if id == run_id && crate::hitl::authority::is_durable_router_record(&ctx, e) => {
                     Some(SignedPause {
                         spent_usd,
                         active_elapsed_ms,
@@ -592,3 +602,7 @@ mod tests;
 #[cfg(test)]
 #[path = "resume_scope_tests.rs"]
 mod scope_tests;
+
+#[cfg(test)]
+#[path = "resume_rekey_tests.rs"]
+mod rekey_tests;

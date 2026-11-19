@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use mur_common::channel::{ChannelEvent, EventKind};
 use mur_common::config::Config;
 use mur_common::hitl::HitlResponse;
-use mur_core::hitl::authority::is_human_authority;
+use mur_core::hitl::authority::{AuthorityCtx, is_human_authority};
 use mur_core::hitl::binding::Requests;
 use mur_git_broker::approval::ApprovalProof;
 use mur_git_broker::constants::ALLOWED_REF_PREFIX;
@@ -168,7 +168,7 @@ pub struct Folded {
 /// Fold channel events into approvals for the rows that are pending now.
 ///
 /// A row is released only by a `HitlResponse` that is the human's
-/// (`is_human_authority`: router-signed, `Human` actor), answers the
+/// (`is_human_authority`: the router as the human, or the owner's head key), answers the
 /// router-signed `HitlRequest` named by its `hitl_id` with the same
 /// `action_hash` in time (the gate's `Requests::bind`), and whose
 /// `hitl_id` and hash are exactly the row's. The newest signed decision
@@ -201,7 +201,16 @@ pub fn fold_decisions(
     pending: &[(RequestKey, String)],
 ) -> Vec<(Folded, bool)> {
     let now = chrono::Utc::now();
-    let requests = Requests::collect(mur_home, channel_id, events);
+    // One authority context per fold: owner trust and keys read once, not
+    // per event (C3). An unreadable channel approves nothing.
+    let ctx = match AuthorityCtx::load(mur_home, channel_id) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            tracing::warn!(channel_id, error = %e, "git push approvals: channel unreadable");
+            return Vec::new();
+        }
+    };
+    let requests = Requests::collect(&ctx, events);
     let mut out = Vec::new();
     for (key, hash) in pending {
         // (signed answer time, allow, event id) of the newest human decision.
@@ -213,7 +222,7 @@ pub fn fold_decisions(
             if r.hitl_id != key.request_id || r.action_hash != *hash {
                 continue;
             }
-            if !is_human_authority(mur_home, channel_id, e) {
+            if !is_human_authority(&ctx, e) {
                 continue;
             }
             let Ok(at) = requests.bind(&r, now) else {

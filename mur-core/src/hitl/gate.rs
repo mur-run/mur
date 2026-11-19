@@ -377,14 +377,17 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
     // A log that fails its integrity check settles nothing and offers no
     // pending request: an allow, a deny, or a parked id read from it may be
     // what is left after a deletion (#1935). Ask afresh.
-    let log_integrity::Checked { events, damage } =
-        log_integrity::load_checked(mur_home, channel_id)?;
+    let log_integrity::Checked {
+        events,
+        damage,
+        ctx,
+    } = log_integrity::load_checked(mur_home, channel_id)?;
     if let Some(why) = damage {
         return Ok(Prior::Damaged(why));
     }
 
     let now = chrono::Utc::now();
-    let requests = binding::Requests::collect(mur_home, channel_id, &events);
+    let requests = binding::Requests::collect(&ctx, &events);
     let mut responded: std::collections::HashSet<String> = std::collections::HashSet::new();
     // (signed answer time, decision). Newest by signed `issued_at`, never by
     // line order: lines are not signed, so a reordered file must not let an
@@ -399,8 +402,10 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
                 let Ok(r) = serde_json::from_value::<HitlResponse>(e.payload.clone()) else {
                     continue;
                 };
-                // Only the router writes answers — see `authority`.
-                if !super::authority::is_router_signed(mur_home, channel_id, e) {
+                // The router's answers and a trusted human's own (N4): a
+                // human-key approval left while the gate was deferred must
+                // reach the authority check below — see `authority`.
+                if !super::authority::is_authentic_answer(&ctx, e) {
                     continue;
                 }
                 // An answer counts only for the request it names, in time
@@ -419,7 +424,7 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
                 responded.insert(r.hitl_id.clone());
                 // Only the human's answer decides. Audit records are skipped,
                 // not counted as "no": a human's earlier answer still stands.
-                if !super::authority::is_human_authority(mur_home, channel_id, e) {
+                if !super::authority::is_human_authority(&ctx, e) {
                     continue;
                 }
                 if r.action_hash != hash || check_fresh(answered_at, now).is_err() {
@@ -454,7 +459,7 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
                 // not re-issued, signed `issued_at`, not expired. Anything
                 // else, the gate writes a fresh request instead.
                 if q.action_hash != hash
-                    || !super::authority::is_router_signed(mur_home, channel_id, e)
+                    || !super::authority::is_router_signed(&ctx, e)
                     || !requests.is_answerable(&q.hitl_id, now)
                 {
                     continue;
@@ -516,6 +521,7 @@ async fn wait_for_response(
             let log_integrity::Checked {
                 events: evs,
                 damage,
+                ctx,
             } = log_integrity::load_checked(mur_home, channel_id)?;
             // Fail closed at once (#1935): on a damaged log a missing answer
             // may be a deleted one, and a deleted request can never be
@@ -529,19 +535,19 @@ async fn wait_for_response(
                     hitl_id: None,
                 });
             }
-            let requests = binding::Requests::collect(mur_home, channel_id, &evs);
+            let requests = binding::Requests::collect(&ctx, &evs);
             let found = evs.into_iter().rev().find(|e| {
                 if e.kind != EventKind::HitlResponse
                     || e.payload.get("hitl_id").and_then(|v| v.as_str()) != Some(hitl_id)
                 {
                     return false;
                 }
-                if !super::authority::is_human_authority(mur_home, channel_id, e) {
+                if !super::authority::is_human_authority(&ctx, e) {
                     tracing::warn!(
                         channel_id,
                         hitl_id,
                         actor = ?e.actor,
-                        "HitlResponse is not signed by MUR's router as the human — ignoring"
+                        "HitlResponse is not the human's decision (router as the human, or the owner's head key) — ignoring"
                     );
                     return false;
                 }
@@ -625,6 +631,8 @@ mod log_integrity;
 mod human_authority_tests;
 #[cfg(test)]
 mod integrity_tests;
+#[cfg(test)]
+mod owner_authority_tests;
 #[cfg(test)]
 mod response_binding_tests;
 #[cfg(test)]

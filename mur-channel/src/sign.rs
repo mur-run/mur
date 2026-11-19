@@ -319,9 +319,21 @@ fn resolve_writer_pubkey_from_disk(
 ///
 /// With an identity pin (#2318) the chain is the one the pin vouches for.
 pub fn resolve_writer_pubkey_strict(agent_home: &Path, key_version: u32) -> Option<[u8; 32]> {
-    use mur_common::identity::{ChainOptions, decode_pubkey, verify_chain};
-    let chain = match mur_common::identity_pin::resolve(agent_home) {
-        Some(trusted) => trusted?.chain?,
+    let chain = verified_writer_chain(agent_home)?;
+    let att = chain.iter().find(|a| a.new_key_version == key_version)?;
+    mur_common::identity::decode_pubkey(&att.new_pubkey).ok()
+}
+
+/// The agent's rotation chain, only if it verifies (no emergency entries
+/// without approval): the pinned chain when the agent has a pin (#2318),
+/// otherwise `<agent_home>/rotations.jsonl`. Bootstrap first. `None` for a
+/// missing, unreadable, or non-verifying chain — never a partial one.
+pub fn verified_writer_chain(
+    agent_home: &Path,
+) -> Option<Vec<mur_common::identity::RotationAttestation>> {
+    use mur_common::identity::{ChainOptions, verify_chain};
+    match mur_common::identity_pin::resolve(agent_home) {
+        Some(trusted) => trusted?.chain,
         None => {
             let text = std::fs::read_to_string(agent_home.join("rotations.jsonl")).ok()?;
             let chain = mur_common::identity_pin::parse_chain(&text)?;
@@ -332,11 +344,9 @@ pub fn resolve_writer_pubkey_strict(agent_home: &Path, key_version: u32) -> Opti
                 },
             )
             .ok()?;
-            chain
+            Some(chain)
         }
-    };
-    let att = chain.iter().find(|a| a.new_key_version == key_version)?;
-    decode_pubkey(&att.new_pubkey).ok()
+    }
 }
 
 /// Verify-on-fold primitive: filter a log to the events that pass verification

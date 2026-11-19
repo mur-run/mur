@@ -38,7 +38,10 @@ fn world() -> World {
     let router = plant(home.path(), ROUTER);
     let agent = plant(home.path(), "bob");
     let svc = ChannelService::open(home.path()).unwrap();
-    let ch = svc.create_for_agent("bob").unwrap().id;
+    let ch = svc
+        .create_for_agent("bob", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap()
+        .id;
     World {
         home,
         svc,
@@ -354,7 +357,10 @@ fn verifier_adapter_folds_its_own_channel() {
 #[test]
 fn adapter_calls_the_shared_predicate_and_never_copies_it() {
     let src = include_str!("../src/git_push_broker.rs");
-    assert!(src.contains("is_human_authority(mur_home, channel_id, e)"));
+    // C3: the predicate takes the scan's one `AuthorityCtx`, never a
+    // per-event reload.
+    assert!(src.contains("is_human_authority(&ctx, e)"));
+    assert!(src.contains("AuthorityCtx::load(mur_home, channel_id)"));
     assert!(
         src.contains("Requests::collect"),
         "binds through the gate's own rule"

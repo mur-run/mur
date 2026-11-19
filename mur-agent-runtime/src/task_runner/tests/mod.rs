@@ -232,6 +232,7 @@ mod headless_approval;
 mod intent_gate;
 mod limits;
 mod live_reload;
+mod originator_demotion;
 mod pre_tool_use_gate;
 mod startup_waiver;
 mod system_prompt;

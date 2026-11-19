@@ -73,7 +73,10 @@ impl Fixture {
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(agent.join("profile.yaml"), profile_yaml(member, write)).unwrap();
         let svc = ChannelService::open(home).unwrap();
-        let channel_id = svc.create_for_workflow("grant-test").unwrap().id;
+        let channel_id = svc
+            .create_for_workflow("grant-test", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         Self {
             tmp,
             channel_id,

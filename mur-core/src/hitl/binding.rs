@@ -19,7 +19,6 @@
 //! gave it — pair every `bind` with `authority::is_human_authority`.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use mur_common::channel::{ChannelEvent, EventKind};
@@ -54,12 +53,10 @@ pub enum Unbound {
 }
 
 impl Requests {
-    pub fn collect(mur_home: &Path, channel_id: &str, events: &[ChannelEvent]) -> Self {
+    pub fn collect(ctx: &super::authority::AuthorityCtx, events: &[ChannelEvent]) -> Self {
         let mut map: HashMap<String, Issued> = HashMap::new();
         for e in events {
-            if e.kind != EventKind::HitlRequest
-                || !super::authority::is_router_signed(mur_home, channel_id, e)
-            {
+            if e.kind != EventKind::HitlRequest || !super::authority::is_router_signed(ctx, e) {
                 continue;
             }
             let Ok(q) = serde_json::from_value::<HitlRequest>(e.payload.clone()) else {

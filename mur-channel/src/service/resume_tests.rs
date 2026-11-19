@@ -10,10 +10,17 @@ fn latest_for_agent_skips_a_newer_fleet_channel() {
     // after its last chat must not hijack "continue my conversation".
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let chat = svc.create_for_agent("mur").unwrap();
+    let chat = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(2));
     let fleet = svc
-        .create_for_fleet("projectx", "mur", &["mur".into()])
+        .create_for_fleet(
+            "projectx",
+            "mur",
+            &["mur".into()],
+            crate::service::ChannelOwner::Legacy,
+        )
         .unwrap();
     svc.append_message(
         &fleet.id,
@@ -34,9 +41,13 @@ fn latest_for_agent_skips_a_newer_fleet_channel() {
 fn latest_for_agent_skips_a_workflow_channel() {
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let chat = svc.create_for_agent("mur").unwrap();
+    let chat = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(2));
-    let wf = svc.create_for_workflow("nightly").unwrap();
+    let wf = svc
+        .create_for_workflow("nightly", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     svc.add_participant(
         &wf.id,
         "mur",
@@ -55,8 +66,13 @@ fn latest_for_agent_is_none_when_only_runs_exist() {
     // user's chat into a fleet run.
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    svc.create_for_fleet("projectx", "mur", &["mur".into()])
-        .unwrap();
+    svc.create_for_fleet(
+        "projectx",
+        "mur",
+        &["mur".into()],
+        crate::service::ChannelOwner::Legacy,
+    )
+    .unwrap();
     assert!(svc.latest_for_agent("mur").unwrap().is_none());
 }
 
@@ -66,7 +82,9 @@ fn latest_for_agent_still_returns_an_empty_conversation() {
     // again on the next call, so empty conversations stay eligible.
     let tmp = TempDir::new().unwrap();
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let chat = svc.create_for_agent("mur").unwrap();
+    let chat = svc
+        .create_for_agent("mur", crate::service::ChannelOwner::Legacy)
+        .unwrap();
     assert_eq!(
         svc.latest_for_agent("mur").unwrap().as_deref(),
         Some(chat.id.as_str())

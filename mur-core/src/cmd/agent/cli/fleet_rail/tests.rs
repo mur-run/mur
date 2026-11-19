@@ -427,8 +427,13 @@ fn seed_home() -> tempfile::TempDir {
     // not the router's.
     crate::channel_writer::plant_identity_for(tmp.path(), "qa");
     let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-    svc.create_for_fleet("dev", "mur", &["qa".to_string()])
-        .unwrap();
+    svc.create_for_fleet(
+        "dev",
+        "mur",
+        &["qa".to_string()],
+        mur_channel::service::ChannelOwner::Legacy,
+    )
+    .unwrap();
     tmp
 }
 

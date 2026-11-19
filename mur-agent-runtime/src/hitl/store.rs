@@ -288,7 +288,8 @@ impl ChannelDecisionStore {
             damaged_channel = %channel_id,
             "chat-gate decision log failed its integrity check; starting a new one"
         );
-        let fresh = svc.create_for_agent(&self.agent)?;
+        let fresh =
+            svc.create_for_agent(&self.agent, mur_channel::service::ChannelOwner::Legacy)?;
         let marker = self
             .mur_home
             .join("agents")
@@ -364,7 +365,7 @@ fn decision_channel(svc: &ChannelService, mur_home: &Path, agent: &str) -> Resul
             return Ok(id.to_string());
         }
     }
-    let ch = svc.create_for_agent(agent)?;
+    let ch = svc.create_for_agent(agent, mur_channel::service::ChannelOwner::Legacy)?;
     if let Some(dir) = marker.parent() {
         std::fs::create_dir_all(dir)?;
     }

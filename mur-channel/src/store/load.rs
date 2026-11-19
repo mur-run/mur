@@ -125,6 +125,12 @@ pub(super) fn check_absence_is_not_corruption(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Event-log reads on this thread, so a test can pin "one load".
+    pub(crate) static EVENT_FILE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl ChannelStore {
     /// Read a channel's events. A line that fails to parse is skipped so one
     /// damaged record cannot make a whole channel unreadable — but it is
@@ -166,6 +172,8 @@ impl ChannelStore {
     /// what "absent" means without duplicating the Windows `ENOTDIR`
     /// handling (see [`check_absence_is_not_corruption`]).
     pub(super) fn read_events_file(path: &Path, channel_dir: &Path) -> Result<Option<String>> {
+        #[cfg(test)]
+        EVENT_FILE_READS.with(|n| n.set(n.get() + 1));
         match fs::read_to_string(path) {
             Ok(c) => Ok(Some(c)),
             // `NotFound` normally means genuine absence: no such channel, or a
@@ -209,6 +217,20 @@ impl ChannelStore {
         writer_pubkey: &[u8; 32],
         require_sig: bool,
     ) -> Result<(Vec<ChannelEvent>, DamageReport)> {
+        self.load_raw_with_damage(id, writer_pubkey, require_sig)
+            .map(|(_, events, report)| (events, report))
+    }
+
+    /// [`load_events_with_damage`](Self::load_events_with_damage) plus the
+    /// raw log text it parsed, for a caller that needs facts the parsed
+    /// events lose (the owner record's `human_cut.line_hash` hashes the raw
+    /// line) and must take them from the SAME read, not a second one.
+    pub fn load_raw_with_damage(
+        &self,
+        id: &str,
+        writer_pubkey: &[u8; 32],
+        require_sig: bool,
+    ) -> Result<(String, Vec<ChannelEvent>, DamageReport)> {
         let dir = self.channel_dir(id)?;
         let path = dir.join(super::EVENTS_FILE);
         let content = match Self::read_events_file(&path, &dir)? {
@@ -220,7 +242,7 @@ impl ChannelStore {
                 && !crate::anchor::is_dirty(&self.mur_home, id)
                 && !crate::repair_marker::is_pending(&self.mur_home, id) =>
             {
-                return Ok((Vec::new(), DamageReport::default()));
+                return Ok((String::new(), Vec::new(), DamageReport::default()));
             }
             None => String::new(),
         };
@@ -258,7 +280,19 @@ impl ChannelStore {
             super::chain::anchor_mismatch(&self.mur_home, id, &content, writer_pubkey)?;
         report.anchor_dirty = crate::anchor::is_dirty(&self.mur_home, id);
         report.repair_pending = crate::repair_marker::is_pending(&self.mur_home, id);
-        Ok((events, report))
+        Ok((content, events, report))
+    }
+
+    /// The signed-head verdict for `content` under `pubkey`, without reading
+    /// the log again: a reader that must try the head under more than one
+    /// key (router, then a legacy sealer) checks the same bytes each time.
+    pub fn anchor_mismatch_for(
+        &self,
+        id: &str,
+        content: &str,
+        pubkey: &[u8; 32],
+    ) -> Result<Option<AnchorMismatch>> {
+        super::chain::anchor_mismatch(&self.mur_home, id, content, pubkey)
     }
 
     /// [`load_events_with_damage`](Self::load_events_with_damage) under the

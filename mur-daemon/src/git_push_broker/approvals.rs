@@ -24,7 +24,7 @@ use mur_common::config::Config;
 use mur_common::git_push::private_dir;
 use mur_common::hitl::{HitlRequest, RiskTier};
 use mur_core::channel_writer::{ROUTER_AGENT, append_as_writer};
-use mur_core::hitl::authority::is_router_signed;
+use mur_core::hitl::authority::{AuthorityCtx, is_router_signed};
 use mur_git_broker::action::ActionDocument;
 use mur_git_broker::pending::{RequestKey, Row, State};
 
@@ -140,7 +140,9 @@ fn open_requests(mur_home: &Path, rows: &[Row]) -> anyhow::Result<Vec<ChannelEve
             serde_json::to_value(request_for(row)?)?,
             Some(format!("{IDEMPOTENCY_PREFIX}{id}")),
         )?;
-        if !is_router_signed(mur_home, BROKER_CHANNEL_ID, &ev) {
+        if !AuthorityCtx::load(mur_home, BROKER_CHANNEL_ID)
+            .is_ok_and(|ctx| is_router_signed(&ctx, &ev))
+        {
             // Written, but no human answer can bind to it: the gate only counts router-signed
             // requests. Say so now rather than leave a question nobody can settle.
             tracing::warn!(

@@ -18,7 +18,21 @@ fn home_with_agents(names: &[&str]) -> TempDir {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("profile.yaml"), format!("name: {n}\n")).unwrap();
     }
+    plant_human(tmp.path());
     tmp
+}
+
+/// What a human write needs since C2: the router key that seals the head
+/// and an enrolled human identity.
+fn plant_human(home: &std::path::Path) {
+    let router = home.join("agents").join("mur");
+    if !router.join("identity.pub").exists() {
+        std::fs::create_dir_all(&router).unwrap();
+        mur_common::identity::AgentIdentity::generate()
+            .save(&router)
+            .unwrap();
+    }
+    mur_core::identity_enroll::ensure_enrolled(home).unwrap();
 }
 
 /// `prepare_send` refuses an agent with no `running.lock` before it writes;
@@ -43,7 +57,9 @@ fn send_at_agent_ordinal_continues_channel() {
     let home = tmp.path();
     mark_running(home, "a");
     let svc = ChannelService::open(home).unwrap();
-    let ch = svc.create_for_agent("a").unwrap();
+    let ch = svc
+        .create_for_agent("a", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let n = ordinal(&svc, &ch.id);
 
     let p = prepare_send(home, &format!("@a#{n}"), "continue please").unwrap();
@@ -77,7 +93,9 @@ fn send_at_agent_without_ordinal_continues_latest_conversation() {
     let home = tmp.path();
     mark_running(home, "a");
     let svc = ChannelService::open(home).unwrap();
-    let ch = svc.create_for_agent("a").unwrap();
+    let ch = svc
+        .create_for_agent("a", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
 
     let p = prepare_send(home, "@A", "hi").unwrap();
 
@@ -117,7 +135,9 @@ fn send_at_agent_non_member_adds_no_participant() {
     let home = tmp.path();
     mark_running(home, "a");
     let svc = ChannelService::open(home).unwrap();
-    let ch = svc.create_for_agent("b").unwrap();
+    let ch = svc
+        .create_for_agent("b", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let n = ordinal(&svc, &ch.id);
     let events_before = svc.load_events(&ch.id).unwrap().len();
 
@@ -145,7 +165,9 @@ fn send_at_workflow_titled_channel_is_not_conversation() {
     let home = tmp.path();
     mark_running(home, "a");
     let svc = ChannelService::open(home).unwrap();
-    let ch = svc.create_for_workflow("nightly").unwrap();
+    let ch = svc
+        .create_for_workflow("nightly", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let n = ordinal(&svc, &ch.id);
 
     let e = prepare_send(home, &format!("@a#{n}"), "hi").unwrap_err();

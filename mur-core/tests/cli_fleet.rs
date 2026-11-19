@@ -138,6 +138,7 @@ fn fleet_job_and_roster_round_trip() {
     use mur_core::cmd::fleet::{create, delete, jobs, roster, store};
 
     let tmp = tempfile::tempdir().unwrap();
+
     let home = tmp.path();
 
     // create (members need not exist on disk; names canonicalize themselves)

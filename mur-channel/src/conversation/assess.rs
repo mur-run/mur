@@ -1,12 +1,13 @@
 //! The locked read of a channel conversation (§3.4, §7 order under the
 //! lock): `REPAIRING` → regression → damage table → watermark → fold. One
-//! log read (plus one re-read of the same snapshot for a rekeyed head), all
-//! inside the caller's shared lock.
+//! log read — owner trust and every head check reuse its bytes — all inside
+//! the caller's shared lock.
 use anyhow::Result;
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 
 use super::{Assessment, CacheState, ConversationDamage as D, Keys, Verdict};
-use crate::store::{AnchorMismatchKind, ChannelStore, DamageReport};
+use crate::store::{ChannelStore, DamageReport};
+use crate::verify::human::{HumanTrust, OwnerDamage};
 
 /// Run inside `store.with_shared_lock(channel_id, |s| assess_locked(s, ...))`.
 pub fn assess_locked(
@@ -18,16 +19,25 @@ pub fn assess_locked(
     turn_input: &str,
 ) -> Result<Verdict> {
     // require_sig = false: every pre-identity channel is unsigned; the HITL
-    // gate makes the same choice (log_integrity.rs).
-    let (events, mut report) =
-        store.load_events_with_damage(channel_id, &keys.writer_pubkey, false)?;
-    // A head sealed before a rekey: re-check it under the key its
-    // key_version names, as the HITL gate does.
-    if let Some(older) = rekeyed_head_key(keys, &report) {
-        let (_, again) = store.load_events_with_damage(channel_id, &older, false)?;
-        report.anchor_mismatch = again.anchor_mismatch;
-    }
-    // Lines signed before the same rekey: vouched for by the same history.
+    // gate makes the same choice (log_integrity.rs). ONE read of the log:
+    // the owner state and every head check below use these same bytes.
+    let (content, events, mut report) =
+        store.load_raw_with_damage(channel_id, &keys.writer_pubkey, false)?;
+    let head = crate::head_io::read_head(&crate::anchor::heads_dir(keys.mur_home), channel_id)?;
+    let trust = HumanTrust::from_log(keys.mur_home, channel_id, &content, head.as_ref());
+    let owned = trust.live_record().is_some();
+    // H1: router first; the writer key (and its rotated keys) only while the
+    // channel has no live owner record.
+    report.anchor_mismatch = super::head::verdict(
+        store,
+        channel_id,
+        keys,
+        &content,
+        head.as_ref(),
+        report.anchor_mismatch.take(),
+        owned,
+    )?;
+    // Lines signed before a rekey: vouched for by the same history.
     report
         .unverified
         .retain(|ev| !verifies_under_rotated_key(channel_id, keys, ev));
@@ -35,6 +45,17 @@ pub fn assess_locked(
         !rotated_key(keys, ev.key_version)
             .is_some_and(|pk| crate::sign::verify_newer_kind(channel_id, ev, &pk, true))
     });
+    // C4: on an owned channel a `Human` line is judged by owner trust, never
+    // by the writer key; an untrusted claim is projected marked, not damage.
+    // A record that did not qualify is ignored, never damage (D-7).
+    let ignored = trust.ignored_records();
+    report.unverified.retain(|ev| {
+        !(owned && matches!(ev.actor, ChannelActor::Human { .. }))
+            && !(ev.kind == EventKind::OwnerKeyEnrolled && ignored.contains(&ev.seq))
+    });
+    report
+        .unverified_newer_kind
+        .retain(|ev| !(owned && matches!(ev.actor, ChannelActor::Human { .. })));
 
     // §7: REPAIRING before anything else under the lock.
     if report.repair_pending {
@@ -65,6 +86,11 @@ pub fn assess_locked(
     if let Some(d) = damage_table(report.clone()) {
         return Ok(Verdict::Damaged(d));
     }
+    // Owner state before any event is classified: a record no head covers
+    // proves nothing about the lines it would vouch for (D-3).
+    if let Some(d) = owner_damage(&trust) {
+        return Ok(Verdict::Damaged(d));
+    }
 
     if let Some(d) = watermark(channel_id, keys, &events, channel_seq, turn_input) {
         return Ok(Verdict::Damaged(d));
@@ -81,8 +107,20 @@ pub fn assess_locked(
     }
 
     let retracts = super::retract::scan(&events, keys.agent, channel_seq);
+    let mut projected = super::project::project(&events, keys.agent, channel_seq);
+    mark_untrusted(channel_id, keys, &trust, &events, &mut projected);
+    // `watermark` above proved the event exists.
+    let chain = mur_common::identity::human::rotation_chain(keys.mur_home).ok();
+    let turn_originator = events
+        .iter()
+        .find(|e| e.seq == channel_seq)
+        .map(|ev| {
+            super::originator::classify(keys.mur_home, channel_id, &trust, chain.as_ref(), ev)
+        })
+        .unwrap_or(super::originator::Originator::System);
     Ok(Verdict::Ok(Assessment {
-        projected: super::project::project(&events, keys.agent, channel_seq),
+        turn_originator,
+        projected,
         retracted: retracts.targets.into_iter().collect(),
         ignored_retracts: retracts.ignored,
         log_last_seq: log_last_seq.unwrap_or(0),
@@ -108,6 +146,39 @@ fn damage_table(report: DamageReport) -> Option<D> {
         return Some(D::Anchor);
     }
     None
+}
+
+/// `owner_unanchored` (D-3) is its own reason; a cut that does not hold
+/// means a line inside the anchored prefix changed, which is what `anchor`
+/// already names.
+fn owner_damage(trust: &HumanTrust) -> Option<D> {
+    let damage = trust.damage();
+    if damage.contains(&OwnerDamage::Unanchored) {
+        Some(D::OwnerUnanchored)
+    } else if !damage.is_empty() {
+        Some(D::Anchor)
+    } else {
+        None
+    }
+}
+
+/// Flag every projected `Human` turn the owner trust does not vouch for.
+/// `require_sig = true`: an unsigned human line is history, not a claim
+/// anyone stands behind.
+fn mark_untrusted(
+    channel_id: &str,
+    keys: &Keys<'_>,
+    trust: &HumanTrust,
+    events: &[ChannelEvent],
+    projected: &mut [super::ProjectedMessage],
+) {
+    for p in projected.iter_mut() {
+        let Some(ev) = events.iter().find(|e| e.seq == p.seq) else {
+            continue;
+        };
+        p.untrusted = matches!(ev.actor, ChannelActor::Human { .. })
+            && !trust.is_trusted_human(keys.mur_home, channel_id, ev, true);
+    }
 }
 
 /// Murmur's own event at `channel_seq` must exist and be this turn's input.
@@ -174,7 +245,7 @@ fn verified_repair_record(channel_id: &str, keys: &Keys<'_>, ev: &ChannelEvent) 
 /// This agent's key for `key_version` per its VERIFIED rotation history,
 /// when that is not the key already tried. Strict: no fallback to the
 /// current key, so a version the history does not vouch for resolves nothing.
-fn rotated_key(keys: &Keys<'_>, key_version: Option<u32>) -> Option<[u8; 32]> {
+pub(super) fn rotated_key(keys: &Keys<'_>, key_version: Option<u32>) -> Option<[u8; 32]> {
     let dir = crate::verify::actor_key_dir(
         keys.mur_home,
         &ChannelActor::Agent {
@@ -183,15 +254,6 @@ fn rotated_key(keys: &Keys<'_>, key_version: Option<u32>) -> Option<[u8; 32]> {
     )?;
     let key = crate::sign::resolve_writer_pubkey_strict(&dir, key_version?)?;
     (key != keys.writer_pubkey).then_some(key)
-}
-
-/// Same rule as the HITL gate's `rekeyed_head_key`, for this agent's key.
-fn rekeyed_head_key(keys: &Keys<'_>, r: &DamageReport) -> Option<[u8; 32]> {
-    let m = r.anchor_mismatch.as_ref()?;
-    if m.kind != AnchorMismatchKind::BadSignature {
-        return None;
-    }
-    rotated_key(keys, m.head.key_version)
 }
 
 /// A line that failed under the current writer key but verifies under the

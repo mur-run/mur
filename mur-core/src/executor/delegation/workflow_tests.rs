@@ -38,7 +38,7 @@ fn setup(member: &str, grant: bool) -> (tempfile::TempDir, String, PathBuf) {
     std::fs::write(agent.join("profile.yaml"), profile_yaml(member, &write)).unwrap();
     let channel_id = ChannelService::open(home)
         .unwrap()
-        .create_for_workflow("wf-test")
+        .create_for_workflow("wf-test", mur_channel::service::ChannelOwner::Legacy)
         .unwrap()
         .id;
     (tmp, channel_id, project)

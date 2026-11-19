@@ -339,6 +339,9 @@ fn browser_add_then_mode_arg_reaches_a_live_agent_as_a_turn() {
     // key (`supervisor/identity.rs` falls back to an ephemeral one otherwise)
     // instead of this test refusing the turn on the CI step that sets it.
     crate::channel_writer::plant_identity_for(home, "browsertest");
+    // The user line is a human write (C2): it enrolls the owner, which needs
+    // the human key and the router key that seals the head.
+    crate::channel_writer::plant_human_identity(home);
 
     let _guard = boot_runtime(home, "browsertest", &runtime_str, &sock_str);
 

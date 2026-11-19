@@ -83,7 +83,7 @@ pub fn summary_of(ch: &Channel, events: &[ChannelEvent], ordinal: i64) -> Channe
         .collect();
     let preview = events
         .iter()
-        .find(|e| matches!(e.actor, ChannelActor::Human { .. }))
+        .find(|e| e.is_human_message())
         .and_then(|e| e.payload.get("text").and_then(|v| v.as_str()))
         .unwrap_or("")
         .chars()
@@ -159,7 +159,9 @@ mod tests {
     fn summary_of_extracts_agents_preview_and_state() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("qa").unwrap();
+        let ch = svc
+            .create_for_agent("qa", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         svc.append_message(
             &ch.id,
             ChannelActor::local_human(),
@@ -181,12 +183,46 @@ mod tests {
         assert!(!s.state.is_empty() && !s.state.contains('"'));
     }
 
+    /// C7: the owner record is a `Human` line with no text; the preview takes
+    /// the first human `Message`, not the first human line.
+    #[test]
+    fn preview_skips_owner_record() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc
+            .create_for_agent("qa", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
+        let manifest = svc.store().load_manifest(&ch.id).unwrap();
+        let line = |seq, kind, payload| ChannelEvent {
+            seq,
+            ts: chrono::Utc::now(),
+            actor: ChannelActor::local_human(),
+            kind,
+            payload,
+            idempotency_key: None,
+            sig: None,
+            key_version: None,
+            prev_hash: None,
+        };
+        let events = vec![
+            line(0, EventKind::OwnerKeyEnrolled, serde_json::json!({})),
+            line(
+                1,
+                EventKind::Message,
+                serde_json::json!({ "text": "find the bug" }),
+            ),
+        ];
+        assert_eq!(summary_of(&manifest, &events, 1).preview, "find the bug");
+    }
+
     #[test]
     fn list_channels_folds_manifests_and_skips_empty() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
         // One real channel with a turn…
-        let a = svc.create_for_agent("qa").unwrap();
+        let a = svc
+            .create_for_agent("qa", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         svc.append_message(
             &a.id,
             ChannelActor::local_human(),
@@ -196,7 +232,9 @@ mod tests {
         )
         .unwrap();
         // …and one empty stub that must be filtered out of the rail.
-        let _empty = svc.create_for_agent("ghost").unwrap();
+        let _empty = svc
+            .create_for_agent("ghost", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
 
         let rows = list_channels(tmp.path()).unwrap();
         assert_eq!(rows.len(), 1, "empty channels are hidden from the rail");

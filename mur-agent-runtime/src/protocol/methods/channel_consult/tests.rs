@@ -31,7 +31,10 @@ impl World {
             std::fs::write(home.join("profile.yaml"), FIXTURE).unwrap();
         }
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let channel = svc.create_for_agent("pm").unwrap().id;
+        let channel = svc
+            .create_for_agent("pm", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         Self {
             tmp,
             pm,

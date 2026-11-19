@@ -8,11 +8,110 @@
 //! requests they answer, are held to a stricter rule that does not depend on
 //! that variable: only the router speaks for the human.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
+use mur_channel::verify::human::HumanTrust;
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use mur_common::hitl::HitlRequest;
+use mur_common::identity::{RotationReason, decode_pubkey};
+
+/// Everything the predicates below need about one channel, loaded once per
+/// scan (C3): the channel's owner trust, the human chain's head key, and the
+/// router keys a durable record may verify under. No predicate reloads
+/// anything per event.
+pub struct AuthorityCtx {
+    mur_home: PathBuf,
+    channel_id: String,
+    trust: HumanTrust,
+    /// The local human chain's current key. The only human key that carries
+    /// authority (D-9); `None` when no human is enrolled or the chain does
+    /// not verify.
+    human_head: Option<[u8; 32]>,
+    /// The router's head key plus every earlier key the verified rotation
+    /// chain retired routinely (D-10, A1). Head-only when the chain is
+    /// missing or does not verify.
+    durable_router_keys: Vec<[u8; 32]>,
+}
+
+impl AuthorityCtx {
+    /// Read `channel_id`'s raw log and signed head under the shared lock and
+    /// build the context. For a caller that already holds the raw bytes of
+    /// its own read, [`AuthorityCtx::from_log`] reuses them instead.
+    pub fn load(mur_home: &Path, channel_id: &str) -> Result<Self> {
+        let store = mur_channel::ChannelStore::new(mur_home);
+        let (raw, head) = store.with_shared_lock(channel_id, |s| {
+            let path = s.events_path(channel_id)?;
+            let raw = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => return Err(e.into()),
+            };
+            let head = mur_channel::head_io::read_head(
+                &mur_channel::anchor::heads_dir(mur_home),
+                channel_id,
+            )?;
+            Ok((raw, head))
+        })?;
+        Ok(Self::from_log(mur_home, channel_id, &raw, head.as_ref()))
+    }
+
+    /// Build from bytes the caller already read (one load for the gate).
+    pub fn from_log(
+        mur_home: &Path,
+        channel_id: &str,
+        raw: &str,
+        head: Option<&mur_channel::head::Head>,
+    ) -> Self {
+        Self {
+            mur_home: mur_home.to_path_buf(),
+            channel_id: channel_id.to_string(),
+            trust: HumanTrust::from_log(mur_home, channel_id, raw, head),
+            human_head: mur_common::identity::human::rotation_chain(mur_home)
+                .ok()
+                .map(|c| c.head_pubkey()),
+            durable_router_keys: durable_router_keys(mur_home),
+        }
+    }
+}
+
+/// D-10 (A1): the router's head key, then every earlier key in the verified
+/// rotation chain whose retirement was routine (`scheduled`,
+/// `owner-change`). A key retired by `suspect-compromise` or `emergency` is
+/// never a candidate. A chain that does not verify, or whose head is not the
+/// key the router resolves to, yields the head key only (D-9), never "all
+/// keys".
+fn durable_router_keys(mur_home: &Path) -> Vec<[u8; 32]> {
+    let Some(head) = mur_channel::verify::router_pubkey(mur_home, None) else {
+        return Vec::new();
+    };
+    let mut keys = vec![head];
+    let router_home = mur_home
+        .join("agents")
+        .join(mur_channel::verify::ROUTER_AGENT);
+    let Some(chain) = mur_channel::sign::verified_writer_chain(&router_home) else {
+        return keys;
+    };
+    if chain
+        .last()
+        .and_then(|a| decode_pubkey(&a.new_pubkey).ok())
+        .is_none_or(|k| k != head)
+    {
+        return keys;
+    }
+    for pair in chain.windows(2) {
+        let (key, retired_by) = (&pair[0], &pair[1]);
+        if matches!(
+            retired_by.reason,
+            RotationReason::Scheduled | RotationReason::OwnerChange
+        ) && let Ok(k) = decode_pubkey(&key.new_pubkey)
+            && !keys.contains(&k)
+        {
+            keys.push(k);
+        }
+    }
+    keys
+}
 
 /// True if the router wrote `ev`: a Human or System actor (an agent never
 /// speaks for the human), a signature, and that signature verifying against
@@ -26,23 +125,85 @@ use mur_common::hitl::HitlRequest;
 /// sandboxed `mur channel approve` writes — it cannot read the router key — so
 /// tolerating unsigned approvals is tolerating agent-written ones. The cost: a
 /// home with no router identity cannot approve anything.
-pub fn is_router_signed(mur_home: &Path, channel_id: &str, ev: &ChannelEvent) -> bool {
+pub fn is_router_signed(ctx: &AuthorityCtx, ev: &ChannelEvent) -> bool {
     if matches!(ev.actor, ChannelActor::Agent { .. }) || ev.sig.is_none() {
         return false;
     }
-    mur_channel::verify::router_pubkey(mur_home, ev.key_version)
-        .is_some_and(|pk| mur_channel::sign::verify_one(channel_id, ev, &pk, true))
+    mur_channel::verify::router_pubkey(&ctx.mur_home, ev.key_version)
+        .is_some_and(|pk| mur_channel::sign::verify_one(&ctx.channel_id, ev, &pk, true))
 }
 
-/// True if `ev` is the human's decision: router-signed AND spoken as `Human`
-/// (`mur channel approve`, the phone).
+/// A router-written record with no TTL (D-10): today only the `run_paused`
+/// note resume reads. Verifies under the router's head key or any key the
+/// verified chain retired routinely. Every candidate is tried;
+/// `ev.key_version` is never consulted, so a label cannot pick the key.
+pub fn is_durable_router_record(ctx: &AuthorityCtx, ev: &ChannelEvent) -> bool {
+    if matches!(ev.actor, ChannelActor::Agent { .. }) || ev.sig.is_none() {
+        return false;
+    }
+    ctx.durable_router_keys
+        .iter()
+        .any(|pk| mur_channel::sign::verify_one(&ctx.channel_id, ev, pk, true))
+}
+
+/// True if `ev` is an answer someone with standing wrote: the router, or a
+/// human the channel's owner trust accepts (signature required). Decides
+/// which responses the gate looks at; whether one *decides* anything is
+/// [`is_human_authority`]. Before C3 the scan kept only router-signed
+/// answers, so a deferred human-key approval never reached that check (N4).
+pub fn is_authentic_answer(ctx: &AuthorityCtx, ev: &ChannelEvent) -> bool {
+    is_router_signed(ctx, ev)
+        || ctx
+            .trust
+            .is_trusted_human(&ctx.mur_home, &ctx.channel_id, ev, true)
+}
+
+/// True if `ev` is the human's decision (D-4, D-9). Never on a channel
+/// whose owner state is damaged.
+///
+/// - Keyed `Human`: the channel has a live owner record, the actor names the
+///   human chain's **head** key, and the signature verifies under that key
+///   and nothing else — never a key picked by `ev.key_version`. A pre-rekey
+///   approval still projects as a trusted human event (provenance) but
+///   grants nothing here.
+/// - Keyless `Human`: router-signed (`mur channel approve`, the phone) and,
+///   on an owned channel, at or before `human_cut` — past the cut a keyless
+///   human line is exactly what the router writes for anyone who asks it.
 ///
 /// A `System` answer is the gate recording what it did on its own — `--yes`
 /// or a pre-approved tier. That record is audit, not consent: counting it
 /// would let one `--yes` run approve every later run of the same action for
 /// the whole approval TTL, with or without `--yes` (#1764).
-pub fn is_human_authority(mur_home: &Path, channel_id: &str, ev: &ChannelEvent) -> bool {
-    matches!(ev.actor, ChannelActor::Human { .. }) && is_router_signed(mur_home, channel_id, ev)
+pub fn is_human_authority(ctx: &AuthorityCtx, ev: &ChannelEvent) -> bool {
+    let ChannelActor::Human { key, .. } = &ev.actor else {
+        return false;
+    };
+    // Owner damage (an unanchored record, a cut past the head or off its
+    // line) means the owner state itself is in question: no human decides.
+    if !ctx.trust.damage().is_empty() {
+        return false;
+    }
+    let live = ctx.trust.live_record();
+    match key {
+        Some(k) => {
+            let Some(head) = ctx.human_head else {
+                return false;
+            };
+            live.is_some()
+                && ev.sig.is_some()
+                && decode_pubkey(k).is_ok_and(|named| named == head)
+                && mur_channel::sign::verify_one(&ctx.channel_id, ev, &head, true)
+        }
+        None => {
+            is_router_signed(ctx, ev)
+                && live.is_none_or(|l| {
+                    l.payload
+                        .human_cut
+                        .as_ref()
+                        .is_some_and(|cut| ev.seq <= cut.seq)
+                })
+        }
+    }
 }
 
 /// The request `hitl_id` names, if the router asked it.
@@ -57,6 +218,7 @@ pub fn request_to_answer(
     events: &[ChannelEvent],
     hitl_id: &str,
 ) -> Result<HitlRequest> {
+    let ctx = AuthorityCtx::load(mur_home, channel_id)?;
     let mut unsigned_match = false;
     for e in events
         .iter()
@@ -69,7 +231,7 @@ pub fn request_to_answer(
         if r.hitl_id != hitl_id {
             continue;
         }
-        if is_router_signed(mur_home, channel_id, e) {
+        if is_router_signed(&ctx, e) {
             // Refuse what the gate would ignore, rather than write an answer
             // that silently settles nothing (#1764 option C): a request with
             // no signed `issued_at`, or one past its TTL, is not open.
@@ -100,253 +262,5 @@ pub fn request_to_answer(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use mur_channel::ChannelService;
-    use mur_common::identity::AgentIdentity;
-    use tempfile::TempDir;
-
-    fn response(hitl_id: &str) -> serde_json::Value {
-        serde_json::json!({
-            "hitl_id": hitl_id, "action_hash": "AH", "allow": true,
-            "reason": "", "surface": "cli"
-        })
-    }
-
-    fn request(hitl_id: &str, hash: &str) -> serde_json::Value {
-        serde_json::json!({
-            "hitl_id": hitl_id, "action_hash": hash, "tier": "destructive",
-            "tool_name": "bash", "tool_input": {}, "step_or_call_id": "s0",
-            "agent_id": "mur", "timeout_ms": 1000u64, "summary": "echo hi",
-            "issued_at": chrono::Utc::now()
-        })
-    }
-
-    /// The router writes as the human (`mur channel approve`, the phone) or as
-    /// the system (the gate's own `--yes` / tier-grant audit record). Both are
-    /// the router's; only the human's is a decision.
-    #[test]
-    fn only_the_routers_human_answer_is_the_humans_decision() {
-        let tmp = TempDir::new().unwrap();
-        let router = crate::channel_writer::plant_writer_identity(tmp.path());
-        let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_workflow("g").unwrap();
-        for (actor, human) in [
-            (ChannelActor::local_human(), true),
-            (ChannelActor::System, false),
-        ] {
-            let ev = svc
-                .append_signed(
-                    &ch.id,
-                    &router,
-                    0,
-                    actor.clone(),
-                    EventKind::HitlResponse,
-                    response("h1"),
-                    None,
-                )
-                .unwrap();
-            assert!(is_router_signed(tmp.path(), &ch.id, &ev), "{actor:?}");
-            assert_eq!(
-                is_human_authority(tmp.path(), &ch.id, &ev),
-                human,
-                "{actor:?}"
-            );
-        }
-    }
-
-    /// B2: `is_router_signed` asks only "did the router write this". A
-    /// `Human` actor that names a key must not move the check onto the human
-    /// chain: the router's signature still passes, a human-key signature does
-    /// not (that is C3's question, not this one's).
-    #[test]
-    fn is_router_signed_unchanged_for_human_actor() {
-        let tmp = TempDir::new().unwrap();
-        let router = crate::channel_writer::plant_writer_identity(tmp.path());
-        let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_workflow("g").unwrap();
-        let human = AgentIdentity::generate();
-        let actor = ChannelActor::local_human_with_key(human.pubkey_text());
-        let by_router = svc
-            .append_signed(
-                &ch.id,
-                &router,
-                0,
-                actor.clone(),
-                EventKind::HitlResponse,
-                response("h1"),
-                None,
-            )
-            .unwrap();
-        assert!(is_router_signed(tmp.path(), &ch.id, &by_router));
-        let by_human = svc
-            .append_signed(
-                &ch.id,
-                &human,
-                0,
-                actor,
-                EventKind::HitlResponse,
-                response("h2"),
-                None,
-            )
-            .unwrap();
-        assert!(!is_router_signed(tmp.path(), &ch.id, &by_human));
-    }
-
-    /// A human answer the router signed for one channel does not carry over
-    /// to another: the channel id is in the signed input, so copying the
-    /// event into a second channel's log is not a decision there (#1764).
-    #[test]
-    fn a_human_answer_signed_for_another_channel_is_not_authority() {
-        let tmp = TempDir::new().unwrap();
-        let router = crate::channel_writer::plant_writer_identity(tmp.path());
-        let svc = ChannelService::open(tmp.path()).unwrap();
-        let here = svc.create_for_workflow("here").unwrap();
-        let there = svc.create_for_workflow("there").unwrap();
-        let ev = svc
-            .append_signed(
-                &here.id,
-                &router,
-                0,
-                ChannelActor::local_human(),
-                EventKind::HitlResponse,
-                response("h1"),
-                None,
-            )
-            .unwrap();
-        assert!(
-            is_human_authority(tmp.path(), &here.id, &ev),
-            "precondition"
-        );
-        assert!(
-            !is_router_signed(tmp.path(), &there.id, &ev)
-                && !is_human_authority(tmp.path(), &there.id, &ev),
-            "a signature for {} must not verify in {}",
-            here.id,
-            there.id
-        );
-    }
-
-    /// The self-approval this module exists to stop. Each of these passes
-    /// `verify_event` with enforcement off (the default), and none of them
-    /// is the human's answer.
-    #[test]
-    fn an_agent_cannot_answer_for_the_human() {
-        let tmp = TempDir::new().unwrap();
-        let router = crate::channel_writer::plant_writer_identity(tmp.path());
-        let qa = crate::channel_writer::plant_identity_for(tmp.path(), "qa");
-        let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_workflow("g").unwrap();
-
-        // 1. Unsigned, claiming to be the human — what a sandboxed
-        //    `mur channel approve` writes, since it cannot read the router key.
-        let unsigned = svc
-            .append(
-                &ch.id,
-                ChannelActor::local_human(),
-                EventKind::HitlResponse,
-                response("h1"),
-                None,
-            )
-            .unwrap();
-        // 2. An agent answering as itself, correctly signed with its own key.
-        let own_key = svc
-            .append_signed(
-                &ch.id,
-                &qa,
-                0,
-                ChannelActor::Agent { id: "qa".into() },
-                EventKind::HitlResponse,
-                response("h1"),
-                None,
-            )
-            .unwrap();
-        // 3. The router's key, but speaking as an agent (the runtime's own
-        //    chat-gate memory is written this way) — an agent, not the human.
-        let router_as_agent = svc
-            .append_signed(
-                &ch.id,
-                &router,
-                0,
-                ChannelActor::Agent { id: "mur".into() },
-                EventKind::HitlResponse,
-                response("h1"),
-                None,
-            )
-            .unwrap();
-        // 4. Claiming the human, signed by a key that is not the router's.
-        let wrong_key = svc
-            .append_signed(
-                &ch.id,
-                &AgentIdentity::generate(),
-                0,
-                ChannelActor::local_human(),
-                EventKind::HitlResponse,
-                response("h1"),
-                None,
-            )
-            .unwrap();
-
-        assert!(
-            crate::channel_verify::verify_event(tmp.path(), &ch.id, &unsigned, false)
-                && crate::channel_verify::verify_event(tmp.path(), &ch.id, &own_key, false),
-            "precondition: per-actor verification alone accepts these"
-        );
-        for (what, ev) in [
-            ("unsigned human", &unsigned),
-            ("agent's own key", &own_key),
-            ("router key as agent", &router_as_agent),
-            ("wrong key as human", &wrong_key),
-        ] {
-            assert!(
-                !is_router_signed(tmp.path(), &ch.id, ev)
-                    && !is_human_authority(tmp.path(), &ch.id, ev),
-                "{what} must not carry the router's authority"
-            );
-        }
-    }
-
-    /// An agent-written request is not answered, and cannot shadow the real
-    /// one by reusing its id: the older router-signed request still wins.
-    #[test]
-    fn only_a_router_signed_request_is_answered() {
-        let tmp = TempDir::new().unwrap();
-        let router = crate::channel_writer::plant_writer_identity(tmp.path());
-        let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_workflow("g").unwrap();
-        svc.append(
-            &ch.id,
-            ChannelActor::System,
-            EventKind::HitlRequest,
-            request("forged", "HASH-OF-RM-RF"),
-            None,
-        )
-        .unwrap();
-        svc.append_signed(
-            &ch.id,
-            &router,
-            0,
-            ChannelActor::System,
-            EventKind::HitlRequest,
-            request("h1", "REAL"),
-            None,
-        )
-        .unwrap();
-        svc.append(
-            &ch.id,
-            ChannelActor::System,
-            EventKind::HitlRequest,
-            request("h1", "HASH-OF-RM-RF"),
-            None,
-        )
-        .unwrap();
-        let events = svc.load_events(&ch.id).unwrap();
-
-        let err = request_to_answer(tmp.path(), &ch.id, &events, "forged").unwrap_err();
-        assert!(err.to_string().contains("not signed"), "{err}");
-        let r = request_to_answer(tmp.path(), &ch.id, &events, "h1").unwrap();
-        assert_eq!(r.action_hash, "REAL", "the shadowing copy must be skipped");
-        let err = request_to_answer(tmp.path(), &ch.id, &events, "nope").unwrap_err();
-        assert!(err.to_string().contains("no pending"), "{err}");
-    }
-}
+#[path = "authority_tests.rs"]
+mod tests;

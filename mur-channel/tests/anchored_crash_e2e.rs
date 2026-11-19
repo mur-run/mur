@@ -198,7 +198,10 @@ fn sigkill_during_anchored_appends_leaves_no_damage() {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let svc = ChannelService::open(home).unwrap();
-        let ch = svc.create_for_workflow("crash").unwrap().id;
+        let ch = svc
+            .create_for_workflow("crash", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         let id = AgentIdentity::generate();
 
         let mut guard = ChildGuard(spawn_child(home, &ch, &id));
@@ -278,7 +281,10 @@ fn line_ahead_of_head_with_marker_is_not_damage_and_the_next_append_repairs_it()
     let tmp = TempDir::new().unwrap();
     let home = tmp.path();
     let svc = ChannelService::open(home).unwrap();
-    let ch = svc.create_for_workflow("crash").unwrap().id;
+    let ch = svc
+        .create_for_workflow("crash", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap()
+        .id;
     let id = AgentIdentity::generate();
     anchor_one(&svc, &ch, &id, 0);
 

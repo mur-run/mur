@@ -439,7 +439,9 @@ async fn resume_skips_a_step_already_completed() {
     let tmp = tempfile::TempDir::new().unwrap();
     crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("resume-wf").unwrap();
+    let ch = svc
+        .create_for_workflow("resume-wf", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
 
     let proc = Procedure {
         variables: vec![],
@@ -484,7 +486,9 @@ async fn high_risk_step_gates_and_runs_when_preapproved() {
     let tmp = tempfile::TempDir::new().unwrap();
     crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("gated-wf").unwrap();
+    let ch = svc
+        .create_for_workflow("gated-wf", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
     let mut s = step("s0", &[], Some("echo done"));
     s.risk = Some(RiskTier::Destructive);
     let proc = Procedure {
@@ -521,7 +525,9 @@ fn channel_run_emits_attributed_event_trail() {
     let tmp = tempfile::TempDir::new().unwrap();
     crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
-    let ch = svc.create_for_workflow("test-skill").unwrap();
+    let ch = svc
+        .create_for_workflow("test-skill", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
 
     let proc = Procedure {
         variables: vec![],
@@ -837,7 +843,9 @@ async fn corrupt_run_json_falls_back_via_the_executors_channel_sidecar() {
     let mur_home = tmp.path();
     crate::channel_writer::plant_writer_identity(mur_home);
     let svc = ChannelService::open(mur_home).unwrap();
-    let ch = svc.create_for_workflow("sidecar-wf").unwrap();
+    let ch = svc
+        .create_for_workflow("sidecar-wf", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
 
     let procedure = Procedure {
         variables: vec![],

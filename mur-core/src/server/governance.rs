@@ -232,7 +232,12 @@ mod tests {
         crate::cmd::commander::cmd_commander_pin(home, &id.public_key_multibase(), false).unwrap();
         mur_channel::ChannelService::open(home)
             .unwrap()
-            .create_for_fleet("dev", "mur", &[])
+            .create_for_fleet(
+                "dev",
+                "mur",
+                &[],
+                mur_channel::service::ChannelOwner::Legacy,
+            )
             .unwrap();
         (Arc::new(state), id)
     }
@@ -419,7 +424,12 @@ mod tests {
         let state = Arc::new(crate::server::tests::test_state_for_signals(&tmp));
         mur_channel::ChannelService::open(tmp.path())
             .unwrap()
-            .create_for_fleet("dev", "mur", &[])
+            .create_for_fleet(
+                "dev",
+                "mur",
+                &[],
+                mur_channel::service::ChannelOwner::Legacy,
+            )
             .unwrap();
         let id = AgentIdentity::generate(); // signed but no key pinned
         let (status, _) = post(state, directive_body(&id, "dev", "kill", None)).await;
@@ -575,7 +585,12 @@ mod tests {
         let (state, id) = setup(&tmp); // pins key + creates fleet-dev
         mur_channel::ChannelService::open(tmp.path())
             .unwrap()
-            .create_for_fleet("dev2", "mur", &[])
+            .create_for_fleet(
+                "dev2",
+                "mur",
+                &[],
+                mur_channel::service::ChannelOwner::Legacy,
+            )
             .unwrap();
 
         let mut body = directive_body(&id, "dev", "kill", None);

@@ -13,6 +13,7 @@ fn pm(seq: u64, role: Role, text: &str) -> ProjectedMessage {
         seq,
         role,
         text: text.into(),
+        untrusted: false,
     }
 }
 
@@ -24,6 +25,7 @@ fn assessment(projected: Vec<ProjectedMessage>, last: u64, retracted: Vec<u64>) 
         anchor_dirty: false,
         retracted,
         ignored_retracts: vec![],
+        turn_originator: mur_channel::conversation::originator::Originator::Human { key: None },
     }
 }
 
@@ -178,7 +180,10 @@ mod refusal_reaches_the_log {
         let me = Arc::new(AgentIdentity::generate());
         me.save(&tmp.path().join("agents").join(AGENT)).unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent(AGENT).unwrap().id;
+        let ch = svc
+            .create_for_agent(AGENT, mur_channel::service::ChannelOwner::Legacy)
+            .unwrap()
+            .id;
         let mut runner = TaskRunner::with_llm(Arc::new(Never))
             .with_agent_name(AGENT)
             .with_channel_conversations(tmp.path().to_path_buf(), None, 4);

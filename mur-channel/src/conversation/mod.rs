@@ -9,6 +9,12 @@ use std::path::Path;
 use serde::Serialize;
 
 pub mod assess;
+mod head;
+pub mod originator;
+#[cfg(test)]
+mod originator_tests;
+#[cfg(test)]
+mod owner_tests;
 pub mod project;
 pub mod retract;
 #[cfg(test)]
@@ -39,13 +45,22 @@ pub fn normalize_user_text(text: &str) -> &str {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "reason", rename_all = "kebab-case")]
 pub enum ConversationDamage {
-    Manifest { detail: String },
-    Unparseable { lines: Vec<usize> },
+    Manifest {
+        detail: String,
+    },
+    Unparseable {
+        lines: Vec<usize>,
+    },
     Signature,
     Chain,
     Anchor,
+    /// The channel's live owner record is not covered by the signed head
+    /// (no head, or `record.seq > head.seq`): it proves nothing (D-3).
+    OwnerUnanchored,
     LogRegressed,
-    Watermark { detail: String },
+    Watermark {
+        detail: String,
+    },
 }
 
 impl ConversationDamage {
@@ -57,6 +72,7 @@ impl ConversationDamage {
             Self::Signature => "signature",
             Self::Chain => "chain",
             Self::Anchor => "anchor",
+            Self::OwnerUnanchored => "owner-unanchored",
             Self::LogRegressed => "log-regressed",
             Self::Watermark { .. } => "watermark",
         }
@@ -111,6 +127,9 @@ pub struct Assessment {
     /// Seqs of `Retract` events below `channel_seq` that withdrew nothing
     /// (other actor, answered, forward seq…): audit only.
     pub ignored_retracts: Vec<u64>,
+    /// Who wrote the event at `channel_seq`, by signature (E1). Classified
+    /// on this same load; the runtime audits it and never re-derives it.
+    pub turn_originator: originator::Originator,
 }
 
 /// One message of the projected history.
@@ -119,6 +138,10 @@ pub struct ProjectedMessage {
     pub seq: u64,
     pub role: Role,
     pub text: String,
+    /// A `Human` turn the channel's owner trust does not vouch for (C4): no
+    /// verifying signature, a key off the local human chain, or a keyless
+    /// line past the cut. History, not damage — shown as untrusted data.
+    pub untrusted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

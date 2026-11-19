@@ -154,7 +154,9 @@ mod tests {
         let qa = AgentIdentity::generate();
         qa.save(&qa_home).unwrap();
         let svc = crate::ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("qa").unwrap();
+        let ch = svc
+            .create_for_agent("qa", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         svc.append_signed(
             &ch.id,
             &qa,
@@ -185,7 +187,9 @@ mod tests {
     fn an_unsigned_event_still_follows_require_sig() {
         let tmp = tempfile::TempDir::new().unwrap();
         let svc = crate::ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("ghost").unwrap();
+        let ch = svc
+            .create_for_agent("ghost", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         svc.append_signed(
             &ch.id,
             &AgentIdentity::generate(),
@@ -217,7 +221,9 @@ mod tests {
     fn a_traversal_actor_id_cannot_point_at_a_planted_key() {
         let tmp = tempfile::TempDir::new().unwrap();
         let svc = crate::ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("qa").unwrap();
+        let ch = svc
+            .create_for_agent("qa", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         // The attacker's key, planted inside the world-writable channel store.
         let planted = tmp.path().join("channels").join("planted");
         std::fs::create_dir_all(&planted).unwrap();
@@ -289,7 +295,9 @@ mod tests {
         let qa = AgentIdentity::generate();
         qa.save(&qa_home).unwrap();
         let svc = crate::ChannelService::open(tmp.path()).unwrap();
-        let ch = svc.create_for_agent("qa").unwrap();
+        let ch = svc
+            .create_for_agent("qa", crate::service::ChannelOwner::Legacy)
+            .unwrap();
         svc.append_signed(
             &ch.id,
             &qa,

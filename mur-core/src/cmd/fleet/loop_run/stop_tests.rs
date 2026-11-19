@@ -49,7 +49,12 @@ async fn a_stop_during_the_converging_iteration_is_recorded_stopped() {
     crate::cmd::fleet::store::save_fleet(&home, &fleet).unwrap();
     mur_channel::ChannelService::open(&home)
         .unwrap()
-        .create_for_fleet("dev", "mur", &["member".into()])
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["member".into()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
         .unwrap();
 
     // Fake member: does the work (writes the convergence marker into the
@@ -152,8 +157,13 @@ fn a_custom_router_stop_event_is_signed_by_the_writer_and_verifies() {
         needs: vec![],
     };
     let svc = mur_channel::ChannelService::open(home).unwrap();
-    svc.create_for_fleet("council", "orchestrator", &["orchestrator".into()])
-        .unwrap();
+    svc.create_for_fleet(
+        "council",
+        "orchestrator",
+        &["orchestrator".into()],
+        mur_channel::service::ChannelOwner::Legacy,
+    )
+    .unwrap();
 
     pause::emit_stop_event(&svc, home, &fleet, LoopStop::Budget, 0, 0.0, "run-1");
 

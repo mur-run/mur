@@ -240,7 +240,7 @@ mod tests {
         let mur_home = tmp.path();
         let svc = mur_channel::ChannelService::open(mur_home).unwrap();
         let id = svc
-            .create_for_workflow("rebuild-test")
+            .create_for_workflow("rebuild-test", mur_channel::service::ChannelOwner::Legacy)
             .expect("create channel")
             .id;
         svc.append_delegation(&id, "pm", "child-task-1", None, Some("run-x"))
@@ -314,7 +314,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mur_home = tmp.path();
         let svc = mur_channel::ChannelService::open(mur_home).unwrap();
-        let ch = svc.create_for_workflow("broken-channel").unwrap();
+        let ch = svc
+            .create_for_workflow("broken-channel", mur_channel::service::ChannelOwner::Legacy)
+            .unwrap();
         // Sabotage: the channel dir becomes a file, so reading
         // Portable sabotage: `events.jsonl` becomes a DIRECTORY, so reading it
         // fails with a non-`NotFound` error on every platform (EISDIR on Unix,
@@ -347,7 +349,10 @@ mod tests {
         let mur_home = tmp.path();
         let svc = mur_channel::ChannelService::open(mur_home).unwrap();
         let id = svc
-            .create_for_workflow("rebuild-test-running")
+            .create_for_workflow(
+                "rebuild-test-running",
+                mur_channel::service::ChannelOwner::Legacy,
+            )
             .expect("create channel")
             .id;
         svc.append_delegation(&id, "pm", "child-task-2", None, Some("run-x"))
@@ -384,7 +389,12 @@ mod tests {
         let mur_home = tmp.path();
         let svc = mur_channel::ChannelService::open(mur_home).unwrap();
         let id = svc
-            .create_for_fleet("rebuild-test", "mur", &["pm".to_string()])
+            .create_for_fleet(
+                "rebuild-test",
+                "mur",
+                &["pm".to_string()],
+                mur_channel::service::ChannelOwner::Legacy,
+            )
             .expect("create fleet channel")
             .id;
         svc.append_delegation(&id, "pm", "child-task-3", None, Some("run-x"))
@@ -411,7 +421,12 @@ mod tests {
         let mur_home = tmp.path();
         let svc = mur_channel::ChannelService::open(mur_home).unwrap();
         let id = svc
-            .create_for_fleet("dev", "mur", &["pm".to_string()])
+            .create_for_fleet(
+                "dev",
+                "mur",
+                &["pm".to_string()],
+                mur_channel::service::ChannelOwner::Legacy,
+            )
             .expect("create fleet channel")
             .id;
         assert!(
@@ -443,7 +458,7 @@ mod tests {
         let mur_home = tmp.path();
         let svc = mur_channel::ChannelService::open(mur_home).unwrap();
         let id = svc
-            .create_for_workflow("shared")
+            .create_for_workflow("shared", mur_channel::service::ChannelOwner::Legacy)
             .expect("create channel")
             .id;
 
@@ -517,7 +532,7 @@ mod tests {
         let mur_home = tmp.path();
         let svc = mur_channel::ChannelService::open(mur_home).unwrap();
         let id = svc
-            .create_for_workflow("seq-bound")
+            .create_for_workflow("seq-bound", mur_channel::service::ChannelOwner::Legacy)
             .expect("create channel")
             .id;
         svc.append_delegation(&id, "pm", "child-a", None, Some("run-a"))
@@ -566,7 +581,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
         let id = svc
-            .create_for_fleet("dev", "mur", &["pm".to_string()])
+            .create_for_fleet(
+                "dev",
+                "mur",
+                &["pm".to_string()],
+                mur_channel::service::ChannelOwner::Legacy,
+            )
             .unwrap()
             .id;
         svc.transition(
@@ -621,7 +641,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
         let id = svc
-            .create_for_fleet("dev", "mur", &["pm".to_string()])
+            .create_for_fleet(
+                "dev",
+                "mur",
+                &["pm".to_string()],
+                mur_channel::service::ChannelOwner::Legacy,
+            )
             .unwrap()
             .id;
         svc.append_delegation(&id, "pm", "ct-1", None, Some("mine"))

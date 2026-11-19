@@ -421,7 +421,12 @@ mod tests {
         store::save_fleet(home, &f).unwrap();
         mur_channel::ChannelService::open(home)
             .unwrap()
-            .create_for_fleet("killed", "mur", &[])
+            .create_for_fleet(
+                "killed",
+                "mur",
+                &[],
+                mur_channel::service::ChannelOwner::Legacy,
+            )
             .unwrap();
         mur_core::cmd::commander::cmd_commander_directive(home, "killed", "kill", None, 1000)
             .unwrap();
@@ -446,7 +451,12 @@ mod tests {
         store::save_fleet(home, &f).unwrap();
         mur_channel::ChannelService::open(home)
             .unwrap()
-            .create_for_fleet("capped", "mur", &[])
+            .create_for_fleet(
+                "capped",
+                "mur",
+                &[],
+                mur_channel::service::ChannelOwner::Legacy,
+            )
             .unwrap();
         mur_core::cmd::commander::cmd_commander_directive(
             home,
