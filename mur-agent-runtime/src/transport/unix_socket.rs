@@ -49,7 +49,24 @@ pub async fn serve_unix_reporting(
     notifications: mpsc::Receiver<Value>,
     policy: Option<Arc<AcceptPolicy>>,
 ) {
-    if let Err(e) = serve_unix_gated(dispatcher, path.clone(), notifications, policy).await {
+    let r = serve_unix_gated(dispatcher, path.clone(), notifications, policy).await;
+    report_failure(&path, r);
+}
+
+/// [`serve_unix_reporting`] over a listener bound before the seal.
+pub async fn serve_unix_listener_reporting(
+    dispatcher: Arc<Dispatcher>,
+    listener: std::os::unix::net::UnixListener,
+    path: PathBuf,
+    notifications: mpsc::Receiver<Value>,
+    policy: Option<Arc<AcceptPolicy>>,
+) {
+    let r = serve_unix_listener(dispatcher, listener, notifications, policy).await;
+    report_failure(&path, r);
+}
+
+fn report_failure(path: &std::path::Path, r: std::io::Result<()>) {
+    if let Err(e) = r {
         let line = format!("unix socket transport failed at {}: {e}", path.display());
         tracing::warn!("{line}");
         eprintln!("warning: {line}");
@@ -63,20 +80,40 @@ pub async fn serve_unix_reporting(
 pub async fn serve_unix_gated(
     dispatcher: Arc<Dispatcher>,
     path: PathBuf,
+    notifications: mpsc::Receiver<Value>,
+    policy: Option<Arc<AcceptPolicy>>,
+) -> std::io::Result<()> {
+    let listener = bind_unix_std(&path)?;
+    serve_unix_listener(dispatcher, listener, notifications, policy).await
+}
+
+/// Bind `path` with std (no runtime needed), replacing a stale socket file and
+/// restricting it to the owner. The supervisor calls this BEFORE the Landlock
+/// seal (#2422): after the seal a bind outside every write grant — a long-path
+/// `/tmp` fallback, or a configured path outside `agent_home` — is refused.
+pub fn bind_unix_std(path: &std::path::Path) -> std::io::Result<std::os::unix::net::UnixListener> {
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
+    let listener = std::os::unix::net::UnixListener::bind(path)?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path)?.permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(path, perms)?;
+    }
+    listener.set_nonblocking(true)?;
+    Ok(listener)
+}
+
+/// [`serve_unix_gated`] over a listener bound earlier (see [`bind_unix_std`]).
+pub async fn serve_unix_listener(
+    dispatcher: Arc<Dispatcher>,
+    listener: std::os::unix::net::UnixListener,
     mut notifications: mpsc::Receiver<Value>,
     policy: Option<Arc<AcceptPolicy>>,
 ) -> std::io::Result<()> {
-    if path.exists() {
-        let _ = std::fs::remove_file(&path);
-    }
-    let listener = UnixListener::bind(&path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&path)?.permissions();
-        perms.set_mode(0o600);
-        std::fs::set_permissions(&path, perms)?;
-    }
+    let listener = UnixListener::from_std(listener)?;
     // Broadcast carries only request-INDEPENDENT notifications (telemetry,
     // skill-executed, progress) to every connection. Request-SCOPED streaming
     // (token deltas + HITL prompts) is NOT broadcast — it is routed to the

@@ -43,6 +43,8 @@ mod pin;
 mod private_agent;
 mod seal;
 mod serve;
+#[cfg(unix)]
+mod socket_boot;
 mod ssh_gate_boot;
 #[cfg(unix)]
 mod ssh_proxy_boot;
@@ -267,6 +269,9 @@ pub fn entrypoint() -> anyhow::Result<()> {
         }
     };
     // 3c–3d. Pre-seal setup and the B1 seal (`seal.rs`); the runtime after.
+    // 3c'. The unix socket binds while still unconfined (#2422).
+    #[cfg(unix)]
+    let pre_socket = socket_boot::bind_before_seal(&profile)?;
     let pre = seal::prepare_and_seal(&mut profile, &agent_home, &mur_home, pin_trust)?;
     boot::build_runtime()?.block_on(serve::serve(boot::Boot {
         mur_home,
@@ -280,5 +285,7 @@ pub fn entrypoint() -> anyhow::Result<()> {
         boot_cfg,
         boot_global_limits,
         pre,
+        #[cfg(unix)]
+        pre_socket,
     }))
 }

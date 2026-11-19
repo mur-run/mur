@@ -6,19 +6,16 @@ use crate::hooks::ShutdownReason;
 use crate::idle_scheduler::IdleScheduler;
 use crate::lock_file::write_lock;
 use crate::scheduler::CronScheduler;
-#[cfg(unix)]
-use crate::socket_path::resolve_bind_target;
 use crate::telemetry_writer::Event;
 use crate::transport::stdio::serve_stdio;
 use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
 #[cfg(unix)]
-use crate::transport::unix_socket::serve_unix_reporting;
+use crate::transport::unix_socket::serve_unix_listener_reporting;
 use crate::transport::webhook;
 use crate::watch_scheduler::WatchScheduler;
 use anyhow::Context;
 use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, agent::LockTransports};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
@@ -38,6 +35,8 @@ pub(super) async fn serve(boot: boot::Boot) -> anyhow::Result<()> {
         boot_cfg,
         boot_global_limits,
         pre,
+        #[cfg(unix)]
+        pre_socket,
     } = boot;
     let seal::Sealed {
         egress_proxy,
@@ -66,8 +65,10 @@ pub(super) async fn serve(boot: boot::Boot) -> anyhow::Result<()> {
         boot_global_limits.clone(),
     );
     // 4–4a. Telemetry writer, hook chain, skills — extracted to prepare_runtime.
-    let socket_enabled = profile.inner.transport.socket.enabled
-        && profile.inner.transport.socket.bind.starts_with("unix://");
+    #[cfg(unix)]
+    let socket_enabled = pre_socket.is_some();
+    #[cfg(not(unix))]
+    let socket_enabled = false;
     let (
         writer,
         stdio_notif_rx,
@@ -206,26 +207,23 @@ pub(super) async fn serve(boot: boot::Boot) -> anyhow::Result<()> {
     };
 
     #[cfg(unix)]
-    if socket_enabled {
-        let canonical = PathBuf::from(
-            profile
-                .inner
-                .transport
-                .socket
-                .bind
-                .trim_start_matches("unix://"),
-        );
-        let res = resolve_bind_target(&canonical, &profile.inner.id)?;
-        lock_transports.unix_socket = Some(canonical.to_string_lossy().to_string());
+    if let Some(sock) = pre_socket {
+        lock_transports.unix_socket = Some(sock.canonical.to_string_lossy().to_string());
         let d = dispatcher.clone();
-        let bind = res.bind_path.clone();
         let policy = std::sync::Arc::new(crate::communication_policy::AcceptPolicy {
             accepts_from: profile.inner.communication.accepts_from.clone(),
             agents_dir: mur_home.join("agents"),
             self_pid: std::process::id(),
         });
         transport_tasks.push(tokio::spawn(async move {
-            serve_unix_reporting(d, bind, sock_notif_rx, Some(policy)).await;
+            serve_unix_listener_reporting(
+                d,
+                sock.listener,
+                sock.bind_path,
+                sock_notif_rx,
+                Some(policy),
+            )
+            .await;
         }));
     }
     #[cfg(not(unix))]

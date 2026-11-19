@@ -64,4 +64,6 @@ pub(super) struct Boot {
     pub(super) boot_cfg: mur_common::config::Config,
     pub(super) boot_global_limits: mur_common::limits::Limits,
     pub(super) pre: seal::PreSeal,
+    #[cfg(unix)]
+    pub(super) pre_socket: Option<super::socket_boot::PreBoundSocket>,
 }
