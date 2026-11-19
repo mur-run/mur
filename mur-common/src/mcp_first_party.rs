@@ -205,10 +205,19 @@ mod tests {
     #[test]
     fn linux_exe_link_breaks_after_swap_but_captured_dir_does_not() {
         let (_g, dir) = install_dir();
+        // A stand-in binary that still runs when renamed to `mur`. Not a
+        // coreutils tool like `sleep`: on ubuntu-26.04 those are the uutils
+        // multicall binary, which dispatches on argv[0] and exits with
+        // "unknown program 'mur'" (#2472). `/bin/sh` stays alive blocked on
+        // the piped stdin, which we hold open until the kill below.
+        const STAND_IN: &str = "/bin/sh";
         let exe = dir.join("mur");
-        std::fs::copy("/bin/sleep", &exe).unwrap();
+        std::fs::copy(STAND_IN, &exe).unwrap();
         let captured = install_dir_of(&exe);
-        let mut child = std::process::Command::new(&exe).arg("30").spawn().unwrap();
+        let mut child = std::process::Command::new(&exe)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
         let proc_exe = PathBuf::from(format!("/proc/{}/exe", child.id()));
         // `spawn()` can return before the child's execve lands, so the link
         // briefly still names the forked test binary; wait for the exec.
@@ -223,10 +232,14 @@ mod tests {
         assert_eq!(install_dir_of(&proc_exe).as_deref(), Some(dir.as_path()));
 
         let staged = dir.join("mur.new");
-        std::fs::copy("/bin/sleep", &staged).unwrap();
+        std::fs::copy(STAND_IN, &staged).unwrap();
         std::fs::rename(&staged, &exe).unwrap();
 
         let after = install_dir_of(&proc_exe);
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "the stand-in must still be running when the link is read"
+        );
         child.kill().ok();
         child.wait().ok();
         assert_eq!(
