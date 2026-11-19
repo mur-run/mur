@@ -432,6 +432,10 @@ fn live_command_is_absolute_and_never_the_murmur_alias() {
     let p = std::path::PathBuf::from("/opt/bin/mur");
     assert_eq!(live_command(Ok(p)), "/opt/bin/mur");
     assert_eq!(live_command(Err(std::io::Error::other("x"))), "mur");
+    // #2484: the Hub runs this in-process, so current_exe() is the GUI. The
+    // entry must launch the sibling `mur` CLI, never the host binary.
+    let p = std::path::PathBuf::from("/opt/bin/mur-hub-gui");
+    assert_eq!(live_command(Ok(p)), swapped.to_string_lossy());
 }
 
 // Grants merge exactly once and report only what was new.

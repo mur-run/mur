@@ -428,13 +428,30 @@ pub(super) fn live_fs(mur_home: &Path, registry: Option<&Path>) -> FilesystemEnt
 /// A bare `mur` is resolved against whatever PATH the runtime has, so the
 /// pinned hash and the exec'd file could drift apart (B0 rule 6). The
 /// `murmur` alias is normalized, or `murmur browser …` would mis-dispatch.
+/// Any other host binary (the Hub runs this in-process, #2484) is swapped
+/// for its sibling `mur`: only the CLI has a `browser record` subcommand.
 pub(super) fn live_command(exe: std::io::Result<std::path::PathBuf>) -> String {
     match exe {
-        Ok(p) => super::multiplex::canonical_mur_exe(p)
+        Ok(p) => sibling_mur_cli(super::multiplex::canonical_mur_exe(p))
             .to_string_lossy()
             .into_owned(),
         Err(_) => "mur".into(),
     }
+}
+
+/// `exe` itself when it is the `mur` CLI, else the `mur` beside it.
+fn sibling_mur_cli(exe: std::path::PathBuf) -> std::path::PathBuf {
+    let is_cli = exe.file_name().is_some_and(|n| {
+        mur_common::mcp_first_party::MUR_CLI_NAMES.contains(&&*n.to_string_lossy())
+    });
+    if is_cli {
+        return exe;
+    }
+    let name = match exe.extension() {
+        Some(ext) => format!("mur.{}", ext.to_string_lossy()),
+        None => "mur".to_string(),
+    };
+    exe.with_file_name(name)
 }
 
 /// Point an existing live entry at `command` (from [`live_command`]) and
