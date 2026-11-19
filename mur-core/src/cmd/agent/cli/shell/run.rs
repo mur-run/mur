@@ -25,6 +25,8 @@ pub const KILL_GRACE: Duration = Duration::from_secs(2);
 /// can hold them open past the shell's own exit, so this must be bounded or
 /// a `!cmd` that spawned a daemon would never finish.
 const DRAIN_GRACE: Duration = Duration::from_millis(250);
+/// Pump turns past [`DRAIN_GRACE`]; a count, so starvation cannot eat it.
+const DRAIN_SETTLE_YIELDS: u32 = 32;
 /// What the card says when that bound is what ended the drain. Silence here
 /// would be a truncation the user cannot see (D9).
 pub const DRAIN_INCOMPLETE_NOTE: &str =
@@ -403,19 +405,8 @@ pub async fn run(
     // D9: the child is gone but a grandchild may still hold the pipes, so the
     // drain is bounded — and when the bound is what stopped it, the card says
     // so instead of losing the tail in silence.
-    let drained = tokio::time::timeout(DRAIN_GRACE, async {
-        while let Some(chunk) = out_rx.recv().await {
-            if tx
-                .send(StreamMsg::ShellOutput { gen_id, chunk })
-                .await
-                .is_err()
-            {
-                return;
-            }
-        }
-    })
-    .await;
-    if drained.is_err() {
+    let deadline = tokio::time::Instant::now() + DRAIN_GRACE;
+    if !drain(&mut out_rx, &tx, gen_id, deadline).await {
         let _ = tx
             .send(StreamMsg::ShellOutput {
                 gen_id,
@@ -432,9 +423,45 @@ pub async fn run(
     }
 }
 
-/// Is this pid still alive? Test-only, and shared by both of this module's
-/// test suites and its sibling's, so it lives here rather than inside one
-/// `mod tests`.
+/// Forward `out_rx` until EOF (`true`) or `deadline` (`false`). A starved
+/// process can pass the deadline before the pumps ever ran (#2427), so they
+/// get [`DRAIN_SETTLE_YIELDS`] more turns — turns, not time, so a grandchild
+/// holding the pipes still cannot keep this open.
+async fn drain(
+    out_rx: &mut mpsc::Receiver<String>,
+    tx: &mpsc::Sender<StreamMsg>,
+    gen_id: u64,
+    deadline: tokio::time::Instant,
+) -> bool {
+    let mut idle_turns = 0;
+    loop {
+        let next = match tokio::time::timeout_at(deadline, out_rx.recv()).await {
+            Ok(next) => next,
+            Err(_) => match out_rx.try_recv() {
+                Ok(chunk) => Some(chunk),
+                Err(mpsc::error::TryRecvError::Disconnected) => None,
+                Err(mpsc::error::TryRecvError::Empty) if idle_turns < DRAIN_SETTLE_YIELDS => {
+                    idle_turns += 1;
+                    tokio::task::yield_now().await;
+                    continue;
+                }
+                Err(mpsc::error::TryRecvError::Empty) => return false,
+            },
+        };
+        let Some(chunk) = next else { return true };
+        idle_turns = 0;
+        if tx
+            .send(StreamMsg::ShellOutput { gen_id, chunk })
+            .await
+            .is_err()
+        {
+            return true; // UI gone; nobody left to tell
+        }
+    }
+}
+
+/// Is this pid still alive? Test-only and shared with the sibling module's
+/// tests, so it lives here rather than inside one `mod tests`.
 #[cfg(all(test, unix))]
 pub(super) fn alive(pid: u32) -> bool {
     // SAFETY: signal 0 probes existence only.
@@ -480,6 +507,33 @@ mod tests {
             }
         }
         text
+    }
+
+    /// #2427: a starved pump's pending output survives the grace elapsing.
+    #[tokio::test]
+    async fn drain_past_its_deadline_still_collects_pending_output() {
+        let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(4);
+        tokio::spawn(async move {
+            for _ in 0..8 {
+                tokio::task::yield_now().await;
+            }
+            let _ = out_tx.send("137 x 41\n".into()).await;
+        });
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let complete = drain(&mut out_rx, &tx, 1, tokio::time::Instant::now()).await;
+        assert!(complete, "EOF was reached, so no incomplete note");
+        match rx.try_recv() {
+            Ok(StreamMsg::ShellOutput { chunk, .. }) => assert_eq!(chunk, "137 x 41\n"),
+            _ => panic!("pending output was dropped"),
+        }
+    }
+
+    /// Bounded: a pipe that never closes still ends the drain.
+    #[tokio::test]
+    async fn drain_gives_up_on_a_pipe_that_stays_open() {
+        let (_held, mut out_rx) = tokio::sync::mpsc::channel::<String>(4);
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        assert!(!drain(&mut out_rx, &tx, 1, tokio::time::Instant::now()).await);
     }
 
     /// #2032: a supplied size reaches the child as `COLUMNS`/`LINES`.
