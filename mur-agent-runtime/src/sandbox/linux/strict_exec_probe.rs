@@ -33,6 +33,11 @@ const EXIT_CARVED_SIBLING_RAN: i32 = 26;
 const ALLOWED: &str = "true";
 const UNLISTED: &str = "id";
 const COPIED: &str = "copied-binary";
+/// Sources for the renamed copies, tried in order. A multi-call binary
+/// (uutils coreutils, the default since Ubuntu 25.10, or BusyBox) picks its
+/// applet from argv[0] and fails under a new name, so the first candidate
+/// whose renamed copy still runs unsandboxed is used.
+const COPY_CANDIDATES: &[&str] = &["id", "hostname", "uname", "whoami"];
 /// Read-only dir holding a file named like the `mur` CLI (so the carve-out
 /// splits this grant) next to an unlisted binary that must stay refused.
 const CARVED_DIR: &str = "ro";
@@ -44,6 +49,25 @@ fn system_binary(name: &str) -> PathBuf {
         .map(|d| Path::new(d).join(name))
         .find(|p| p.exists())
         .unwrap_or_else(|| panic!("no {name} on this host"))
+}
+
+/// Copy a standalone binary to `dst` and return its source. Panics when no
+/// candidate survives the rename, since the unsandboxed control below would
+/// then fail for a reason that has nothing to do with Landlock.
+fn copy_standalone(dst: &Path) -> PathBuf {
+    for name in COPY_CANDIDATES {
+        let Some(src) = ["/usr/bin", "/bin"]
+            .iter()
+            .map(|d| Path::new(d).join(name))
+            .find(|p| p.exists())
+        else {
+            continue;
+        };
+        if std::fs::copy(&src, dst).is_ok() && runs(dst) {
+            return src;
+        }
+    }
+    panic!("no binary in {COPY_CANDIDATES:?} runs under a new name on this host");
 }
 
 fn strict_policy(dir: &Path) -> SandboxPolicy {
@@ -109,10 +133,10 @@ fn strict_landlock_runs_only_allowlisted_binaries() {
     let work = tmp.path().join("work");
     std::fs::create_dir_all(&work).unwrap();
     std::fs::create_dir_all(tmp.path().join("agent")).unwrap();
-    std::fs::copy(system_binary(UNLISTED), work.join(COPIED)).unwrap();
+    copy_standalone(&work.join(COPIED));
     let carved = tmp.path().join(CARVED_DIR);
     std::fs::create_dir_all(&carved).unwrap();
-    std::fs::copy(system_binary(UNLISTED), carved.join(CARVED_SIBLING)).unwrap();
+    copy_standalone(&carved.join(CARVED_SIBLING));
     std::fs::copy(system_binary(ALLOWED), carved.join("mur")).unwrap();
     // The scenario needs the carve-out to actually fire on this grant.
     let deny = strict_policy(tmp.path()).landlock_exec_denies();
