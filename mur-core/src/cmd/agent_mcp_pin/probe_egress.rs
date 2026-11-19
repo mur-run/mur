@@ -8,6 +8,8 @@ use super::{ProbeError, probe_mcp_descriptions};
 use mur_agent_runtime::protocol::mcp_client::ToolInfo;
 use mur_agent_runtime::sandbox::policy::SandboxPolicy;
 use mur_common::agent::McpServerEntry;
+use std::future::Future;
+use std::time::{Duration, Instant};
 
 /// Probe `entry` as `agent` would spawn it, and tear the probe's proxy down
 /// before returning — on success and on failure alike.
@@ -17,7 +19,8 @@ use mur_common::agent::McpServerEntry;
 /// `Handle::current()` panics outside a runtime and `block_in_place` panics on
 /// a current_thread one, and the callers span all three (CLI, a synchronous
 /// Tauri command, unit tests). It blocks the calling thread for at most one
-/// probe timeout, which every caller was already doing.
+/// probe timeout in total — key resolution included — which every caller was
+/// already doing.
 ///
 /// ⚠ LIFETIME: the proxy's accept loop is a task on the probe-owned runtime,
 /// and the ONLY thing that stops it is that runtime being dropped when the
@@ -29,36 +32,80 @@ use mur_common::agent::McpServerEntry;
 pub fn probe_as_runtime_would(
     agent: &str,
     entry: &McpServerEntry,
-    timeout: std::time::Duration,
+    timeout: Duration,
     policy: &SandboxPolicy,
 ) -> Result<(String, Vec<ToolInfo>), ProbeError> {
+    let resolve_key = needs_browser_key(entry).then_some(cache_browser_key);
+    run_within_budget(timeout, resolve_key, |deadline| async move {
+        let proxy = if mur_common::agent::entries_need_egress(std::slice::from_ref(entry)) {
+            Some(
+                mur_agent_runtime::sandbox::egress_proxy::start_egress_proxy(agent)
+                    .await
+                    .map_err(|e| ProbeError::Setup(format!("start probe egress proxy: {e}")))?,
+            )
+        } else {
+            None
+        };
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        probe_mcp_descriptions(entry, remaining, policy, proxy.as_ref()).await
+    })
+}
+
+/// Run `probe` on its own thread and current-thread runtime (see
+/// `probe_as_runtime_would` for why), with ONE deadline shared by the
+/// optional pre-spawn key resolution and the probe itself: `probe` gets the
+/// deadline, not a fresh timeout, so a slow Keychain plus a stalled handshake
+/// still stops at `timeout` overall. A resolver that eats the whole budget
+/// ends the probe with `ProbeError::Timeout` before anything is spawned.
+fn run_within_budget<T, R, F, Fut>(
+    timeout: Duration,
+    resolve_key: Option<R>,
+    probe: F,
+) -> Result<T, ProbeError>
+where
+    T: Send,
+    R: FnOnce() + Send + 'static,
+    F: FnOnce(Instant) -> Fut + Send,
+    Fut: Future<Output = Result<T, ProbeError>>,
+{
+    let deadline = Instant::now() + timeout;
     std::thread::scope(|s| {
-        s.spawn(|| {
+        s.spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| ProbeError::Setup(format!("build probe runtime: {e}")))?;
-            if needs_browser_key(entry) {
-                cache_browser_key(timeout);
+            if let Some(resolve) = resolve_key
+                && !resolve_before(resolve, deadline)
+            {
+                return Err(ProbeError::Timeout(timeout));
             }
-            rt.block_on(async {
-                let proxy = if mur_common::agent::entries_need_egress(std::slice::from_ref(entry)) {
-                    Some(
-                        mur_agent_runtime::sandbox::egress_proxy::start_egress_proxy(agent)
-                            .await
-                            .map_err(|e| {
-                                ProbeError::Setup(format!("start probe egress proxy: {e}"))
-                            })?,
-                    )
-                } else {
-                    None
-                };
-                probe_mcp_descriptions(entry, timeout, policy, proxy.as_ref()).await
-            })
+            // Report the configured budget, not the remainder the probe saw.
+            match rt.block_on(probe(deadline)) {
+                Err(ProbeError::Timeout(_)) => Err(ProbeError::Timeout(timeout)),
+                other => other,
+            }
         })
         .join()
         .unwrap_or_else(|_| Err(ProbeError::Setup("probe thread panicked".into())))
     })
+}
+
+/// Run `resolve` on a detached thread and wait for it until `deadline`.
+/// Detached because an unauthorised Keychain item raises a modal prompt that
+/// blocks until clicked; the probe must not outlive its budget over it.
+/// Returns false when the deadline passed first.
+fn resolve_before(resolve: impl FnOnce() + Send + 'static, deadline: Instant) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        resolve();
+        let _ = tx.send(());
+    });
+    let waited = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    if waited.is_err() {
+        tracing::warn!("probe: keychain did not answer for the browser state key in time");
+    }
+    waited.is_ok()
 }
 
 /// Whether the probe must read the browser state key before spawning `entry`:
@@ -71,24 +118,14 @@ fn needs_browser_key(entry: &McpServerEntry) -> bool {
 }
 
 /// Read the key into the pre-seal cache, mirroring the runtime's
-/// `supervisor::browser_key::cache_before_seal`. Bounded on its own thread:
-/// an unauthorised Keychain item raises a modal prompt that blocks until
-/// clicked, and the probe must not outlive its own timeout over it. Never
-/// fails the probe — a miss leaves the child on the Keychain fallback, which
-/// is exactly what the probe did before.
-fn cache_browser_key(timeout: std::time::Duration) {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let r = mur_common::browser_state_key::keychain_ref();
-        let _ = tx.send(mur_common::secret::cache_before_seal(&r));
-    });
-    match rx.recv_timeout(timeout) {
-        Ok(Ok(())) => tracing::debug!("probe: browser state key resolved before spawn"),
-        Ok(Err(e)) => tracing::debug!(error = %e, "probe: browser state key not available"),
-        Err(_) => tracing::warn!(
-            timeout_secs = timeout.as_secs(),
-            "probe: keychain did not answer for the browser state key in time"
-        ),
+/// `supervisor::browser_key::cache_before_seal`. A miss never fails the
+/// probe — it leaves the child on the Keychain fallback, which is exactly
+/// what the probe did before. Bounded by the caller (`resolve_before`).
+fn cache_browser_key() {
+    let r = mur_common::browser_state_key::keychain_ref();
+    match mur_common::secret::cache_before_seal(&r) {
+        Ok(()) => tracing::debug!("probe: browser state key resolved before spawn"),
+        Err(e) => tracing::debug!(error = %e, "probe: browser state key not available"),
     }
 }
 
@@ -120,5 +157,61 @@ mod browser_key_tests {
             "g"
         ])));
         assert!(!needs_browser_key(&entry(&["serve"])));
+    }
+
+    use super::run_within_budget;
+    use crate::cmd::agent_mcp_pin::ProbeError;
+    use std::time::{Duration, Instant};
+
+    const BUDGET: Duration = Duration::from_millis(1200);
+
+    /// A slow Keychain and a stalled handshake must share ONE budget: the
+    /// handshake gets what the key lookup left, not a fresh full timeout
+    /// (which made a T-second probe block for ~2T).
+    #[test]
+    fn a_slow_key_and_a_stalled_handshake_share_one_timeout() {
+        let start = Instant::now();
+        let r: Result<(), _> = run_within_budget(
+            BUDGET,
+            Some(|| std::thread::sleep(BUDGET * 3 / 4)),
+            |deadline| async move {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                assert!(
+                    remaining < BUDGET / 2,
+                    "handshake got a fresh budget: {remaining:?}"
+                );
+                tokio::time::sleep(remaining).await; // a handshake that never answers
+                Err(ProbeError::Timeout(remaining))
+            },
+        );
+        assert!(
+            matches!(r, Err(ProbeError::Timeout(t)) if t == BUDGET),
+            "{r:?}"
+        );
+        assert!(
+            start.elapsed() < BUDGET * 3 / 2,
+            "took {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// A key lookup that outlasts the whole budget ends the probe as a
+    /// timeout without spawning the server.
+    #[test]
+    fn a_key_lookup_past_the_budget_times_out_before_spawning() {
+        let start = Instant::now();
+        let r: Result<(), _> =
+            run_within_budget(BUDGET, Some(|| std::thread::sleep(BUDGET * 4)), |_| async {
+                panic!("probe must not run once the budget is spent")
+            });
+        assert!(
+            matches!(r, Err(ProbeError::Timeout(t)) if t == BUDGET),
+            "{r:?}"
+        );
+        assert!(
+            start.elapsed() < BUDGET * 3 / 2,
+            "took {:?}",
+            start.elapsed()
+        );
     }
 }
