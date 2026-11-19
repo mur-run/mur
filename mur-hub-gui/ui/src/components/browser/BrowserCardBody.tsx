@@ -48,7 +48,18 @@ function PortStep({ step }: { step: PortStepView }) {
   );
 }
 
-function Row({ row, busy, onAnswer }: { row: RowView; busy: boolean; onAnswer: (p: PickArg) => void }) {
+function Row({
+  row,
+  busy,
+  picks,
+  onAnswer,
+}: {
+  row: RowView;
+  busy: boolean;
+  /** False while the port is closed: the CLI line is the only pick (D1). */
+  picks: boolean;
+  onAnswer: (p: PickArg) => void;
+}) {
   const { t } = useT();
   const o: OfferView = row.offer;
   const detail =
@@ -72,7 +83,7 @@ function Row({ row, busy, onAnswer }: { row: RowView; busy: boolean; onAnswer: (
         </div>
       )}
       {o.kind === "already_bound" && <span className="field-muted"> {t("browser.row.bound")}</span>}
-      {(o.kind === "offered" || o.kind === "adds_hosts" || o.kind === "already_bound") && (
+      {picks && (o.kind === "offered" || o.kind === "adds_hosts" || o.kind === "already_bound") && (
         <button
           type="button"
           className="btn btn--sm btn--primary"
@@ -82,7 +93,7 @@ function Row({ row, busy, onAnswer }: { row: RowView; busy: boolean; onAnswer: (
           {t("browser.row.use")}
         </button>
       )}
-      {o.kind === "replace_only" && (
+      {picks && o.kind === "replace_only" && (
         <button
           type="button"
           className="btn btn--sm btn--secondary"
@@ -111,7 +122,7 @@ export function BrowserCardBody({ card, busy, loggingIn, result, note, onAnswer,
         <>
           <ul className="perm__list">
             {b.rows.map((r) => (
-              <Row key={r.name} row={r} busy={busy} onAnswer={onAnswer} />
+              <Row key={r.name} row={r} busy={busy} picks={!portClosed} onAnswer={onAnswer} />
             ))}
           </ul>
           {loggingIn ? (
@@ -123,6 +134,10 @@ export function BrowserCardBody({ card, busy, loggingIn, result, note, onAnswer,
             </>
           ) : b.login_offer.kind === "disabled" ? (
             <p className="field-muted">{b.login_offer.why}</p>
+          ) : portClosed ? (
+            // Saving a login would settle the request with the page still
+            // unreachable; the port step's `--login` line does both.
+            <p className="field-muted">{t("browser.login.portClosed")}</p>
           ) : (
             <>
               {b.login_offer.kind === "replace_only" && (

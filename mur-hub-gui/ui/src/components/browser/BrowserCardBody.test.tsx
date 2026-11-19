@@ -129,6 +129,25 @@ describe("BrowserCardBody", () => {
     expect([...host.querySelectorAll("button")].some((b) => b.textContent?.startsWith("Allow"))).toBe(false);
   });
 
+  it("a closed port hides Use and Log in: the CLI line saves and opens both", async () => {
+    const onAnswer = vi.fn();
+    const step = {
+      port: 8443,
+      warning: "w",
+      commands: [
+        "mur browser answer qa https://git.example:8443 --profile work --open-port",
+        "mur browser answer qa https://git.example:8443 --login --reauth --open-port",
+      ],
+    };
+    await render(card(login(true), step), onAnswer);
+    const labels = [...host.querySelectorAll("button")].map((b) => b.textContent ?? "");
+    expect(labels.some((l) => /^Use/.test(l))).toBe(false);
+    expect(labels.some((l) => /Log in again/.test(l))).toBe(false);
+    expect(host.textContent).toContain("log in from the CLI line below");
+    expect(labels.filter((l) => l === "Copy")).toHaveLength(2);
+    expect(onAnswer).not.toHaveBeenCalled();
+  });
+
   it("copies a port command without the warning prose", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
