@@ -16,6 +16,19 @@ pub fn cmd_schedule_add(
     sends_to: Option<String>,
     not_after: Option<String>,
 ) -> Result<()> {
+    add_entry(name, cron, message, sends_to, not_after, None)
+}
+
+/// [`cmd_schedule_add`] plus the conversation a granted proposal was asked
+/// for in (#2464) — the CLI `add` has none to carry.
+fn add_entry(
+    name: &str,
+    cron: &str,
+    message: &str,
+    sends_to: Option<String>,
+    not_after: Option<String>,
+    reply_to: Option<String>,
+) -> Result<()> {
     validate_cron(cron)?;
     let (path, mut profile) = load_profile_for_edit(name)?;
     profile.lifecycle.schedule.push(ScheduleEntry {
@@ -23,6 +36,7 @@ pub fn cmd_schedule_add(
         message: message.to_string(),
         sends_to,
         not_after,
+        reply_to,
     });
     let idx = profile.lifecycle.schedule.len() - 1;
     save_profile(&path, &mut profile)?;
@@ -105,7 +119,14 @@ pub fn cmd_schedule_accept(name: &str, id: &str) -> Result<()> {
         })?;
     // The bound is part of what the reviewer approved: dropping it here would
     // grant a perpetual schedule from a proposal that said "once".
-    cmd_schedule_add(name, &p.cron, &p.message, None, p.not_after.clone())?;
+    add_entry(
+        name,
+        &p.cron,
+        &p.message,
+        None,
+        p.not_after.clone(),
+        p.reply_to.clone(),
+    )?;
     std::fs::remove_file(proposal_dir(name).join(format!("{id}.yaml")))
         .with_context(|| format!("remove proposal {id}"))?;
     println!("granted — a running '{name}' picks it up within about 30 seconds, no restart needed");

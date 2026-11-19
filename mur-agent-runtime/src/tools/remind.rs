@@ -114,11 +114,14 @@ accept` to grant it, so say that you have asked rather than that it is set."
             message: message.clone(),
             asked_for: field("asked_for"),
             not_after,
+            reply_to: crate::task_runner::origin_channel::current(),
             proposed_at: chrono::Utc::now().to_rfc3339(),
         };
-        // Derived from the content, so the same request restated in one
-        // conversation folds onto one proposal instead of stacking.
-        let id = proposal_id(&cron, &message);
+        // Derived from the content and the conversation, so the same request
+        // restated in one conversation folds onto one proposal instead of
+        // stacking, while the same words from another conversation stay a
+        // separate proposal with their own `reply_to` (PR #2466 review).
+        let id = proposal_id(&cron, &message, proposal.reply_to.as_deref());
         // A correction supersedes what it corrects.
         //
         // The id is derived from the cron, so fixing a wrong date produces a
@@ -130,7 +133,7 @@ accept` to grant it, so say that you have asked rather than that it is set."
         // Keyed on what the user said, not on what the agent computed: the
         // words are the request, and the cron is one attempt at expressing it.
         if let Some(asked) = proposal.asked_for.as_deref() {
-            supersede(&dir, asked, &id);
+            supersede(&dir, asked, proposal.reply_to.as_deref(), &id);
         }
         let body = serde_yaml_ng::to_string(&proposal)
             .map_err(|e| ToolError::Execution(format!("serialise proposal: {e}")))?;
@@ -146,13 +149,15 @@ accept` to grant it, so say that you have asked rather than that it is set."
     }
 }
 
-/// Remove earlier proposals for the same request, keeping `keep_id`.
+/// Remove earlier proposals for the same request from the same conversation,
+/// keeping `keep_id`. Proposals are shared by every conversation of an agent,
+/// so matching words alone would let one conversation delete another's.
 ///
 /// Best-effort: a proposal that cannot be read is left alone rather than
 /// deleted on a guess, and a failure here must not lose the new proposal — the
 /// worst case is the duplicate this exists to prevent, which is visible in
 /// `schedule proposals` and removable with `decline`.
-fn supersede(dir: &std::path::Path, asked_for: &str, keep_id: &str) {
+fn supersede(dir: &std::path::Path, asked_for: &str, origin: Option<&str>, keep_id: &str) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -170,19 +175,25 @@ fn supersede(dir: &std::path::Path, asked_for: &str, keep_id: &str) {
         let Ok(old) = serde_yaml_ng::from_str::<mur_common::agent::ScheduleProposal>(&body) else {
             continue;
         };
-        if old.asked_for.as_deref() == Some(asked_for) {
+        if old.asked_for.as_deref() == Some(asked_for) && old.reply_to.as_deref() == origin {
             let _ = std::fs::remove_file(&path);
         }
     }
 }
 
 /// Stable across restatements of the same request within a conversation.
-fn proposal_id(cron: &str, message: &str) -> String {
+fn proposal_id(cron: &str, message: &str, origin: Option<&str>) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(cron.as_bytes());
     h.update(b"\0");
     h.update(message.trim().to_lowercase().as_bytes());
+    // Absent origin hashes exactly as before, so ids of proposals made
+    // outside any conversation are unchanged.
+    if let Some(origin) = origin {
+        h.update(b"\0");
+        h.update(origin.as_bytes());
+    }
     format!("{:x}", h.finalize())[..12].to_string()
 }
 
@@ -286,6 +297,36 @@ mod tests {
         assert_eq!(p.asked_for.as_deref(), Some("明天早上 10:00 提醒我吃早餐"));
     }
 
+    /// #2464: a reminder asked for inside a conversation remembers which one,
+    /// so its reply can be delivered back there instead of only to the
+    /// schedule channel nobody was looking at.
+    #[tokio::test]
+    async fn a_proposal_made_in_a_channel_remembers_it() {
+        let d = tempfile::tempdir().unwrap();
+        crate::task_runner::origin_channel::scope(
+            Some("01a1ee17-9cc2-71e1-a016-dd488a58de85".to_string()),
+            tool(d.path()).execute(serde_json::json!({
+                "cron": "47 21 18 11 *", "message": "查 council", "once": true
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            only_proposal(d.path()).await.reply_to.as_deref(),
+            Some("01a1ee17-9cc2-71e1-a016-dd488a58de85")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_proposal_made_outside_a_channel_has_no_reply_to() {
+        let d = tempfile::tempdir().unwrap();
+        tool(d.path())
+            .execute(serde_json::json!({"cron": "0 9 * * 1-5", "message": "standup"}))
+            .await
+            .unwrap();
+        assert!(only_proposal(d.path()).await.reply_to.is_none());
+    }
+
     /// Restating the same reminder must not stack proposals — the same failure
     /// `open_item`'s id-folding exists to prevent.
     #[tokio::test]
@@ -299,6 +340,63 @@ mod tests {
         }
         let dir = d.path().join(mur_common::agent::SCHEDULE_PROPOSAL_DIR);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    }
+
+    /// PR #2466 review: proposals are shared by every conversation of one
+    /// agent, so the same reminder asked for in two conversations must stay
+    /// two proposals — otherwise the second overwrites the first's `reply_to`
+    /// and accepting the id shown in the first delivers to the second.
+    #[tokio::test]
+    async fn the_same_request_from_two_conversations_keeps_both_destinations() {
+        let d = tempfile::tempdir().unwrap();
+        let req = serde_json::json!({
+            "cron": "0 10 9 8 *", "message": "吃早餐", "asked_for": "明天 10 點提醒我吃早餐"
+        });
+        let mut ids = Vec::new();
+        for origin in ["chan-a", "chan-b"] {
+            let out = crate::task_runner::origin_channel::scope(
+                Some(origin.to_string()),
+                tool(d.path()).execute(req.clone()),
+            )
+            .await
+            .unwrap();
+            let id = out
+                .text
+                .split('(')
+                .nth(1)
+                .unwrap()
+                .split(')')
+                .next()
+                .unwrap();
+            ids.push(id.to_string());
+        }
+        assert_ne!(ids[0], ids[1], "each conversation gets its own proposal id");
+        let dir = d.path().join(mur_common::agent::SCHEDULE_PROPOSAL_DIR);
+        for (id, origin) in ids.iter().zip(["chan-a", "chan-b"]) {
+            let body = std::fs::read_to_string(dir.join(format!("{id}.yaml"))).unwrap();
+            let p: mur_common::agent::ScheduleProposal = serde_yaml_ng::from_str(&body).unwrap();
+            assert_eq!(p.reply_to.as_deref(), Some(origin));
+        }
+    }
+
+    /// A correction supersedes only within its own conversation: another
+    /// conversation that happened to use the same words keeps its proposal.
+    #[tokio::test]
+    async fn a_correction_does_not_supersede_another_conversations_proposal() {
+        let d = tempfile::tempdir().unwrap();
+        let asked = "明天 10 點提醒我吃早餐";
+        for (origin, cron) in [("chan-a", "0 10 24 2 *"), ("chan-b", "0 10 1 9 *")] {
+            crate::task_runner::origin_channel::scope(
+                Some(origin.to_string()),
+                tool(d.path()).execute(
+                    serde_json::json!({"cron": cron, "message": "吃早餐", "asked_for": asked}),
+                ),
+            )
+            .await
+            .unwrap();
+        }
+        let dir = d.path().join(mur_common::agent::SCHEDULE_PROPOSAL_DIR);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
     }
 
     /// A malformed cron must fail here, not at accept time: the agent has

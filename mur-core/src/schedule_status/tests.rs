@@ -411,6 +411,7 @@ fn firing_note_only_speaks_for_spent_one_offs_and_never_guesses_missed() {
         message: "pay invoice".into(),
         sends_to: None,
         not_after: not_after.map(str::to_string),
+        reply_to: None,
     };
     let bound = "2026-11-03T10:00:00+08:00";
     let note = |e: &ScheduleEntry, now: &str| firing_note(home.path(), "probe", e, at(now));

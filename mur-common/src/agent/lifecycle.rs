@@ -173,6 +173,12 @@ pub struct ScheduleProposal {
     /// rather than a recurrence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_after: Option<String>,
+    /// The conversation the reminder was asked for in (#2464). A fired turn's
+    /// reply goes there as well as to the schedule channel: the schedule
+    /// channel is the record, but the person who said "check again in half
+    /// an hour" is looking at the conversation they said it in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
     pub proposed_at: String,
 }
 
@@ -195,6 +201,12 @@ pub struct ScheduleEntry {
     /// at all, so the bound works where a flag structurally could not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_after: Option<String>,
+    /// The conversation the reminder was asked for in (#2464). A fired turn's
+    /// reply goes there as well as to the schedule channel: the schedule
+    /// channel is the record, but the person who said "check again in half
+    /// an hour" is looking at the conversation they said it in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

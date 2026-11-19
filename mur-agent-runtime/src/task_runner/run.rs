@@ -264,6 +264,10 @@ impl TaskRunner {
         // instructions are built inside it. It is dropped with the future on
         // every outcome, cancel included (R10).
         let generation = consult_scope::scope(spec.consult_scope.clone(), generation);
+        // #2464: tools that record where a request came from (`remind`) read
+        // the turn's conversation from here.
+        let generation =
+            super::origin_channel::scope(channel.map(|c| c.channel_id.clone()), generation);
         let result: Option<Result<(Message, Option<LoopExit>), TaskError>> = tokio::select! {
             r = generation => Some(r),
             _ = &mut rx_cancel => None,

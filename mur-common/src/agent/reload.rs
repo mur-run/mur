@@ -220,6 +220,7 @@ mod tests {
             message: "hi".into(),
             sends_to: None,
             not_after: None,
+            reply_to: None,
         });
         new.lifecycle.max_restarts += 1;
         let d = AgentProfile::reload_diff(&base(), &new);

@@ -27,6 +27,7 @@ fn once(not_after: &str) -> ScheduleEntry {
         message: "run pkg audit".into(),
         sends_to: None,
         not_after: Some(not_after.into()),
+        reply_to: None,
     }
 }
 
@@ -286,4 +287,77 @@ async fn the_reader_tells_a_missed_entry_from_its_fired_sibling() {
     let read = |e: &ScheduleEntry| read_firing_outcome(tmp.path(), "probe", e, bound).unwrap();
     assert_eq!(read(&fired), FiringOutcome::Fired);
     assert_eq!(read(&missed), FiringOutcome::Missed);
+}
+
+// ── #2464: a fired reply reaches the conversation it was asked in ───────────
+
+fn completed(id: &str, text: &str) -> mur_common::a2a::Task {
+    mur_common::a2a::Task {
+        id: id.into(),
+        state: mur_common::a2a::TaskState::Completed,
+        messages: vec![mur_common::a2a::Message {
+            role: "agent".into(),
+            parts: vec![mur_common::a2a::MessagePart::Text { text: text.into() }],
+        }],
+        created_at: String::new(),
+        completed_at: None,
+        error: None,
+        usage: None,
+        artifacts: None,
+    }
+}
+
+fn texts(home: &Path, channel: &str) -> Vec<String> {
+    ChannelService::open(home)
+        .unwrap()
+        .load_events(channel)
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| e.payload["text"].as_str().map(str::to_string))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_reply_goes_back_to_the_conversation_it_was_asked_in() {
+    let tmp = tempfile::tempdir().unwrap();
+    let chat = ChannelService::open(tmp.path())
+        .unwrap()
+        .create_for_agent("probe")
+        .unwrap()
+        .id;
+    let entry = ScheduleEntry {
+        reply_to: Some(chat.clone()),
+        ..once("2099-01-01T00:00:00+08:00")
+    };
+    super::super::record_reply(
+        &sink(tmp.path()),
+        &completed("t9", "council 還在跑"),
+        &entry,
+    )
+    .await;
+
+    assert_eq!(texts(tmp.path(), &chat), vec!["council 還在跑".to_string()]);
+    // The schedule channel stays the record, unchanged.
+    assert!(
+        channel_events(tmp.path())
+            .iter()
+            .any(|e| e.payload["text"] == "council 還在跑")
+    );
+}
+
+/// The conversation was deleted after the reminder was set: the schedule
+/// channel still gets the reply, and nothing is invented in its place.
+#[tokio::test]
+async fn a_vanished_conversation_does_not_lose_the_reply() {
+    let tmp = tempfile::tempdir().unwrap();
+    let entry = ScheduleEntry {
+        reply_to: Some("01a1ee17-0000-7000-8000-000000000000".into()),
+        ..once("2099-01-01T00:00:00+08:00")
+    };
+    super::super::record_reply(&sink(tmp.path()), &completed("t9", "hi"), &entry).await;
+    assert!(
+        channel_events(tmp.path())
+            .iter()
+            .any(|e| e.payload["text"] == "hi")
+    );
 }
