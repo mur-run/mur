@@ -120,6 +120,11 @@ fn show_reads_the_card_and_the_port_step_says_any_host() {
     let step = port_step(&s).unwrap();
     assert_eq!(step.port, 3000);
     assert!(step.warning.contains("ANY host"), "{}", step.warning);
+    assert!(
+        step.warning.contains("run one of these"),
+        "{}",
+        step.warning
+    );
     // Each copied line is a complete command: an answer choice plus
     // --open-port, no prose (D1).
     assert_eq!(
@@ -179,6 +184,12 @@ fn a_reach_port_step_offers_allow_and_a_disabled_one_offers_nothing() {
     assert_eq!(
         step.commands,
         vec!["mur browser answer asker http://gitea.example:3000 --allow --open-port"]
+    );
+    // One command: the prose must not say "one of these" (s4 live check).
+    assert!(
+        step.warning.contains("CLI step: run this instead"),
+        "{}",
+        step.warning
     );
     let off = Shown::for_test(
         "asker",

@@ -101,6 +101,9 @@ export function BrowserCardBody({ card, busy, loggingIn, result, note, onAnswer,
   const [confirm, setConfirm] = useState(false);
   const b = card.body;
   const finished = result?.state === "done";
+  // Answering here never opens the port (D1): it would settle the request
+  // with the site still unreachable. The port step's CLI command is the way.
+  const portClosed = card.port_step !== null;
   return (
     <>
       {b.kind === "no_live_entry" && <p className="field-muted">{t("browser.noLiveEntry")}</p>}
@@ -152,11 +155,15 @@ export function BrowserCardBody({ card, busy, loggingIn, result, note, onAnswer,
       )}
       {b.kind === "reach" && !finished && (
         <>
-          {b.reach.kind === "allowed" && <p className="field-muted">{t("browser.reach.allowed")}</p>}
+          {b.reach.kind === "allowed" && (
+            <p className="field-muted">
+              {t(portClosed ? "browser.reach.allowedPortClosed" : "browser.reach.allowed")}
+            </p>
+          )}
           {b.reach.kind === "unscoped" && (
             <p className="field-muted">{t("browser.reach.unscoped", { mode: b.reach.mode })}</p>
           )}
-          {(b.reach.kind === "allowed" || b.reach.kind === "unscoped") && (
+          {!portClosed && (b.reach.kind === "allowed" || b.reach.kind === "unscoped") && (
             <button
               type="button"
               className="btn btn--primary"
@@ -167,7 +174,7 @@ export function BrowserCardBody({ card, busy, loggingIn, result, note, onAnswer,
             </button>
           )}
           {b.reach.kind === "disabled" && <p className="field-muted">{b.reach.why}</p>}
-          {b.reach.kind === "needs_host" && (
+          {!portClosed && b.reach.kind === "needs_host" && (
             <button
               type="button"
               className="btn btn--primary"

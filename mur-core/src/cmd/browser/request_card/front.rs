@@ -161,11 +161,16 @@ pub fn port_step(s: &Shown) -> Option<PortStep> {
             _ => vec!["--allow".to_owned()],
         },
     };
+    let run = if picks.len() == 1 {
+        "run this"
+    } else {
+        "run one of these"
+    };
     Some(PortStep {
         port,
         warning: format!(
             "port {port} is not open. Opening it opens port {port} to ANY host, so it is a \
-             CLI step: run one of these instead of answering here (restart needed)."
+             CLI step: {run} instead of answering here (restart needed)."
         ),
         commands: picks
             .into_iter()
