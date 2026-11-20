@@ -301,6 +301,41 @@ fn reach_card_allows_unless_disabled() {
     );
 }
 
+/// #2486 review: with the port closed, murmur settles nothing but a
+/// dismiss and points at the CLI lines, same as Hub.
+#[test]
+fn a_closed_port_card_only_dismisses() {
+    let mut reach = State::new(Shown::for_test(
+        "qa",
+        req(false),
+        Card::Reach {
+            reach: Reach::Allowed,
+            port: Some(8763),
+        },
+    ));
+    let s = text(&reach);
+    assert!(!s.contains("a allows"), "{s}");
+    assert!(s.contains("port is not open"), "{s}");
+    for key in [KeyCode::Char('a'), KeyCode::Enter] {
+        assert_eq!(reach.on_key(k(key)), KeyAction::Nothing);
+    }
+    assert!(reach.note.as_deref().unwrap_or("").contains("CLI"));
+    assert_eq!(
+        reach.on_key(k(KeyCode::Char('d'))),
+        KeyAction::Settle(Pick::Dismiss)
+    );
+
+    let mut login = login_card(vec![row("gitea", Offer::Offered)], Some(8763));
+    for key in [KeyCode::Enter, KeyCode::Char('r'), KeyCode::Char('l')] {
+        assert_eq!(login.on_key(k(key)), KeyAction::Nothing);
+    }
+    assert!(!super::render::hint(&login).contains("Enter use"));
+    assert_eq!(
+        login.on_key(k(KeyCode::Char('d'))),
+        KeyAction::Settle(Pick::Dismiss)
+    );
+}
+
 #[test]
 fn saved_shows_the_d4_label() {
     let mut c = login_card(vec![], None);

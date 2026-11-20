@@ -766,15 +766,18 @@ Agent** wizard offers the same catalog as a source.
   browser entry changed since the card was read, nothing is written and the
   request stays open. `--open-port` also opens a non-default port (to ANY
   host, restart needed) through the same writer as
-  `mur agent perm allow-port`. A successful answer clears the request and
+  `mur agent perm allow-port`. While the card's port is closed, the only
+  answers are one that carries `--open-port` or `--dismiss`; anything else is
+  refused and nothing is written. A successful answer clears the request and
   prints the text to send the agent; its first visit is the test, and what
   it reports is the agent's own report, not a check by MUR.
   `mur browser answer --login` needs a terminal.
   The same card opens by itself in `murmur` when the agent files a
   `browser_request`, and in Hub as a "needs you" item: one button per row,
   "logged in" while a login browser is open, and "saved, not yet tried"
-  until the agent reports back. Neither UI can open a non-default port;
-  the card only prints the `--open-port` line for you to run.
+  until the agent reports back. Neither UI can open a non-default port:
+  while it is closed they only offer dismiss, and the card prints the
+  `--open-port` line for you to run.
   To unbind everything, rerun `/browser live <hosts> --no-profile`; to keep
   some, name only those (`--profile a --profile b`). The saved profiles stay
   on disk.

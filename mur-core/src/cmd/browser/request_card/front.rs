@@ -161,11 +161,16 @@ pub fn port_step(s: &Shown) -> Option<PortStep> {
             _ => vec!["--allow".to_owned()],
         },
     };
+    let run = match picks.len() {
+        0 => "nothing on this card can be answered until that is fixed",
+        1 => "run this instead of answering here (restart needed)",
+        _ => "run one of these instead of answering here (restart needed)",
+    };
     Some(PortStep {
         port,
         warning: format!(
             "port {port} is not open. Opening it opens port {port} to ANY host, so it is a \
-             CLI step: run one of these instead of answering here (restart needed)."
+             CLI step: {run}."
         ),
         commands: picks
             .into_iter()
@@ -222,6 +227,18 @@ pub(crate) async fn settle_with(
     ports: &mut dyn PortOps,
 ) -> Result<Settled> {
     let agent = &s.agent;
+    // A closed port is settled only by the typed `--open-port` (D1). Any
+    // other answer would settle the request with the site still
+    // unreachable, so every front is refused here, not just in its UI.
+    if let Some(port) = s.port()
+        && !open_port
+        && !matches!(pick, Pick::Dismiss)
+    {
+        bail!(
+            "✗ {agent}: port {port} is not open — answer with the CLI line that carries \
+             --open-port, or dismiss; nothing written"
+        );
+    }
     let mut saved_as = None;
     let choice = if let Pick::Login {
         name,

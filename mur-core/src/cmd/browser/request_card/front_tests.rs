@@ -120,6 +120,11 @@ fn show_reads_the_card_and_the_port_step_says_any_host() {
     let step = port_step(&s).unwrap();
     assert_eq!(step.port, 3000);
     assert!(step.warning.contains("ANY host"), "{}", step.warning);
+    assert!(
+        step.warning.contains("run one of these"),
+        "{}",
+        step.warning
+    );
     // Each copied line is a complete command: an answer choice plus
     // --open-port, no prose (D1).
     assert_eq!(
@@ -180,6 +185,12 @@ fn a_reach_port_step_offers_allow_and_a_disabled_one_offers_nothing() {
         step.commands,
         vec!["mur browser answer asker http://gitea.example:3000 --allow --open-port"]
     );
+    // One command: the prose must not say "one of these" (s4 live check).
+    assert!(
+        step.warning.contains("CLI step: run this instead"),
+        "{}",
+        step.warning
+    );
     let off = Shown::for_test(
         "asker",
         s.request.clone(),
@@ -188,7 +199,10 @@ fn a_reach_port_step_offers_allow_and_a_disabled_one_offers_nothing() {
             port: Some(3000),
         },
     );
-    assert!(port_step(&off).unwrap().commands.is_empty());
+    let none = port_step(&off).unwrap();
+    assert!(none.commands.is_empty());
+    // No lines to run: the prose must not point at any.
+    assert!(!none.warning.contains("run "), "{}", none.warning);
 }
 
 #[test]
@@ -246,7 +260,9 @@ async fn entries_changed_since_show_is_stale_and_keeps_the_request() {
             name: "gitea".into(),
             replace: false,
         },
-        false,
+        // The fixture's port 3000 is closed: only `--open-port` gets past
+        // the port gate to the staleness check under test.
+        true,
         async |_: &LoginPlan, _: &mut (dyn FnMut(String) + Send)| unreachable!(),
         &mut |_| {},
         &mut Ops(Vec::new()),
@@ -256,6 +272,59 @@ async fn entries_changed_since_show_is_stale_and_keeps_the_request() {
     .unwrap();
     assert_eq!(got.answered, Answered::Stale);
     assert_eq!(pending(t.path(), "asker").len(), 1);
+}
+
+/// #2486 review: a closed port is settled only by the CLI's `--open-port`.
+/// Any other front (murmur, Hub) answering would leave the site
+/// unreachable, so the shared door refuses and keeps the request.
+#[tokio::test]
+async fn a_closed_port_refuses_every_answer_but_dismiss() {
+    let t = tempfile::tempdir().unwrap();
+    saved(t.path(), "gitea", None);
+    asker(t.path(), true);
+    let s = show(t.path(), "asker", &site()).unwrap();
+    assert_eq!(s.port(), Some(3000));
+    let picks = [
+        Pick::Row {
+            name: "gitea".into(),
+            replace: false,
+        },
+        Pick::Login {
+            name: None,
+            reauth: false,
+            replace: false,
+        },
+    ];
+    for pick in picks {
+        let err = settle_with(
+            t.path(),
+            &s,
+            pick,
+            false,
+            async |_: &LoginPlan, _: &mut (dyn FnMut(String) + Send)| unreachable!(),
+            &mut |_| {},
+            &mut Ops(Vec::new()),
+            &mut NoPorts,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("port 3000 is not open"), "{err}");
+        assert!(err.contains("--open-port"), "{err}");
+        assert_eq!(pending(t.path(), "asker").len(), 1);
+    }
+    let got = settle_with(
+        t.path(),
+        &s,
+        Pick::Dismiss,
+        false,
+        async |_: &LoginPlan, _: &mut (dyn FnMut(String) + Send)| unreachable!(),
+        &mut |_| {},
+        &mut Ops(Vec::new()),
+        &mut NoPorts,
+    )
+    .await;
+    assert!(got.is_ok(), "{got:?}");
 }
 
 /// D6: closing the card cancels the login; no profile is created.
@@ -274,7 +343,7 @@ async fn a_cancelled_login_saves_nothing() {
             reauth: false,
             replace: false,
         },
-        false,
+        true, // past the closed-port gate; the login is cancelled first
         async |_: &LoginPlan, _: &mut (dyn FnMut(String) + Send)| {
             rx.await.map_err(|_| anyhow::anyhow!("the card closed"))
         },

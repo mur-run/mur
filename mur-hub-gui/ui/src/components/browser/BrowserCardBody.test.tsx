@@ -110,6 +110,44 @@ describe("BrowserCardBody", () => {
     });
   }
 
+  it("a closed port hides Continue: the CLI command is the only way through", async () => {
+    const onAnswer = vi.fn();
+    const cmd = "mur browser answer qa http://localhost:8763 --allow --open-port";
+    await render(
+      card({ kind: "reach", reach: { kind: "allowed" } }, { port: 8763, warning: "port 8763 is not open.", commands: [cmd] }),
+      onAnswer,
+    );
+    expect([...host.querySelectorAll("button")].some((b) => b.textContent === "Continue")).toBe(false);
+    expect(host.textContent).not.toContain("already allowed");
+    expect(host.textContent).toContain("port is not open yet");
+    expect(host.textContent).toContain("port 8763 is not");
+  });
+
+  it("a closed port hides the host button too: the CLI line adds both", async () => {
+    const step = { port: 8763, warning: "w", commands: ["mur browser answer qa http://localhost:8763 --allow --open-port"] };
+    await render(card({ kind: "reach", reach: { kind: "needs_host", missing: ["localhost"] } }, step), () => {});
+    expect([...host.querySelectorAll("button")].some((b) => b.textContent?.startsWith("Allow"))).toBe(false);
+  });
+
+  it("a closed port hides Use and Log in: the CLI line saves and opens both", async () => {
+    const onAnswer = vi.fn();
+    const step = {
+      port: 8443,
+      warning: "w",
+      commands: [
+        "mur browser answer qa https://git.example:8443 --profile work --open-port",
+        "mur browser answer qa https://git.example:8443 --login --reauth --open-port",
+      ],
+    };
+    await render(card(login(true), step), onAnswer);
+    const labels = [...host.querySelectorAll("button")].map((b) => b.textContent ?? "");
+    expect(labels.some((l) => /^Use/.test(l))).toBe(false);
+    expect(labels.some((l) => /Log in again/.test(l))).toBe(false);
+    expect(host.textContent).toContain("log in from the CLI line below");
+    expect(labels.filter((l) => l === "Copy")).toHaveLength(2);
+    expect(onAnswer).not.toHaveBeenCalled();
+  });
+
   it("copies a port command without the warning prose", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
