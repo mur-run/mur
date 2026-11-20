@@ -9,9 +9,16 @@
 //! widen anything: bounds come from the `run_paused` event signed with the
 //! trusted writer's key (`ROUTER_AGENT`, whatever the fleet's `router:`) and
 //! are `min`-ed with what `fleet.yaml` allows now, counters are `max`-ed with
-//! that event, and the HITL policy is never loosened from `defer`. When no
-//! such event verifies (no writer identity, note lost), the checkpoint's
-//! bounds are used and resume warns — still `min`-ed with `fleet.yaml`.
+//! those events, and when this resume is unattended the HITL policy is never
+//! looser than `defer` (from a terminal the frozen policy is kept). Every
+//! verified `run_paused` for the run is folded, not just the newest, so a
+//! re-appended older pause with looser bounds cannot widen them (#2081).
+//!
+//! A channel that cannot be read is an error, not an empty channel. When no
+//! verified event carries bounds (no writer identity, note lost, or only
+//! pre-rev 3 events with `bounds: None`), resume refuses under
+//! `MUR_CHANNEL_REQUIRE_SIG`; otherwise it falls back to the checkpoint's
+//! bounds, still `min`-ed with `fleet.yaml`, and warns.
 
 use std::path::Path;
 use std::time::Duration;
@@ -120,7 +127,8 @@ fn parse_unanswered(s: &str) -> Result<Unanswered> {
         .map_err(|_| anyhow::anyhow!("checkpoint names an unknown HITL policy `{s}`"))
 }
 
-/// What the latest signed `run_paused` for a run recorded.
+/// What the verified `run_paused` events for a run recorded, folded: the
+/// tightest bounds and the highest counters any of them carried.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct SignedPause {
     pub spent_usd: f64,
@@ -130,7 +138,8 @@ pub(super) struct SignedPause {
     pub bounds: Option<RunBounds>,
 }
 
-/// The latest signed `run_paused` for `run_id` on the fleet's channel. Only
+/// Every router-signed `run_paused` for `run_id` on the fleet's channel,
+/// folded by [`fold_pauses`]. Only
 /// router-signed events count — the checkpoint is what an untrusted run
 /// wrote, this is what the trusted writer recorded beside it.
 ///
@@ -138,30 +147,29 @@ pub(super) struct SignedPause {
 /// key, so a member signing a forged pause as itself would pass and its
 /// bounds would replace the originals. `is_durable_router_record` requires a
 /// non-agent actor and a `ROUTER_AGENT` key — the identity `record_pause`
-/// writes with for every fleet, including one with a custom `router:`.
+/// asks to sign with for every fleet, including one with a custom `router:`.
 ///
 /// D-10 (A1): a paused run can outlive a router rekey, so the note verifies
 /// under the head key or any key a routine rekey retired; a compromise rekey
-/// revokes it and resume falls back to the checkpoint with its warning. The
+/// revokes it and resume falls back to the checkpoint with its warning (or
+/// refuses under `MUR_CHANNEL_REQUIRE_SIG`). The
 /// note's `key_version` label is never consulted.
+///
+/// A channel whose keys cannot be loaded is an error, not "no signed pause"
+/// (#2081 item 2): silently falling back would hide the failure.
 fn signed_pause(
     mur_home: &Path,
     channel_id: &str,
     events: &[ChannelEvent],
     run_id: &str,
-) -> Option<SignedPause> {
-    let ctx = match crate::hitl::authority::AuthorityCtx::load(mur_home, channel_id) {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            tracing::warn!(channel_id, error = %e, "cannot read the channel to verify run_paused");
-            return None;
-        }
-    };
-    events
+) -> Result<Option<SignedPause>> {
+    let ctx = crate::hitl::authority::AuthorityCtx::load(mur_home, channel_id).map_err(|e| {
+        anyhow::anyhow!("cannot read channel {channel_id} to verify run_paused: {e}")
+    })?;
+    let verified = events
         .iter()
-        .rev()
         .filter(|e| e.kind == EventKind::Note && e.sig.is_some())
-        .find_map(|e| match classify_note_payload(&e.payload) {
+        .filter_map(|e| match classify_note_payload(&e.payload) {
             NoteClassification::FleetRun(env) => match env.payload {
                 FleetRunPayload::RunPaused {
                     run_id: id,
@@ -181,7 +189,49 @@ fn signed_pause(
                 _ => None,
             },
             _ => None,
-        })
+        });
+    Ok(fold_pauses(verified))
+}
+
+/// Fold verified pauses so none can widen another: counters take the
+/// highest, each bound the tightest (`None` = off/uncapped is the loosest).
+/// An event without bounds (pre-rev 3) contributes counters only.
+pub(super) fn fold_pauses(pauses: impl IntoIterator<Item = SignedPause>) -> Option<SignedPause> {
+    pauses.into_iter().reduce(|a, b| SignedPause {
+        spent_usd: a.spent_usd.max(b.spent_usd),
+        active_elapsed_ms: a.active_elapsed_ms.max(b.active_elapsed_ms),
+        iteration: a.iteration.max(b.iteration),
+        bounds: match (a.bounds, b.bounds) {
+            (Some(x), Some(y)) => Some(RunBounds {
+                deadline_ms: x.deadline_ms.min(y.deadline_ms),
+                stuck_ms: min_some(x.stuck_ms, y.stuck_ms, u64::min),
+                cost_usd: min_some(x.cost_usd, y.cost_usd, f64::min),
+            }),
+            (x, y) => x.or(y),
+        },
+    })
+}
+
+fn min_some<T>(a: Option<T>, b: Option<T>, min: fn(T, T) -> T) -> Option<T> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(min(x, y)),
+        (x, y) => x.or(y),
+    }
+}
+
+/// Under `MUR_CHANNEL_REQUIRE_SIG` a resume whose original bounds no signed
+/// event vouches for is refused: the checkpoint alone is run-written.
+pub(super) fn require_authenticated(
+    name: &str,
+    authenticated: bool,
+    require_sig: bool,
+) -> Result<()> {
+    if require_sig && !authenticated {
+        bail!(
+            "MUR_CHANNEL_REQUIRE_SIG is set and no signed run_paused carries the original limits of '{name}'s paused run; refusing to resume from the unsigned checkpoint"
+        );
+    }
+    Ok(())
 }
 
 /// Build the resume state from a checkpoint and the channel (design §5.3):
@@ -331,10 +381,20 @@ pub async fn cmd_fleet_resume(mur_home: &Path, name: &str) -> Result<()> {
     let cp = admit(mur_home, name)?;
     let events = mur_channel::ChannelService::open(mur_home)?
         .load_events(&fleet.channel_id)
-        .unwrap_or_default();
-    let signed = signed_pause(mur_home, &fleet.channel_id, &events, &cp.run_id);
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "cannot read channel {} to verify the paused run's limits: {e}",
+                fleet.channel_id
+            )
+        })?;
+    let signed = signed_pause(mur_home, &fleet.channel_id, &events, &cp.run_id)?;
     let unattended = !std::io::IsTerminal::is_terminal(&std::io::stdin());
     let from = resume_from(&cp, signed, unattended)?;
+    require_authenticated(
+        name,
+        from.bounds_authenticated,
+        crate::channel_verify::require_sig_from_env(),
+    )?;
     if !from.bounds_authenticated {
         println!(
             "  ⚠ no signed run_paused carries this run's original limits; resuming under the checkpoint's copy, tightened by fleet.yaml (check `mur fleet limits {name}`)"
