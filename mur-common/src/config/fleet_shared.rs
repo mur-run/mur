@@ -25,6 +25,8 @@ pub const FLEET_SHARED_DEFAULT_MAX_TOTAL_MB: u64 = 1024;
 pub const FLEET_SHARED_DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 /// Seconds between daemon sweeps and between runtime reply polls.
 pub const FLEET_SHARED_DEFAULT_POLL_SECS: u64 = 1;
+/// Seconds any path waits for the reply-directory lifecycle lock.
+pub const FLEET_SHARED_DEFAULT_LIFECYCLE_LOCK_TIMEOUT_SECS: u64 = 10;
 
 /// Keys that exist only in a later version; a v1 config that sets one is
 /// told so and the key has no effect.
@@ -85,6 +87,7 @@ pub struct FleetSharedAreaConfig {
     /// Read it through [`FleetSharedAreaConfig::effective_timeout_secs`].
     pub request_timeout_secs: u64,
     pub poll_secs: u64,
+    pub lifecycle_lock_timeout_secs: u64,
     /// Entries of the block that were not applied. Never written back.
     #[serde(skip)]
     pub problems: Vec<FleetSharedConfigProblem>,
@@ -102,6 +105,7 @@ impl Default for FleetSharedAreaConfig {
             on_expiry: FleetSharedOnExpiry::default(),
             request_timeout_secs: FLEET_SHARED_DEFAULT_REQUEST_TIMEOUT_SECS,
             poll_secs: FLEET_SHARED_DEFAULT_POLL_SECS,
+            lifecycle_lock_timeout_secs: FLEET_SHARED_DEFAULT_LIFECYCLE_LOCK_TIMEOUT_SECS,
             problems: Vec::new(),
         }
     }
@@ -119,6 +123,7 @@ impl PartialEq for FleetSharedAreaConfig {
             && self.on_expiry == other.on_expiry
             && self.request_timeout_secs == other.request_timeout_secs
             && self.poll_secs == other.poll_secs
+            && self.lifecycle_lock_timeout_secs == other.lifecycle_lock_timeout_secs
     }
 }
 
@@ -171,6 +176,9 @@ impl<'de> Deserialize<'de> for FleetSharedAreaConfig {
                 "max_total_mb" => positive(&value, &mut cfg.max_total_mb),
                 "request_timeout_secs" => positive(&value, &mut cfg.request_timeout_secs),
                 "poll_secs" => positive(&value, &mut cfg.poll_secs),
+                "lifecycle_lock_timeout_secs" => {
+                    positive(&value, &mut cfg.lifecycle_lock_timeout_secs)
+                }
                 "on_expiry" => match serde_json::from_value(value) {
                     Ok(v) => {
                         cfg.on_expiry = v;
@@ -231,6 +239,7 @@ mod tests {
         assert_eq!(c.on_expiry, FleetSharedOnExpiry::Delete);
         assert_eq!(c.request_timeout_secs, 30);
         assert_eq!(c.poll_secs, 1);
+        assert_eq!(c.lifecycle_lock_timeout_secs, 10);
         assert!(c.problems.is_empty());
         assert!(c.is_default());
         assert_eq!(parse("fleet:\n  autorun: true\n"), c);
@@ -296,6 +305,27 @@ mod tests {
             c.problems,
             vec![FleetSharedConfigProblem::InvalidValue("on_expiry".into())]
         );
+    }
+
+    #[test]
+    fn lifecycle_lock_timeout_is_read_and_never_zero() {
+        let c = parse("fleet:\n  shared_area:\n    lifecycle_lock_timeout_secs: 3\n");
+        assert_eq!(c.lifecycle_lock_timeout_secs, 3);
+        assert!(c.problems.is_empty());
+        assert!(!c.is_default());
+        for bad in ["0", "-1", "1.5", "never"] {
+            let c = parse(&format!(
+                "fleet:\n  shared_area:\n    lifecycle_lock_timeout_secs: {bad}\n"
+            ));
+            assert_eq!(c.lifecycle_lock_timeout_secs, 10, "input {bad}");
+            assert_eq!(
+                c.problems,
+                vec![FleetSharedConfigProblem::InvalidValue(
+                    "lifecycle_lock_timeout_secs".into()
+                )],
+                "input {bad}"
+            );
+        }
     }
 
     #[test]
