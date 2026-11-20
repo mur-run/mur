@@ -342,6 +342,7 @@ async fn open_port_through_the_real_writers_grants_the_port() {
     asker(t.path(), false);
     let s = show(t.path(), "asker", &site()).unwrap();
     assert_eq!(s.port(), Some(3000));
+    let mut live = Saves(s.snapshot.clone());
     let got = settle_with(
         t.path(),
         &s,
@@ -349,12 +350,18 @@ async fn open_port_through_the_real_writers_grants_the_port() {
         true,
         async |_: &LoginPlan, _: &mut (dyn FnMut(String) + Send)| unreachable!(),
         &mut |_| {},
-        &mut Saves(s.snapshot.clone()),
+        &mut live,
         &mut super::super::AgentPorts("asker"),
     )
     .await
     .unwrap();
     assert!(matches!(got.answered, Answered::Done { .. }), "{got:?}");
+    // The host half: the live check's failure was host opened, port not.
+    let net = live.0[0].network.as_ref().unwrap();
+    assert!(
+        net.allow_hosts.contains(&"gitea.example".to_string()),
+        "{net:?}"
+    );
     let yaml = fs::read_to_string(t.path().join("agents/asker/profile.yaml")).unwrap();
     let p: AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
     assert_eq!(p.entitlements.network.outbound.allow_ports, vec![3000]);
