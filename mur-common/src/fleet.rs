@@ -242,6 +242,28 @@ pub fn valid_fleet_name(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
+/// Longest object name in the fleet shared area, in bytes.
+pub const MAX_SHARED_OBJECT_NAME_LEN: usize = 64;
+
+/// A fleet member as named in the shared area: a canonical agent name, so it
+/// is the member's directory under `agents/` and in the store. Callers
+/// canonicalize what a user typed first; this check is exact.
+pub fn valid_member_name(name: &str) -> bool {
+    crate::validate_agent_name(name).is_ok()
+}
+
+/// An object name in the fleet shared area: `[a-z0-9][a-z0-9._-]{0,63}` with
+/// no `..`. It becomes a directory under the member's `admissions/`.
+pub fn valid_object_name(name: &str) -> bool {
+    let plain = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    name.len() <= MAX_SHARED_OBJECT_NAME_LEN
+        && name.starts_with(plain)
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|c| plain(c) || matches!(c, '.' | '_' | '-'))
+}
+
 /// Channel-id prefix for a fleet's shared channel (`fleet-<name>`).
 pub const CHANNEL_PREFIX: &str = "fleet-";
 
@@ -549,6 +571,65 @@ mod tests {
         );
         let back: Job = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(back, j);
+    }
+}
+
+#[cfg(test)]
+mod shared_name_tests {
+    use super::*;
+
+    #[test]
+    fn object_name_table() {
+        let max = "a".repeat(MAX_SHARED_OBJECT_NAME_LEN);
+        for ok in ["a", "0", "report.md", "a-b_c.1", "a.b.c", max.as_str()] {
+            assert!(valid_object_name(ok), "{ok:?} should pass");
+        }
+        let over = "a".repeat(MAX_SHARED_OBJECT_NAME_LEN + 1);
+        for bad in [
+            "",
+            ".",
+            "..",
+            ".hidden",
+            "-a",
+            "_a",
+            "a..b",
+            "a/b",
+            "a\\b",
+            "A",
+            "aB",
+            "a b",
+            "a\n",
+            "a\0",
+            "é",
+            "報告",
+            over.as_str(),
+        ] {
+            assert!(!valid_object_name(bad), "{bad:?} should fail");
+        }
+    }
+
+    #[test]
+    fn member_name_table() {
+        let max = "a".repeat(crate::MAX_AGENT_NAME_LEN);
+        for ok in ["mur", "Mur", "council-challenger", "a_b", "9", max.as_str()] {
+            assert!(valid_member_name(ok), "{ok:?} should pass");
+        }
+        let over = "a".repeat(crate::MAX_AGENT_NAME_LEN + 1);
+        for bad in [
+            "",
+            ".",
+            "..",
+            ".mur",
+            "a.b",
+            "-mur",
+            "a/b",
+            "a b",
+            "é",
+            "代理",
+            over.as_str(),
+        ] {
+            assert!(!valid_member_name(bad), "{bad:?} should fail");
+        }
     }
 }
 

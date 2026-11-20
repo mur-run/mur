@@ -331,6 +331,10 @@ pub struct FleetConfig {
     /// Allow fleets with a trigger + budget configured to auto-run unattended.
     #[serde(default)]
     pub autorun: bool,
+
+    /// Limits of the fleet shared area (`fleet.shared_area:`).
+    #[serde(default, skip_serializing_if = "FleetSharedAreaConfig::is_default")]
+    pub shared_area: FleetSharedAreaConfig,
 }
 
 /// Routing for Anthropic subscription-OAuth (`sk-ant-oat*`) tokens through a
