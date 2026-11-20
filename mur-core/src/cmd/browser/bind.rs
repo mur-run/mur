@@ -6,11 +6,10 @@
 //! alongside** the ones already bound when their domains are disjoint
 //! (#2263); `replace` drops the ones it overlaps and keeps the rest (#2493),
 //! and an overlap without `replace` is refused. Every other plan is refused
-//! with the reason, and for `NeedsHosts`
-//! the full `/browser live` command to run instead. Writes go through [`LiveOps::save_if_unchanged`], which
-//! shares `/browser live`'s save path but refuses if the entries changed
-//! since the user reviewed them; each write appends a `profile_bound` trace
-//! event.
+//! with the reason, and for `NeedsHosts` the full `/browser live` command to
+//! run instead. Writes go through [`LiveOps::save_if_unchanged`], which shares
+//! `/browser live`'s save path but refuses if the entries changed since the
+//! user reviewed them; each write appends a `profile_bound` trace event.
 
 use std::io::{BufRead, IsTerminal, Write};
 
