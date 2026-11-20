@@ -134,8 +134,23 @@ pub async fn record(
         &install_dir,
         browsers.as_deref(),
     ));
+    // Host-level escape hatch, as replay, live and doctor already apply:
+    // inside an outer seal Chromium's own sandbox cannot start, the browser
+    // dies on launch and every step fails with "Target page, context or
+    // browser has been closed". `--no-sandbox` arrives here when sealed or
+    // via `MUR_BROWSER_CHROMIUM_ARGS`.
+    // Live mode already got them from `live_proxy::launch_args`.
+    if live_config.is_none() {
+        args.extend(mur_browser::chromium::system_extra_args());
+    }
+    // `@playwright/mcp` 0.0.82 dropped `--save-trace` and refuses to start
+    // when handed it ("unknown option"), so `--trace` must not forward it.
+    // Nothing in MUR reads that trace output; keep the flag accepted.
     if trace {
-        args.push("--save-trace".into());
+        tracing::warn!(
+            run,
+            "--trace is ignored: the installed @playwright/mcp no longer supports --save-trace"
+        );
     }
     // Resolve the server before any broker state exists, so a missing install
     // fails with the setup hint and leaves no socket behind.
