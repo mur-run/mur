@@ -24,6 +24,16 @@ pub struct RequestContext {
     /// [`RequestContext::owner`] and by the unix socket transport after its
     /// lineage walk names the peer [`Caller::SelfAgent`](crate::communication_policy::Caller).
     pub runs_tools: bool,
+    /// Whether the peer is the agent's owner by construction: stdio, whose
+    /// peer launched the runtime. Owner methods
+    /// ([`mur_common::owner_call::OWNER_METHODS`]) are served to such a peer
+    /// without proof; everyone else — the agent's own lineage included —
+    /// must present one. Set only by [`RequestContext::owner`].
+    pub owner: bool,
+    /// The running peer agent this connection's lineage names, if any. It
+    /// lets a task's submitter `tasks/get` / `tasks/cancel` that task without
+    /// the owner's proof (#2488). Set only by the unix socket transport.
+    pub peer_agent: Option<String>,
 }
 
 impl RequestContext {
@@ -39,6 +49,8 @@ impl RequestContext {
             notifier: Some(notifier),
             conn: None,
             runs_tools: false,
+            owner: false,
+            peer_agent: None,
         }
     }
 
@@ -47,6 +59,7 @@ impl RequestContext {
     pub fn owner() -> Self {
         Self {
             runs_tools: true,
+            owner: true,
             ..Self::default()
         }
     }
@@ -68,6 +81,12 @@ impl RequestContext {
         Err(HandlerError::CommunicationDenied(format!(
             "{method} is served only to this agent's own processes"
         )))
+    }
+
+    /// Name the peer agent this connection's lineage resolved to.
+    pub fn with_peer_agent(mut self, peer_agent: Option<String>) -> Self {
+        self.peer_agent = peer_agent;
+        self
     }
 
     /// Attach this connection's identity (unix socket transport).
@@ -127,6 +146,11 @@ pub enum HandlerError {
     /// Too many turns already wait on this conversation.
     #[error("conversation busy: {0}")]
     ConversationBusy(String),
+    /// The agent cannot admit another caller-named task right now: every
+    /// slot in the submitter table belongs to a turn still running. Its own
+    /// code so a caller retries later instead of reading it as a refusal.
+    #[error("server busy: {0}")]
+    ServerBusy(String),
 }
 
 impl HandlerError {
@@ -150,6 +174,7 @@ impl HandlerError {
             Self::ConversationRepairing(_) => -32024,
             Self::ConversationDamaged(_) => -32025,
             Self::ConversationBusy(_) => -32026,
+            Self::ServerBusy(_) => -32030,
         }
     }
 
@@ -173,6 +198,15 @@ pub trait MethodHandler: Send + Sync {
 
 pub struct Dispatcher {
     methods: HashMap<String, Box<dyn MethodHandler>>,
+    owner_gate: Option<OwnerGate>,
+    submitters: super::task_submitters::TaskSubmitters,
+}
+
+/// What the dispatcher needs to check an owner-method proof: the name the
+/// proof is bound to and the home token it is keyed with.
+struct OwnerGate {
+    agent: String,
+    authority: crate::hitl::authority::ApprovalAuthority,
 }
 
 impl Default for Dispatcher {
@@ -185,7 +219,120 @@ impl Dispatcher {
     pub fn new() -> Self {
         Self {
             methods: HashMap::new(),
+            owner_gate: None,
+            submitters: Default::default(),
         }
+    }
+
+    /// Check owner-method proofs as agent `agent`, keyed by `authority`'s
+    /// token. Without this, an owner method is served to stdio only.
+    pub fn with_owner_gate(
+        mut self,
+        agent: &str,
+        authority: crate::hitl::authority::ApprovalAuthority,
+    ) -> Self {
+        self.owner_gate = Some(OwnerGate {
+            agent: agent.to_string(),
+            authority,
+        });
+        self
+    }
+
+    /// Every registered method name, for coverage tests.
+    pub fn method_names(&self) -> impl Iterator<Item = &str> {
+        self.methods.keys().map(String::as_str)
+    }
+
+    /// Admit an owner method from stdio or with a valid proof; refuse it
+    /// otherwise (#2488). The proof is removed from `params` either way, so
+    /// no handler sees it and a non-owner method never carries one inward.
+    fn gate_owner(
+        &self,
+        method: &str,
+        params: &mut Option<Value>,
+        ctx: &RequestContext,
+    ) -> Result<(), HandlerError> {
+        let presented = params
+            .as_mut()
+            .and_then(Value::as_object_mut)
+            .and_then(|o| o.remove(mur_common::owner_call::PARAM));
+        if !mur_common::owner_call::is_owner_method(method) || ctx.owner {
+            return Ok(());
+        }
+        if self.is_submitter_call(method, params.as_ref(), ctx) {
+            return Ok(());
+        }
+        let deny = |why: &str| {
+            Err(HandlerError::CommunicationDenied(format!(
+                "{method} is served only to this agent's owner: {why}"
+            )))
+        };
+        let Some(gate) = &self.owner_gate else {
+            return deny("this transport cannot verify the owner");
+        };
+        if !gate.authority.has_token() {
+            return deny(
+                "the agent could not load the approval token when it started; \
+                 check the agent log, then restart the agent",
+            );
+        }
+        match presented.as_ref().and_then(Value::as_str) {
+            Some(p) if gate.authority.verify_owner(&gate.agent, method, p) => Ok(()),
+            Some(_) => deny("the owner proof does not match this MUR home"),
+            None => deny(
+                "no owner proof; call it from the Hub or the `mur` CLI \
+                 running as the same user and MUR_HOME",
+            ),
+        }
+    }
+
+    /// Claim the caller-named `task_id` of a turn-starting call for the
+    /// connection's peer agent (or for no agent), first claim wins. Returns
+    /// the id when this call now holds the claim, to settle once it returns.
+    fn claim_task(
+        &self,
+        method: &str,
+        params: Option<&Value>,
+        ctx: &RequestContext,
+    ) -> Result<Option<String>, HandlerError> {
+        use super::task_submitters::{Claim, SUBMIT_METHODS};
+        if !SUBMIT_METHODS.contains(&method) {
+            return Ok(None);
+        }
+        let Some(id) = params
+            .and_then(|p| p.get("task_id"))
+            .and_then(Value::as_str)
+        else {
+            return Ok(None);
+        };
+        match self.submitters.claim(id, ctx.peer_agent.as_deref()) {
+            Claim::New => Ok(Some(id.to_string())),
+            Claim::Taken => Ok(None),
+            Claim::Full => Err(HandlerError::ServerBusy(format!(
+                "{method}: too many running turns hold a caller-named task id; \
+                 retry once one finishes"
+            ))),
+        }
+    }
+
+    /// True when a peer agent asks about, or stops, a task it submitted.
+    fn is_submitter_call(
+        &self,
+        method: &str,
+        params: Option<&Value>,
+        ctx: &RequestContext,
+    ) -> bool {
+        use super::task_submitters::SUBMITTER_METHODS;
+        let (Some(agent), true) = (
+            ctx.peer_agent.as_deref(),
+            SUBMITTER_METHODS.contains(&method),
+        ) else {
+            return false;
+        };
+        params
+            .and_then(|p| p.get("id"))
+            .and_then(Value::as_str)
+            .is_some_and(|id| self.submitters.is_submitter(id, agent))
     }
 
     pub fn register(&mut self, name: &str, handler: Box<dyn MethodHandler>) {
@@ -206,8 +353,34 @@ impl Dispatcher {
                 None,
             ));
         }
+        let mut params = req.params;
+        if self.methods.contains_key(&req.method)
+            && let Err(e) = self.gate_owner(&req.method, &mut params, ctx)
+        {
+            tracing::warn!(method = %req.method, "refused an owner method from a non-owner peer");
+            return Ok(Self::err_response(id, e.code(), &e.to_string(), e.data()));
+        }
+        let claimed = if self.methods.contains_key(&req.method) {
+            match self.claim_task(&req.method, params.as_ref(), ctx) {
+                Ok(c) => c,
+                Err(e) => return Ok(Self::err_response(id, e.code(), &e.to_string(), e.data())),
+            }
+        } else {
+            None
+        };
+        // Settles the claim however this call ends, including the future
+        // being dropped mid-turn; a refusal releases the id (#2491 review).
+        let mut settle = claimed.map(|task_id| SettleClaim {
+            submitters: &self.submitters,
+            task_id,
+            accepted: true,
+        });
         match self.methods.get(&req.method) {
-            Some(handler) => match handler.handle(req.params, ctx).await {
+            Some(handler) => match handler.handle(params, ctx).await.inspect_err(|_| {
+                if let Some(s) = settle.as_mut() {
+                    s.accepted = false;
+                }
+            }) {
                 Ok(result) => Ok(JsonRpcResponse {
                     jsonrpc: "2.0".into(),
                     id,
@@ -238,3 +411,20 @@ impl Dispatcher {
         }
     }
 }
+
+/// Settles a submission's claim when its dispatch ends, however it ends.
+struct SettleClaim<'a> {
+    submitters: &'a super::task_submitters::TaskSubmitters,
+    task_id: String,
+    accepted: bool,
+}
+
+impl Drop for SettleClaim<'_> {
+    fn drop(&mut self) {
+        self.submitters.settle(&self.task_id, self.accepted);
+    }
+}
+
+#[cfg(test)]
+#[path = "a2a_server_owner_tests.rs"]
+mod owner_tests;

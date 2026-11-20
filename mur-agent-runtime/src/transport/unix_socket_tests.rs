@@ -30,9 +30,17 @@ impl MethodHandler for Tools {
     }
 }
 
+const TOKEN: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
 async fn serve(self_pid: u32) -> (tempfile::TempDir, PathBuf) {
-    let mut d = Dispatcher::new();
+    let mut d = Dispatcher::new().with_owner_gate(
+        "alice",
+        crate::hitl::authority::ApprovalAuthority::new(Some(TOKEN.into()), true),
+    );
+    d.register("secret/set", Box::new(Ping));
     d.register("ping", Box::new(Ping));
+    d.register("message/send", Box::new(Ping));
+    d.register("tasks/cancel", Box::new(Ping));
     d.register("tools/list", Box::new(Tools("tools/list")));
     d.register("tools/call", Box::new(Tools("tools/call")));
     // Short path: sun_path is ~104 bytes on macOS.
@@ -63,9 +71,13 @@ async fn serve(self_pid: u32) -> (tempfile::TempDir, PathBuf) {
 }
 
 async fn call(sock: &PathBuf, method: &str) -> Value {
+    call_with(sock, method, json!({})).await
+}
+
+async fn call_with(sock: &PathBuf, method: &str, params: Value) -> Value {
     let s = tokio::net::UnixStream::connect(sock).await.unwrap();
     let (r, mut w) = s.into_split();
-    let req = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": {}});
+    let req = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
     w.write_all(format!("{req}\n").as_bytes()).await.unwrap();
     let mut lines = BufReader::new(r).lines();
     loop {
@@ -96,4 +108,64 @@ async fn the_agents_own_process_still_runs_tools() {
     for m in ["tools/list", "tools/call"] {
         assert_eq!(call(&sock, m).await["result"], json!("ran"), "{m}");
     }
+}
+
+/// #2488: an owner method over the real listener. Neither a peer nor the
+/// agent's own lineage may call it bare; the owner's proof is admitted.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn owner_methods_need_the_owner_proof_from_any_socket_peer() {
+    for self_pid in [1, std::process::id()] {
+        let (_dir, sock) = serve(self_pid).await;
+        let v = call(&sock, "secret/set").await;
+        assert_eq!(
+            v["error"]["code"],
+            json!(-32011),
+            "self_pid {self_pid}: {v}"
+        );
+        let p = json!({
+            mur_common::owner_call::PARAM:
+                mur_common::owner_call::proof(TOKEN, "alice", "secret/set")
+        });
+        assert_eq!(
+            call_with(&sock, "secret/set", p).await["result"],
+            json!("pong")
+        );
+    }
+}
+
+/// #2488 / #2491: a peer agent that submitted a task over the real listener
+/// may stop it without the owner's proof — the case of a fleet launched from a
+/// sealed agent's sandbox, which cannot read the token. It may not stop a task
+/// it did not submit.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn a_peer_agent_may_stop_the_task_it_submitted() {
+    // Not this process, so the test connection is a peer, not the agent.
+    let (dir, sock) = serve(1).await;
+    // Make this process a running sibling named "bob".
+    let bob = dir.path().join("agents").join("bob");
+    std::fs::create_dir_all(&bob).unwrap();
+    let lock = json!({
+        "schema": 1, "uuid": "u", "name": "bob", "pid": std::process::id(), "ppid": 0,
+        "started_at": "t", "binary_version": "v",
+        "transports": {"stdio": false, "unix_socket": null, "tcp": null, "webhook": null},
+        "card_digest": "d", "capabilities": []
+    });
+    std::fs::write(bob.join("running.lock"), lock.to_string()).unwrap();
+
+    let v = call_with(&sock, "tasks/cancel", json!({"id": "ct-1"})).await;
+    assert_eq!(v["error"]["code"], json!(-32011), "not submitted yet: {v}");
+
+    let v = call_with(&sock, "message/send", json!({"task_id": "ct-1"})).await;
+    assert_eq!(v["result"], json!("pong"), "{v}");
+
+    let v = call_with(&sock, "tasks/cancel", json!({"id": "ct-1"})).await;
+    assert_eq!(v["result"], json!("pong"), "submitter cancels: {v}");
+    let v = call_with(&sock, "tasks/cancel", json!({"id": "ct-2"})).await;
+    assert_eq!(
+        v["error"]["code"],
+        json!(-32011),
+        "someone else's task: {v}"
+    );
 }

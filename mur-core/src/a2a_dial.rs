@@ -139,6 +139,15 @@ fn dial_method_inner(
     let _span = tracing::info_span!("a2a.dial", agent = %agent_name, method = %method).entered();
     tracing::debug!(?mode, "dialing");
 
+    // Owner methods carry proof that the caller is the user (#2488). Bound to
+    // this agent and method, so the socket it lands on can replay it nowhere
+    // else. A token that cannot be read is not fatal: the runtime's refusal
+    // names the cause.
+    let mut params = params;
+    if let Err(e) = mur_common::owner_call::attach(&mut params, home, agent_name, method) {
+        tracing::warn!(error = %e, "could not read the approval token; sending without owner proof");
+    }
+
     let request_id = json!(1);
     let request = json!({
         "jsonrpc": "2.0",

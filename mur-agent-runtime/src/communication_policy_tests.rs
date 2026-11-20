@@ -203,3 +203,44 @@ fn only_own_lineage_may_run_tools_even_with_an_open_list() {
         "unreadable lineage"
     );
 }
+
+/// #2488: `peer_agent` names a running sibling (or its child) and nothing
+/// else, even under an open `accepts_from`.
+#[test]
+fn peer_agent_names_only_a_running_sibling() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let bob = tmp.path().join("bob");
+    std::fs::create_dir_all(&bob).unwrap();
+    // `running_agents` checks liveness, so bob must be a live pid: ours.
+    let bob_pid = std::process::id();
+    let lock = serde_json::json!({
+        "schema": 1, "uuid": "u", "name": "bob", "pid": bob_pid, "ppid": 0,
+        "started_at": "t", "binary_version": "v",
+        "transports": {"stdio": false, "unix_socket": null, "tcp": null, "webhook": null},
+        "card_digest": "d", "capabilities": []
+    });
+    std::fs::write(bob.join("running.lock"), lock.to_string()).unwrap();
+    let policy = AcceptPolicy {
+        accepts_from: list(&["*"]),
+        agents_dir: tmp.path().to_path_buf(),
+        self_pid: SELF,
+    };
+    const BOB_CHILD: u32 = 0x7fff_0001;
+    const USER: u32 = 0x7fff_0002;
+    let tree = move |p: u32| match p {
+        BOB_CHILD => Some(bob_pid),
+        USER | SELF => Some(1),
+        _ => None,
+    };
+    assert_eq!(
+        policy.peer_agent_with(Some(BOB_CHILD), tree).as_deref(),
+        Some("bob")
+    );
+    assert_eq!(
+        policy.peer_agent_with(Some(bob_pid), tree).as_deref(),
+        Some("bob")
+    );
+    assert_eq!(policy.peer_agent_with(Some(SELF), tree), None, "self");
+    assert_eq!(policy.peer_agent_with(Some(USER), tree), None, "user");
+    assert_eq!(policy.peer_agent_with(None, tree), None, "unknown");
+}

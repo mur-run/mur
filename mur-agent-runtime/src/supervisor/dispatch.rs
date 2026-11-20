@@ -133,7 +133,9 @@ pub(super) fn build_dispatcher(
     approval_authority: crate::hitl::authority::ApprovalAuthority,
     egress_proxy: Option<crate::sandbox::egress_proxy::EgressProxyHandle>,
 ) -> Dispatcher {
-    let mut d = Dispatcher::new();
+    // Owner methods need a proof keyed by the home token and bound to this
+    // agent's name (#2488); see `mur_common::owner_call`.
+    let mut d = Dispatcher::new().with_owner_gate(agent_name, approval_authority.clone());
     d.register("agent/card", Box::new(CardHandler::new(profile.clone())));
     d.register(
         "message/send",

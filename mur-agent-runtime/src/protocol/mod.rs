@@ -6,3 +6,4 @@ pub mod mcp_client;
 pub mod mcp_sse;
 pub mod methods;
 pub mod peer_dial;
+pub mod task_submitters;

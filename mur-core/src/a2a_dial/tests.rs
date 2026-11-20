@@ -211,3 +211,77 @@ fn match_agent_name_missing() {
         NameMatch::Missing
     );
 }
+
+// ---------------------------------------------------------------------------
+// Owner proof on owner methods (#2488)
+// ---------------------------------------------------------------------------
+
+/// A running agent `name` whose socket records the one request it gets and
+/// answers it. Returns the captured request.
+#[cfg(unix)]
+fn capture_one(home: &std::path::Path, name: &str, method: &str) -> Value {
+    use std::io::{BufRead, BufReader, Write};
+    let adir = home.join("agents").join(name);
+    std::fs::create_dir_all(&adir).unwrap();
+    std::fs::write(adir.join("profile.yaml"), format!("name: {name}\n")).unwrap();
+    // sun_path is short on macOS; keep the socket path brief.
+    let sdir = tempfile::Builder::new()
+        .prefix("oc")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let sock = sdir.path().join("s");
+    let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    let lock = serde_json::json!({
+        "schema": 1, "uuid": "u", "name": name, "pid": std::process::id(), "ppid": 1,
+        "started_at": "t", "binary_version": "v",
+        "proto_version": mur_common::build::A2A_PROTO_VERSION,
+        "transports": {"stdio": false, "unix_socket": sock.to_str().unwrap()},
+        "card_digest": "d", "capabilities": []
+    });
+    std::fs::write(adir.join("running.lock"), lock.to_string()).unwrap();
+    let srv = std::thread::spawn(move || {
+        let (s, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        BufReader::new(s.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let req: Value = serde_json::from_str(&line).unwrap();
+        let resp = serde_json::json!({"jsonrpc": "2.0", "id": req["id"], "result": {}});
+        (&s).write_all(format!("{resp}\n").as_bytes()).unwrap();
+        req
+    });
+    dial_method(home, name, method, Value::Null, DialMode::RequireRunning).unwrap();
+    let req = srv.join().unwrap();
+    drop(sdir);
+    req
+}
+
+#[cfg(unix)]
+#[test]
+fn owner_methods_carry_a_proof_bound_to_the_agent_and_never_the_token() {
+    let home = tempdir().unwrap();
+    let token = mur_common::hitl::approval_token::load_or_create(home.path()).unwrap();
+    let req = capture_one(home.path(), "alice", "tasks/cancel");
+    let sent = req["params"][mur_common::owner_call::PARAM]
+        .as_str()
+        .expect("owner proof attached");
+    assert!(mur_common::owner_call::verify(
+        &token,
+        "alice",
+        "tasks/cancel",
+        sent
+    ));
+    assert!(!req.to_string().contains(&token), "token must not travel");
+}
+
+#[cfg(unix)]
+#[test]
+fn peer_methods_carry_no_owner_proof() {
+    let home = tempdir().unwrap();
+    mur_common::hitl::approval_token::load_or_create(home.path()).unwrap();
+    let req = capture_one(home.path(), "alice", "agent/card");
+    assert!(
+        req["params"].get(mur_common::owner_call::PARAM).is_none(),
+        "{req}"
+    );
+}
