@@ -578,7 +578,9 @@ fn a_member_signed_pause_cannot_supply_the_original_bounds() {
     note(&pm, ChannelActor::System, 20.0);
 
     let events = svc.load_events(&ch.id).unwrap();
-    let got = signed_pause(tmp.path(), &ch.id, &events, RUN).expect("the router's pause");
+    let got = signed_pause(tmp.path(), &ch.id, &events, RUN)
+        .unwrap()
+        .expect("the router's pause");
     assert_eq!(
         got.bounds.and_then(|b| b.cost_usd),
         Some(5.0),
@@ -628,6 +630,7 @@ fn a_custom_router_fleet_reads_back_its_own_signed_pause() {
 
     let events = svc.load_events(&ch.id).unwrap();
     let got = signed_pause(tmp.path(), &ch.id, &events, RUN)
+        .unwrap()
         .expect("a custom-router fleet's own pause must verify");
     assert_eq!(got.bounds.and_then(|b| b.cost_usd), Some(5.0));
 }
@@ -765,4 +768,38 @@ fn stop_ends_an_interrupted_resume_like_a_paused_run() {
     assert_eq!(rec.state, crate::run_status::State::Stopped);
     assert!(checkpoint::load(home.path(), "dev", RUN).unwrap().is_none());
     assert!(!control::paused_path(home.path(), "dev").exists());
+}
+
+/// #2081 item 3: an older, looser pause must not widen a newer, tighter one.
+#[test]
+fn every_verified_pause_is_folded_to_the_tightest_bounds() {
+    let b = |d, s, c| {
+        Some(RunBounds {
+            deadline_ms: d,
+            stuck_ms: s,
+            cost_usd: c,
+        })
+    };
+    let got = fold_pauses([
+        signed(1.0, 10, 1, b(900, None, None)),
+        signed(2.0, 5, 3, b(600, Some(300), Some(5.0))),
+        signed(0.5, 20, 2, b(700, Some(100), Some(9.0))),
+        signed(0.1, 1, 0, None),
+    ])
+    .unwrap();
+    assert_eq!(
+        (got.spent_usd, got.active_elapsed_ms, got.iteration),
+        (2.0, 20, 3)
+    );
+    assert_eq!(got.bounds, b(600, Some(100), Some(5.0)));
+    assert!(fold_pauses([]).is_none());
+    assert_eq!(fold_pauses([signed(0.0, 0, 0, None)]).unwrap().bounds, None);
+}
+
+/// #2081 item 1: REQUIRE_SIG turns the unsigned-checkpoint warning into a refusal.
+#[test]
+fn require_sig_refuses_an_unauthenticated_resume() {
+    assert!(require_authenticated("dev", false, true).is_err());
+    assert!(require_authenticated("dev", false, false).is_ok());
+    assert!(require_authenticated("dev", true, true).is_ok());
 }

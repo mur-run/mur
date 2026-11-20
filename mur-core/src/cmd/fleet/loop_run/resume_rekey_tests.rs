@@ -77,7 +77,7 @@ fn resume_after(
         rekey_router(tmp.path(), &old, r);
     }
     let events = svc.load_events(&ch).unwrap();
-    let signed = signed_pause(tmp.path(), &ch, &events, RUN);
+    let signed = signed_pause(tmp.path(), &ch, &events, RUN).unwrap();
     resume_from(&edited_checkpoint(), signed, true).unwrap()
 }
 
