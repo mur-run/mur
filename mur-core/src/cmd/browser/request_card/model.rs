@@ -31,7 +31,8 @@ pub enum Offer {
     /// `BindPlan::NeedsHosts`: picking it adds `missing` in the same save.
     AddsHosts { missing: Vec<String> },
     /// `BindPlan::Overlaps`: only with the explicit replace choice, which
-    /// drops every profile in `drops` and adds `adds` (D4).
+    /// drops the profiles in `drops` (the overlapping ones, #2493) and adds
+    /// `adds` (D4).
     ReplaceOnly {
         with: String,
         domains: Vec<String>,

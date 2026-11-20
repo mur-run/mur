@@ -4,8 +4,9 @@
 //! Only [`BindPlan::Bind`] ever writes, and it only rewrites the entry's
 //! `--profile` argv — never its network policy. A profile is **added
 //! alongside** the ones already bound when their domains are disjoint
-//! (#2263); `replace` drops them instead, and an overlap without `replace` is
-//! refused. Every other plan is refused with the reason, and for `NeedsHosts`
+//! (#2263); `replace` drops the ones it overlaps and keeps the rest (#2493),
+//! and an overlap without `replace` is refused. Every other plan is refused
+//! with the reason, and for `NeedsHosts`
 //! the full `/browser live` command to run instead. Writes go through [`LiveOps::save_if_unchanged`], which
 //! shares `/browser live`'s save path but refuses if the entries changed
 //! since the user reviewed them; each write appends a `profile_bound` trace
@@ -116,8 +117,9 @@ pub(crate) fn menu(
 /// Bind `site` to `agent`'s live entry. The plan is recomputed from what
 /// `ops` reads now, not from the menu's snapshot, so a concurrent
 /// `/browser live` can never turn a refusal into a write. `bound` resolves
-/// the domains of profiles already on the entry; `replace` drops them instead
-/// of adding `site` alongside. `confirm` is the interactive reader; `None`
+/// the domains of profiles already on the entry; `replace` drops the ones
+/// `site` overlaps instead of refusing, and keeps the rest. `confirm` is the
+/// interactive reader; `None`
 /// writes without asking (the `--bind` flag is the consent).
 #[allow(clippy::too_many_arguments)] // one call site per flow; the args are the plan's inputs
 pub(crate) fn bind_agent(
@@ -141,16 +143,20 @@ pub(crate) fn bind_agent(
                 .collect()
         })
         .unwrap_or_default();
-    // Already carrying `site`: with `replace` the others still go; without
-    // it there is nothing to change.
-    if before.iter().any(|p| p == site) && (!replace || before.len() == 1) {
+    let plan = plan_bind(entry, site, domains, bound, replace);
+    // Already carrying `site`: nothing to change unless `replace` has an
+    // overlapping profile to drop.
+    let drops_nothing = match &plan {
+        BindPlan::Bind { replaces, .. } => replaces.is_empty(),
+        _ => !replace,
+    };
+    if before.iter().any(|p| p == site) && drops_nothing {
         writeln!(
             out,
             "{agent} already launches with {site:?}; nothing to bind."
         )?;
         return Ok(Outcome::Unchanged);
     }
-    let plan = plan_bind(entry, site, domains, bound, replace);
     let BindPlan::Bind {
         alongside,
         replaces,
@@ -226,24 +232,26 @@ fn quoted(names: &[String]) -> String {
 
 /// The confirmation prompt's first line: what the write will do.
 fn intent_line(agent: &str, site: &str, alongside: &[String], replaces: &[String]) -> String {
-    if !replaces.is_empty() {
-        format!("bind {site:?} to {agent}, replacing {}", quoted(replaces))
-    } else if !alongside.is_empty() {
-        format!("bind {site:?} to {agent} alongside {}", quoted(alongside))
-    } else {
-        format!("bind {site:?} to {agent}")
+    let mut line = format!("bind {site:?} to {agent}");
+    if !alongside.is_empty() {
+        line.push_str(&format!(" alongside {}", quoted(alongside)));
     }
+    if !replaces.is_empty() {
+        line.push_str(&format!(", replacing {}", quoted(replaces)));
+    }
+    line
 }
 
 /// What the write did, after it succeeded.
 fn done_line(agent: &str, site: &str, alongside: &[String], replaces: &[String]) -> String {
-    if !replaces.is_empty() {
-        format!("bound {site:?} to {agent} (was {})", quoted(replaces))
-    } else if !alongside.is_empty() {
-        format!("bound {site:?} to {agent} alongside {}", quoted(alongside))
-    } else {
-        format!("bound {site:?} to {agent}")
+    let mut line = format!("bound {site:?} to {agent}");
+    if !alongside.is_empty() {
+        line.push_str(&format!(" alongside {}", quoted(alongside)));
     }
+    if !replaces.is_empty() {
+        line.push_str(&format!(" (was {})", quoted(replaces)));
+    }
+    line
 }
 
 /// How to put the old binding back: a `/browser live` rerun with the same

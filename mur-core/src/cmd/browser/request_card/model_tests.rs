@@ -190,9 +190,10 @@ fn a_subdomain_request_under_restricted_adds_the_host() {
     );
 }
 
-/// D4, council N5: the row names every profile a replace drops.
+/// D4, council N5: the row names every profile a replace drops, which is
+/// the overlapping one and not the disjoint one beside it (#2493).
 #[test]
-fn overlap_is_replace_only_and_names_everything_it_drops() {
+fn overlap_is_replace_only_and_names_only_what_it_drops() {
     let e = restricted(&["gitea.example"], &["old", "other"]);
     let bound = |n: &str| match n {
         "old" => Some(hosts(&["gitea.example"])),
@@ -218,7 +219,7 @@ fn overlap_is_replace_only_and_names_everything_it_drops() {
         };
         assert_eq!(
             (with.as_str(), domains, drops),
-            ("old", hosts(&["gitea.example"]), hosts(&["old", "other"]))
+            ("old", hosts(&["gitea.example"]), hosts(&["old"]))
         );
     }
 }

@@ -66,8 +66,8 @@ pub enum BrowserAction {
         /// binding would need wider egress or the agent has no live entry.
         #[arg(long, value_name = "AGENT")]
         bind: Option<String>,
-        /// With `--bind`: drop the agent's other bound profiles instead of
-        /// adding this one alongside them.
+        /// With `--bind`: drop the agent's bound profiles that share a host
+        /// with this one, instead of refusing. Profiles for other hosts stay.
         #[arg(long, requires = "bind")]
         replace: bool,
     },
@@ -104,8 +104,9 @@ pub enum BrowserAction {
         /// host.
         #[arg(long, conflicts_with = "dismiss")]
         allow: bool,
-        /// Drop the agent's other bound profiles. Only for a row the card
-        /// marks "only as a replacement".
+        /// Drop the agent's bound profiles that share a host with this one;
+        /// profiles for other hosts stay. Only for a row the card marks
+        /// "only as a replacement".
         #[arg(long, conflicts_with_all = ["allow", "dismiss"])]
         replace: bool,
         /// Also open the site's non-default port. It opens to ANY host (the

@@ -24,7 +24,8 @@ use super::live_entry::{attached_profiles, norm, within};
 pub(crate) enum BindPlan {
     /// Every profile domain is reachable under the entry's policy. Safe to
     /// write. `alongside` are the profiles already bound that stay; with
-    /// `replace`, `replaces` names the ones dropped instead.
+    /// `replace`, `replaces` names the ones dropped: those sharing a domain
+    /// with `site`, and those whose metadata cannot be read (#2493).
     Bind {
         alongside: Vec<String>,
         replaces: Vec<String>,
@@ -68,7 +69,8 @@ pub(crate) type BoundDomains<'a> = dyn Fn(&str) -> Option<Vec<String>> + 'a;
 /// Plan attaching profile `site` (whose hosts are `domains`, from
 /// [`profile_domains`]) to `entry`. `entry` is the agent's live entry, or
 /// `None` when it has none. `bound` resolves the domains of profiles the
-/// entry already carries; `replace` drops them instead of adding alongside.
+/// entry already carries; `replace` drops the ones `site` overlaps instead
+/// of refusing, and keeps the rest.
 pub(crate) fn plan_bind(
     entry: Option<&McpServerEntry>,
     site: &str,
@@ -97,25 +99,22 @@ pub(crate) fn plan_bind_for(
     let bind = |entry: &McpServerEntry| bind(entry, site, domains, bound, replace);
     // The policy has to hold for the session that results, not just for the
     // profile being added (#2263): a retained profile whose hosts the entry
-    // no longer covers would otherwise ride along unreachable. `--replace`
-    // drops the others, so only the replacement is checked then. Unreadable
-    // metadata contributes nothing here; `bind` refuses it as an overlap.
-    let mut checked: Vec<String> = if replace {
-        domains.to_vec()
-    } else {
-        let mut all = domains.to_vec();
-        for other in attached_profiles(entry) {
-            if other == site {
-                continue;
-            }
-            if let Some(theirs) = bound(other) {
-                all.extend(theirs);
-            }
+    // no longer covers would otherwise ride along unreachable. A profile
+    // `--replace` drops is not retained, so it is not checked. Unreadable
+    // metadata contributes nothing here; `bind` treats it as an overlap.
+    let mut checked = domains.to_vec();
+    for other in attached_profiles(entry) {
+        if other == site {
+            continue;
         }
-        all.sort();
-        all.dedup();
-        all
-    };
+        if let Some(theirs) = bound(other)
+            && !(replace && shares(domains, Some(&theirs)))
+        {
+            checked.extend(theirs);
+        }
+    }
+    checked.sort();
+    checked.dedup();
     for h in reach.iter().map(|h| norm(h)) {
         if !checked.contains(&h) {
             checked.push(h);
@@ -167,7 +166,7 @@ pub(crate) fn plan_reach(entry: Option<&McpServerEntry>, host: &str) -> BindPlan
         &[],
         &[host.to_owned()],
         &|_: &str| Some(Vec::new()),
-        true,
+        false,
     )
 }
 
@@ -184,9 +183,14 @@ fn bind(
         .map(str::to_owned)
         .collect();
     if replace {
+        // Drop what the overlap rule below would refuse, and nothing else:
+        // a disjoint profile merges cleanly, so it stays (#2493).
+        let (replaces, alongside) = others
+            .into_iter()
+            .partition(|other| shares(domains, bound(other).as_deref()));
         return BindPlan::Bind {
-            alongside: Vec::new(),
-            replaces: others,
+            alongside,
+            replaces,
         };
     }
     for other in &others {
@@ -207,6 +211,13 @@ fn bind(
         alongside: others,
         replaces: Vec::new(),
     }
+}
+
+/// Whether a profile for `domains` cannot be merged with a bound one whose
+/// domains are `theirs`. `None` is unreadable metadata, which counts as
+/// overlapping: nothing proves the two logins are for different hosts.
+fn shares(domains: &[String], theirs: Option<&[String]>) -> bool {
+    theirs.is_none_or(|theirs| !overlap(domains, theirs).is_empty())
 }
 
 /// Domains of `a` that a cookie for some domain of `b` would also be sent to

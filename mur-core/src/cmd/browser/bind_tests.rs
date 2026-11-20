@@ -192,26 +192,31 @@ fn a_disjoint_profile_is_added_alongside_and_the_undo_restores_the_old_list() {
     assert!(!out.contains("replacing"), "{out}");
 }
 
+/// #2493: `--replace` drops the profile that overlaps and keeps the rest.
 #[test]
-fn replace_drops_the_bound_profiles_and_prints_a_working_undo() {
+fn replace_drops_the_overlapping_profile_keeps_the_rest_and_prints_a_working_undo() {
     let mut f = Fake {
         servers: vec![restricted(
             &["*.deepseek.com", "gitea.example", "x.com"],
-            Some("gitea"),
+            Some("old-ds"),
         )],
         ..Default::default()
     };
     f.servers[0]
         .args
         .extend(["--profile".to_string(), "x".to_string()]);
-    let (outcome, out) = run_with(&mut f, "deepseek", &["deepseek.com"], &disjoint, true, None);
+    let bound = |s: &str| match s {
+        "old-ds" => Some(d(&["chat.deepseek.com"])),
+        _ => Some(d(&["x.com"])),
+    };
+    let (outcome, out) = run_with(&mut f, "deepseek", &["deepseek.com"], &bound, true, None);
     assert_eq!(outcome, Outcome::Bound);
-    assert_eq!(profiles_of(&f.saves[0][0]), ["deepseek"]);
-    assert_eq!(f.bound[0].1.as_deref(), Some("gitea,x"));
-    assert!(out.contains("(was \"gitea\", \"x\")"), "{out}");
+    assert_eq!(profiles_of(&f.saves[0][0]), ["x", "deepseek"]);
+    assert_eq!(f.bound[0].1.as_deref(), Some("old-ds"));
+    assert!(out.contains("alongside \"x\" (was \"old-ds\")"), "{out}");
     assert!(
         out.contains(
-            "/browser live *.deepseek.com gitea.example x.com --profile gitea --profile x"
+            "/browser live *.deepseek.com gitea.example x.com --profile old-ds --profile x"
         ),
         "{out}"
     );
@@ -244,10 +249,11 @@ fn an_overlapping_profile_is_refused_without_replace() {
     assert_eq!(profiles_of(&f.saves[0][0]), ["ds"]);
 }
 
-/// `--replace` on an entry that already carries the site still drops the
-/// others; without it, an already-bound site is a no-op.
+/// An already-bound site is a no-op, and `--replace` does not turn it into a
+/// way to drop disjoint profiles (#2493). It still drops one that cannot be
+/// proven disjoint.
 #[test]
-fn replace_with_the_site_already_bound_drops_only_the_others() {
+fn replace_with_the_site_already_bound_drops_only_what_overlaps() {
     let mut f = Fake {
         servers: vec![restricted(&["x.com", "y.com"], Some("x"))],
         ..Default::default()
@@ -258,6 +264,11 @@ fn replace_with_the_site_already_bound_drops_only_the_others() {
     let (outcome, _) = run(&mut f, "x", &["x.com"], None);
     assert_eq!(outcome, Outcome::Unchanged);
     let (outcome, out) = run_with(&mut f, "x", &["x.com"], &disjoint, true, None);
+    assert_eq!(outcome, Outcome::Unchanged, "{out}");
+    assert!(f.saves.is_empty() && f.bound.is_empty());
+
+    let gone = |_: &str| None;
+    let (outcome, out) = run_with(&mut f, "x", &["x.com"], &gone, true, None);
     assert_eq!(outcome, Outcome::Bound, "{out}");
     assert_eq!(profiles_of(&f.saves[0][0]), ["x"]);
     assert_eq!(f.bound[0].1.as_deref(), Some("y"));
@@ -500,7 +511,9 @@ fn replacing_an_equals_style_entry_names_the_old_profile_and_keeps_one_flag() {
         servers: vec![restricted_eq(&["*.deepseek.com", "gitea.example"], "gitea")],
         ..Default::default()
     };
-    let (outcome, out) = run_with(&mut f, "deepseek", &["deepseek.com"], &disjoint, true, None);
+    // The bound profile has to overlap for `--replace` to drop it (#2493).
+    let old = |_: &str| Some(d(&["chat.deepseek.com"]));
+    let (outcome, out) = run_with(&mut f, "deepseek", &["deepseek.com"], &old, true, None);
     assert_eq!(outcome, Outcome::Bound);
     let after = &f.saves[0][0];
     assert_eq!(profile_flags(after), 1, "{:?}", after.args);
