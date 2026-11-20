@@ -1111,7 +1111,13 @@ Agent** wizard offers the same catalog as a source.
   <name>` continues under the same run id, with the same spend, the same
   consumed deadline and the same claimed job, and work already paid for is not
   redone. Paused time does not count against the deadline, and a resumed run
-  never gets wider limits than it had. `--detach` resumes in the background
+  never gets wider limits than it had: its original limits come from the
+  signed `run_paused` events on the fleet's channel (the tightest of them),
+  not from the checkpoint the run itself wrote. With no signed pause to vouch
+  for them, resume warns and uses the checkpoint tightened by `fleet.yaml`;
+  under `MUR_CHANNEL_REQUIRE_SIG=1` it refuses instead, and `mur fleet stop`
+  ends the run. A channel that cannot be read also refuses the resume.
+  `--detach` resumes in the background
   (log in `~/.mur/fleet-state/<fleet>/runs/<run_id>/resume.log`). `stop` still wins: it ends a
   paused run for good. `mur fleet list` marks a paused fleet `▮`; the Hub and
   murmur's `/deep-research pause|resume` reach the same commands.
