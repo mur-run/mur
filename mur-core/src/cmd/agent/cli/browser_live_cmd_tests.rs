@@ -420,8 +420,9 @@ fn live_fs_without_registry_skips_only_that_grant() {
     assert_eq!((fs.read.len(), fs.write.len()), (1, 1));
 }
 
-// The entry must launch THIS binary by absolute path (B0 rule 6), and the
-// `murmur` alias must not leak into the command.
+// The entry must launch the `mur` CLI by absolute path (B0 rule 6): the
+// current exe when it is the CLI, else the `mur` beside it, so neither the
+// `murmur` alias nor the Hub binary (#2484) leaks into the command.
 #[test]
 fn live_command_is_absolute_and_never_the_murmur_alias() {
     // The alias is swapped with `Path::join`, so the expected value must use
@@ -436,6 +437,12 @@ fn live_command_is_absolute_and_never_the_murmur_alias() {
     // entry must launch the sibling `mur` CLI, never the host binary.
     let p = std::path::PathBuf::from("/opt/bin/mur-hub-gui");
     assert_eq!(live_command(Ok(p)), swapped.to_string_lossy());
+    // The extension survives the swap (Windows).
+    let exe = std::path::Path::new("/opt/bin").join("mur.exe");
+    let p = std::path::PathBuf::from("/opt/bin/mur-hub-gui.exe");
+    assert_eq!(live_command(Ok(p)), exe.to_string_lossy());
+    let p = std::path::PathBuf::from("/opt/bin/mur.exe");
+    assert_eq!(live_command(Ok(p)), "/opt/bin/mur.exe");
 }
 
 // Grants merge exactly once and report only what was new.

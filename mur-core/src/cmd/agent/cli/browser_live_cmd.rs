@@ -432,24 +432,31 @@ pub(super) fn live_fs(mur_home: &Path, registry: Option<&Path>) -> FilesystemEnt
 /// for its sibling `mur`: only the CLI has a `browser record` subcommand.
 pub(super) fn live_command(exe: std::io::Result<std::path::PathBuf>) -> String {
     match exe {
-        Ok(p) => sibling_mur_cli(super::multiplex::canonical_mur_exe(p))
-            .to_string_lossy()
-            .into_owned(),
+        Ok(p) => sibling_mur_cli(p).to_string_lossy().into_owned(),
         Err(_) => "mur".into(),
     }
 }
 
-/// `exe` itself when it is the `mur` CLI, else the `mur` beside it.
+/// `exe` itself when it is the `mur` CLI, else the `mur` beside it, extension
+/// kept. One rule covers both hosts that are not the CLI: the `murmur` alias
+/// and the Hub, which runs `ProfileOps` in-process (#2484). The sibling, not
+/// a PATH lookup: the Hub bundles `mur` beside itself (`externalBin`), so this
+/// is the CLI from the same build, and a GUI's PATH is not the shell's.
 fn sibling_mur_cli(exe: std::path::PathBuf) -> std::path::PathBuf {
-    let is_cli = exe.file_name().is_some_and(|n| {
-        mur_common::mcp_first_party::MUR_CLI_NAMES.contains(&&*n.to_string_lossy())
-    });
+    let is_cli = exe
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| mur_common::mcp_first_party::MUR_CLI_NAMES.contains(&n));
     if is_cli {
         return exe;
     }
     let name = match exe.extension() {
-        Some(ext) => format!("mur.{}", ext.to_string_lossy()),
-        None => "mur".to_string(),
+        Some(ext) => {
+            let mut s = std::ffi::OsString::from("mur.");
+            s.push(ext);
+            s
+        }
+        None => std::ffi::OsString::from("mur"),
     };
     exe.with_file_name(name)
 }

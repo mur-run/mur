@@ -79,7 +79,7 @@ impl LiveOps for ProfileOps<'_> {
         let registry = mur_browser::chromium::system_server_registry_dir();
         let fs = live_fs(&home, registry.as_deref());
         let (_, mut profile) = crate::cmd::agent::load_profile_for_edit(self.0)?;
-        Ok(apply_repairs(&mut profile, servers.to_vec(), &fs)?.1)
+        Ok(apply_repairs(&mut profile, servers.to_vec(), &fs, std::env::current_exe())?.1)
     }
 }
 
@@ -94,11 +94,13 @@ fn live_spawn() -> Vec<String> {
 /// Re-pin the live entry onto this binary and backfill its fs/spawn grants on
 /// `profile` in memory. Returns whether `servers` differ from the profile's,
 /// and one note per repair. Shared by `save` and `pending_repairs` so the
-/// preview names exactly what the write will do.
+/// preview names exactly what the write will do. `exe` is the running
+/// binary (`current_exe()`), injected so a test can run this as the Hub.
 fn apply_repairs(
     profile: &mut mur_common::AgentProfile,
     servers: Vec<McpServerEntry>,
     fs: &FilesystemEntitlement,
+    exe: std::io::Result<std::path::PathBuf>,
 ) -> anyhow::Result<(bool, Vec<String>)> {
     let mut servers = servers;
     let mut notes = Vec::new();
@@ -106,7 +108,7 @@ fn apply_repairs(
     if let Some(entry) = servers.iter_mut().find(|e| e.name == LIVE_ENTRY) {
         // Hash before any write: a binary we cannot hash must not be
         // pinned, and bailing here leaves the profile untouched.
-        let command = live_command(std::env::current_exe());
+        let command = live_command(exe);
         let resolved = crate::cmd::agent_mcp_pin::resolve_command(&command)
             .with_context(|| format!("resolve browser live command `{command}`"))?;
         let sha = crate::cmd::agent_mcp_pin::compute_binary_sha256(&resolved)?;
@@ -164,7 +166,8 @@ impl ProfileOps<'_> {
             return Ok(None);
         }
         let before = profile.clone();
-        let (servers_changed, notes) = apply_repairs(&mut profile, servers, &fs)?;
+        let (servers_changed, notes) =
+            apply_repairs(&mut profile, servers, &fs, std::env::current_exe())?;
         // Nothing to persist: skip the write so `updated_at` stays put and the
         // caller can tell "no change" from "saved".
         if servers_changed || !notes.is_empty() {
@@ -301,12 +304,40 @@ mod tests {
         let mut p = profile();
         let before = p.entitlements.processes.spawn.clone();
         let fs = FilesystemEntitlement::default();
-        let (_, notes) = apply_repairs(&mut p, Vec::new(), &fs).unwrap();
+        let (_, notes) = apply_repairs(&mut p, Vec::new(), &fs, std::env::current_exe()).unwrap();
         assert_eq!(p.entitlements.processes.spawn.allowed, before.allowed);
         assert_eq!(
             p.entitlements.processes.spawn.allowed_dirs,
             before.allowed_dirs
         );
         assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    /// #2484: settled from the Hub, `current_exe()` is `mur-hub-gui`. The
+    /// repair must pin the sibling `mur` (command and hash), never the Hub,
+    /// and must also repair an entry a Hub settle already broke.
+    #[test]
+    fn repairs_from_the_hub_pin_the_sibling_mur_cli() {
+        let dir = tempfile::tempdir().unwrap();
+        let hub = dir.path().join("mur-hub-gui");
+        let cli = dir.path().join("mur");
+        std::fs::write(&hub, b"hub").unwrap();
+        std::fs::write(&cli, b"cli").unwrap();
+        let cli_sha = crate::cmd::agent_mcp_pin::compute_binary_sha256(&cli).unwrap();
+        let broken = McpServerEntry {
+            name: LIVE_ENTRY.into(),
+            command: hub.to_string_lossy().into_owned(),
+            binary_sha256: Some(crate::cmd::agent_mcp_pin::compute_binary_sha256(&hub).unwrap()),
+            ..Default::default()
+        };
+        let mut p = profile();
+        let fs = FilesystemEntitlement::default();
+        let (changed, _) = apply_repairs(&mut p, vec![broken], &fs, Ok(hub.clone())).unwrap();
+        assert!(changed);
+        let entry = p.mcp_servers.iter().find(|e| e.name == LIVE_ENTRY).unwrap();
+        assert_eq!(entry.command, cli.to_string_lossy());
+        assert_eq!(entry.binary_sha256.as_deref(), Some(cli_sha.as_str()));
+        let hub_s = hub.to_string_lossy().into_owned();
+        assert!(!p.entitlements.processes.spawn.allowed.contains(&hub_s));
     }
 }
