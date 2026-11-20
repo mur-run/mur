@@ -57,7 +57,8 @@ where
         };
         // stdio is a single peer; notifications already fan to this one stdout
         // via the baked notifier, so no per-connection routing is needed.
-        let resp = match dispatcher.dispatch(req, &RequestContext::none()).await {
+        // That peer is whoever launched the runtime, so it is the owner.
+        let resp = match dispatcher.dispatch(req, &RequestContext::owner()).await {
             Ok(r) => r,
             Err(_) => continue,
         };

@@ -18,6 +18,12 @@ pub struct RequestContext {
     /// Who is on the other end of this connection, and whether it has
     /// redeemed a shim ticket. `None` for transports that cannot say.
     pub conn: Option<std::sync::Arc<crate::hitl::shim_ticket::Connection>>,
+    /// Whether the peer may run this agent's tools (`tools/*`). Defaults to
+    /// `false`, so a transport that cannot establish the peer is this agent
+    /// (TCP, or a socket peer from another lineage) fails closed. Set only by
+    /// [`RequestContext::owner`] and by the unix socket transport after its
+    /// lineage walk names the peer [`Caller::SelfAgent`](crate::communication_policy::Caller).
+    pub runs_tools: bool,
 }
 
 impl RequestContext {
@@ -32,7 +38,36 @@ impl RequestContext {
         Self {
             notifier: Some(notifier),
             conn: None,
+            runs_tools: false,
         }
+    }
+
+    /// A context for the agent's owner: stdio, whose peer is the process
+    /// that launched the runtime, and in-process callers.
+    pub fn owner() -> Self {
+        Self {
+            runs_tools: true,
+            ..Self::default()
+        }
+    }
+
+    /// Mark whether this connection's peer may run the agent's tools.
+    pub fn with_runs_tools(mut self, runs_tools: bool) -> Self {
+        self.runs_tools = runs_tools;
+        self
+    }
+
+    /// Refuse `method` unless the peer may run this agent's tools. A peer
+    /// that passed `accepts_from` may talk to the agent; it may not borrow
+    /// the agent's tools, vault and sandbox grants, or receive tool output
+    /// that never taints the borrower's session (#2488).
+    pub fn require_tool_access(&self, method: &str) -> Result<(), HandlerError> {
+        if self.runs_tools {
+            return Ok(());
+        }
+        Err(HandlerError::CommunicationDenied(format!(
+            "{method} is served only to this agent's own processes"
+        )))
     }
 
     /// Attach this connection's identity (unix socket transport).

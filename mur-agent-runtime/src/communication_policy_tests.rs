@@ -178,3 +178,28 @@ fn an_open_list_skips_identification() {
     };
     assert!(p.check(None).is_ok());
 }
+
+/// #2488: `is_self` gates tool execution, and an open `accepts_from` must not
+/// widen it. Only this agent's own lineage counts — never a peer agent, its
+/// children, the user's shell, or a peer whose lineage cannot be read.
+#[test]
+fn only_own_lineage_may_run_tools_even_with_an_open_list() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let policy = AcceptPolicy {
+        accepts_from: list(&["*"]),
+        agents_dir: tmp.path().to_path_buf(),
+        self_pid: SELF,
+    };
+    assert!(policy.is_self_with(Some(SELF), tree));
+    assert!(policy.is_self_with(Some(101), tree), "own child (the shim)");
+    // No running.lock in tmp, so PEER reads as the user here: still refused.
+    for pid in [PEER, 201, 202, 501] {
+        assert!(!policy.is_self_with(Some(pid), tree), "pid {pid}");
+    }
+    assert!(!policy.is_self_with(None, tree), "no peer credential");
+    assert!(!policy.is_self_with(Some(0), tree), "pid 0 is unknown");
+    assert!(
+        !policy.is_self_with(Some(202), |_| None),
+        "unreadable lineage"
+    );
+}
