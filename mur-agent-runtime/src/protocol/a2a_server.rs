@@ -24,6 +24,12 @@ pub struct RequestContext {
     /// [`RequestContext::owner`] and by the unix socket transport after its
     /// lineage walk names the peer [`Caller::SelfAgent`](crate::communication_policy::Caller).
     pub runs_tools: bool,
+    /// Whether the peer is the agent's owner by construction: stdio, whose
+    /// peer launched the runtime. Owner methods
+    /// ([`mur_common::owner_call::OWNER_METHODS`]) are served to such a peer
+    /// without proof; everyone else — the agent's own lineage included —
+    /// must present one. Set only by [`RequestContext::owner`].
+    pub owner: bool,
 }
 
 impl RequestContext {
@@ -39,6 +45,7 @@ impl RequestContext {
             notifier: Some(notifier),
             conn: None,
             runs_tools: false,
+            owner: false,
         }
     }
 
@@ -47,6 +54,7 @@ impl RequestContext {
     pub fn owner() -> Self {
         Self {
             runs_tools: true,
+            owner: true,
             ..Self::default()
         }
     }
@@ -173,6 +181,14 @@ pub trait MethodHandler: Send + Sync {
 
 pub struct Dispatcher {
     methods: HashMap<String, Box<dyn MethodHandler>>,
+    owner_gate: Option<OwnerGate>,
+}
+
+/// What the dispatcher needs to check an owner-method proof: the name the
+/// proof is bound to and the home token it is keyed with.
+struct OwnerGate {
+    agent: String,
+    authority: crate::hitl::authority::ApprovalAuthority,
 }
 
 impl Default for Dispatcher {
@@ -185,6 +201,66 @@ impl Dispatcher {
     pub fn new() -> Self {
         Self {
             methods: HashMap::new(),
+            owner_gate: None,
+        }
+    }
+
+    /// Check owner-method proofs as agent `agent`, keyed by `authority`'s
+    /// token. Without this, an owner method is served to stdio only.
+    pub fn with_owner_gate(
+        mut self,
+        agent: &str,
+        authority: crate::hitl::authority::ApprovalAuthority,
+    ) -> Self {
+        self.owner_gate = Some(OwnerGate {
+            agent: agent.to_string(),
+            authority,
+        });
+        self
+    }
+
+    /// Every registered method name, for coverage tests.
+    pub fn method_names(&self) -> impl Iterator<Item = &str> {
+        self.methods.keys().map(String::as_str)
+    }
+
+    /// Admit an owner method from stdio or with a valid proof; refuse it
+    /// otherwise (#2488). The proof is removed from `params` either way, so
+    /// no handler sees it and a non-owner method never carries one inward.
+    fn gate_owner(
+        &self,
+        method: &str,
+        params: &mut Option<Value>,
+        ctx: &RequestContext,
+    ) -> Result<(), HandlerError> {
+        let presented = params
+            .as_mut()
+            .and_then(Value::as_object_mut)
+            .and_then(|o| o.remove(mur_common::owner_call::PARAM));
+        if !mur_common::owner_call::is_owner_method(method) || ctx.owner {
+            return Ok(());
+        }
+        let deny = |why: &str| {
+            Err(HandlerError::CommunicationDenied(format!(
+                "{method} is served only to this agent's owner: {why}"
+            )))
+        };
+        let Some(gate) = &self.owner_gate else {
+            return deny("this transport cannot verify the owner");
+        };
+        if !gate.authority.has_token() {
+            return deny(
+                "the agent could not load the approval token when it started; \
+                 check the agent log, then restart the agent",
+            );
+        }
+        match presented.as_ref().and_then(Value::as_str) {
+            Some(p) if gate.authority.verify_owner(&gate.agent, method, p) => Ok(()),
+            Some(_) => deny("the owner proof does not match this MUR home"),
+            None => deny(
+                "no owner proof; call it from the Hub or the `mur` CLI \
+                 running as the same user and MUR_HOME",
+            ),
         }
     }
 
@@ -206,8 +282,15 @@ impl Dispatcher {
                 None,
             ));
         }
+        let mut params = req.params;
+        if self.methods.contains_key(&req.method)
+            && let Err(e) = self.gate_owner(&req.method, &mut params, ctx)
+        {
+            tracing::warn!(method = %req.method, "refused an owner method from a non-owner peer");
+            return Ok(Self::err_response(id, e.code(), &e.to_string(), e.data()));
+        }
         match self.methods.get(&req.method) {
-            Some(handler) => match handler.handle(req.params, ctx).await {
+            Some(handler) => match handler.handle(params, ctx).await {
                 Ok(result) => Ok(JsonRpcResponse {
                     jsonrpc: "2.0".into(),
                     id,
@@ -238,3 +321,7 @@ impl Dispatcher {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "a2a_server_owner_tests.rs"]
+mod owner_tests;

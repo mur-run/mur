@@ -30,8 +30,14 @@ impl MethodHandler for Tools {
     }
 }
 
+const TOKEN: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
 async fn serve(self_pid: u32) -> (tempfile::TempDir, PathBuf) {
-    let mut d = Dispatcher::new();
+    let mut d = Dispatcher::new().with_owner_gate(
+        "alice",
+        crate::hitl::authority::ApprovalAuthority::new(Some(TOKEN.into()), true),
+    );
+    d.register("secret/set", Box::new(Ping));
     d.register("ping", Box::new(Ping));
     d.register("tools/list", Box::new(Tools("tools/list")));
     d.register("tools/call", Box::new(Tools("tools/call")));
@@ -63,9 +69,13 @@ async fn serve(self_pid: u32) -> (tempfile::TempDir, PathBuf) {
 }
 
 async fn call(sock: &PathBuf, method: &str) -> Value {
+    call_with(sock, method, json!({})).await
+}
+
+async fn call_with(sock: &PathBuf, method: &str, params: Value) -> Value {
     let s = tokio::net::UnixStream::connect(sock).await.unwrap();
     let (r, mut w) = s.into_split();
-    let req = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": {}});
+    let req = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
     w.write_all(format!("{req}\n").as_bytes()).await.unwrap();
     let mut lines = BufReader::new(r).lines();
     loop {
@@ -95,5 +105,29 @@ async fn the_agents_own_process_still_runs_tools() {
     let (_dir, sock) = serve(std::process::id()).await;
     for m in ["tools/list", "tools/call"] {
         assert_eq!(call(&sock, m).await["result"], json!("ran"), "{m}");
+    }
+}
+
+/// #2488: an owner method over the real listener. Neither a peer nor the
+/// agent's own lineage may call it bare; the owner's proof is admitted.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn owner_methods_need_the_owner_proof_from_any_socket_peer() {
+    for self_pid in [1, std::process::id()] {
+        let (_dir, sock) = serve(self_pid).await;
+        let v = call(&sock, "secret/set").await;
+        assert_eq!(
+            v["error"]["code"],
+            json!(-32011),
+            "self_pid {self_pid}: {v}"
+        );
+        let p = json!({
+            mur_common::owner_call::PARAM:
+                mur_common::owner_call::proof(TOKEN, "alice", "secret/set")
+        });
+        assert_eq!(
+            call_with(&sock, "secret/set", p).await["result"],
+            json!("pong")
+        );
     }
 }

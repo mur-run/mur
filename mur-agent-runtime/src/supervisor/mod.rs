@@ -289,3 +289,6 @@ pub fn entrypoint() -> anyhow::Result<()> {
         pre_socket,
     }))
 }
+
+#[cfg(test)]
+mod method_classification_tests;

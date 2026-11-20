@@ -99,6 +99,22 @@ impl ApprovalAuthority {
     }
 }
 
+impl ApprovalAuthority {
+    /// Whether `proof` shows an owner-method call on `agent` came from the
+    /// user (`mur_common::owner_call`). Unlike an approval this does not
+    /// require the seal: an unsealed boot has no peer boundary to protect, and
+    /// refusing would lock the owner out of their own agent's controls.
+    pub fn verify_owner(&self, agent: &str, method: &str, proof: &str) -> bool {
+        self.token
+            .as_deref()
+            .is_some_and(|t| mur_common::owner_call::verify(t, agent, method, proof))
+    }
+
+    pub fn has_token(&self) -> bool {
+        self.token.is_some()
+    }
+}
+
 impl std::fmt::Debug for ApprovalAuthority {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ApprovalAuthority")
