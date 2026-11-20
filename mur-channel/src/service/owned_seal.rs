@@ -7,12 +7,16 @@
 //!   head, as a sandboxed agent's would be. Never under the writer's own key
 //!   once a record is live — that head would fail every owned-channel check.
 //!
+//! A commander directive ([`HeadSealer::RouterAlways`]) is router-sealed in
+//! every case: its signer writes nothing else, so it never owns a head.
+//!
 //! A live record the head does not yet cover (a C1 crash between the line and
 //! its head) is sealed by the router like any other, as `append_human` does.
 
 use anyhow::{Context, Result};
 
 use super::anchored::{HeadSealer, HeadSigner};
+use super::create::RouterSeal;
 use crate::store::ChannelStore;
 use crate::verify::human::HumanTrust;
 use crate::{anchor, head_io};
@@ -22,19 +26,35 @@ use crate::{anchor, head_io};
 const OWNER_RECORD_TAG: &str = "\"owner-key-enrolled\"";
 
 /// The signer that actually seals for `signer`, or `None` for an unanchored
-/// write. Anything but [`HeadSealer::Writer`] passes through unchanged.
-/// Caller must hold the append lock.
+/// write. [`HeadSealer::EventSigner`] and [`HeadSealer::Router`] pass through
+/// unchanged. Caller must hold the append lock.
 pub(super) fn resolve<'a>(
     store: &ChannelStore,
     channel_id: &str,
     signer: HeadSigner<'a>,
 ) -> Result<Option<HeadSigner<'a>>> {
-    let HeadSealer::Writer { router } = signer.sealer else {
-        return Ok(Some(signer));
+    let (router, always) = match signer.sealer {
+        HeadSealer::Writer { router } => (router, false),
+        HeadSealer::RouterAlways { router } => (Some(router), true),
+        _ => return Ok(Some(signer)),
     };
-    let event_sealed = HeadSigner {
-        sealer: HeadSealer::EventSigner,
+    let by_router = |r: RouterSeal<'a>, live_record| HeadSigner {
+        sealer: HeadSealer::Router {
+            identity: r.identity,
+            kv: r.kv,
+            key_home: r.key_home,
+            live_record,
+        },
         ..signer
+    };
+    // No live record: the writer seals its own head, except a directive,
+    // whose head is the router's (taking over one its signer sealed before).
+    let event_sealed = match router {
+        Some(r) if always => by_router(r, false),
+        _ => HeadSigner {
+            sealer: HeadSealer::EventSigner,
+            ..signer
+        },
     };
     let path = store.events_path(channel_id)?;
     let log = match std::fs::read_to_string(&path) {
@@ -52,15 +72,7 @@ pub(super) fn resolve<'a>(
         return Ok(Some(event_sealed));
     }
     match router {
-        Some(r) => Ok(Some(HeadSigner {
-            sealer: HeadSealer::Router {
-                identity: r.identity,
-                kv: r.kv,
-                key_home: r.key_home,
-                live_record: true,
-            },
-            ..signer
-        })),
+        Some(r) => Ok(Some(by_router(r, true))),
         None => {
             tracing::debug!(
                 channel_id,

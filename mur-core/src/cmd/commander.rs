@@ -4,8 +4,11 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use mur_common::commander::{COMMANDER_DIRECTIVE_KEY, GovernanceState};
-use mur_common::identity::AgentIdentity;
+use mur_common::identity::{AgentIdentity, IdentityError};
+
+use crate::channel_writer::{ROUTER_AGENT, read_key_version};
 
 pub use mur_common::commander::{COMMANDER_DIR, COMMANDER_PREV_PUB, COMMANDER_PUB};
 
@@ -30,6 +33,28 @@ pub fn accepted_pubkeys(mur_home: &Path) -> Vec<[u8; 32]> {
         }
     }
     out
+}
+
+/// True when `ev` is a directive line that one of `keys` signed: the check
+/// `fold_governance` makes before it honours one. A directive is a `System`
+/// line the router did not sign, so the per-actor check alone would call
+/// every one of them a bad signature.
+pub(crate) fn is_signed_directive(keys: &[[u8; 32]], channel_id: &str, ev: &ChannelEvent) -> bool {
+    let Some(sig) = ev.sig.as_deref() else {
+        return false;
+    };
+    ev.payload.get(COMMANDER_DIRECTIVE_KEY).is_some()
+        && keys.iter().any(|pk| {
+            mur_channel::sign::verify_event_sig(
+                channel_id,
+                &ev.actor,
+                ev.kind,
+                &ev.payload,
+                ev.idempotency_key.as_deref(),
+                sig,
+                pk,
+            )
+        })
 }
 
 /// Fold governance for `fleet` from its channel. Err on channel read failure
@@ -154,22 +179,69 @@ pub fn cmd_commander_directive(
     // sandbox, so it moves the trusted head. A kill directive is usually the
     // LAST line of the fleet log — without an anchor after it, truncating one
     // line silently un-kills the fleet.
-    let ev = svc.append_and_anchor_v1(
-        &format!("fleet-{fleet}"),
-        &id,
-        0,
-        &mur_home.join(COMMANDER_DIR),
-        mur_common::channel::ChannelActor::System,
-        mur_common::channel::EventKind::Note,
-        payload,
-        Some(nonce.clone()),
-    )?;
+    //
+    // The ROUTER key seals that head; the commander key only signs the line.
+    // The head belongs to the channel's writer: sealed by the commander, the
+    // router could never advance it again, and sealed by the router first,
+    // the commander could not advance it (the directive was written, took
+    // effect, and was reported as failed).
+    let channel_id = format!("fleet-{fleet}");
+    let commander_home = mur_home.join(COMMANDER_DIR);
+    let router_home = mur_home.join("agents").join(ROUTER_AGENT);
+    let (actor, event_kind) = (ChannelActor::System, EventKind::Note);
+    let anchored = |router: Option<&AgentIdentity>| {
+        svc.append_and_anchor_v1(
+            &channel_id,
+            &id,
+            0,
+            &commander_home,
+            router.map(|identity| mur_channel::service::RouterSeal {
+                identity,
+                kv: read_key_version(&router_home),
+                key_home: &router_home,
+            }),
+            actor.clone(),
+            event_kind,
+            payload.clone(),
+            Some(nonce.clone()),
+        )
+    };
+    let ev = match AgentIdentity::load(&router_home) {
+        Ok(router) => anchored(Some(&router))?,
+        // A home with no router key has no other head sealer to collide
+        // with: the commander seals, as it always has there.
+        Err(IdentityError::NotFound) => anchored(None)?,
+        // The router key exists but cannot be read here. The directive must
+        // still land (a kill that is refused is worse than one whose anchor
+        // lags), so it goes in past the head and the router's next write
+        // covers it.
+        Err(e) => {
+            eprintln!(
+                "warning: the router key under {} could not be read ({e}); the directive is \
+                 written but the signed head does not cover it until the router next writes",
+                router_home.display()
+            );
+            svc.append_signed_v1(
+                &channel_id,
+                &id,
+                0,
+                actor.clone(),
+                event_kind,
+                payload.clone(),
+                Some(nonce.clone()),
+            )?
+        }
+    };
     println!(
         "Issued commander '{kind}' for fleet '{fleet}' (seq {}, nonce {nonce})",
         ev.seq
     );
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "commander_head_tests.rs"]
+mod head_tests;
 
 #[cfg(test)]
 mod tests {
