@@ -17,6 +17,9 @@ use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 /// The channel's router/owner agent; defined beside the verification that
 /// resolves System/Human actors to it ([`mur_channel::verify::ROUTER_AGENT`]).
 pub use mur_channel::verify::ROUTER_AGENT;
+/// Who signs a write. Shared with the verifier, so a writer cannot pick a
+/// trust root the reader does not check against (#2081).
+pub use mur_channel::verify::Signer;
 
 /// Plant a signing identity for `agent` under `home`, so events that agent
 /// writes in a test are SIGNED the way they are in production.
@@ -168,9 +171,9 @@ pub fn ingest_signing_handoff() -> anyhow::Result<()> {
 ///
 /// A child signs as the agent that spawned it and as nothing else — a run
 /// that writes on behalf of some other agent falls back to the disk path.
-fn handoff_for(router_agent: &str) -> Option<(&'static mur_common::identity::AgentIdentity, u32)> {
+fn handoff_for(signer_agent: &str) -> Option<(&'static mur_common::identity::AgentIdentity, u32)> {
     let (agent, kv, id) = HANDOFF.get()?.as_ref()?;
-    (agent == router_agent).then_some((id, *kv))
+    (agent == signer_agent).then_some((id, *kv))
 }
 
 /// Leave a durable, readable mark when a write is refused.
@@ -184,7 +187,7 @@ fn handoff_for(router_agent: &str) -> Option<(&'static mur_common::identity::Age
 /// Best-effort on purpose: if the sidecar cannot be written we still return
 /// the original refusal. Losing the breadcrumb must never turn a fail-closed
 /// refusal into something else.
-fn record_refusal(home: &Path, router_agent: &str, reason: &str) {
+fn record_refusal(home: &Path, signer_agent: &str, reason: &str) {
     // Counted BEFORE the write is attempted. The count is what a run's
     // closing summary reports, and a refusal that could not even be
     // written to the sidecar (unwritable home, full disk) is the one most
@@ -196,7 +199,7 @@ fn record_refusal(home: &Path, router_agent: &str, reason: &str) {
     }
     let line = serde_json::json!({
         "ts": chrono::Utc::now().to_rfc3339(),
-        "router_agent": router_agent,
+        "router_agent": signer_agent,
         "pid": std::process::id(),
         "reason": reason,
     });
@@ -210,7 +213,7 @@ fn record_refusal(home: &Path, router_agent: &str, reason: &str) {
     }
 }
 
-/// How this process signs as `router_agent`, resolved once for every kind of
+/// How this process signs as `signer_agent`, resolved once for every kind of
 /// write.
 ///
 /// `Ok(Some(..))` — sign. `Ok(None)` — no key exists at all and enforcement
@@ -253,10 +256,10 @@ pub(crate) struct WriterKey {
     pub(crate) source: KeySource,
 }
 
-pub(crate) fn writer_key(home: &Path, router_agent: &str) -> anyhow::Result<Option<WriterKey>> {
+pub(crate) fn writer_key(home: &Path, signer_agent: &str) -> anyhow::Result<Option<WriterKey>> {
     writer_key_with(
         home,
-        router_agent,
+        signer_agent,
         crate::channel_verify::require_sig_from_env(),
     )
 }
@@ -266,12 +269,12 @@ pub(crate) fn writer_key(home: &Path, router_agent: &str) -> anyhow::Result<Opti
 /// process-global env (which `cargo test`'s parallel threads would race on).
 fn writer_key_with(
     home: &Path,
-    router_agent: &str,
+    signer_agent: &str,
     require_sig: bool,
 ) -> anyhow::Result<Option<WriterKey>> {
     resolve_writer_key(
         home,
-        router_agent,
+        signer_agent,
         Refuse {
             require_sig,
             awaits_answer: false,
@@ -295,7 +298,7 @@ struct Refuse {
 
 fn resolve_writer_key(
     home: &Path,
-    router_agent: &str,
+    signer_agent: &str,
     refuse: Refuse,
 ) -> anyhow::Result<Option<WriterKey>> {
     let Refuse {
@@ -307,14 +310,14 @@ fn resolve_writer_key(
     // and handed it over stdin, so prefer that when it is for THIS writer.
     // Checked before the disk read because the disk read is the thing that
     // cannot work here, not a faster path we are skipping.
-    if let Some((id, kv)) = handoff_for(router_agent) {
+    if let Some((id, kv)) = handoff_for(signer_agent) {
         return Ok(Some(WriterKey {
             id: id.clone(),
             kv,
             source: KeySource::Handoff,
         }));
     }
-    let agent_home = home.join("agents").join(router_agent);
+    let agent_home = home.join("agents").join(signer_agent);
     match mur_common::identity::AgentIdentity::load(&agent_home) {
         Ok(id) => Ok(Some(WriterKey {
             kv: read_key_version(&agent_home),
@@ -330,11 +333,11 @@ fn resolve_writer_key(
         Err(mur_common::identity::IdentityError::NotFound) => {
             if require_sig {
                 let reason = format!(
-                    "refusing to write an unsigned event as '{router_agent}': the writer key \
+                    "refusing to write an unsigned event as '{signer_agent}': the writer key \
                      does not exist (expected under {}), and MUR_CHANNEL_REQUIRE_SIG is set",
                     agent_home.display()
                 );
-                record_refusal(home, router_agent, &reason);
+                record_refusal(home, signer_agent, &reason);
                 anyhow::bail!(reason);
             }
             Ok(None)
@@ -350,27 +353,27 @@ fn resolve_writer_key(
                 // Typed, so a caller that knows the remedy (the write-grant
                 // gate: "grant it from your own terminal") can say it.
                 let reason = format!(
-                    "cannot sign an approval request as '{router_agent}': the writer key is \
+                    "cannot sign an approval request as '{signer_agent}': the writer key is \
                      unreadable ({e}), and an unsigned request could never be approved"
                 );
-                record_refusal(home, router_agent, &reason);
+                record_refusal(home, signer_agent, &reason);
                 return Err(UnanswerableRequest(reason).into());
             }
             if require_sig {
                 // The reader would reject an unsigned event anyway; fail here,
                 // where the cause is still legible, instead of at verification.
                 let reason = format!(
-                    "refusing to write an unsigned event as '{router_agent}': the writer key \
+                    "refusing to write an unsigned event as '{signer_agent}': the writer key \
                      is unreadable ({e}), and MUR_CHANNEL_REQUIRE_SIG is set"
                 );
                 // Leave a trace before unwinding: this Err is discarded by
                 // several call sites, and a sandboxed child's stderr is not
                 // reliably captured anywhere.
-                record_refusal(home, router_agent, &reason);
+                record_refusal(home, signer_agent, &reason);
                 anyhow::bail!(reason);
             }
             tracing::warn!(
-                router_agent,
+                signer_agent,
                 error = %e,
                 "writer signing key is present but unreadable — writing UNSIGNED. \
                  Signature verification is not protecting this channel while that holds."
@@ -380,7 +383,7 @@ fn resolve_writer_key(
     }
 }
 
-/// Move `channel_id` to `new_state`, SIGNED by `router_agent` when possible.
+/// Move `channel_id` to `new_state`, SIGNED by `signer` when possible.
 ///
 /// The signed counterpart of `ChannelService::transition`. A run's start and
 /// end are the two events every surface reads to decide whether work is in
@@ -390,12 +393,12 @@ pub fn transition_as_writer(
     svc: &ChannelService,
     home: &Path,
     channel_id: &str,
-    router_agent: &str,
+    signer: Signer<'_>,
     new_state: mur_common::channel::ChannelState,
     actor: ChannelActor,
     run_id: Option<&str>,
 ) -> anyhow::Result<ChannelEvent> {
-    match writer_key(home, router_agent)? {
+    match writer_key(home, signer.agent_name())? {
         // Same provenance rule as `append_with_key`: only a key read from
         // disk proves this process is outside the sandbox, so only it anchors.
         Some(WriterKey {
@@ -409,7 +412,7 @@ pub fn transition_as_writer(
             run_id,
             &id,
             kv,
-            &home.join("agents").join(router_agent),
+            &signer.key_home(home),
         ),
         Some(WriterKey { id, kv, .. }) => {
             svc.transition_signed(channel_id, new_state, actor, run_id, Some((&id, kv)))
@@ -418,18 +421,22 @@ pub fn transition_as_writer(
     }
 }
 
-/// Append `actor`/`kind`/`payload` to `channel_id`, SIGNED by `router_agent`'s
+/// Append `actor`/`kind`/`payload` to `channel_id`, SIGNED by `signer`'s
 /// identity when it is available, else unsigned (migration-safe).
 ///
-/// `home` is the `~/.mur` root; the router identity is loaded from
-/// `<home>/agents/<router_agent>/identity.{key,pub}` and its key version from
-/// that agent's `profile.yaml`.
+/// `home` is the `~/.mur` root; the identity is loaded from
+/// `<home>/agents/<name>/identity.{key,pub}` and its key version from that
+/// agent's `profile.yaml`.
+///
+/// Pass the signer a reader will check `actor` against
+/// ([`Signer::for_actor`]): [`Signer::ControlPlane`] for a `System` or
+/// keyless `Human` event, [`Signer::Agent`] for an agent speaking as itself.
 #[allow(clippy::too_many_arguments)]
 pub fn append_as_writer(
     svc: &ChannelService,
     home: &Path,
     channel_id: &str,
-    router_agent: &str,
+    signer: Signer<'_>,
     actor: ChannelActor,
     kind: EventKind,
     payload: serde_json::Value,
@@ -439,7 +446,7 @@ pub fn append_as_writer(
         svc,
         home,
         channel_id,
-        router_agent,
+        signer.agent_name(),
         actor,
         kind,
         payload,
@@ -456,16 +463,16 @@ fn append_as_writer_with(
     svc: &ChannelService,
     home: &Path,
     channel_id: &str,
-    router_agent: &str,
+    signer_agent: &str,
     actor: ChannelActor,
     kind: EventKind,
     payload: serde_json::Value,
     idem: Option<String>,
     require_sig: bool,
 ) -> anyhow::Result<ChannelEvent> {
-    match writer_key_with(home, router_agent, require_sig)? {
+    match writer_key_with(home, signer_agent, require_sig)? {
         Some(key) => {
-            let key_home = home.join("agents").join(router_agent);
+            let key_home = home.join("agents").join(signer_agent);
             append_with_key(
                 svc, home, channel_id, key, &key_home, actor, kind, payload, idem,
             )
@@ -482,7 +489,8 @@ fn append_as_writer_with(
 #[error("{0}")]
 pub struct UnanswerableRequest(pub String);
 
-/// Append a `HitlRequest`, SIGNED by `router_agent`.
+/// Append a `HitlRequest`, signed by the control plane — the only signer
+/// `hitl::authority` accepts a request from, so there is no signer to pass.
 ///
 /// [`append_as_writer`] with one extra refusal: when `awaits_answer` (a
 /// human must release the gate) and the router key exists but this process
@@ -495,7 +503,6 @@ pub fn append_hitl_request(
     svc: &ChannelService,
     home: &Path,
     channel_id: &str,
-    router_agent: &str,
     payload: serde_json::Value,
     awaits_answer: bool,
 ) -> anyhow::Result<ChannelEvent> {
@@ -503,21 +510,22 @@ pub fn append_hitl_request(
         require_sig: crate::channel_verify::require_sig_from_env(),
         awaits_answer,
     };
-    append_request_with(svc, home, channel_id, router_agent, payload, refuse)
+    let signer = Signer::ControlPlane.agent_name();
+    append_request_with(svc, home, channel_id, signer, payload, refuse)
 }
 
 fn append_request_with(
     svc: &ChannelService,
     home: &Path,
     channel_id: &str,
-    router_agent: &str,
+    signer_agent: &str,
     payload: serde_json::Value,
     refuse: Refuse,
 ) -> anyhow::Result<ChannelEvent> {
     let (actor, kind) = (ChannelActor::System, EventKind::HitlRequest);
-    match resolve_writer_key(home, router_agent, refuse)? {
+    match resolve_writer_key(home, signer_agent, refuse)? {
         Some(key) => {
-            let key_home = home.join("agents").join(router_agent);
+            let key_home = home.join("agents").join(signer_agent);
             append_with_key(
                 svc, home, channel_id, key, &key_home, actor, kind, payload, None,
             )
@@ -578,6 +586,10 @@ mod missing_key_tests;
 #[cfg(test)]
 #[path = "channel_writer_request_tests.rs"]
 mod request_tests;
+
+#[cfg(test)]
+#[path = "channel_writer_signer_tests.rs"]
+mod signer_tests;
 
 #[cfg(test)]
 #[path = "channel_writer_tests.rs"]

@@ -331,7 +331,7 @@ fn answer(w: &World, hitl_id: &str, hash: &str, allow: bool, actor: ChannelActor
         &svc,
         w.home.path(),
         BROKER_CHANNEL_ID,
-        ROUTER_AGENT,
+        mur_core::channel_writer::Signer::ControlPlane,
         actor,
         EventKind::HitlResponse,
         serde_json::json!({

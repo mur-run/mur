@@ -266,7 +266,7 @@ fn crashed_in_round_two() -> (tempfile::TempDir, String) {
             &svc,
             home,
             &fleet.channel_id,
-            crate::channel_writer::ROUTER_AGENT,
+            crate::channel_writer::Signer::ControlPlane,
             mur_common::channel::ChannelActor::System,
             EventKind::Note,
             to_note_payload(p),

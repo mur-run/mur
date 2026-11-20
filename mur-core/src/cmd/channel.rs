@@ -405,7 +405,7 @@ mod approve_tests {
             &ChannelService::open(home).unwrap(),
             home,
             channel_id,
-            ROUTER_AGENT,
+            crate::channel_writer::Signer::ControlPlane,
             ChannelActor::System,
             EventKind::HitlRequest,
             serde_json::to_value(&req).unwrap(),

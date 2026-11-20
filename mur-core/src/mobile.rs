@@ -667,7 +667,7 @@ pub fn respond_hitl(
             &svc,
             home,
             channel_id,
-            crate::channel_writer::ROUTER_AGENT,
+            crate::channel_writer::Signer::ControlPlane,
             ChannelActor::local_human(),
             EventKind::HitlResponse,
             serde_json::to_value(&resp)?,

@@ -163,7 +163,7 @@ fn the_headline_says_stopped_when_the_rail_reports_a_stop() {
         &svc,
         &a.home,
         "fleet-dev",
-        crate::channel_writer::ROUTER_AGENT,
+        crate::channel_writer::Signer::ControlPlane,
         mur_common::channel::ChannelActor::System,
         mur_common::channel::EventKind::StateChange,
         serde_json::json!({"from": "working", "to": "failed",

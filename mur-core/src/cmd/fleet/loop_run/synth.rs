@@ -100,7 +100,7 @@ pub(super) fn synthesize_via_router(
             &svc,
             mur_home,
             &fleet.channel_id,
-            fleet.router_or_concierge(),
+            crate::channel_writer::Signer::Agent(fleet.router_or_concierge()),
             ChannelActor::Agent {
                 id: fleet.router_or_concierge().to_string(),
             },

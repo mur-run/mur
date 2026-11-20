@@ -26,7 +26,7 @@ fn note(home: &Path, ch: &str, i: usize) {
         &svc,
         home,
         ch,
-        ROUTER_AGENT,
+        crate::channel_writer::Signer::ControlPlane,
         ChannelActor::System,
         EventKind::Note,
         serde_json::json!({ "text": format!("event {i}") }),

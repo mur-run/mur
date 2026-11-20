@@ -178,7 +178,7 @@ pub(super) fn append_session_stopped(
         &svc,
         mur_home,
         channel_id,
-        crate::channel_writer::ROUTER_AGENT,
+        crate::channel_writer::Signer::ControlPlane,
         mur_common::channel::ChannelActor::System,
         mur_common::channel::EventKind::Note,
         to_note_payload(&payload),

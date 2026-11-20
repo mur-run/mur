@@ -596,10 +596,7 @@ fn verify_events(
     events
         .into_iter()
         .filter(|ev| {
-            let agent = match &ev.actor {
-                ChannelActor::Agent { id } => id.as_str(),
-                _ => crate::channel_writer::ROUTER_AGENT,
-            };
+            let agent = crate::channel_writer::Signer::for_actor(&ev.actor).agent_name();
             // Same key-dir resolution as `actor_pubkey`, including its refusal
             // to join an actor id that is not a valid agent name.
             let pk = *cache
