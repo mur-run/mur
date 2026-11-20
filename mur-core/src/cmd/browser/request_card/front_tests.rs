@@ -91,6 +91,38 @@ impl LiveOps for Ops {
     }
 }
 
+/// [`Ops`] whose guarded save succeeds, so the port step is reached.
+struct Saves(Vec<McpServerEntry>);
+
+impl LiveOps for Saves {
+    fn servers(&mut self) -> Result<Vec<McpServerEntry>> {
+        Ok(self.0.clone())
+    }
+    fn mcp_add(&mut self, _: &[String], _: McpServerNetwork) -> Result<String> {
+        panic!("the card never creates an entry")
+    }
+    fn save(&mut self, _: Vec<McpServerEntry>) -> Result<(Vec<String>, Effect)> {
+        panic!("the card saves only through save_if_unchanged")
+    }
+    fn save_if_unchanged(
+        &mut self,
+        _: &[McpServerEntry],
+        next: Vec<McpServerEntry>,
+    ) -> Result<Option<(Vec<String>, Effect)>> {
+        self.0 = next;
+        Ok(Some((Vec::new(), Effect::Restart)))
+    }
+    fn pending_repairs(&mut self, _: &[McpServerEntry]) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+    fn record_research(&mut self, _: &str) -> Result<()> {
+        Ok(())
+    }
+    fn record_profile_bound(&mut self, _: &str, _: Option<&str>, _: &str) -> Result<()> {
+        Ok(())
+    }
+}
+
 struct NoPorts;
 impl PortOps for NoPorts {
     fn open(&mut self, _: u16) -> Result<String> {
@@ -367,4 +399,39 @@ fn status_is_saved_not_tried_until_an_agent_writes_back() {
     assert_eq!(status(t.path(), "fresh").unwrap(), Status::SavedNotTried);
     assert_eq!(status(t.path(), "used").unwrap(), Status::AgentReported(at));
     assert!(status(t.path(), "../x").is_err());
+}
+
+/// #2360 s4 live check: `--open-port` must land in `outbound.allow_ports`
+/// through the real writers, not only open the host.
+#[tokio::test]
+async fn open_port_through_the_real_writers_grants_the_port() {
+    let t = tempfile::tempdir().unwrap();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_HOME", t.path());
+    asker(t.path(), false);
+    let s = show(t.path(), "asker", &site()).unwrap();
+    assert_eq!(s.port(), Some(3000));
+    let mut live = Saves(s.snapshot.clone());
+    let got = settle_with(
+        t.path(),
+        &s,
+        Pick::Allow,
+        true,
+        async |_: &LoginPlan, _: &mut (dyn FnMut(String) + Send)| unreachable!(),
+        &mut |_| {},
+        &mut live,
+        &mut super::super::AgentPorts("asker"),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(got.answered, Answered::Done { .. }), "{got:?}");
+    // The host half: the live check's failure was host opened, port not.
+    let net = live.0[0].network.as_ref().unwrap();
+    assert!(
+        net.allow_hosts.contains(&"gitea.example".to_string()),
+        "{net:?}"
+    );
+    let yaml = fs::read_to_string(t.path().join("agents/asker/profile.yaml")).unwrap();
+    let p: AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
+    assert_eq!(p.entitlements.network.outbound.allow_ports, vec![3000]);
 }
