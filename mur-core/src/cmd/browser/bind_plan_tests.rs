@@ -156,20 +156,49 @@ fn disjoint_profile_is_added_alongside_the_bound_one_but_never_itself() {
     );
 }
 
+/// `--replace` exists to get past an overlap, so it drops what overlaps and
+/// nothing else (#2493). A profile whose metadata is gone cannot be proven
+/// disjoint, so it goes too; a disjoint one stays.
 #[test]
-fn replace_drops_every_bound_profile_instead_of_adding() {
+fn replace_drops_only_the_overlapping_and_unreadable_profiles() {
     let mut e = entry(
         Some(McpNetMode::Restricted),
-        &["deepseek.com", "gitea.example", "x.com"],
+        &["deepseek.com", "gitea.example"],
+        &[],
+        Some("old-ds"),
+    );
+    for p in ["gitea", "ghost"] {
+        e.args.extend(["--profile".to_string(), p.to_string()]);
+    }
+    let bound = |s: &str| match s {
+        "old-ds" => Some(d(&["chat.deepseek.com"])),
+        "gitea" => Some(d(&["gitea.example"])),
+        _ => None,
+    };
+    assert_eq!(
+        plan_bind(Some(&e), "ds", &d(&["deepseek.com"]), &bound, true),
+        BindPlan::Bind {
+            alongside: vec!["gitea".into()],
+            replaces: vec!["old-ds".into(), "ghost".into()],
+        }
+    );
+}
+
+/// With nothing overlapping, `--replace` is the plain add.
+#[test]
+fn replace_without_an_overlap_drops_nothing() {
+    let e = entry(
+        Some(McpNetMode::Restricted),
+        &["deepseek.com", "gitea.example"],
         &[],
         Some("gitea"),
     );
-    e.args.extend(["--profile".to_string(), "x".to_string()]);
+    let gitea = |s: &str| (s == "gitea").then(|| d(&["gitea.example"]));
     assert_eq!(
-        plan_bind(Some(&e), "ds", &d(&["deepseek.com"]), &disjoint, true),
+        plan_bind(Some(&e), "ds", &d(&["deepseek.com"]), &gitea, true),
         BindPlan::Bind {
-            alongside: Vec::new(),
-            replaces: vec!["gitea".into(), "x".into()],
+            alongside: vec!["gitea".into()],
+            replaces: Vec::new(),
         }
     );
 }
@@ -292,14 +321,22 @@ fn restricted_refuses_when_a_retained_profile_is_no_longer_covered() {
     );
 }
 
-/// With `--replace` the retained profiles are dropped, so only the
-/// replacement has to be covered.
+/// `--replace` drops only what overlaps (#2493), so a profile it keeps still
+/// has to be covered, while one it drops does not.
 #[test]
-fn replace_checks_only_the_replacement_against_the_policy() {
+fn replace_checks_the_profiles_it_keeps_but_not_the_ones_it_drops() {
     let e = entry(Some(McpNetMode::Restricted), &["b.com"], &[], Some("a"));
-    let bound = |site: &str| (site == "a").then(|| d(&["a.com"]));
+    let kept = |site: &str| (site == "a").then(|| d(&["a.com"]));
     assert_eq!(
-        plan_bind(Some(&e), "b", &d(&["b.com"]), &bound, true),
+        plan_bind(Some(&e), "b", &d(&["b.com"]), &kept, true),
+        BindPlan::NeedsHosts {
+            current: d(&["b.com"]),
+            missing: d(&["a.com"]),
+        }
+    );
+    let dropped = |site: &str| (site == "a").then(|| d(&["a.com", "www.b.com"]));
+    assert_eq!(
+        plan_bind(Some(&e), "b", &d(&["b.com"]), &dropped, true),
         BindPlan::Bind {
             alongside: Vec::new(),
             replaces: d(&["a"]),

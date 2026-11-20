@@ -736,7 +736,8 @@ Agent** wizard offers the same catalog as a source.
   hosts is added alongside the bound ones and their sessions are merged at
   launch, so one live browser is logged in to every site at once. Two
   profiles that share a host are refused (the merge would silently pick one
-  login); `--bind <agent> --replace` drops the bound profiles instead.
+  login); `--bind <agent> --replace` drops the bound profiles that share
+  a host and keeps the ones for other hosts.
   Binding only changes the entry's `--profile`, never its network policy: an
   agent whose
   `allow_hosts` do not cover the profile's host is refused with the full
