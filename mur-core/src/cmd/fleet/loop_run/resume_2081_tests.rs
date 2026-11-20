@@ -6,6 +6,9 @@ use super::tests::{RUN, paused_home, signed};
 use super::*;
 use mur_common::channel::ChannelActor;
 
+/// The variable `channel_verify::require_sig_from_env` reads.
+const REQUIRE_SIG_ENV: &str = "MUR_CHANNEL_REQUIRE_SIG";
+
 fn tight() -> RunBounds {
     RunBounds {
         deadline_ms: 600_000,
@@ -97,26 +100,45 @@ fn a_reappended_looser_pause_cannot_widen_the_signed_bounds() {
 
 /// Item 2: an unreadable channel refuses the resume instead of reading as
 /// "no signed pause" and falling back to the checkpoint. Nothing is touched.
+///
+/// Asserted with and without `MUR_CHANNEL_REQUIRE_SIG` (#2499): the read fails
+/// before the flag is consulted, so under the flag the refusal is still the
+/// read failure — not "no signed run_paused", which would misreport a channel
+/// that could not be read as one that was read and found unsigned.
 #[tokio::test]
 async fn an_unreadable_channel_refuses_the_resume() {
-    let home = paused_home(None);
-    // A directory where the log should be: present, but not readable as one.
-    let log = mur_channel::ChannelStore::new(home.path())
-        .events_path("fleet-dev")
-        .unwrap();
-    std::fs::create_dir_all(&log).unwrap();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    for require_sig in [false, true] {
+        if require_sig {
+            envg.set_var(REQUIRE_SIG_ENV, "1");
+        } else {
+            envg.unset_var(REQUIRE_SIG_ENV);
+        }
+        assert_eq!(
+            crate::channel_verify::require_sig_from_env(),
+            require_sig,
+            "the flag did not reach the reader"
+        );
 
-    let err = cmd_fleet_resume(home.path(), "dev").await.unwrap_err();
-    assert!(
-        format!("{err:#}").contains("to verify the paused run's limits"),
-        "{err:#}"
-    );
-    assert!(
-        signed_pause(home.path(), "fleet-dev", &[], RUN).is_err(),
-        "signed_pause must refuse an unreadable channel on its own"
-    );
-    assert!(control::paused_path(home.path(), "dev").exists());
-    assert!(checkpoint::load(home.path(), "dev", RUN).unwrap().is_some());
+        let home = paused_home(None);
+        // A directory where the log should be: present, but not readable as one.
+        let log = mur_channel::ChannelStore::new(home.path())
+            .events_path("fleet-dev")
+            .unwrap();
+        std::fs::create_dir_all(&log).unwrap();
+
+        let err = cmd_fleet_resume(home.path(), "dev").await.unwrap_err();
+        assert!(
+            format!("{err:#}").contains("to verify the paused run's limits"),
+            "require_sig={require_sig}: {err:#}"
+        );
+        assert!(
+            signed_pause(home.path(), "fleet-dev", &[], RUN).is_err(),
+            "require_sig={require_sig}: signed_pause must refuse an unreadable channel on its own"
+        );
+        assert!(control::paused_path(home.path(), "dev").exists());
+        assert!(checkpoint::load(home.path(), "dev", RUN).unwrap().is_some());
+    }
 }
 
 /// Item 1: REQUIRE_SIG turns the unsigned-checkpoint warning into a refusal.
