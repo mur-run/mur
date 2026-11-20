@@ -181,9 +181,11 @@ pub async fn serve_unix_listener(
             // Decided once per connection, like the accepts_from gate. No
             // policy (tests only) means no known self pid: fail closed.
             let runs_tools = policy.as_deref().is_some_and(|p| p.is_self(peer_pid));
+            let peer_agent = policy.as_deref().and_then(|p| p.peer_agent(peer_pid));
             let ctx = RequestContext::with_notifier(conn_notif_tx)
                 .with_conn(crate::hitl::shim_ticket::Connection::new(peer_pid))
-                .with_runs_tools(runs_tools);
+                .with_runs_tools(runs_tools)
+                .with_peer_agent(peer_agent);
 
             let codec = LinesCodec::new_with_max_length(MAX_LINE_BYTES);
             let mut framed = FramedRead::new(read, codec);

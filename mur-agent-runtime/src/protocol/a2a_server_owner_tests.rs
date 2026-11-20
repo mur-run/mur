@@ -21,7 +21,13 @@ impl MethodHandler for Echo {
 
 fn dispatcher(authority: ApprovalAuthority) -> Dispatcher {
     let mut d = Dispatcher::new().with_owner_gate(AGENT, authority);
-    for m in ["secret/set", "tasks/cancel", "message/send"] {
+    for m in [
+        "secret/set",
+        "tasks/cancel",
+        "tasks/get",
+        "message/send",
+        "channel/delegate",
+    ] {
         d.register(m, Box::new(Echo));
     }
     d
@@ -146,4 +152,78 @@ async fn a_stray_proof_never_reaches_a_peer_method_handler() {
     let p = json!({"x": 1, PARAM: "anything"});
     let r = call(&d, "message/send", p, &RequestContext::none()).await;
     assert_eq!(r.result, Some(json!({"x": 1})));
+}
+
+fn peer(name: &str) -> RequestContext {
+    RequestContext::none().with_peer_agent(Some(name.into()))
+}
+
+/// A fleet started by a sealed agent's `fleet_run` cannot read the token, yet
+/// its kill-switch must stop the member turn it delegated (#2488 / #2491).
+#[tokio::test]
+async fn a_submitter_may_follow_and_stop_its_own_task() {
+    let d = dispatcher(sealed());
+    let r = call(
+        &d,
+        "channel/delegate",
+        json!({"task_id": "ct-1"}),
+        &peer("mur"),
+    )
+    .await;
+    assert!(r.result.is_some(), "{r:?}");
+    for m in ["tasks/get", "tasks/cancel"] {
+        let r = call(&d, m, json!({"id": "ct-1"}), &peer("mur")).await;
+        assert_eq!(r.result, Some(json!({"id": "ct-1"})), "{m}: {r:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_sibling_cannot_stop_another_agents_task() {
+    let d = dispatcher(sealed());
+    call(&d, "message/send", json!({"task_id": "ct-1"}), &peer("mur")).await;
+    let r = call(&d, "tasks/cancel", json!({"id": "ct-1"}), &peer("bob")).await;
+    assert!(denied(&r), "{r:?}");
+    // Nor a task that no one submitted over this dispatcher.
+    let r = call(&d, "tasks/cancel", json!({"id": "ct-2"}), &peer("mur")).await;
+    assert!(denied(&r), "{r:?}");
+}
+
+#[tokio::test]
+async fn reusing_a_claimed_id_does_not_adopt_the_task() {
+    let d = dispatcher(sealed());
+    // The user's CLI (no peer agent) starts the turn first.
+    call(
+        &d,
+        "message/send",
+        json!({"task_id": "task-1"}),
+        &RequestContext::none(),
+    )
+    .await;
+    call(
+        &d,
+        "message/send",
+        json!({"task_id": "task-1"}),
+        &peer("bob"),
+    )
+    .await;
+    let r = call(&d, "tasks/cancel", json!({"id": "task-1"}), &peer("bob")).await;
+    assert!(denied(&r), "{r:?}");
+}
+
+#[tokio::test]
+async fn a_submitter_gets_nothing_beyond_its_tasks() {
+    let d = dispatcher(sealed());
+    call(&d, "message/send", json!({"task_id": "ct-1"}), &peer("mur")).await;
+    let r = call(&d, "secret/set", json!({"id": "ct-1"}), &peer("mur")).await;
+    assert!(denied(&r), "{r:?}");
+}
+
+#[tokio::test]
+async fn a_refused_submission_claims_nothing() {
+    let d = dispatcher(sealed());
+    // An unknown method is never dispatched, so it cannot claim an id.
+    call(&d, "no/such", json!({"task_id": "ct-1"}), &peer("bob")).await;
+    call(&d, "message/send", json!({"task_id": "ct-1"}), &peer("mur")).await;
+    let r = call(&d, "tasks/cancel", json!({"id": "ct-1"}), &peer("mur")).await;
+    assert!(r.result.is_some(), "{r:?}");
 }

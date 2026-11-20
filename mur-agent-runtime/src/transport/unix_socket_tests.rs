@@ -39,6 +39,8 @@ async fn serve(self_pid: u32) -> (tempfile::TempDir, PathBuf) {
     );
     d.register("secret/set", Box::new(Ping));
     d.register("ping", Box::new(Ping));
+    d.register("message/send", Box::new(Ping));
+    d.register("tasks/cancel", Box::new(Ping));
     d.register("tools/list", Box::new(Tools("tools/list")));
     d.register("tools/call", Box::new(Tools("tools/call")));
     // Short path: sun_path is ~104 bytes on macOS.
@@ -130,4 +132,40 @@ async fn owner_methods_need_the_owner_proof_from_any_socket_peer() {
             json!("pong")
         );
     }
+}
+
+/// #2488 / #2491: a peer agent that submitted a task over the real listener
+/// may stop it without the owner's proof — the case of a fleet launched from a
+/// sealed agent's sandbox, which cannot read the token. It may not stop a task
+/// it did not submit.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn a_peer_agent_may_stop_the_task_it_submitted() {
+    // Not this process, so the test connection is a peer, not the agent.
+    let (dir, sock) = serve(1).await;
+    // Make this process a running sibling named "bob".
+    let bob = dir.path().join("agents").join("bob");
+    std::fs::create_dir_all(&bob).unwrap();
+    let lock = json!({
+        "schema": 1, "uuid": "u", "name": "bob", "pid": std::process::id(), "ppid": 0,
+        "started_at": "t", "binary_version": "v",
+        "transports": {"stdio": false, "unix_socket": null, "tcp": null, "webhook": null},
+        "card_digest": "d", "capabilities": []
+    });
+    std::fs::write(bob.join("running.lock"), lock.to_string()).unwrap();
+
+    let v = call_with(&sock, "tasks/cancel", json!({"id": "ct-1"})).await;
+    assert_eq!(v["error"]["code"], json!(-32011), "not submitted yet: {v}");
+
+    let v = call_with(&sock, "message/send", json!({"task_id": "ct-1"})).await;
+    assert_eq!(v["result"], json!("pong"), "{v}");
+
+    let v = call_with(&sock, "tasks/cancel", json!({"id": "ct-1"})).await;
+    assert_eq!(v["result"], json!("pong"), "submitter cancels: {v}");
+    let v = call_with(&sock, "tasks/cancel", json!({"id": "ct-2"})).await;
+    assert_eq!(
+        v["error"]["code"],
+        json!(-32011),
+        "someone else's task: {v}"
+    );
 }

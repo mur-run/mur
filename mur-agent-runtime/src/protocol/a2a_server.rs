@@ -30,6 +30,10 @@ pub struct RequestContext {
     /// without proof; everyone else — the agent's own lineage included —
     /// must present one. Set only by [`RequestContext::owner`].
     pub owner: bool,
+    /// The running peer agent this connection's lineage names, if any. It
+    /// lets a task's submitter `tasks/get` / `tasks/cancel` that task without
+    /// the owner's proof (#2488). Set only by the unix socket transport.
+    pub peer_agent: Option<String>,
 }
 
 impl RequestContext {
@@ -46,6 +50,7 @@ impl RequestContext {
             conn: None,
             runs_tools: false,
             owner: false,
+            peer_agent: None,
         }
     }
 
@@ -76,6 +81,12 @@ impl RequestContext {
         Err(HandlerError::CommunicationDenied(format!(
             "{method} is served only to this agent's own processes"
         )))
+    }
+
+    /// Name the peer agent this connection's lineage resolved to.
+    pub fn with_peer_agent(mut self, peer_agent: Option<String>) -> Self {
+        self.peer_agent = peer_agent;
+        self
     }
 
     /// Attach this connection's identity (unix socket transport).
@@ -182,6 +193,7 @@ pub trait MethodHandler: Send + Sync {
 pub struct Dispatcher {
     methods: HashMap<String, Box<dyn MethodHandler>>,
     owner_gate: Option<OwnerGate>,
+    submitters: super::task_submitters::TaskSubmitters,
 }
 
 /// What the dispatcher needs to check an owner-method proof: the name the
@@ -202,6 +214,7 @@ impl Dispatcher {
         Self {
             methods: HashMap::new(),
             owner_gate: None,
+            submitters: Default::default(),
         }
     }
 
@@ -240,6 +253,9 @@ impl Dispatcher {
         if !mur_common::owner_call::is_owner_method(method) || ctx.owner {
             return Ok(());
         }
+        if self.is_submitter_call(method, params.as_ref(), ctx) {
+            return Ok(());
+        }
         let deny = |why: &str| {
             Err(HandlerError::CommunicationDenied(format!(
                 "{method} is served only to this agent's owner: {why}"
@@ -262,6 +278,41 @@ impl Dispatcher {
                  running as the same user and MUR_HOME",
             ),
         }
+    }
+
+    /// Claim the caller-named `task_id` of a turn-starting call for the
+    /// connection's peer agent (or for no agent), first claim wins.
+    fn claim_task(&self, method: &str, params: Option<&Value>, ctx: &RequestContext) {
+        use super::task_submitters::SUBMIT_METHODS;
+        if !SUBMIT_METHODS.contains(&method) {
+            return;
+        }
+        if let Some(id) = params
+            .and_then(|p| p.get("task_id"))
+            .and_then(Value::as_str)
+        {
+            self.submitters.record(id, ctx.peer_agent.as_deref());
+        }
+    }
+
+    /// True when a peer agent asks about, or stops, a task it submitted.
+    fn is_submitter_call(
+        &self,
+        method: &str,
+        params: Option<&Value>,
+        ctx: &RequestContext,
+    ) -> bool {
+        use super::task_submitters::SUBMITTER_METHODS;
+        let (Some(agent), true) = (
+            ctx.peer_agent.as_deref(),
+            SUBMITTER_METHODS.contains(&method),
+        ) else {
+            return false;
+        };
+        params
+            .and_then(|p| p.get("id"))
+            .and_then(Value::as_str)
+            .is_some_and(|id| self.submitters.is_submitter(id, agent))
     }
 
     pub fn register(&mut self, name: &str, handler: Box<dyn MethodHandler>) {
@@ -288,6 +339,9 @@ impl Dispatcher {
         {
             tracing::warn!(method = %req.method, "refused an owner method from a non-owner peer");
             return Ok(Self::err_response(id, e.code(), &e.to_string(), e.data()));
+        }
+        if self.methods.contains_key(&req.method) {
+            self.claim_task(&req.method, params.as_ref(), ctx);
         }
         match self.methods.get(&req.method) {
             Some(handler) => match handler.handle(params, ctx).await {

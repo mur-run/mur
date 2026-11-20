@@ -169,6 +169,25 @@ impl AcceptPolicy {
         self.is_self_with(peer_pid, crate::hitl::shim_ticket::parent_of)
     }
 
+    /// The peer agent on the other end, if lineage names one. Unlike
+    /// [`check`](Self::check) this never short-circuits on `*`. Used to let a
+    /// task's submitter follow and stop that task (#2488).
+    pub fn peer_agent(&self, peer_pid: Option<u32>) -> Option<String> {
+        self.peer_agent_with(peer_pid, crate::hitl::shim_ticket::parent_of)
+    }
+
+    fn peer_agent_with(
+        &self,
+        peer_pid: Option<u32>,
+        parent: impl Fn(u32) -> Option<u32>,
+    ) -> Option<String> {
+        let running = running_agents(&self.agents_dir);
+        match identify(peer_pid, self.self_pid, &running, parent) {
+            Caller::Agent(name) => Some(name),
+            _ => None,
+        }
+    }
+
     fn is_self_with(&self, peer_pid: Option<u32>, parent: impl Fn(u32) -> Option<u32>) -> bool {
         let running = running_agents(&self.agents_dir);
         identify(peer_pid, self.self_pid, &running, parent) == Caller::SelfAgent
