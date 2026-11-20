@@ -148,3 +148,40 @@ fn require_sig_refuses_an_unauthenticated_resume() {
     assert!(require_authenticated("dev", false, false).is_ok());
     assert!(require_authenticated("dev", true, true).is_ok());
 }
+
+/// Item 1 end to end (#2499, optional case): under `MUR_CHANNEL_REQUIRE_SIG` a
+/// paused run that only an unsigned checkpoint vouches for is refused before
+/// the run starts — the run lock is never taken and the pause is left intact.
+#[tokio::test]
+async fn require_sig_refuses_an_unsigned_checkpoint_before_the_run_lock() {
+    use mur_common::paths::{FLEET_RUN_LOCK_FILE, FLEET_RUN_OWNER_FILE, fleet_state_dir};
+
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var(REQUIRE_SIG_ENV, "1");
+    assert!(crate::channel_verify::require_sig_from_env());
+
+    // Sentinel + checkpoint + `Paused` record, and no `run_paused` on the channel.
+    let home = paused_home(None);
+    let state = fleet_state_dir(home.path(), "dev");
+    let lock_files = [
+        state.join(FLEET_RUN_LOCK_FILE),
+        state.join(FLEET_RUN_OWNER_FILE),
+    ];
+    for f in &lock_files {
+        assert!(!f.exists(), "fixture already has {}", f.display());
+    }
+
+    let err = cmd_fleet_resume(home.path(), "dev").await.unwrap_err();
+    assert!(
+        format!("{err:#}").contains("refusing to resume from the unsigned checkpoint"),
+        "{err:#}"
+    );
+    // `run_lock::acquire` creates both files, and neither is removed on
+    // release, so their absence means the lock was never taken.
+    for f in &lock_files {
+        assert!(!f.exists(), "the run lock was taken: {}", f.display());
+    }
+    assert!(!run_lock::is_held(home.path(), "dev"));
+    assert!(control::paused_path(home.path(), "dev").exists());
+    assert!(checkpoint::load(home.path(), "dev", RUN).unwrap().is_some());
+}
