@@ -146,6 +146,11 @@ pub enum HandlerError {
     /// Too many turns already wait on this conversation.
     #[error("conversation busy: {0}")]
     ConversationBusy(String),
+    /// The agent cannot admit another caller-named task right now: every
+    /// slot in the submitter table belongs to a turn still running. Its own
+    /// code so a caller retries later instead of reading it as a refusal.
+    #[error("server busy: {0}")]
+    ServerBusy(String),
 }
 
 impl HandlerError {
@@ -169,6 +174,7 @@ impl HandlerError {
             Self::ConversationRepairing(_) => -32024,
             Self::ConversationDamaged(_) => -32025,
             Self::ConversationBusy(_) => -32026,
+            Self::ServerBusy(_) => -32030,
         }
     }
 
@@ -302,7 +308,7 @@ impl Dispatcher {
         match self.submitters.claim(id, ctx.peer_agent.as_deref()) {
             Claim::New => Ok(Some(id.to_string())),
             Claim::Taken => Ok(None),
-            Claim::Full => Err(HandlerError::CommunicationDenied(format!(
+            Claim::Full => Err(HandlerError::ServerBusy(format!(
                 "{method}: too many running turns hold a caller-named task id; \
                  retry once one finishes"
             ))),

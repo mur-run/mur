@@ -256,3 +256,22 @@ impl MethodHandler for Refuse {
         Err(HandlerError::InvalidParams("missing message".into()))
     }
 }
+
+#[tokio::test]
+async fn a_full_claim_table_answers_busy_not_denied() {
+    let d = dispatcher(sealed());
+    // Fill every slot with a claim whose submit call is still running.
+    for i in 0..crate::protocol::task_submitters::MAX_ENTRIES {
+        d.submitters.claim(&format!("ct-{i}"), Some("mur"));
+    }
+    let r = call(
+        &d,
+        "message/send",
+        json!({"task_id": "one-more"}),
+        &RequestContext::none(),
+    )
+    .await;
+    let e = r.error.expect("a full table refuses the submission");
+    assert_eq!(e.code, -32030, "{e:?}");
+    assert!(e.message.starts_with("server busy:"), "{e:?}");
+}

@@ -29,7 +29,7 @@ pub const SUBMITTER_METHODS: &[&str] = &["tasks/get", "tasks/cancel"];
 /// claim whose submit call is still running (the turn itself, since
 /// `message/send` returns when the turn ends) is pinned, so a flood of
 /// submissions cannot push out the claim of a live turn.
-const MAX_ENTRIES: usize = 1_024;
+pub(crate) const MAX_ENTRIES: usize = 1_024;
 
 #[derive(Default)]
 pub struct TaskSubmitters {

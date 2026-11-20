@@ -6,12 +6,13 @@
 //! model, cancelling or steering a turn, forgetting HITL decisions. A peer
 //! that may *talk* to an agent must not *operate* it.
 //!
-//! The runtime admits an owner method from its own lineage (the agent and the
-//! processes it spawned) or from stdio, its launcher. Anyone else must present
-//! a proof derived from the home's approval token
+//! The runtime admits an owner method without proof only from stdio, whose
+//! peer launched it. Every socket caller, the agent's own lineage included,
+//! must present a proof derived from the home's approval token
 //! ([`crate::hitl::approval_token`]): it lives in `secrets/`, which sealed
 //! agents can neither read nor write, so the Hub and the CLI can prove they
-//! are the user and an agent's `bash` cannot.
+//! are the user and an agent's `bash` cannot. The one exception is a task's
+//! submitter, which may `tasks/get` / `tasks/cancel` the task it started.
 //!
 //! Lineage alone cannot say "the user": a process that daemonizes is
 //! reparented to init and looks like it. The token can.
