@@ -145,6 +145,19 @@ impl State {
             (KeyCode::Char('d'), Card::Login { .. } | Card::Reach { .. }) => {
                 KeyAction::Settle(Pick::Dismiss)
             }
+            // A closed port is a CLI step (D1): nothing here but a dismiss
+            // can settle it, same as Hub. `front::settle` refuses too.
+            (
+                KeyCode::Enter | KeyCode::Char('a' | 'r' | 'l'),
+                Card::Login { .. } | Card::Reach { .. },
+            ) if self.shown.port().is_some() => {
+                self.note = Some(
+                    "the port is not open — run the CLI line above (it opens the port too), \
+                     or press d to dismiss"
+                        .into(),
+                );
+                KeyAction::Nothing
+            }
             (KeyCode::Up, Card::Login { .. }) => {
                 self.step(false);
                 KeyAction::Nothing

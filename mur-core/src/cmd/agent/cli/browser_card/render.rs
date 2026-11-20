@@ -19,6 +19,9 @@ pub fn hint(c: &State) -> &'static str {
         (Phase::Working, _) => "working…",
         (Phase::LoggingIn, _) => "Enter logged in · Esc cancel (nothing is saved)",
         (Phase::Saved { .. }, _) => "Enter/Esc close",
+        (_, Card::Login { .. } | Card::Reach { .. }) if c.shown.port().is_some() => {
+            "port closed: use the CLI line below · d dismiss · Esc close"
+        }
         (_, Card::Login { .. }) => {
             "↑↓ pick · Enter use · r replace · l log in · d dismiss · Esc close"
         }
@@ -76,6 +79,9 @@ fn body(c: &State, t: &'static Theme, out: &mut Vec<Line<'static>>) {
             "this agent has no live browser yet — set one up with /browser live",
         )),
         Card::Reach { reach, .. } => out.push(Line::from(match reach {
+            Reach::Allowed if c.shown.port().is_some() => {
+                "the host is allowed, but the port is not open yet".into()
+            }
             Reach::Allowed => "the live browser already reaches it; a allows the request".into(),
             Reach::NeedsHost { missing } => format!("allowing adds {}", missing.join(", ")),
             Reach::Unscoped { mode } => {

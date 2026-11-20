@@ -51,13 +51,13 @@ function PortStep({ step }: { step: PortStepView }) {
 function Row({
   row,
   busy,
-  picks,
+  canPick,
   onAnswer,
 }: {
   row: RowView;
   busy: boolean;
   /** False while the port is closed: the CLI line is the only pick (D1). */
-  picks: boolean;
+  canPick: boolean;
   onAnswer: (p: PickArg) => void;
 }) {
   const { t } = useT();
@@ -83,7 +83,7 @@ function Row({
         </div>
       )}
       {o.kind === "already_bound" && <span className="field-muted"> {t("browser.row.bound")}</span>}
-      {picks && (o.kind === "offered" || o.kind === "adds_hosts" || o.kind === "already_bound") && (
+      {canPick && (o.kind === "offered" || o.kind === "adds_hosts" || o.kind === "already_bound") && (
         <button
           type="button"
           className="btn btn--sm btn--primary"
@@ -93,7 +93,7 @@ function Row({
           {t("browser.row.use")}
         </button>
       )}
-      {picks && o.kind === "replace_only" && (
+      {canPick && o.kind === "replace_only" && (
         <button
           type="button"
           className="btn btn--sm btn--secondary"
@@ -122,7 +122,7 @@ export function BrowserCardBody({ card, busy, loggingIn, result, note, onAnswer,
         <>
           <ul className="perm__list">
             {b.rows.map((r) => (
-              <Row key={r.name} row={r} busy={busy} picks={!portClosed} onAnswer={onAnswer} />
+              <Row key={r.name} row={r} busy={busy} canPick={!portClosed} onAnswer={onAnswer} />
             ))}
           </ul>
           {loggingIn ? (
