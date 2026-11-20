@@ -219,11 +219,40 @@ async fn a_submitter_gets_nothing_beyond_its_tasks() {
 }
 
 #[tokio::test]
-async fn a_refused_submission_claims_nothing() {
+async fn an_unknown_method_claims_nothing() {
     let d = dispatcher(sealed());
     // An unknown method is never dispatched, so it cannot claim an id.
     call(&d, "no/such", json!({"task_id": "ct-1"}), &peer("bob")).await;
     call(&d, "message/send", json!({"task_id": "ct-1"}), &peer("mur")).await;
     let r = call(&d, "tasks/cancel", json!({"id": "ct-1"}), &peer("mur")).await;
     assert!(r.result.is_some(), "{r:?}");
+}
+
+/// #2491 review: a submission its handler refuses must release the id, so
+/// invalid calls can neither hold an id nor flood out a live turn's claim.
+#[tokio::test]
+async fn a_refused_submission_releases_its_claim() {
+    let mut d = dispatcher(sealed());
+    d.register("message/send", Box::new(Refuse));
+    call(&d, "message/send", json!({"task_id": "ct-1"}), &peer("bob")).await;
+    let r = call(&d, "tasks/cancel", json!({"id": "ct-1"}), &peer("bob")).await;
+    assert!(denied(&r), "{r:?}");
+    call(
+        &d,
+        "channel/delegate",
+        json!({"task_id": "ct-1"}),
+        &peer("mur"),
+    )
+    .await;
+    let r = call(&d, "tasks/cancel", json!({"id": "ct-1"}), &peer("mur")).await;
+    assert!(r.result.is_some(), "{r:?}");
+}
+
+struct Refuse;
+
+#[async_trait]
+impl MethodHandler for Refuse {
+    async fn handle(&self, _p: Option<Value>, _c: &RequestContext) -> Result<Value, HandlerError> {
+        Err(HandlerError::InvalidParams("missing message".into()))
+    }
 }

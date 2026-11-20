@@ -281,17 +281,31 @@ impl Dispatcher {
     }
 
     /// Claim the caller-named `task_id` of a turn-starting call for the
-    /// connection's peer agent (or for no agent), first claim wins.
-    fn claim_task(&self, method: &str, params: Option<&Value>, ctx: &RequestContext) {
-        use super::task_submitters::SUBMIT_METHODS;
+    /// connection's peer agent (or for no agent), first claim wins. Returns
+    /// the id when this call now holds the claim, to settle once it returns.
+    fn claim_task(
+        &self,
+        method: &str,
+        params: Option<&Value>,
+        ctx: &RequestContext,
+    ) -> Result<Option<String>, HandlerError> {
+        use super::task_submitters::{Claim, SUBMIT_METHODS};
         if !SUBMIT_METHODS.contains(&method) {
-            return;
+            return Ok(None);
         }
-        if let Some(id) = params
+        let Some(id) = params
             .and_then(|p| p.get("task_id"))
             .and_then(Value::as_str)
-        {
-            self.submitters.record(id, ctx.peer_agent.as_deref());
+        else {
+            return Ok(None);
+        };
+        match self.submitters.claim(id, ctx.peer_agent.as_deref()) {
+            Claim::New => Ok(Some(id.to_string())),
+            Claim::Taken => Ok(None),
+            Claim::Full => Err(HandlerError::CommunicationDenied(format!(
+                "{method}: too many running turns hold a caller-named task id; \
+                 retry once one finishes"
+            ))),
         }
     }
 
@@ -340,11 +354,27 @@ impl Dispatcher {
             tracing::warn!(method = %req.method, "refused an owner method from a non-owner peer");
             return Ok(Self::err_response(id, e.code(), &e.to_string(), e.data()));
         }
-        if self.methods.contains_key(&req.method) {
-            self.claim_task(&req.method, params.as_ref(), ctx);
-        }
+        let claimed = if self.methods.contains_key(&req.method) {
+            match self.claim_task(&req.method, params.as_ref(), ctx) {
+                Ok(c) => c,
+                Err(e) => return Ok(Self::err_response(id, e.code(), &e.to_string(), e.data())),
+            }
+        } else {
+            None
+        };
+        // Settles the claim however this call ends, including the future
+        // being dropped mid-turn; a refusal releases the id (#2491 review).
+        let mut settle = claimed.map(|task_id| SettleClaim {
+            submitters: &self.submitters,
+            task_id,
+            accepted: true,
+        });
         match self.methods.get(&req.method) {
-            Some(handler) => match handler.handle(params, ctx).await {
+            Some(handler) => match handler.handle(params, ctx).await.inspect_err(|_| {
+                if let Some(s) = settle.as_mut() {
+                    s.accepted = false;
+                }
+            }) {
                 Ok(result) => Ok(JsonRpcResponse {
                     jsonrpc: "2.0".into(),
                     id,
@@ -373,6 +403,19 @@ impl Dispatcher {
                 data,
             }),
         }
+    }
+}
+
+/// Settles a submission's claim when its dispatch ends, however it ends.
+struct SettleClaim<'a> {
+    submitters: &'a super::task_submitters::TaskSubmitters,
+    task_id: String,
+    accepted: bool,
+}
+
+impl Drop for SettleClaim<'_> {
+    fn drop(&mut self) {
+        self.submitters.settle(&self.task_id, self.accepted);
     }
 }
 
