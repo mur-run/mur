@@ -108,8 +108,12 @@ async fn an_unreadable_channel_refuses_the_resume() {
 
     let err = cmd_fleet_resume(home.path(), "dev").await.unwrap_err();
     assert!(
-        format!("{err:#}").contains("cannot read channel fleet-dev"),
+        format!("{err:#}").contains("to verify the paused run's limits"),
         "{err:#}"
+    );
+    assert!(
+        signed_pause(home.path(), "fleet-dev", &[], RUN).is_err(),
+        "signed_pause must refuse an unreadable channel on its own"
     );
     assert!(control::paused_path(home.path(), "dev").exists());
     assert!(checkpoint::load(home.path(), "dev", RUN).unwrap().is_some());
