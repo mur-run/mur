@@ -30,8 +30,9 @@ impl MethodHandler for ToolsListHandler {
     async fn handle(
         &self,
         _params: Option<Value>,
-        _ctx: &RequestContext,
+        ctx: &RequestContext,
     ) -> Result<Value, HandlerError> {
+        ctx.require_tool_access("tools/list")?;
         let tools: Vec<Value> = self
             .runner
             .guarded()
@@ -67,6 +68,7 @@ impl MethodHandler for ToolsCallHandler {
         params: Option<Value>,
         ctx: &RequestContext,
     ) -> Result<Value, HandlerError> {
+        ctx.require_tool_access("tools/call")?;
         let p = params.ok_or_else(|| HandlerError::InvalidParams("missing params".into()))?;
         let task_id = p
             .get("task_id")
@@ -168,8 +170,8 @@ mod tests {
 
     fn ctx() -> RequestContext {
         // No per-connection notifier: these tests drive the handler directly,
-        // not through a socket.
-        RequestContext::none()
+        // not through a socket, as the owner would.
+        RequestContext::owner()
     }
 
     /// A tool that records nothing and returns a fixed string.
@@ -201,6 +203,29 @@ mod tests {
 
     fn runner_with_probe() -> TaskRunner {
         TaskRunner::new_stub_echo().with_tools(vec![Arc::new(ProbeTool)])
+    }
+
+    /// #2488: a context that does not say the peer is this agent — the
+    /// default, and what TCP and a foreign socket peer get — runs nothing
+    /// and lists nothing. The probe tool would answer "probe ran" if the
+    /// gate let the call through.
+    #[tokio::test]
+    async fn tools_are_refused_to_a_peer_not_known_to_be_self() {
+        let runner = Arc::new(runner_with_probe());
+        let stranger = RequestContext::none();
+        let e = ToolsListHandler::new(runner.clone())
+            .handle(None, &stranger)
+            .await
+            .unwrap_err();
+        assert_eq!(e.code(), -32011, "{e}");
+        let e = ToolsCallHandler::new(runner)
+            .handle(
+                Some(json!({ "task_id": "t-1", "name": "probe_tool" })),
+                &stranger,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(e.code(), -32011, "{e}");
     }
 
     #[tokio::test]
@@ -366,7 +391,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Value>(8);
         let ctx = RequestContext {
             notifier: Some(tx),
-            ..Default::default()
+            ..RequestContext::owner()
         };
         let h = ToolsCallHandler::new(runner);
         let call = tokio::spawn(async move {
@@ -406,7 +431,7 @@ mod tests {
         let (shim_tx, _shim_rx) = tokio::sync::mpsc::channel::<Value>(8);
         let ctx = RequestContext {
             notifier: Some(shim_tx),
-            ..Default::default()
+            ..RequestContext::owner()
         };
         let _ = ToolsCallHandler::new(runner.clone())
             .handle(
@@ -454,7 +479,7 @@ mod tests {
         let (shim_tx, _shim_rx) = tokio::sync::mpsc::channel::<Value>(16);
         let ctx = RequestContext {
             notifier: Some(shim_tx),
-            ..Default::default()
+            ..RequestContext::owner()
         };
         let _ = ToolsCallHandler::new(runner.clone())
             .handle(

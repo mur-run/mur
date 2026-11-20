@@ -160,6 +160,19 @@ impl AcceptPolicy {
         let caller = identify(peer_pid, self.self_pid, &running, parent);
         admits(&self.accepts_from, &caller).map(|()| caller)
     }
+
+    /// True only when the peer is this agent or a process it spawned (its
+    /// MCP shim). Unlike [`check`](Self::check) this never short-circuits on
+    /// `*`: an open `accepts_from` lets any agent talk to this one, never run
+    /// its tools (#2488).
+    pub fn is_self(&self, peer_pid: Option<u32>) -> bool {
+        self.is_self_with(peer_pid, crate::hitl::shim_ticket::parent_of)
+    }
+
+    fn is_self_with(&self, peer_pid: Option<u32>, parent: impl Fn(u32) -> Option<u32>) -> bool {
+        let running = running_agents(&self.agents_dir);
+        identify(peer_pid, self.self_pid, &running, parent) == Caller::SelfAgent
+    }
 }
 
 #[cfg(test)]

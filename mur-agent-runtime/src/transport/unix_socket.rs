@@ -177,9 +177,13 @@ pub async fn serve_unix_listener(
                     let _ = w.flush().await;
                 }
             });
-            let ctx = RequestContext::with_notifier(conn_notif_tx).with_conn(
-                crate::hitl::shim_ticket::Connection::new(peer.map(|p| p.pid)),
-            );
+            let peer_pid = peer.map(|p| p.pid);
+            // Decided once per connection, like the accepts_from gate. No
+            // policy (tests only) means no known self pid: fail closed.
+            let runs_tools = policy.as_deref().is_some_and(|p| p.is_self(peer_pid));
+            let ctx = RequestContext::with_notifier(conn_notif_tx)
+                .with_conn(crate::hitl::shim_ticket::Connection::new(peer_pid))
+                .with_runs_tools(runs_tools);
 
             let codec = LinesCodec::new_with_max_length(MAX_LINE_BYTES);
             let mut framed = FramedRead::new(read, codec);
@@ -328,3 +332,7 @@ fn peer_info(stream: &tokio::net::UnixStream) -> Option<PeerInfo> {
 fn peer_info(_stream: &tokio::net::UnixStream) -> Option<PeerInfo> {
     None
 }
+
+#[cfg(test)]
+#[path = "unix_socket_tests.rs"]
+mod tests;
