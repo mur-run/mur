@@ -1,0 +1,10 @@
+/* Browser request card (#2360 s4). It borrows the SSH card's modal and
+   perm__row shell; these rules only let its content fit the dialog (#2511). */
+/* Profile names, host lists and refusal reasons have no length limit, so a
+   long token breaks instead of widening the dialog's scroll area. */
+.browser-card .modal__body { overflow-wrap: anywhere; }
+/* A profile row holds a name, its hosts, detail lines and a button: more
+   than one line's worth, so its items wrap instead of being squeezed. */
+.browser-card__row { flex-wrap: wrap; }
+/* A button whose label carries a profile name or a host list. */
+.browser-card__btn--wrap { height: auto; min-height: 28px; max-width: 100%; padding-block: var(--space-2); white-space: normal; text-align: left; }
