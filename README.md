@@ -437,9 +437,12 @@ Each agent owns its model binding (Ollama, MLX, Anthropic, OpenAI, … via the
 keychain-backed secrets, cron schedules, webhook receiver, and a rotating Ed25519
 identity. `mur agent` exposes 40+ subcommands for the full lifecycle — create,
 chat, export, schedule, permissions, telemetry, trash, rollback. When you need
-to reach past them, `mur agent dial <name> <method> [json]` calls any A2A method
+to reach past them, `mur agent dial <name> <method> [json]` calls an A2A method
 on a running agent and prints the raw result — `memory/reload`, `tasks/list`,
-`turn/steer`, `model/set`.
+`turn/steer`, `model/set`. Those four are owner controls: the CLI attaches a
+proof that the call comes from you, so run it as the same user and `MUR_HOME`
+as the agent. `tools/list` and `tools/call` are refused for every caller but
+the agent itself.
 
 Its tools can hand back images, not just text. Point `read_file` at a
 screenshot, a photo, a rendered chart, and a vision-capable agent *looks* at it;
@@ -1169,6 +1172,24 @@ Agent** wizard offers the same catalog as a source.
   (default 600) sets how long an `Ask` stays answerable. Upgrade every MUR
   binary first: one older than v2.99.0 can drop its own next event after an
   `Ask`.
+- **A peer may talk to an agent, not operate it** — `communication.accepts_from`
+  decides who may message an agent (`message/send`, `agent/card`, `skills/get`,
+  `channel/delegate`, consult). It does not decide who may control it.
+  `tools/list` and `tools/call` are served only to the agent's own processes.
+  The owner's controls — `secret/set`, `secret/delete`, `model/set`,
+  `effort/set`, `memory/reload`, `tasks/get`, `tasks/list`, `tasks/cancel`,
+  `turn/steer`, `hitl/list`, `hitl/forget`, `hitl/pending` — need a proof that
+  the caller is you. The `mur` CLI and MUR Hub attach it; a sealed agent cannot,
+  because the key sits in `secrets/`, which it cannot read. One exception: the
+  agent that submitted a task may `tasks/get` and `tasks/cancel` that task, so
+  `mur fleet stop` still cancels member turns when the router is a sealed
+  agent. A refused call returns `-32011`. Upgrade the CLI, MUR Hub and the
+  agents together: a CLI or Hub older than v2.103.0 sends no proof, so an
+  upgraded agent refuses its owner controls. Known limits:
+  [#2497](https://github.com/mur-run/mur/issues/2497) (a sibling agent can claim
+  another agent's submitter rights) and
+  [#2498](https://github.com/mur-run/mur/issues/2498) (a captured proof can be
+  replayed against the same agent and method).
 - **Long work returns a handle; liveness is a heartbeat** — `fleet_run` and
   `parallel_jobs` answer `{run_id, status: dispatched}` within a second and
   you poll `mur_job_status <run_id>` (or `mur fleet status`); the result lands
@@ -1488,7 +1509,7 @@ mur daemon serve     # web dashboard at http://localhost:3847
 ```
 
 <details>
-<summary><b>Full command tree</b> (36 top-level commands)</summary>
+<summary><b>Full command tree</b> (37 top-level commands)</summary>
 
 ```
 mur
@@ -1521,10 +1542,11 @@ mur
 ├── project      index · search   (semantic code search)
 ├── code-nav     setup · doctor   (ast-grep + opt-in serena LSP navigation for an agent, sandboxed under ~/.mur/tools)
 ├── daemon       start · stop · restart · status · serve · sleep
-├── browser      record · replay · auth · broker · list · show · export · status · doctor · setup · prune   (browser work through Playwright MCP;
+├── browser      record · replay · auth · requests · answer · broker · list · show · export · status · doctor · setup · prune   (browser work through Playwright MCP;
 │                `list` tables recorded runs with a summary, domain, steps and run count — `--json` for all fields)
 ├── channel      approve · verify · repair · backfill-purpose   (HITL approval; verify checks a log against its signed head, repair restarts a damaged one)
 ├── commander    pin · status · directive   (governance: pin the operator key, issue and inspect directives)
+├── identity     init · show · rekey   (the human owner's signing identity)
 ├── auth         login · logout
 ├── team         list · use   (shared skills from private registries)
 ├── push / fetch signal outbox / inbox ↔ server
