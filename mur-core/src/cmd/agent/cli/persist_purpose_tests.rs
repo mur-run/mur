@@ -24,7 +24,7 @@ fn conversation_then_fleet_run(home: &Path) -> (String, String) {
     let fleet = svc
         .create_for_fleet(
             FLEET,
-            crate::channel_writer::ROUTER_AGENT,
+            crate::channel_writer::CONTROL_PLANE_AGENT,
             &[AGENT.to_string()],
             ChannelOwner::Legacy,
         )
