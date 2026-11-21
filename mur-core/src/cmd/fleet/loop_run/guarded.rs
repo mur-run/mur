@@ -616,7 +616,11 @@ async fn run_guarded_inner(
                 marker,
                 out.output_text.as_deref().unwrap_or_default(),
             )
-            .unwrap_or(0),
+            .unwrap_or_else(|error| {
+                // No reply came back, so there is no usage to bill.
+                tracing::warn!(fleet = %name, %error, "fleet loop: the synthesis turn failed");
+                0
+            }),
             _ => 0,
         };
         iteration += 1;
