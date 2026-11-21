@@ -228,7 +228,7 @@ pub(super) fn require_authenticated(
 ) -> Result<()> {
     if require_sig && !authenticated {
         bail!(
-            "MUR_CHANNEL_REQUIRE_SIG is set and no signed run_paused carries the original limits of '{name}'s paused run; refusing to resume from the unsigned checkpoint"
+            "MUR_CHANNEL_REQUIRE_SIG is set and no signed run_paused carries the original limits of the paused run of fleet '{name}'; refusing to resume from the unsigned checkpoint"
         );
     }
     Ok(())
@@ -666,3 +666,7 @@ mod scope_tests;
 #[cfg(test)]
 #[path = "resume_rekey_tests.rs"]
 mod rekey_tests;
+
+#[cfg(test)]
+#[path = "resume_2081_tests.rs"]
+mod hardening_tests;

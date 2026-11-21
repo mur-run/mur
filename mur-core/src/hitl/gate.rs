@@ -626,6 +626,8 @@ async fn wait_for_response(
 mod log_integrity;
 
 #[cfg(test)]
+mod commander_head_tests;
+#[cfg(test)]
 mod human_authority_tests;
 #[cfg(test)]
 mod integrity_tests;

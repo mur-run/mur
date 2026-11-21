@@ -53,6 +53,10 @@ pub(super) enum HeadSealer<'a> {
     /// unanchored (H1). Resolved under the append lock by
     /// [`super::owned_seal::resolve`] before anything is sealed.
     Writer { router: Option<RouterSeal<'a>> },
+    /// `router` seals whether or not the channel is owned: the event signer
+    /// does not own this head (a commander, a fleet's own router), so a head
+    /// under its key strands the writer that does. Resolved into `Router`.
+    RouterAlways { router: RouterSeal<'a> },
     /// The channel router seals every head on an owned channel. Nothing
     /// selects this until C1/C5/C2 exist.
     Router {
@@ -108,6 +112,7 @@ impl<'a> HeadSigner<'a> {
                 key_home,
                 ..
             } => (identity, kv, key_home),
+            HeadSealer::RouterAlways { router } => (router.identity, router.kv, router.key_home),
         }
     }
 
@@ -410,9 +415,8 @@ impl ChannelService {
         kind: EventKind,
         payload: serde_json::Value,
         idempotency_key: Option<String>,
-        anchored: Option<Anchored<'_>>,
+        signer: Option<HeadSigner<'_>>,
     ) -> Result<ChannelEvent> {
-        let signer = anchored.map(|a| a.signer(identity, kv));
         let sig = crate::sign::sign_event(
             identity,
             channel_id,
@@ -513,6 +517,11 @@ impl ChannelService {
 
     /// v1 twin of [`append_and_anchor`](Self::append_and_anchor) for
     /// commander directives; same sandbox caveat and protocol.
+    ///
+    /// With `router`, that key seals the head and `identity` only signs the
+    /// event: the commander is not a channel writer, and a head under its key
+    /// strands every later router write. A head `identity` sealed earlier is
+    /// taken over once, unless the channel has a live owner record.
     #[allow(clippy::too_many_arguments)]
     pub fn append_and_anchor_v1(
         &self,
@@ -520,11 +529,23 @@ impl ChannelService {
         identity: &AgentIdentity,
         kv: u32,
         key_home: &Path,
+        router: Option<RouterSeal<'_>>,
         actor: ChannelActor,
         kind: EventKind,
         payload: serde_json::Value,
         idempotency_key: Option<String>,
     ) -> Result<ChannelEvent> {
+        let signer = match router {
+            Some(router) => HeadSigner {
+                sealer: HeadSealer::RouterAlways { router },
+                ..HeadSigner::event(identity, kv, key_home)
+            },
+            None => Anchored {
+                key_home,
+                router: None,
+            }
+            .signer(identity, kv),
+        };
         self.signed_v1(
             channel_id,
             identity,
@@ -533,10 +554,7 @@ impl ChannelService {
             kind,
             payload,
             idempotency_key,
-            Some(Anchored {
-                key_home,
-                router: None,
-            }),
+            Some(signer),
         )
     }
 }

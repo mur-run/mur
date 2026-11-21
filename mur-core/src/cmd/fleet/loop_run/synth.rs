@@ -94,22 +94,30 @@ pub(super) fn synthesize_via_router(
         },
         marker,
     );
-    {
-        let svc = mur_channel::ChannelService::open(mur_home)?;
-        crate::channel_writer::append_as_writer(
-            &svc,
-            mur_home,
-            &fleet.channel_id,
-            crate::channel_writer::Signer::Agent(fleet.router_or_concierge()),
-            ChannelActor::Agent {
-                id: fleet.router_or_concierge().to_string(),
-            },
-            mur_common::channel::EventKind::Message,
-            serde_json::json!({ "text": reply }),
-            None,
-        )?;
-    }
+    record_synthesis(mur_home, fleet, &reply)?;
     Ok(task_tokens(&task))
+}
+
+/// Write the router's synthesis to the fleet channel, as the router.
+///
+/// The line is the router's own (`Agent`, its key), but the head stays the
+/// control plane's: with `router: orchestrator` the two are different keys,
+/// and a head under the router's would strand every `System` write after it.
+pub(super) fn record_synthesis(
+    mur_home: &Path,
+    fleet: &mur_common::fleet::Fleet,
+    reply: &str,
+) -> Result<ChannelEvent> {
+    let svc = mur_channel::ChannelService::open(mur_home)?;
+    crate::channel_writer::append_agent_line_router_sealed(
+        &svc,
+        mur_home,
+        &fleet.channel_id,
+        fleet.router_or_concierge(),
+        mur_common::channel::EventKind::Message,
+        serde_json::json!({ "text": reply }),
+        None,
+    )
 }
 
 /// Ask the router agent whether the goal is complete. Streams a one-word reply.
