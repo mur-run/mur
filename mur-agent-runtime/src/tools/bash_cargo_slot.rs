@@ -25,8 +25,20 @@ const POLL: Duration = Duration::from_millis(500);
 /// A held slot. Dropping it releases the flock.
 #[derive(Debug)]
 pub struct CargoSlot {
-    _file: File,
+    file: File,
     pub index: u32,
+}
+
+impl Drop for CargoSlot {
+    /// Unlock explicitly instead of relying on the close. An flock belongs to
+    /// the open file description, and a child forked by another thread holds
+    /// a duplicate of it until it execs, so the close alone can leave the
+    /// slot locked for a few milliseconds (#2523). A failed unlock is not
+    /// reported: the close that follows still releases it once no duplicate
+    /// is left.
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
 }
 
 /// The slot count to enforce: `configured` when non-zero, else derived
@@ -78,7 +90,7 @@ pub fn try_acquire(dir: &Path, slots: u32) -> std::io::Result<Option<CargoSlot>>
             .write(true)
             .open(dir.join(format!("slot-{index}.lock")))?;
         if file.try_lock_exclusive().is_ok() {
-            return Ok(Some(CargoSlot { _file: file, index }));
+            return Ok(Some(CargoSlot { file, index }));
         }
     }
     Ok(None)
