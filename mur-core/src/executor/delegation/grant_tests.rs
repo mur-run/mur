@@ -123,8 +123,7 @@ impl Fixture {
             &svc,
             self.home(),
             &self.channel_id,
-            crate::channel_writer::Signer::ControlPlane,
-            ChannelActor::local_human(),
+            crate::channel_writer::Authorship::local_human(),
             EventKind::HitlResponse,
             serde_json::to_value(HitlResponse {
                 hitl_id: req.hitl_id,

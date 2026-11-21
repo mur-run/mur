@@ -75,8 +75,10 @@ fn answer_as(home: &Path, ch: &str, hitl_id: &str, actor: ChannelActor) {
         &svc,
         home,
         ch,
-        crate::channel_writer::Signer::ControlPlane,
-        actor,
+        crate::channel_writer::Authorship::out_of_role(
+            crate::channel_writer::Signer::ControlPlane,
+            actor,
+        ),
         EventKind::HitlResponse,
         serde_json::to_value(&resp).unwrap(),
         None,

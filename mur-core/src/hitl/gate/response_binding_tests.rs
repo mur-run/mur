@@ -62,8 +62,10 @@ fn append_router(
         &svc,
         home,
         ch,
-        crate::channel_writer::Signer::ControlPlane,
-        actor,
+        crate::channel_writer::Authorship::out_of_role(
+            crate::channel_writer::Signer::ControlPlane,
+            actor,
+        ),
         kind,
         payload,
         None,

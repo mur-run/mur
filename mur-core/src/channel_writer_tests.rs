@@ -39,8 +39,7 @@ fn an_unreadable_writer_key_does_not_silently_write_unsigned() {
         &svc,
         home,
         &ch.id,
-        crate::channel_writer::Signer::ControlPlane,
-        ChannelActor::System,
+        crate::channel_writer::Authorship::system(),
         EventKind::Message,
         serde_json::json!({"text": "before"}),
         None,
@@ -185,8 +184,7 @@ fn signed_when_identity_present_and_verifies() {
         &svc,
         tmp.path(),
         &ch.id,
-        crate::channel_writer::Signer::ControlPlane,
-        ChannelActor::System,
+        crate::channel_writer::Authorship::system(),
         EventKind::HitlResponse,
         serde_json::json!({ "allow": true }),
         None,
@@ -230,9 +228,8 @@ fn a_disk_keyed_transition_advances_the_head() {
         &svc,
         tmp.path(),
         &ch.id,
-        crate::channel_writer::Signer::ControlPlane,
+        crate::channel_writer::Authorship::system(),
         mur_common::channel::ChannelState::Completed,
-        ChannelActor::System,
         None,
     )
     .unwrap();
@@ -321,15 +318,11 @@ fn a_cross_router_run_outside_the_seal_signs_as_the_router() {
     let ch = svc
         .create_for_workflow("council", mur_channel::service::ChannelOwner::Legacy)
         .unwrap();
-    let actor = ChannelActor::Agent {
-        id: "orchestrator".into(),
-    };
     let ev = append_as_writer(
         &svc,
         home,
         &ch.id,
-        crate::channel_writer::Signer::Agent("orchestrator"),
-        actor,
+        crate::channel_writer::Authorship::agent("orchestrator"),
         EventKind::Message,
         serde_json::json!({"text": "verdict"}),
         None,

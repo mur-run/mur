@@ -41,9 +41,8 @@ pub async fn execute_dag(
             &svc,
             mur_home,
             cid,
-            crate::channel_writer::Signer::ControlPlane,
+            crate::channel_writer::Authorship::system(),
             ChannelState::Working,
-            ChannelActor::System,
             opts.event_run_id(),
         );
     }
@@ -210,9 +209,8 @@ pub async fn execute_dag(
                     &svc,
                     mur_home,
                     cid,
-                    crate::channel_writer::Signer::ControlPlane,
+                    crate::channel_writer::Authorship::system(),
                     st,
-                    ChannelActor::System,
                     opts.event_run_id(),
                 )
             });

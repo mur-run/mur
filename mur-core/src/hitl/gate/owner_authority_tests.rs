@@ -73,8 +73,10 @@ fn router_answer(home: &Path, ch: &str, actor: ChannelActor, payload: serde_json
         &svc,
         home,
         ch,
-        crate::channel_writer::Signer::ControlPlane,
-        actor,
+        crate::channel_writer::Authorship::out_of_role(
+            crate::channel_writer::Signer::ControlPlane,
+            actor,
+        ),
         EventKind::HitlResponse,
         payload,
         None,

@@ -157,26 +157,29 @@ impl Session {
         // enrolling the owner on first write); the reply and the `!cmd`
         // card stay signed by the session agent.
         //
-        // The `!cmd` card is the one write here whose signer is NOT
-        // `Signer::for_actor(&actor)`: it is a `System` note under the
-        // session agent's key, which is what the conversation watermark
-        // checks it against (`mur_channel::conversation::assess`, S1). The
-        // per-actor verifier holds a `System` actor to the control plane
-        // instead, so for an agent other than the control plane it reports
-        // this line as a bad signature (#2081 item 4 audit).
-        let ev = if matches!(actor, ChannelActor::Human { .. }) {
-            crate::human_writer::append_as_human(&self.svc, &self.home, &id, kind, payload, None)?
-        } else {
-            crate::channel_writer::append_as_writer(
-                &self.svc,
-                &self.home,
-                &id,
-                crate::channel_writer::Signer::Agent(&self.agent),
-                actor,
-                kind,
-                payload,
-                None,
-            )?
+        // The `!cmd` card is the one write here whose signer is not its
+        // actor's own, and the type makes it say so: it is a `System` note
+        // under the session agent's key, which is what the conversation
+        // watermark checks it against (`mur_channel::conversation::assess`,
+        // S1). The per-actor verifier holds a `System` actor to the control
+        // plane instead, so for an agent other than the control plane it
+        // reports this line as a bad signature (#2081 item 4 audit).
+        use crate::channel_writer::{Authorship, Signer};
+        let author = match actor {
+            ChannelActor::Human { .. } => None,
+            ChannelActor::Agent { .. } => Some(Authorship::agent(&self.agent)),
+            ChannelActor::System => Some(Authorship::out_of_role(
+                Signer::Agent(&self.agent),
+                ChannelActor::System,
+            )),
+        };
+        let ev = match author {
+            None => crate::human_writer::append_as_human(
+                &self.svc, &self.home, &id, kind, payload, None,
+            )?,
+            Some(author) => crate::channel_writer::append_as_writer(
+                &self.svc, &self.home, &id, author, kind, payload, None,
+            )?,
         };
         Ok(ev.seq)
     }
