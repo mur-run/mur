@@ -208,3 +208,43 @@ fn directive_on_owned_channel_is_router_sealed() {
     assert!(hd.verify(&h.router.verifying_key_bytes()));
     assert!(h.trust(&id).damage().is_empty());
 }
+
+/// An agent's own line on a channel whose head the router owns (a fleet
+/// router's synthesis): the agent signs it, the router seals, either order.
+fn agent_line(h: &Home, id: &str, a: &Agent) -> mur_common::channel::ChannelEvent {
+    let rh = h.router_home();
+    h.svc()
+        .append_and_anchor_router_sealed(
+            id,
+            &a.id,
+            0,
+            &a.home,
+            h.seal(&rh),
+            ChannelActor::Agent { id: "qa".into() },
+            EventKind::Message,
+            serde_json::json!({ "text": "report" }),
+            None,
+        )
+        .unwrap()
+}
+
+#[test]
+fn an_agent_line_is_router_sealed_on_an_unowned_channel_either_order() {
+    let h = Home::new();
+    let a = agent(&h);
+    for router_first in [true, false] {
+        let id = h.legacy_channel(0);
+        if router_first {
+            router_write(&h, &id).unwrap();
+        }
+        let ev = agent_line(&h, &id, &a);
+        assert!(ev.sig.is_some(), "the agent signs its own line");
+        let hd = head(&h, &id).unwrap();
+        assert_eq!(hd.seq, ev.seq);
+        assert!(hd.verify(&h.router.verifying_key_bytes()));
+        assert!(!hd.verify(&a.id.verifying_key_bytes()));
+        let next = router_write(&h, &id).expect("the router still advances its head");
+        assert_eq!(head(&h, &id).unwrap().seq, next.seq);
+        assert!(!is_dirty(h.path(), &id));
+    }
+}
