@@ -39,8 +39,10 @@ fn system_note_as(home: &Path, channel_id: &str, signer: &str) {
         &svc,
         home,
         channel_id,
-        crate::channel_writer::Signer::Agent(signer),
-        ChannelActor::System,
+        crate::channel_writer::Authorship::out_of_role(
+            crate::channel_writer::Signer::Agent(signer),
+            ChannelActor::System,
+        ),
         EventKind::Note,
         serde_json::json!({ "text": "$ rm -rf /" }),
         None,

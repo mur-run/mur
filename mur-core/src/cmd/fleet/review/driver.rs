@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use mur_channel::ChannelService;
-use mur_common::channel::{ChannelActor, EventKind};
+use mur_common::channel::EventKind;
 
 use super::constants::NOTE_FLUSH_FAILED_REASON;
 use super::ledger::{EscalationRecord, Ledger};
@@ -560,8 +560,7 @@ pub(super) fn write_paused_and_revert(
         &svc,
         mur_home,
         channel_id,
-        crate::channel_writer::Signer::ControlPlane,
-        ChannelActor::System,
+        crate::channel_writer::Authorship::system(),
         EventKind::Note,
         to_note_payload(&ReviewPayload::Paused {
             kind,
@@ -575,8 +574,7 @@ pub(super) fn write_paused_and_revert(
         &svc,
         mur_home,
         channel_id,
-        crate::channel_writer::Signer::ControlPlane,
-        ChannelActor::System,
+        crate::channel_writer::Authorship::system(),
         EventKind::Note,
         to_note_payload(&ReviewPayload::ModeChanged {
             mode: Mode::SemiAuto,

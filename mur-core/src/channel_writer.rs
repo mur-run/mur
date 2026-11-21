@@ -19,7 +19,7 @@ use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 pub use mur_channel::verify::CONTROL_PLANE_AGENT;
 /// Who signs a write. Shared with the verifier, so a writer cannot pick a
 /// trust root the reader does not check against (#2081).
-pub use mur_channel::verify::Signer;
+pub use mur_channel::verify::{Authorship, Signer};
 
 /// Plant a signing identity for `agent` under `home`, so events that agent
 /// writes in a test are SIGNED the way they are in production.
@@ -383,7 +383,7 @@ fn resolve_writer_key(
     }
 }
 
-/// Move `channel_id` to `new_state`, SIGNED by `signer` when possible.
+/// Move `channel_id` to `new_state`, SIGNED by `author`'s signer when possible.
 ///
 /// The signed counterpart of `ChannelService::transition`. A run's start and
 /// end are the two events every surface reads to decide whether work is in
@@ -393,11 +393,12 @@ pub fn transition_as_writer(
     svc: &ChannelService,
     home: &Path,
     channel_id: &str,
-    signer: Signer<'_>,
+    author: Authorship<'_>,
     new_state: mur_common::channel::ChannelState,
-    actor: ChannelActor,
     run_id: Option<&str>,
 ) -> anyhow::Result<ChannelEvent> {
+    let signer = author.signer();
+    let actor = author.actor().clone();
     match writer_key(home, signer.agent_name())? {
         // Same provenance rule as `append_with_key`: only a key read from
         // disk proves this process is outside the sandbox, so only it anchors.
@@ -421,33 +422,32 @@ pub fn transition_as_writer(
     }
 }
 
-/// Append `actor`/`kind`/`payload` to `channel_id`, SIGNED by `signer`'s
+/// Append `author`'s `kind`/`payload` to `channel_id`, SIGNED by its signer's
 /// identity when it is available, else unsigned (migration-safe).
 ///
 /// `home` is the `~/.mur` root; the identity is loaded from
 /// `<home>/agents/<name>/identity.{key,pub}` and its key version from that
 /// agent's `profile.yaml`.
 ///
-/// Pass the signer a reader will check `actor` against
-/// ([`Signer::for_actor`]): [`Signer::ControlPlane`] for a `System` or
-/// keyless `Human` event, [`Signer::Agent`] for an agent speaking as itself.
-#[allow(clippy::too_many_arguments)]
+/// [`Authorship`] carries the actor and the signer as one value, so the
+/// signer is the one a reader will check the actor against unless the caller
+/// wrote [`Authorship::out_of_role`].
 pub fn append_as_writer(
     svc: &ChannelService,
     home: &Path,
     channel_id: &str,
-    signer: Signer<'_>,
-    actor: ChannelActor,
+    author: Authorship<'_>,
     kind: EventKind,
     payload: serde_json::Value,
     idem: Option<String>,
 ) -> anyhow::Result<ChannelEvent> {
+    let signer_agent = author.signer().agent_name().to_string();
     append_as_writer_with(
         svc,
         home,
         channel_id,
-        signer.agent_name(),
-        actor,
+        &signer_agent,
+        author.into_actor(),
         kind,
         payload,
         idem,

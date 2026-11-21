@@ -128,7 +128,7 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
     use mur_channel::ChannelService;
-    use mur_common::channel::{ChannelActor, EventKind};
+    use mur_common::channel::EventKind;
     use mur_common::hitl::{HitlRequest, HitlResponse};
     use mur_monitor::spec::MonitorSpec;
     use mur_monitor::store::MonitorStore;
@@ -198,8 +198,7 @@ mod tests {
             &svc,
             home,
             channel_id,
-            crate::channel_writer::Signer::ControlPlane,
-            ChannelActor::local_human(),
+            crate::channel_writer::Authorship::local_human(),
             EventKind::HitlResponse,
             serde_json::to_value(&resp).unwrap(),
             None,

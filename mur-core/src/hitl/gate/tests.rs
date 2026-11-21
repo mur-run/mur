@@ -1,4 +1,5 @@
 use super::*;
+use mur_common::channel::ChannelActor;
 use tempfile::TempDir;
 
 fn req(tier: RiskTier) -> ActionRequest {
@@ -459,8 +460,7 @@ fn answer(home: &Path, ch: &str, hitl_id: &str, allow: bool) {
         &svc,
         home,
         ch,
-        crate::channel_writer::Signer::ControlPlane,
-        ChannelActor::local_human(),
+        crate::channel_writer::Authorship::local_human(),
         EventKind::HitlResponse,
         serde_json::to_value(&resp).unwrap(),
         None,

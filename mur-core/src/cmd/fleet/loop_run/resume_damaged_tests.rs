@@ -5,8 +5,9 @@ use super::super::pause_events::{PauseReason, RunBounds};
 use super::damaged::{checked_resume, resume_from_damaged};
 use super::tests::{RUN, paused_home, signed};
 use super::*;
-use crate::channel_writer::{CONTROL_PLANE_AGENT, Signer, append_as_writer, plant_writer_identity};
-use mur_common::channel::ChannelActor;
+use crate::channel_writer::{
+    Authorship, CONTROL_PLANE_AGENT, append_as_writer, plant_writer_identity,
+};
 
 /// The fixture fleet's channel and name (`resume_tests::fleet`).
 const CHANNEL: &str = "fleet-dev";
@@ -62,8 +63,7 @@ fn home_with_three_pauses() -> tempfile::TempDir {
             &svc,
             home.path(),
             CHANNEL,
-            Signer::ControlPlane,
-            ChannelActor::System,
+            Authorship::system(),
             EventKind::Note,
             note,
             None,

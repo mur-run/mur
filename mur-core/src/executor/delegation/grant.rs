@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use mur_agent_runtime::entitlements::{WriteVerdict, write_verdict};
 use mur_agent_runtime::sandbox::launch_chain::{LaunchChain, is_overbroad_grant_root};
-use mur_common::channel::{ChannelActor, EventKind};
+use mur_common::channel::EventKind;
 use mur_common::hitl::RiskTier;
 
 use crate::channel_writer::{CONTROL_PLANE_AGENT, UnanswerableRequest};
@@ -451,8 +451,7 @@ fn record(ctx: &GrantContext<'_>, t: &DelegationTarget, outcome: &GrantOutcome) 
             &svc,
             ctx.mur_home,
             ctx.channel_id,
-            crate::channel_writer::Signer::ControlPlane,
-            ChannelActor::System,
+            crate::channel_writer::Authorship::system(),
             EventKind::Note,
             payload,
             None,
