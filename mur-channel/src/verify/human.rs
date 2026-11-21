@@ -191,7 +191,7 @@ impl HumanTrust {
                     .as_ref()
                     .is_some_and(|cut| ev.seq <= cut.seq)
                     && ev.sig.is_some()
-                    && super::router_pubkey(mur_home, ev.key_version)
+                    && super::control_plane_pubkey(mur_home, ev.key_version)
                         .is_some_and(|pk| crate::sign::verify_one(channel_id, ev, &pk, true))
             }
         }

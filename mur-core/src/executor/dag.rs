@@ -16,7 +16,7 @@ mod run;
 mod step;
 mod stop;
 
-use crate::channel_writer::ROUTER_AGENT;
+use crate::channel_writer::CONTROL_PLANE_AGENT;
 pub(crate) use graph::validate_steps;
 use graph::*;
 pub use run::*;

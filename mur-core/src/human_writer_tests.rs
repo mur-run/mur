@@ -1,12 +1,12 @@
 use super::*;
-use crate::channel_writer::{ROUTER_AGENT, plant_identity_for, plant_writer_identity};
+use crate::channel_writer::{CONTROL_PLANE_AGENT, plant_identity_for, plant_writer_identity};
 use mur_channel::anchor::heads_dir;
 use mur_channel::head_io::read_head;
 use mur_channel::verify::human::HumanTrust;
 use tempfile::TempDir;
 
 fn router_key(home: &Path) -> [u8; 32] {
-    AgentIdentity::load(&home.join("agents").join(ROUTER_AGENT))
+    AgentIdentity::load(&home.join("agents").join(CONTROL_PLANE_AGENT))
         .unwrap()
         .verifying_key_bytes()
 }

@@ -457,7 +457,7 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
                 // not re-issued, signed `issued_at`, not expired. Anything
                 // else, the gate writes a fresh request instead.
                 if q.action_hash != hash
-                    || !super::authority::is_router_signed(&ctx, e)
+                    || !super::authority::is_control_plane_signed(&ctx, e)
                     || !requests.is_answerable(&q.hitl_id, now)
                 {
                     continue;

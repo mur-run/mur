@@ -52,7 +52,7 @@ fn enroll(mur: &Path, keys: &[&AgentIdentity]) {
 
 fn router(mur: &Path) -> AgentIdentity {
     let r = AgentIdentity::from_secret_bytes(&[3u8; 32]);
-    r.save(&mur.join("agents").join(super::super::ROUTER_AGENT))
+    r.save(&mur.join("agents").join(super::super::CONTROL_PLANE_AGENT))
         .unwrap();
     r
 }

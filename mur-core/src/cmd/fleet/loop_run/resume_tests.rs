@@ -595,8 +595,8 @@ fn a_member_signed_pause_cannot_supply_the_original_bounds() {
 
 /// A fleet with a custom `router:` must be able to authenticate its own
 /// pause (#2072 review). `record_pause` used to sign with the fleet's router
-/// while `is_router_signed` verifies a `System` actor against
-/// `ROUTER_AGENT`, so every non-`mur` router fell back to the unverified
+/// while `is_control_plane_signed` verifies a `System` actor against
+/// `CONTROL_PLANE_AGENT`, so every non-`mur` router fell back to the unverified
 /// checkpoint. Goes through the real writer, not a hand-signed note.
 #[test]
 fn a_custom_router_fleet_reads_back_its_own_signed_pause() {

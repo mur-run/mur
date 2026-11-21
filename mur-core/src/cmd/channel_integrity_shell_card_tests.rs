@@ -70,8 +70,8 @@ fn a_session_agents_shell_card_is_not_a_bad_signature() {
 
 #[test]
 fn the_concierges_own_shell_card_still_verifies() {
-    let tmp = home_for(crate::channel_writer::ROUTER_AGENT);
-    let (id, _) = session_with_card(tmp.path(), crate::channel_writer::ROUTER_AGENT);
+    let tmp = home_for(crate::channel_writer::CONTROL_PLANE_AGENT);
+    let (id, _) = session_with_card(tmp.path(), crate::channel_writer::CONTROL_PLANE_AGENT);
     let r = check_with(tmp.path(), &id, true).unwrap();
     assert!(r.is_intact(), "{}", r.render());
 }
@@ -109,7 +109,7 @@ fn a_members_system_note_on_a_fleet_channel_is_reported() {
     let id = svc
         .create_for_fleet(
             "dev",
-            crate::channel_writer::ROUTER_AGENT,
+            crate::channel_writer::CONTROL_PLANE_AGENT,
             &[AGENT.to_string()],
             mur_channel::service::ChannelOwner::Legacy,
         )

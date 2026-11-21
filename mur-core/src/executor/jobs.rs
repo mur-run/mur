@@ -713,7 +713,7 @@ mod tests {
         let key = mur_common::identity::private_key_dir(
             &home
                 .join("agents")
-                .join(crate::channel_writer::ROUTER_AGENT),
+                .join(crate::channel_writer::CONTROL_PLANE_AGENT),
         )
         .join("identity.key");
         std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o000)).unwrap();

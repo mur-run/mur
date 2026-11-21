@@ -112,7 +112,7 @@ pub fn classify(
             }
         }
         None => {
-            let router_signed = crate::verify::router_pubkey(mur_home, ev.key_version)
+            let router_signed = crate::verify::control_plane_pubkey(mur_home, ev.key_version)
                 .is_some_and(|pk| crate::sign::verify_one(channel_id, ev, &pk, true));
             if !router_signed {
                 untrusted(ClaimReason::SignatureInvalid)

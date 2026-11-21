@@ -354,7 +354,7 @@ fn plant_router(home: &Path) {
         .save(
             &home
                 .join("agents")
-                .join(crate::channel_writer::ROUTER_AGENT),
+                .join(crate::channel_writer::CONTROL_PLANE_AGENT),
         )
         .unwrap();
 }
@@ -373,7 +373,12 @@ fn doctor_out(f: &Fx) -> (i32, String) {
 fn doctor_refuses_when_enrolled_but_the_router_identity_is_missing() {
     let f = fx();
     for d in ["agents", "keys"] {
-        std::fs::remove_dir_all(f.home.join(d).join(crate::channel_writer::ROUTER_AGENT)).unwrap();
+        std::fs::remove_dir_all(
+            f.home
+                .join(d)
+                .join(crate::channel_writer::CONTROL_PLANE_AGENT),
+        )
+        .unwrap();
     }
     go(&f, enroll_args(&f, "alice"));
     let (code, out) = doctor_out(&f);

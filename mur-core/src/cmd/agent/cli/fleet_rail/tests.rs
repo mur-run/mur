@@ -419,7 +419,7 @@ use std::time::Instant;
 fn seed_home() -> tempfile::TempDir {
     let tmp = tempfile::TempDir::new().unwrap();
     // The rail verifies every event it folds against its actor's key
-    // (`verify_events`), resolving a non-agent actor to ROUTER_AGENT. Without
+    // (`verify_events`), resolving a non-agent actor to CONTROL_PLANE_AGENT. Without
     // an identity here the seeded events are unsigned and enforcement drops
     // them — the rail would render an empty fleet for the wrong reason.
     crate::channel_writer::plant_writer_identity(tmp.path());

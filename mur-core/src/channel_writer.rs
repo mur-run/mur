@@ -15,8 +15,8 @@ use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 
 /// The channel's router/owner agent; defined beside the verification that
-/// resolves System/Human actors to it ([`mur_channel::verify::ROUTER_AGENT`]).
-pub use mur_channel::verify::ROUTER_AGENT;
+/// resolves System/Human actors to it ([`mur_channel::verify::CONTROL_PLANE_AGENT`]).
+pub use mur_channel::verify::CONTROL_PLANE_AGENT;
 /// Who signs a write. Shared with the verifier, so a writer cannot pick a
 /// trust root the reader does not check against (#2081).
 pub use mur_channel::verify::Signer;
@@ -35,7 +35,7 @@ pub use mur_channel::verify::Signer;
 /// So this is not test sugar: an unsigned fixture is a fixture that does not
 /// reproduce the path it claims to test. Note that the actor decides whose key
 /// is checked — `ChannelActor::Agent { id }` resolves to that agent, anything
-/// else to [`ROUTER_AGENT`] — so plant the identity matching the actor you
+/// else to [`CONTROL_PLANE_AGENT`] — so plant the identity matching the actor you
 /// write as.
 #[cfg(test)]
 pub(crate) fn plant_identity_for(home: &Path, agent: &str) -> mur_common::identity::AgentIdentity {
@@ -53,7 +53,7 @@ pub(crate) fn plant_identity_for(home: &Path, agent: &str) -> mur_common::identi
 pub(crate) fn plant_human_identity(home: &Path) {
     if !home
         .join("agents")
-        .join(ROUTER_AGENT)
+        .join(CONTROL_PLANE_AGENT)
         .join("identity.pub")
         .exists()
     {
@@ -66,7 +66,7 @@ pub(crate) fn plant_human_identity(home: &Path) {
 /// signs every workflow/HITL event MUR writes on a channel's behalf.
 #[cfg(test)]
 pub(crate) fn plant_writer_identity(home: &Path) -> mur_common::identity::AgentIdentity {
-    plant_identity_for(home, ROUTER_AGENT)
+    plant_identity_for(home, CONTROL_PLANE_AGENT)
 }
 
 /// How many writes this process has refused, across every channel.
@@ -560,7 +560,7 @@ pub(crate) fn append_with_key(
     let WriterKey { id, kv, source } = key;
     match source {
         KeySource::Disk => {
-            let router_home = home.join("agents").join(ROUTER_AGENT);
+            let router_home = home.join("agents").join(CONTROL_PLANE_AGENT);
             let router = mur_common::identity::AgentIdentity::load(&router_home)
                 .ok()
                 .map(|r| (r, read_key_version(&router_home)));
@@ -581,7 +581,7 @@ pub(crate) fn append_with_key(
 
 /// Append a line `agent` signs as itself on a channel whose head the control
 /// plane owns: a fleet channel, where every other line is a `System` event
-/// sealed by [`ROUTER_AGENT`].
+/// sealed by [`CONTROL_PLANE_AGENT`].
 ///
 /// `agent`'s key signs the event; the control-plane key seals the head. Sealed
 /// under `agent`'s own key instead, the next control-plane write could not
@@ -607,7 +607,7 @@ pub(crate) fn append_agent_line_router_sealed(
     };
     let key_home = home.join("agents").join(agent);
     let key = match writer_key(home, agent)? {
-        Some(key) if key.source == KeySource::Disk && agent != ROUTER_AGENT => key,
+        Some(key) if key.source == KeySource::Disk && agent != CONTROL_PLANE_AGENT => key,
         Some(key) => {
             return append_with_key(
                 svc, home, channel_id, key, &key_home, actor, kind, payload, idem,
@@ -615,7 +615,7 @@ pub(crate) fn append_agent_line_router_sealed(
         }
         None => return svc.append(channel_id, actor, kind, payload, idem),
     };
-    let router_home = home.join("agents").join(ROUTER_AGENT);
+    let router_home = home.join("agents").join(CONTROL_PLANE_AGENT);
     match mur_common::identity::AgentIdentity::load(&router_home) {
         Ok(router) => svc.append_and_anchor_router_sealed(
             channel_id,

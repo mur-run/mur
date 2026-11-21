@@ -132,7 +132,8 @@ impl Fx {
     }
 
     fn router_home_of(p: &std::path::Path) -> std::path::PathBuf {
-        p.join("agents").join(mur_channel::verify::ROUTER_AGENT)
+        p.join("agents")
+            .join(mur_channel::verify::CONTROL_PLANE_AGENT)
     }
 
     fn svc(&self) -> ChannelService {

@@ -9,7 +9,7 @@ use mur_common::channel::{ChannelEvent, EventKind};
 use mur_common::identity::{AgentIdentity, RotationAttestation, RotationReason};
 
 use crate::channel_owner::HumanOwner;
-use crate::channel_writer::ROUTER_AGENT;
+use crate::channel_writer::CONTROL_PLANE_AGENT;
 
 /// Rotate the router `old` → a fresh key the way `mur agent rekey` leaves the
 /// files: a signed v0 → v1 attestation with `reason`, the old halves moved to
@@ -19,7 +19,7 @@ pub(crate) fn rekey_router(
     old: &AgentIdentity,
     reason: RotationReason,
 ) -> AgentIdentity {
-    let agent_home = home.join("agents").join(ROUTER_AGENT);
+    let agent_home = home.join("agents").join(CONTROL_PLANE_AGENT);
     let new = AgentIdentity::generate();
     let boot = RotationAttestation::new(
         "u",
@@ -51,7 +51,7 @@ pub(crate) fn rekey_router(
         std::fs::rename(dir.join(f), dir.join(format!("{f}.prev"))).unwrap();
     }
     new.save(&agent_home).unwrap();
-    let yaml = crate::executor::delegation::grant::tests::profile_yaml(ROUTER_AGENT, &[]);
+    let yaml = crate::executor::delegation::grant::tests::profile_yaml(CONTROL_PLANE_AGENT, &[]);
     let mut p: mur_common::AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
     p.identity.key_version = 1;
     std::fs::write(

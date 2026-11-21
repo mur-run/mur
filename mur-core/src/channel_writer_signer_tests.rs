@@ -77,7 +77,7 @@ fn an_event_written_by_its_actors_signer_verifies() {
 /// "fixed" to trust `fleet.router`.
 #[test]
 fn a_system_event_under_a_custom_routers_key_authenticates_nowhere() {
-    use crate::hitl::authority::{AuthorityCtx, is_durable_router_record, is_router_signed};
+    use crate::hitl::authority::{AuthorityCtx, is_control_plane_signed, is_durable_router_record};
     let (tmp, svc) = home_with_keys();
     let home = tmp.path();
 
@@ -85,7 +85,7 @@ fn a_system_event_under_a_custom_routers_key_authenticates_nowhere() {
     let ours = write(&svc, home, &id, Signer::ControlPlane, ChannelActor::System);
     let ctx = AuthorityCtx::load(home, &id).unwrap();
     assert!(crate::channel_verify::verify_event(home, &id, &ours, true));
-    assert!(is_router_signed(&ctx, &ours));
+    assert!(is_control_plane_signed(&ctx, &ours));
     assert!(is_durable_router_record(&ctx, &ours));
 
     let id = channel(&svc, "custom-router");
@@ -96,7 +96,7 @@ fn a_system_event_under_a_custom_routers_key_authenticates_nowhere() {
     assert!(!crate::channel_verify::verify_event(
         home, &id, &theirs, true
     ));
-    assert!(!is_router_signed(&ctx, &theirs));
+    assert!(!is_control_plane_signed(&ctx, &theirs));
     assert!(!is_durable_router_record(&ctx, &theirs));
 }
 
@@ -108,5 +108,5 @@ fn a_hitl_request_is_always_signed_by_the_control_plane() {
     let ev = append_hitl_request(&svc, tmp.path(), &id, serde_json::json!({}), true).unwrap();
     assert_eq!(ev.actor, ChannelActor::System);
     let ctx = crate::hitl::authority::AuthorityCtx::load(tmp.path(), &id).unwrap();
-    assert!(crate::hitl::authority::is_router_signed(&ctx, &ev));
+    assert!(crate::hitl::authority::is_control_plane_signed(&ctx, &ev));
 }

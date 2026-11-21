@@ -12,7 +12,7 @@ use mur_channel::service::restart::RestartOwner;
 use mur_channel::service::{ChannelOwner, RouterSeal};
 use mur_common::identity::AgentIdentity;
 
-use crate::channel_writer::{ROUTER_AGENT, read_key_version};
+use crate::channel_writer::{CONTROL_PLANE_AGENT, read_key_version};
 use crate::identity_enroll::{HumanSigner, ensure_enrolled};
 
 /// Whether A0 is in force on this build: the agent sandbox refuses every
@@ -20,7 +20,7 @@ use crate::identity_enroll::{HumanSigner, ensure_enrolled};
 /// launch chain; the rule is the same for every agent.
 pub fn identity_protected(mur_home: &Path) -> bool {
     mur_agent_runtime::sandbox::launch_chain::LaunchChain::new(
-        &mur_home.join("agents").join(ROUTER_AGENT),
+        &mur_home.join("agents").join(CONTROL_PLANE_AGENT),
     )
     .protects_human_identity()
 }
@@ -37,7 +37,7 @@ impl HumanOwner {
     pub fn load(mur_home: &Path) -> Result<Self> {
         ensure_enrolled(mur_home).context("a human-owned channel needs the human key")?;
         let signer = HumanSigner::load(mur_home)?;
-        let router_home = mur_home.join("agents").join(ROUTER_AGENT);
+        let router_home = mur_home.join("agents").join(CONTROL_PLANE_AGENT);
         let router = AgentIdentity::load(&router_home).with_context(|| {
             format!(
                 "a human-owned channel's head is sealed by the router key under {}",

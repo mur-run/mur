@@ -683,7 +683,7 @@ fn doctor(mur_home: &Path, out: &mut dyn Write, json: bool, fix: bool) -> Result
             format!(
                 "no readable `{}` identity under agents/; approval requests cannot be signed, \
                  so no push can be approved",
-                crate::channel_writer::ROUTER_AGENT
+                crate::channel_writer::CONTROL_PLANE_AGENT
             ),
         );
     }

@@ -7,7 +7,7 @@
 //!
 //! The checkpoint is written by the run itself, so it is never trusted to
 //! widen anything: bounds come from the `run_paused` event signed with the
-//! trusted writer's key (`ROUTER_AGENT`, whatever the fleet's `router:`) and
+//! trusted writer's key (`CONTROL_PLANE_AGENT`, whatever the fleet's `router:`) and
 //! are `min`-ed with what `fleet.yaml` allows now, counters are `max`-ed with
 //! those events, and when this resume is unattended the HITL policy is never
 //! looser than `defer` (from a terminal the frozen policy is kept). Every
@@ -155,7 +155,7 @@ pub(super) struct SignedPause {
 /// `verify_event` is not enough: it checks an event against its OWN actor's
 /// key, so a member signing a forged pause as itself would pass and its
 /// bounds would replace the originals. `is_durable_router_record` requires a
-/// non-agent actor and a `ROUTER_AGENT` key — the identity `record_pause`
+/// non-agent actor and a `CONTROL_PLANE_AGENT` key — the identity `record_pause`
 /// asks to sign with for every fleet, including one with a custom `router:`.
 ///
 /// D-10 (A1): a paused run can outlive a router rekey, so the note verifies

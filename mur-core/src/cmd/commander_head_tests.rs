@@ -11,7 +11,9 @@ use mur_common::identity::AgentIdentity;
 use tempfile::TempDir;
 
 use super::*;
-use crate::channel_writer::{ROUTER_AGENT, append_with_key, plant_writer_identity, writer_key};
+use crate::channel_writer::{
+    CONTROL_PLANE_AGENT, append_with_key, plant_writer_identity, writer_key,
+};
 use crate::cmd::channel_integrity::check;
 
 const FLEET: &str = "dev";
@@ -34,7 +36,7 @@ impl Home {
             .unwrap()
             .create_for_fleet(
                 FLEET,
-                ROUTER_AGENT,
+                CONTROL_PLANE_AGENT,
                 &["pm".into()],
                 mur_channel::service::ChannelOwner::Legacy,
             )
@@ -53,13 +55,13 @@ impl Home {
     /// What the control plane does for every `System` line it writes.
     fn router_note(&self, text: &str) -> anyhow::Result<ChannelEvent> {
         let svc = ChannelService::open(self.path())?;
-        let key = writer_key(self.path(), ROUTER_AGENT)?.expect("the router key is planted");
+        let key = writer_key(self.path(), CONTROL_PLANE_AGENT)?.expect("the router key is planted");
         append_with_key(
             &svc,
             self.path(),
             CHANNEL,
             key,
-            &self.path().join("agents").join(ROUTER_AGENT),
+            &self.path().join("agents").join(CONTROL_PLANE_AGENT),
             ChannelActor::System,
             EventKind::Note,
             serde_json::json!({ "text": text }),
@@ -205,8 +207,9 @@ fn an_unreadable_router_key_does_not_block_or_reseal_a_directive() {
 
     let h = Home::new();
     h.router_note("run started").unwrap();
-    let key = mur_common::identity::private_key_dir(&h.path().join("agents").join(ROUTER_AGENT))
-        .join("identity.key");
+    let key =
+        mur_common::identity::private_key_dir(&h.path().join("agents").join(CONTROL_PLANE_AGENT))
+            .join("identity.key");
     let lock = |mode| std::fs::set_permissions(&key, std::fs::Permissions::from_mode(mode));
     lock(0o000).unwrap();
     if std::fs::read(&key).is_ok() {

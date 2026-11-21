@@ -74,7 +74,7 @@ fn settled_with_policy(
     let d = tempfile::tempdir().unwrap();
     let home = d.path().to_path_buf();
     // The gate signs what it writes and verifies what it reads, both as
-    // `ROUTER_AGENT`. A home without that identity writes unsigned events that
+    // `CONTROL_PLANE_AGENT`. A home without that identity writes unsigned events that
     // enforcement then drops — so plant it here, once, for every fixture built
     // on this helper.
     crate::channel_writer::plant_writer_identity(&home);

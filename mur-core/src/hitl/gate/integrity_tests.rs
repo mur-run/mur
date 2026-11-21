@@ -6,7 +6,7 @@
 //! either as untrustworthy: never release on it, ask again or deny.
 
 use super::*;
-use crate::channel_writer::ROUTER_AGENT;
+use crate::channel_writer::CONTROL_PLANE_AGENT;
 use tempfile::TempDir;
 
 fn action() -> ActionRequest {
@@ -467,7 +467,7 @@ fn rekeyed_home(with_history: bool) -> (TempDir, String) {
         "precondition: clean before the rekey"
     );
 
-    let agent_home = tmp.path().join("agents").join(ROUTER_AGENT);
+    let agent_home = tmp.path().join("agents").join(CONTROL_PLANE_AGENT);
     let new = mur_common::identity::AgentIdentity::generate();
     if with_history {
         write_rotation(&agent_home, &old, &new);
@@ -480,7 +480,8 @@ fn rekeyed_home(with_history: bool) -> (TempDir, String) {
     new.save(&agent_home).unwrap();
     if with_history {
         // ...and bumps the profile's `key_version`, which writers sign under.
-        let yaml = crate::executor::delegation::grant::tests::profile_yaml(ROUTER_AGENT, &[]);
+        let yaml =
+            crate::executor::delegation::grant::tests::profile_yaml(CONTROL_PLANE_AGENT, &[]);
         let mut p: mur_common::AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
         p.identity.key_version = 1;
         let out = serde_yaml_ng::to_string(&p).unwrap();

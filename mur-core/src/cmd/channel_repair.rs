@@ -36,7 +36,7 @@ use mur_channel::service::restart::RestartSigner;
 use mur_common::agent::HITL_CHANNEL_FILE;
 use mur_common::channel::ChannelActor;
 
-use crate::channel_writer::{KeySource, ROUTER_AGENT, WriterKey, writer_key};
+use crate::channel_writer::{CONTROL_PLANE_AGENT, KeySource, WriterKey, writer_key};
 use crate::cmd::channel_integrity::{self, IntegrityReport};
 use crate::cmd::channel_repair_gate_b::GateB;
 
@@ -217,7 +217,7 @@ pub fn repair(mur_home: &Path, channel_id: &str, confirm: Confirm<'_>) -> Result
             prepare,
         ),
         (None, Some(w)) => {
-            let key_home = mur_home.join("agents").join(ROUTER_AGENT);
+            let key_home = mur_home.join("agents").join(CONTROL_PLANE_AGENT);
             let protected = crate::channel_owner::identity_protected(mur_home);
             ChannelService::open(mur_home)?.restart_chain(
                 channel_id,
@@ -252,12 +252,12 @@ pub fn repair(mur_home: &Path, channel_id: &str, confirm: Confirm<'_>) -> Result
 fn router_key(mur_home: &Path) -> Result<WriterKey> {
     let refuse = |why: String| {
         anyhow::anyhow!(
-            "refusing to repair: the router signing key (agent `{ROUTER_AGENT}`) {why}, so \
+            "refusing to repair: the router signing key (agent `{CONTROL_PLANE_AGENT}`) {why}, so \
              the fresh chain could not be signed and anchored; nothing was touched. Run this \
              outside any agent sandbox, from the `mur` that owns the key."
         )
     };
-    match writer_key(mur_home, ROUTER_AGENT) {
+    match writer_key(mur_home, CONTROL_PLANE_AGENT) {
         Ok(Some(k)) if k.source == KeySource::Disk => Ok(k),
         Ok(Some(_)) => Err(refuse("is only available as a sandbox handoff".into())),
         Ok(None) => Err(refuse("is missing or unreadable".into())),

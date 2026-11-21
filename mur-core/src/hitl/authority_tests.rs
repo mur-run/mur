@@ -46,7 +46,7 @@ fn only_the_routers_human_answer_is_the_humans_decision() {
             )
             .unwrap();
         assert!(
-            is_router_signed(&AuthorityCtx::load(tmp.path(), &ch.id).unwrap(), &ev),
+            is_control_plane_signed(&AuthorityCtx::load(tmp.path(), &ch.id).unwrap(), &ev),
             "{actor:?}"
         );
         assert_eq!(
@@ -57,12 +57,12 @@ fn only_the_routers_human_answer_is_the_humans_decision() {
     }
 }
 
-/// B2: `is_router_signed` asks only "did the router write this". A
+/// B2: `is_control_plane_signed` asks only "did the router write this". A
 /// `Human` actor that names a key must not move the check onto the human
 /// chain: the router's signature still passes, a human-key signature does
 /// not (that is C3's question, not this one's).
 #[test]
-fn is_router_signed_unchanged_for_human_actor() {
+fn is_control_plane_signed_unchanged_for_human_actor() {
     let tmp = TempDir::new().unwrap();
     let router = crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
@@ -82,7 +82,7 @@ fn is_router_signed_unchanged_for_human_actor() {
             None,
         )
         .unwrap();
-    assert!(is_router_signed(
+    assert!(is_control_plane_signed(
         &AuthorityCtx::load(tmp.path(), &ch.id).unwrap(),
         &by_router
     ));
@@ -97,7 +97,7 @@ fn is_router_signed_unchanged_for_human_actor() {
             None,
         )
         .unwrap();
-    assert!(!is_router_signed(
+    assert!(!is_control_plane_signed(
         &AuthorityCtx::load(tmp.path(), &ch.id).unwrap(),
         &by_human
     ));
@@ -133,7 +133,7 @@ fn a_human_answer_signed_for_another_channel_is_not_authority() {
         "precondition"
     );
     assert!(
-        !is_router_signed(&AuthorityCtx::load(tmp.path(), &there.id).unwrap(), &ev)
+        !is_control_plane_signed(&AuthorityCtx::load(tmp.path(), &there.id).unwrap(), &ev)
             && !is_human_authority(&AuthorityCtx::load(tmp.path(), &there.id).unwrap(), &ev),
         "a signature for {} must not verify in {}",
         here.id,
@@ -215,7 +215,7 @@ fn an_agent_cannot_answer_for_the_human() {
         ("wrong key as human", &wrong_key),
     ] {
         assert!(
-            !is_router_signed(&AuthorityCtx::load(tmp.path(), &ch.id).unwrap(), ev)
+            !is_control_plane_signed(&AuthorityCtx::load(tmp.path(), &ch.id).unwrap(), ev)
                 && !is_human_authority(&AuthorityCtx::load(tmp.path(), &ch.id).unwrap(), ev),
             "{what} must not carry the router's authority"
         );

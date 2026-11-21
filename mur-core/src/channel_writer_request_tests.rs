@@ -20,7 +20,7 @@ fn request(home: &Path, ch: &str, r: Refuse) -> anyhow::Result<ChannelEvent> {
         &svc,
         home,
         ch,
-        ROUTER_AGENT,
+        CONTROL_PLANE_AGENT,
         serde_json::json!({ "hitl_id": "h-1" }),
         r,
     )
@@ -49,7 +49,7 @@ fn requests(home: &Path, ch: &str) -> usize {
 #[cfg(unix)]
 fn with_unreadable_key<T>(home: &Path, f: impl FnOnce() -> T) -> T {
     use std::os::unix::fs::PermissionsExt;
-    let key = mur_common::identity::private_key_dir(&home.join("agents").join(ROUTER_AGENT))
+    let key = mur_common::identity::private_key_dir(&home.join("agents").join(CONTROL_PLANE_AGENT))
         .join("identity.key");
     std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o000)).unwrap();
     let out = f();

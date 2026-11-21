@@ -6,13 +6,15 @@ use mur_common::channel::{ChannelActor, ChannelEvent};
 
 pub mod human;
 
-/// The channel's router/owner agent — the trusted WRITER that signs the events
-/// appended to workflow/HITL channels (v3d). The concierge `"mur"` owns these
-/// channels; its on-disk identity (`<home>/agents/mur/`) signs `HitlRequest`/
+/// The control-plane identity — the trusted WRITER that signs the events
+/// appended to workflow/HITL channels (v3d), and the trust root a reader checks
+/// them against. Not a fleet's `router:` member, which `fleet.yaml` chooses and
+/// which is therefore never trusted to widen bounds. The concierge `"mur"` owns
+/// these channels; its on-disk identity (`<home>/agents/mur/`) signs `HitlRequest`/
 /// `HitlResponse`/workflow events, and the HITL gate verifies an incoming
 /// `HitlResponse` against this agent's pubkey before releasing. Internal
 /// directory slug, so lowercase (matches the on-disk `name`).
-pub const ROUTER_AGENT: &str = "mur";
+pub const CONTROL_PLANE_AGENT: &str = "mur";
 
 /// Whose identity signs an event, and so whose key a reader checks it against.
 ///
@@ -21,7 +23,7 @@ pub const ROUTER_AGENT: &str = "mur";
 /// the two cannot name the trust root differently (#2081).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Signer<'a> {
-    /// The control plane: the one identity ([`ROUTER_AGENT`]) every reader
+    /// The control plane: the one identity ([`CONTROL_PLANE_AGENT`]) every reader
     /// checks a `System` or keyless `Human` event against.
     ///
     /// Never a fleet's configured `router:`. That field lives in `fleet.yaml`,
@@ -48,7 +50,7 @@ impl<'a> Signer<'a> {
     /// an `Agent` name taken from an event must go through [`actor_key_dir`].
     pub fn agent_name(self) -> &'a str {
         match self {
-            Signer::ControlPlane => ROUTER_AGENT,
+            Signer::ControlPlane => CONTROL_PLANE_AGENT,
             Signer::Agent(name) => name,
         }
     }
@@ -91,10 +93,10 @@ pub fn actor_pubkey(
     crate::sign::resolve_writer_pubkey(&actor_key_dir(mur_home, actor)?, key_version)
 }
 
-/// The router's key at `key_version`, whatever the event's actor says. For
-/// checks whose question is "did the router write this" — they must not
+/// The control-plane key at `key_version`, whatever the event's actor says. For
+/// checks whose question is "did the control plane write this" — they must not
 /// follow `actor_pubkey` onto the human chain when an actor names a key.
-pub fn router_pubkey(mur_home: &Path, key_version: Option<u32>) -> Option<[u8; 32]> {
+pub fn control_plane_pubkey(mur_home: &Path, key_version: Option<u32>) -> Option<[u8; 32]> {
     crate::sign::resolve_writer_pubkey(&Signer::ControlPlane.key_home(mur_home), key_version)
 }
 
@@ -325,7 +327,7 @@ mod tests {
         // System and Human resolve to the router, which is always valid.
         assert_eq!(
             actor_key_dir(home, &ChannelActor::System),
-            Some(home.join("agents").join(ROUTER_AGENT))
+            Some(home.join("agents").join(CONTROL_PLANE_AGENT))
         );
     }
 
@@ -389,10 +391,10 @@ mod tests {
     /// fleet's `router:`, which the fleet's own config controls.
     #[test]
     fn the_control_plane_is_the_router_agent_and_nothing_configurable() {
-        assert_eq!(Signer::ControlPlane.agent_name(), ROUTER_AGENT);
+        assert_eq!(Signer::ControlPlane.agent_name(), CONTROL_PLANE_AGENT);
         assert_eq!(
             Signer::ControlPlane.key_home(Path::new("/h")),
-            Path::new("/h").join("agents").join(ROUTER_AGENT)
+            Path::new("/h").join("agents").join(CONTROL_PLANE_AGENT)
         );
         assert_eq!(Signer::Agent("orchestrator").agent_name(), "orchestrator");
     }

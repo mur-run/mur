@@ -82,13 +82,13 @@ impl AuthorityCtx {
 /// key the router resolves to, yields the head key only (D-9), never "all
 /// keys".
 fn durable_router_keys(mur_home: &Path) -> Vec<[u8; 32]> {
-    let Some(head) = mur_channel::verify::router_pubkey(mur_home, None) else {
+    let Some(head) = mur_channel::verify::control_plane_pubkey(mur_home, None) else {
         return Vec::new();
     };
     let mut keys = vec![head];
     let router_home = mur_home
         .join("agents")
-        .join(mur_channel::verify::ROUTER_AGENT);
+        .join(mur_channel::verify::CONTROL_PLANE_AGENT);
     let Some(chain) = mur_channel::sign::verified_writer_chain(&router_home) else {
         return keys;
     };
@@ -113,9 +113,9 @@ fn durable_router_keys(mur_home: &Path) -> Vec<[u8; 32]> {
     keys
 }
 
-/// True if the router wrote `ev`: a Human or System actor (an agent never
-/// speaks for the human), a signature, and that signature verifying against
-/// the router's key.
+/// True if the control plane ([`mur_channel::verify::CONTROL_PLANE_AGENT`])
+/// wrote `ev`: a Human or System actor (an agent never speaks for the human),
+/// a signature, and that signature verifying against the control-plane key.
 ///
 /// This proves MUR asked a question or recorded an answer. It does NOT prove a
 /// human decided anything: the gate's own `--yes` / tier-grant audit record is
@@ -125,11 +125,11 @@ fn durable_router_keys(mur_home: &Path) -> Vec<[u8; 32]> {
 /// sandboxed `mur channel approve` writes — it cannot read the router key — so
 /// tolerating unsigned approvals is tolerating agent-written ones. The cost: a
 /// home with no router identity cannot approve anything.
-pub fn is_router_signed(ctx: &AuthorityCtx, ev: &ChannelEvent) -> bool {
+pub fn is_control_plane_signed(ctx: &AuthorityCtx, ev: &ChannelEvent) -> bool {
     if matches!(ev.actor, ChannelActor::Agent { .. }) || ev.sig.is_none() {
         return false;
     }
-    mur_channel::verify::router_pubkey(&ctx.mur_home, ev.key_version)
+    mur_channel::verify::control_plane_pubkey(&ctx.mur_home, ev.key_version)
         .is_some_and(|pk| mur_channel::sign::verify_one(&ctx.channel_id, ev, &pk, true))
 }
 
@@ -152,7 +152,7 @@ pub fn is_durable_router_record(ctx: &AuthorityCtx, ev: &ChannelEvent) -> bool {
 /// [`is_human_authority`]. Before C3 the scan kept only router-signed
 /// answers, so a deferred human-key approval never reached that check (N4).
 pub fn is_authentic_answer(ctx: &AuthorityCtx, ev: &ChannelEvent) -> bool {
-    is_router_signed(ctx, ev)
+    is_control_plane_signed(ctx, ev)
         || ctx
             .trust
             .is_trusted_human(&ctx.mur_home, &ctx.channel_id, ev, true)
@@ -195,7 +195,7 @@ pub fn is_human_authority(ctx: &AuthorityCtx, ev: &ChannelEvent) -> bool {
                 && mur_channel::sign::verify_one(&ctx.channel_id, ev, &head, true)
         }
         None => {
-            is_router_signed(ctx, ev)
+            is_control_plane_signed(ctx, ev)
                 && live.is_none_or(|l| {
                     l.payload
                         .human_cut
@@ -231,7 +231,7 @@ pub fn request_to_answer(
         if r.hitl_id != hitl_id {
             continue;
         }
-        if is_router_signed(&ctx, e) {
+        if is_control_plane_signed(&ctx, e) {
             // Refuse what the gate would ignore, rather than write an answer
             // that silently settles nothing (#1764 option C): a request with
             // no signed `issued_at`, or one past its TTL, is not open.

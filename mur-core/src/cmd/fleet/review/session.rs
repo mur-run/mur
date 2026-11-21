@@ -132,7 +132,7 @@ pub(super) fn create_session_fleet(
     let svc = ChannelService::open(mur_home)?;
     let ch = svc.create_for_fleet(
         name,
-        crate::channel_writer::ROUTER_AGENT,
+        crate::channel_writer::CONTROL_PLANE_AGENT,
         &members,
         mur_channel::service::ChannelOwner::Legacy,
     )?;

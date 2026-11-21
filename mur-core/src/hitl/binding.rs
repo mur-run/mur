@@ -56,7 +56,9 @@ impl Requests {
     pub fn collect(ctx: &super::authority::AuthorityCtx, events: &[ChannelEvent]) -> Self {
         let mut map: HashMap<String, Issued> = HashMap::new();
         for e in events {
-            if e.kind != EventKind::HitlRequest || !super::authority::is_router_signed(ctx, e) {
+            if e.kind != EventKind::HitlRequest
+                || !super::authority::is_control_plane_signed(ctx, e)
+            {
                 continue;
             }
             let Ok(q) = serde_json::from_value::<HitlRequest>(e.payload.clone()) else {

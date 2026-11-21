@@ -314,14 +314,14 @@ fn a_pack_that_does_not_match_the_signed_digest_is_refused() {
 
 use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, EventKind};
-use mur_core::channel_writer::{ROUTER_AGENT, append_as_writer};
+use mur_core::channel_writer::{CONTROL_PLANE_AGENT, append_as_writer};
 use mur_daemon::git_push_broker::{BROKER_CHANNEL_ID, approval_pass};
 
 /// The router identity every HITL event is signed with. Without it the request is unsigned and
 /// nothing can bind to it.
 fn plant_router(w: &World) {
     AgentIdentity::generate()
-        .save(&w.home.path().join("agents").join(ROUTER_AGENT))
+        .save(&w.home.path().join("agents").join(CONTROL_PLANE_AGENT))
         .unwrap();
 }
 
