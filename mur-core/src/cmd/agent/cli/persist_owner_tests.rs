@@ -70,7 +70,7 @@ fn agent_reply_after_enroll_is_router_sealed() {
     let router = mur_common::identity::AgentIdentity::load(
         &home
             .join("agents")
-            .join(crate::channel_writer::ROUTER_AGENT),
+            .join(crate::channel_writer::CONTROL_PLANE_AGENT),
     )
     .unwrap();
     assert!(head.verify(&router.verifying_key_bytes()));

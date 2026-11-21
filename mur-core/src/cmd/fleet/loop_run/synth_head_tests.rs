@@ -11,7 +11,7 @@ use mur_common::fleet::{Fleet, FleetLoop, FleetStep};
 use mur_common::identity::AgentIdentity;
 
 use super::*;
-use crate::channel_writer::{ROUTER_AGENT, append_with_key, plant_identity_for, writer_key};
+use crate::channel_writer::{CONTROL_PLANE_AGENT, append_with_key, plant_identity_for, writer_key};
 use crate::cmd::channel_integrity::check;
 
 const MARKER: &str = "RESEARCH_DONE";
@@ -62,7 +62,7 @@ impl Home {
     fn build(keyless_control_plane: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let control_plane =
-            (!keyless_control_plane).then(|| plant_identity_for(dir.path(), ROUTER_AGENT));
+            (!keyless_control_plane).then(|| plant_identity_for(dir.path(), CONTROL_PLANE_AGENT));
         let fleet_router = plant_identity_for(dir.path(), FLEET_ROUTER);
         crate::cmd::fleet::store::save_fleet(dir.path(), &fleet(Some(FLEET_ROUTER))).unwrap();
         ChannelService::open(dir.path())
@@ -114,7 +114,12 @@ impl Home {
 
     /// What the loop and the DAG write: a `System` line, control-plane key.
     fn system_note(&self, text: &str) -> anyhow::Result<ChannelEvent> {
-        self.anchored(ROUTER_AGENT, ChannelActor::System, EventKind::Note, text)
+        self.anchored(
+            CONTROL_PLANE_AGENT,
+            ChannelActor::System,
+            EventKind::Note,
+            text,
+        )
     }
 
     fn synthesis(&self) -> anyhow::Result<ChannelEvent> {
@@ -237,7 +242,7 @@ fn the_default_routers_synthesis_is_signed_and_sealed_by_one_key() {
     assert_eq!(
         ev.actor,
         ChannelActor::Agent {
-            id: ROUTER_AGENT.into()
+            id: CONTROL_PLANE_AGENT.into()
         }
     );
     assert!(crate::channel_verify::verify_event(
@@ -275,8 +280,9 @@ fn an_unreadable_control_plane_key_neither_blocks_nor_reseals_a_synthesis() {
 
     let h = Home::new();
     h.system_note("delegated").unwrap();
-    let key = mur_common::identity::private_key_dir(&h.path().join("agents").join(ROUTER_AGENT))
-        .join("identity.key");
+    let key =
+        mur_common::identity::private_key_dir(&h.path().join("agents").join(CONTROL_PLANE_AGENT))
+            .join("identity.key");
     let lock = |mode| std::fs::set_permissions(&key, std::fs::Permissions::from_mode(mode));
     lock(0o000).unwrap();
     if std::fs::read(&key).is_ok() {

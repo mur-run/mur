@@ -23,8 +23,8 @@ use mur_common::channel::{
 use mur_common::config::Config;
 use mur_common::git_push::private_dir;
 use mur_common::hitl::{HitlRequest, RiskTier};
-use mur_core::channel_writer::{ROUTER_AGENT, append_as_writer};
-use mur_core::hitl::authority::{AuthorityCtx, is_router_signed};
+use mur_core::channel_writer::{CONTROL_PLANE_AGENT, append_as_writer};
+use mur_core::hitl::authority::{AuthorityCtx, is_control_plane_signed};
 use mur_git_broker::action::ActionDocument;
 use mur_git_broker::pending::{RequestKey, Row, State};
 
@@ -141,13 +141,13 @@ fn open_requests(mur_home: &Path, rows: &[Row]) -> anyhow::Result<Vec<ChannelEve
             Some(format!("{IDEMPOTENCY_PREFIX}{id}")),
         )?;
         if !AuthorityCtx::load(mur_home, BROKER_CHANNEL_ID)
-            .is_ok_and(|ctx| is_router_signed(&ctx, &ev))
+            .is_ok_and(|ctx| is_control_plane_signed(&ctx, &ev))
         {
             // Written, but no human answer can bind to it: the gate only counts router-signed
             // requests. Say so now rather than leave a question nobody can settle.
             tracing::warn!(
                 request_id = %id,
-                router = ROUTER_AGENT,
+                router = CONTROL_PLANE_AGENT,
                 "git push approval request is not router-signed; it cannot be approved until the router identity exists"
             );
         }

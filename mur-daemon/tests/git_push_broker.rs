@@ -12,8 +12,8 @@ use mur_git_broker::pending::RequestKey;
 use serde_json::json;
 use std::path::Path;
 
-/// The router's on-disk agent slug (`mur_core::channel_writer::ROUTER_AGENT`).
-const ROUTER: &str = mur_core::channel_writer::ROUTER_AGENT;
+/// The router's on-disk agent slug (`mur_core::channel_writer::CONTROL_PLANE_AGENT`).
+const ROUTER: &str = mur_core::channel_writer::CONTROL_PLANE_AGENT;
 /// Opaque to the fold; any fixed string.
 const H: &str = "aa";
 
@@ -369,7 +369,7 @@ fn adapter_calls_the_shared_predicate_and_never_copies_it() {
     let all = [src, include_str!("../src/git_push_broker/intake.rs")];
     for local in [
         "fn is_human_authority",
-        "fn is_router_signed",
+        "fn is_control_plane_signed",
         "fn bind(",
         "verify_one(",
     ] {

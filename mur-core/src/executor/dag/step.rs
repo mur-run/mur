@@ -495,7 +495,7 @@ pub(super) async fn execute_step(
             step_or_call_id: sid.clone(),
             // The gate is only reached on the LOCAL path — delegate steps return
             // above — so the asker is the router itself, not the step's agent.
-            agent_id: ROUTER_AGENT.into(),
+            agent_id: CONTROL_PLANE_AGENT.into(),
             summary: step.description.clone(),
         };
         let decision = crate::hitl::gate::gate(

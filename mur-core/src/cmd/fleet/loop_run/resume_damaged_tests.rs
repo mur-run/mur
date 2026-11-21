@@ -5,7 +5,7 @@ use super::super::pause_events::{PauseReason, RunBounds};
 use super::damaged::{checked_resume, resume_from_damaged};
 use super::tests::{RUN, paused_home, signed};
 use super::*;
-use crate::channel_writer::{ROUTER_AGENT, Signer, append_as_writer, plant_writer_identity};
+use crate::channel_writer::{CONTROL_PLANE_AGENT, Signer, append_as_writer, plant_writer_identity};
 use mur_common::channel::ChannelActor;
 
 /// The fixture fleet's channel and name (`resume_tests::fleet`).
@@ -42,7 +42,7 @@ fn home_with_three_pauses() -> tempfile::TempDir {
     let svc = mur_channel::ChannelService::open(home.path()).unwrap();
     svc.create_for_fleet(
         FLEET,
-        ROUTER_AGENT,
+        CONTROL_PLANE_AGENT,
         &["pm".into()],
         mur_channel::service::ChannelOwner::Legacy,
     )

@@ -11,7 +11,7 @@ use mur_track::jobs_dispatch_request::{JobsDispatch, RequestedJob};
 use crate::executor::delegation::grant::tests::profile_yaml;
 
 #[tokio::test]
-async fn the_childs_write_grant_request_is_router_signed() {
+async fn the_childs_write_grant_request_is_control_plane_signed() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     // Outside the sandbox the child reads the router key from disk.
@@ -68,7 +68,7 @@ async fn the_childs_write_grant_request_is_router_signed() {
         .collect();
     assert_eq!(asks.len(), 1, "one write-grant approval for coder");
     assert!(
-        crate::hitl::authority::is_router_signed(
+        crate::hitl::authority::is_control_plane_signed(
             &crate::hitl::authority::AuthorityCtx::load(home, &channel_id).unwrap(),
             &asks[0]
         ),

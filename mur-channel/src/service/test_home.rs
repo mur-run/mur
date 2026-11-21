@@ -59,7 +59,11 @@ impl Home {
         .unwrap();
         let router = AgentIdentity::from_secret_bytes(&[3u8; 32]);
         router
-            .save(&dir.path().join("agents").join(crate::verify::ROUTER_AGENT))
+            .save(
+                &dir.path()
+                    .join("agents")
+                    .join(crate::verify::CONTROL_PLANE_AGENT),
+            )
             .unwrap();
         Self {
             dir,
@@ -73,7 +77,9 @@ impl Home {
     }
 
     pub(crate) fn router_home(&self) -> std::path::PathBuf {
-        self.path().join("agents").join(crate::verify::ROUTER_AGENT)
+        self.path()
+            .join("agents")
+            .join(crate::verify::CONTROL_PLANE_AGENT)
     }
 
     pub(crate) fn svc(&self) -> ChannelService {

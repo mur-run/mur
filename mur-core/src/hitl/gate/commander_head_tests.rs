@@ -2,7 +2,9 @@
 //! directive: a directive is not damage, so the gate must not refuse on it.
 
 use super::*;
-use crate::channel_writer::{ROUTER_AGENT, append_with_key, plant_writer_identity, writer_key};
+use crate::channel_writer::{
+    CONTROL_PLANE_AGENT, append_with_key, plant_writer_identity, writer_key,
+};
 use tempfile::TempDir;
 
 #[test]
@@ -16,18 +18,18 @@ fn a_commander_directive_does_not_read_as_log_damage() {
     let svc = ChannelService::open(home).unwrap();
     svc.create_for_fleet(
         "dev",
-        ROUTER_AGENT,
+        CONTROL_PLANE_AGENT,
         &["pm".into()],
         mur_channel::service::ChannelOwner::Legacy,
     )
     .unwrap();
-    let key = writer_key(home, ROUTER_AGENT).unwrap().unwrap();
+    let key = writer_key(home, CONTROL_PLANE_AGENT).unwrap().unwrap();
     append_with_key(
         &svc,
         home,
         "fleet-dev",
         key,
-        &home.join("agents").join(ROUTER_AGENT),
+        &home.join("agents").join(CONTROL_PLANE_AGENT),
         ChannelActor::System,
         EventKind::Note,
         serde_json::json!({ "text": "run started" }),

@@ -370,7 +370,7 @@ mod pending_hitl_tests {
 #[cfg(test)]
 mod approve_tests {
     use super::*;
-    use crate::channel_writer::ROUTER_AGENT;
+    use crate::channel_writer::CONTROL_PLANE_AGENT;
     use mur_channel::ChannelService;
     use mur_common::channel::{ChannelActor, EventKind};
     use tempfile::TempDir;
@@ -395,7 +395,7 @@ mod approve_tests {
         // second key would orphan every request signed with the first.
         if !home
             .join("agents")
-            .join(ROUTER_AGENT)
+            .join(CONTROL_PLANE_AGENT)
             .join("identity.pub")
             .exists()
         {

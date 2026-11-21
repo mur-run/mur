@@ -8,7 +8,7 @@ use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use mur_common::commander::{COMMANDER_DIRECTIVE_KEY, GovernanceState};
 use mur_common::identity::{AgentIdentity, IdentityError};
 
-use crate::channel_writer::{ROUTER_AGENT, read_key_version};
+use crate::channel_writer::{CONTROL_PLANE_AGENT, read_key_version};
 
 pub use mur_common::commander::{COMMANDER_DIR, COMMANDER_PREV_PUB, COMMANDER_PUB};
 
@@ -187,7 +187,7 @@ pub fn cmd_commander_directive(
     // effect, and was reported as failed).
     let channel_id = format!("fleet-{fleet}");
     let commander_home = mur_home.join(COMMANDER_DIR);
-    let router_home = mur_home.join("agents").join(ROUTER_AGENT);
+    let router_home = mur_home.join("agents").join(CONTROL_PLANE_AGENT);
     let (actor, event_kind) = (ChannelActor::System, EventKind::Note);
     let anchored = |router: Option<&AgentIdentity>| {
         svc.append_and_anchor_v1(

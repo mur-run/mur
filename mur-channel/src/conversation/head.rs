@@ -66,14 +66,14 @@ pub(super) fn verdict(
 /// The router's current key and, when different, its strictly resolved key
 /// at the head's `key_version`. Empty when the router key cannot be read.
 fn router_keys(keys: &Keys<'_>, head: &Head) -> Vec<[u8; 32]> {
-    let Some(current) = crate::verify::router_pubkey(keys.mur_home, None) else {
+    let Some(current) = crate::verify::control_plane_pubkey(keys.mur_home, None) else {
         return Vec::new();
     };
     let mut out = vec![current];
     let dir = keys
         .mur_home
         .join("agents")
-        .join(crate::verify::ROUTER_AGENT);
+        .join(crate::verify::CONTROL_PLANE_AGENT);
     if let Some(older) = head
         .key_version
         .and_then(|kv| crate::sign::resolve_writer_pubkey_strict(&dir, kv))

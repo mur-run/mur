@@ -29,7 +29,7 @@ use mur_agent_runtime::sandbox::launch_chain::{LaunchChain, is_overbroad_grant_r
 use mur_common::channel::{ChannelActor, EventKind};
 use mur_common::hitl::RiskTier;
 
-use crate::channel_writer::{ROUTER_AGENT, UnanswerableRequest};
+use crate::channel_writer::{CONTROL_PLANE_AGENT, UnanswerableRequest};
 use crate::hitl::gate::{ActionRequest, GatePolicy, gate};
 
 /// One member and the directory it is about to be sent to.
@@ -273,7 +273,7 @@ async fn ensure_one(ctx: &GrantContext<'_>, t: &DelegationTarget) -> Result<Gran
             "grant": !allowed,
         }),
         step_or_call_id: format!("grant:{}", t.member),
-        agent_id: ROUTER_AGENT.into(),
+        agent_id: CONTROL_PLANE_AGENT.into(),
         summary: prompt(t, allowed, service, ctx.job_count),
     };
     let decision = match gate(

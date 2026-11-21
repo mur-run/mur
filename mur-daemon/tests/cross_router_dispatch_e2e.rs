@@ -21,7 +21,7 @@
 //! `channel_writer`'s `a_cross_router_run_outside_the_seal_signs_as_the_router`.
 //!
 //! The requester is `scout`, not `mur`: `System` events verify against
-//! `ROUTER_AGENT` (`mur`), so a `mur` requester would make "not signed by the
+//! `CONTROL_PLANE_AGENT` (`mur`), so a `mur` requester would make "not signed by the
 //! requester" impossible to assert.
 #![cfg(unix)]
 
@@ -242,10 +242,10 @@ fn sealed_cross_router_dispatch_yields_verifiable_events_not_signed_by_the_reque
     let home = fresh_home(&work);
     let requester = save_identity(&home, REQUESTER);
     save_identity(&home, ROUTER);
-    let writer = save_identity(&home, mur_core::channel_writer::ROUTER_AGENT);
+    let writer = save_identity(&home, mur_core::channel_writer::CONTROL_PLANE_AGENT);
     // The sealed child treats an unreadable key as isolation; that only means
     // something if the key is really there to be refused.
-    for other in [ROUTER, mur_core::channel_writer::ROUTER_AGENT] {
+    for other in [ROUTER, mur_core::channel_writer::CONTROL_PLANE_AGENT] {
         let key = home.join("keys").join(other).join("identity.key");
         assert!(key.is_file(), "expected private key at {}", key.display());
     }
@@ -359,7 +359,7 @@ fn submit(home: &Path, work: &Path) -> ! {
         Ok(s) if s.enforcing => {}
         other => skip_or_fail_unenforced(&other),
     }
-    for other in [ROUTER, mur_core::channel_writer::ROUTER_AGENT] {
+    for other in [ROUTER, mur_core::channel_writer::CONTROL_PLANE_AGENT] {
         let key = home.join("keys").join(other).join("identity.key");
         if std::fs::read(&key).is_ok() {
             fail(&format!("sealed agent read {}", key.display()));

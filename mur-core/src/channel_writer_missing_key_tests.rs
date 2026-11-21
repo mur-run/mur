@@ -23,7 +23,7 @@ fn a_missing_writer_key_is_refused_when_signatures_are_required() {
     let home = tmp.path();
     let mark = refusal_count();
 
-    let err = match writer_key_with(home, ROUTER_AGENT, true) {
+    let err = match writer_key_with(home, CONTROL_PLANE_AGENT, true) {
         Err(e) => e,
         Ok(k) => panic!(
             "require_sig with no key must refuse, got Ok(is_some={})",
@@ -40,7 +40,7 @@ fn a_missing_writer_key_is_refused_when_signatures_are_required() {
     // leave a trace that outlives this call.
     let body = std::fs::read_to_string(sidecar(home)).expect("refusal sidecar must exist");
     let rec: serde_json::Value = serde_json::from_str(body.trim()).expect("one JSON line");
-    assert_eq!(rec["router_agent"], ROUTER_AGENT);
+    assert_eq!(rec["router_agent"], CONTROL_PLANE_AGENT);
     assert!(
         rec["reason"].as_str().unwrap().contains("does not exist"),
         "{rec}"
@@ -53,7 +53,8 @@ fn a_missing_writer_key_still_writes_unsigned_when_signatures_are_optional() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path();
 
-    let key = writer_key_with(home, ROUTER_AGENT, false).expect("bootstrap path must not fail");
+    let key =
+        writer_key_with(home, CONTROL_PLANE_AGENT, false).expect("bootstrap path must not fail");
     assert!(key.is_none(), "no key and no enforcement means unsigned");
     assert!(
         !sidecar(home).exists(),
@@ -67,7 +68,7 @@ fn a_present_writer_key_signs_when_signatures_are_required() {
     let home = tmp.path();
     plant_writer_identity(home);
 
-    let key = writer_key_with(home, ROUTER_AGENT, true)
+    let key = writer_key_with(home, CONTROL_PLANE_AGENT, true)
         .expect("a present key must not be refused")
         .expect("a present key must be returned");
     assert_eq!(key.source, KeySource::Disk);

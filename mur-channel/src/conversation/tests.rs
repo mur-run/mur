@@ -12,7 +12,7 @@ use super::*;
 use crate::ChannelService;
 use crate::repair_record::REPAIR_EVENT_TYPE;
 use crate::service::restart::RestartSigner;
-use crate::verify::ROUTER_AGENT;
+use crate::verify::CONTROL_PLANE_AGENT;
 
 struct Fx {
     tmp: TempDir,
@@ -35,10 +35,10 @@ impl Fx {
     fn new(agent: &str) -> Self {
         let tmp = TempDir::new().unwrap();
         let me = plant(tmp.path(), agent);
-        let router = if agent == ROUTER_AGENT {
+        let router = if agent == CONTROL_PLANE_AGENT {
             AgentIdentity::from_secret_bytes(&me.secret_bytes_for_handoff())
         } else {
-            plant(tmp.path(), ROUTER_AGENT)
+            plant(tmp.path(), CONTROL_PLANE_AGENT)
         };
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc
