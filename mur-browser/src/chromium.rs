@@ -161,10 +161,10 @@ pub fn extra_args(raw: Option<&str>) -> Vec<String> {
     })
 }
 
-/// Set to `1` by the agent runtime on every MCP child it spawns while its own
-/// kernel seal is enforcing. Must match `mur_agent_runtime::sandbox::SEALED_ENV`
-/// (the runtime does not depend on this crate; `mur-core` asserts the two
-/// agree).
+/// Set to `1` by the agent runtime on the children it spawns (MCP servers and
+/// bash tool commands) while its own kernel seal is enforcing. Must match
+/// `mur_agent_runtime::sandbox::SEALED_ENV` (the runtime does not depend on
+/// this crate; `mur-core` asserts the two agree).
 pub const SEALED_ENV: &str = "MUR_SEALED";
 
 /// Whether [`SEALED_ENV`] says the parent is sealed. Only the exact value `1`

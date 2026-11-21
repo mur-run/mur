@@ -360,6 +360,7 @@ mod tests {
             trash: None,
             ssh: None,
             ssh_request: false,
+            sealed: false,
         });
         let bash_def = bash_exec.def();
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None, None);
@@ -401,6 +402,7 @@ mod tests {
             trash: None,
             ssh: None,
             ssh_request: false,
+            sealed: false,
         });
         let bash_def = bash_exec.def();
         let rules = vec![ToolRule {

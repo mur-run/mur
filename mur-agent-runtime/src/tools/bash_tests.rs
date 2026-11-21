@@ -157,6 +157,25 @@ async fn no_scratch_dir_leaves_tmpdir_inherited() {
     assert_eq!(out.text.trim(), want);
 }
 
+/// #2516: the child hears about the seal exactly when it enforces. Without the
+/// marker, a `mur browser` command run from the shell launches Chromium with
+/// its own sandbox, which cannot start inside ours, and the page crashes.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_sealed_marker_reaches_the_child_only_when_the_seal_enforces() {
+    let var = crate::sandbox::SEALED_ENV;
+    for (sealed, want) in [(true, "1"), (false, "unset")] {
+        let t = make_tool().with_sealed(sealed);
+        let out = t
+            .execute(serde_json::json!({
+                "command": format!("printf '%s' \"${{{var}:-unset}}\"")
+            }))
+            .await
+            .unwrap();
+        assert_eq!(out.text.trim(), want, "sealed={sealed}");
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn captures_stderr() {

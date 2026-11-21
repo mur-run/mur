@@ -87,6 +87,11 @@ pub struct BashTool {
     /// Whether `ssh_request` is registered, so a denied `ssh` or a refused
     /// login can point at it (#2344). `false` keeps the generic hints.
     pub ssh_request: bool,
+    /// Whether this runtime's kernel seal enforces. The child is then told so
+    /// (`sandbox::SEALED_ENV`), because a tool that brings its own sandbox
+    /// cannot start it inside ours (#2516). `false` (tests, embedded uses,
+    /// advisory-only runs) exports nothing.
+    pub sealed: bool,
 }
 
 /// `timeout_secs` (alias `wait_secs`): missing/invalid → default; negative →
@@ -111,7 +116,14 @@ impl BashTool {
             trash: None,
             ssh: None,
             ssh_request: false,
+            sealed: false,
         }
+    }
+
+    /// Tell children whether the runtime's kernel seal enforces.
+    pub fn with_sealed(mut self, sealed: bool) -> Self {
+        self.sealed = sealed;
+        self
     }
 
     /// Name the `ssh_request` route in ssh denials.
@@ -311,6 +323,11 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
         if let Some((mur_home, name)) = &self.agent {
             let home = mur_home.join(mur_common::paths::AGENTS).join(name);
             env.extend(crate::agent_paths::run_owner_env(&home));
+        }
+        // The seal reaches this child too, so it must hear about it like an
+        // MCP child does (#2516). Pushed last, so no earlier layer overrides it.
+        if self.sealed {
+            env.push((crate::sandbox::SEALED_ENV.to_owned(), "1".to_owned()));
         }
         // Parallel first compiles race to start the agent's own server (#1860).
         crate::agent_paths::sccache_server::ensure_for(&command, &env).await;
