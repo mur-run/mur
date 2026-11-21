@@ -410,3 +410,48 @@ async fn a_custom_router_run_bills_its_synthesis_and_ends_intact() {
     h.assert_control_plane_head_on_the_log();
     h.assert_intact();
 }
+
+/// #2520: the router's turn is paid for once it returns, whether or not its
+/// synthesis can then be written. A write that fails must not hide the usage.
+#[cfg(unix)]
+#[test]
+fn a_synthesis_that_cannot_be_written_still_reports_its_tokens() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if std::env::var("MUR_TEST_SOCKETS").as_deref() != Ok("1") {
+        eprintln!("skipping a_synthesis_that_cannot_be_written: set MUR_TEST_SOCKETS=1");
+        return;
+    }
+    let h = Home::new();
+    h.system_note("delegated").unwrap();
+    serve(h.path().join("r.sock"), "the report", || {});
+    running_lock(h.path(), FLEET_ROUTER, &h.path().join("r.sock"));
+    let channel_dir = h.path().join("channels").join(CHANNEL);
+    let log = channel_dir.join("events.jsonl");
+    let lock = |dir_mode, log_mode| {
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(log_mode)).unwrap();
+        std::fs::set_permissions(&channel_dir, std::fs::Permissions::from_mode(dir_mode)).unwrap();
+    };
+    lock(0o555, 0o444);
+    if std::fs::OpenOptions::new().append(true).open(&log).is_ok() {
+        // Running as root: the mode does not deny anything, nothing to test.
+        lock(0o755, 0o644);
+        return;
+    }
+    let fixture = h.synthesis();
+
+    let tokens = synth::synthesize_via_router(
+        h.path(),
+        &fleet(Some(FLEET_ROUTER)),
+        "goal",
+        MARKER,
+        "findings",
+    );
+    lock(0o755, 0o644);
+
+    assert!(fixture.is_err(), "fixture: the synthesis write must fail");
+    assert_eq!(
+        tokens.expect("the turn ran, so its usage is reported"),
+        2 * TURN_TOKENS
+    );
+}

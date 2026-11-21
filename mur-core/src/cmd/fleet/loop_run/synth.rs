@@ -58,6 +58,10 @@ pub(super) fn task_tokens(task: &serde_json::Value) -> u64 {
         )
 }
 
+/// Run the router's synthesis turn and record its reply on the fleet channel.
+///
+/// Returns the tokens the turn used. `Err` means the turn itself did not run
+/// to a reply; a reply that could not be recorded is logged and still counted.
 pub(super) fn synthesize_via_router(
     mur_home: &Path,
     fleet: &mur_common::fleet::Fleet,
@@ -94,8 +98,19 @@ pub(super) fn synthesize_via_router(
         },
         marker,
     );
-    record_synthesis(mur_home, fleet, &reply)?;
-    Ok(task_tokens(&task))
+    // The turn is paid for once it returns: a synthesis that cannot be
+    // written is a lost line, not a free turn (#2520).
+    let tokens = task_tokens(&task);
+    if let Err(error) = record_synthesis(mur_home, fleet, &reply) {
+        tracing::warn!(
+            fleet = %fleet.name,
+            channel_id = %fleet.channel_id,
+            tokens,
+            %error,
+            "fleet loop: the synthesis could not be written; its turn is still billed"
+        );
+    }
+    Ok(tokens)
 }
 
 /// Write the router's synthesis to the fleet channel, as the router.
