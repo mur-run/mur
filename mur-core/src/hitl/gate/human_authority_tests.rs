@@ -8,6 +8,7 @@
 //! same action — including runs without `--yes`.
 
 use super::*;
+use mur_common::channel::ChannelActor;
 use tempfile::TempDir;
 
 fn destructive() -> ActionRequest {

@@ -1,4 +1,5 @@
 use super::*;
+use mur_common::channel::ChannelActor;
 use tempfile::TempDir;
 
 fn req(tier: RiskTier) -> ActionRequest {

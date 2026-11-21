@@ -8,6 +8,7 @@
 //! the same `hitl_id`, or lands after its request expired.
 
 use super::*;
+use mur_common::channel::ChannelActor;
 use tempfile::TempDir;
 
 fn action(cmd: &str) -> ActionRequest {

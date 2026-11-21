@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::channel_writer::CONTROL_PLANE_AGENT;
+use mur_common::channel::ChannelActor;
 use tempfile::TempDir;
 
 fn action() -> ActionRequest {

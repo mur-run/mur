@@ -7,6 +7,7 @@ use crate::hitl::authority_fixtures::{
     Labelled, enroll, human_signer, human_write, owned_workflow, previous_human_key, rekey_human,
 };
 use mur_channel::service::HumanSign;
+use mur_common::channel::ChannelActor;
 use mur_common::identity::AgentIdentity;
 use tempfile::TempDir;
 
