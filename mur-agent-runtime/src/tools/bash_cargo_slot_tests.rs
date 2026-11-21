@@ -28,6 +28,20 @@ fn third_build_is_refused_while_two_hold_slots() {
     assert!(try_acquire(dir.path(), 2).unwrap().is_some());
 }
 
+/// #2523: a child forked by another thread holds a duplicate of the slot's
+/// open file description until it execs, and an flock lives on the
+/// description. Closing our fd alone leaves the slot locked for that window,
+/// so the drop has to unlock. The clone stands in for the child's duplicate.
+#[test]
+fn dropped_slot_is_free_while_a_duplicate_descriptor_is_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let slot = try_acquire(dir.path(), 1).unwrap().expect("the only slot");
+    let _duplicate = slot.file.try_clone().unwrap();
+    assert!(try_acquire(dir.path(), 1).unwrap().is_none());
+    drop(slot);
+    assert!(try_acquire(dir.path(), 1).unwrap().is_some());
+}
+
 #[tokio::test]
 async fn waiter_gets_the_slot_when_it_frees() {
     let dir = tempfile::tempdir().unwrap();
