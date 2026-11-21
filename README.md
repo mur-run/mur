@@ -1120,7 +1120,9 @@ Agent** wizard offers the same catalog as a source.
   not from the checkpoint the run itself wrote. With no signed pause to vouch
   for them, resume warns and uses the checkpoint tightened by `fleet.yaml`;
   under `MUR_CHANNEL_REQUIRE_SIG=1` it refuses instead, and `mur fleet stop`
-  ends the run. A channel that cannot be read also refuses the resume.
+  ends the run. A channel that cannot be read, or whose signing authority
+  cannot be loaded to verify those events, also refuses the resume, with or
+  without `MUR_CHANNEL_REQUIRE_SIG`.
   `--detach` resumes in the background
   (log in `~/.mur/fleet-state/<fleet>/runs/<run_id>/resume.log`). `stop` still wins: it ends a
   paused run for good. `mur fleet list` marks a paused fleet `▮`; the Hub and
