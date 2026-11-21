@@ -154,6 +154,8 @@ pub async fn build_provider_runner(
             .with_jobs(bash_jobs.clone())
             .with_ssh(ssh)
             .with_ssh_request(ssh_route)
+            // The seal confines bash children too; they are told so (#2516).
+            .with_sealed(sandbox_enforcing)
             // Same helper as the kernel grant; Err already logged there.
             .with_scratch_dir(crate::agent_paths::agent_scratch_dir(agent_home).ok())
             // D10: `hooks.trash_guard` is the switch for `rm` → trash.

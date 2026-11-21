@@ -44,9 +44,10 @@ pub struct SandboxStatus {
     pub dropped: Vec<mur_common::agent::DroppedGrant>,
 }
 
-/// Env var set to `1` on MCP children spawned while the seal enforces. Tools
-/// that bring their own sandbox (Chromium) read it to stand theirs down, since
-/// a nested one cannot start. Must match `mur_browser::chromium::SEALED_ENV`.
+/// Env var set to `1` on the children spawned while the seal enforces: MCP
+/// servers and the bash tool's commands (#2516). Tools that bring their own
+/// sandbox (Chromium) read it to stand theirs down, since a nested one cannot
+/// start. Must match `mur_browser::chromium::SEALED_ENV`.
 pub const SEALED_ENV: &str = "MUR_SEALED";
 
 /// The env pair telling a child it runs inside an enforcing seal, if it does.
