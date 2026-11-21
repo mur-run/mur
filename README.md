@@ -1122,7 +1122,11 @@ Agent** wizard offers the same catalog as a source.
   under `MUR_CHANNEL_REQUIRE_SIG=1` it refuses instead, and `mur fleet stop`
   ends the run. A channel that cannot be read, or whose signing authority
   cannot be loaded to verify those events, also refuses the resume, with or
-  without `MUR_CHANNEL_REQUIRE_SIG`.
+  without `MUR_CHANNEL_REQUIRE_SIG`. A channel that reads but fails its
+  integrity check (a line that no longer parses, a broken chain, a signed head
+  that does not hold) may have lost the tightest pause, so resume warns and
+  takes the tightest limits of the pauses still readable and the checkpoint;
+  under `MUR_CHANNEL_REQUIRE_SIG=1` it refuses.
   `--detach` resumes in the background
   (log in `~/.mur/fleet-state/<fleet>/runs/<run_id>/resume.log`). `stop` still wins: it ends a
   paused run for good. `mur fleet list` marks a paused fleet `▮`; the Hub and

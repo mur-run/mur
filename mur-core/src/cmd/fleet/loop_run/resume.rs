@@ -14,7 +14,12 @@
 //! verified `run_paused` for the run is folded, not just the newest, so a
 //! re-appended older pause with looser bounds cannot widen them (#2081).
 //!
-//! A channel that cannot be read is an error, not an empty channel. When no
+//! A channel that cannot be read is an error, not an empty channel. A channel
+//! that reads but fails the integrity check the HITL gate uses (a line that
+//! does not parse, a broken chain, a signed head that does not hold) may have
+//! lost its tightest `run_paused`: resume refuses under
+//! `MUR_CHANNEL_REQUIRE_SIG`, and otherwise takes the tightest limits of the
+//! pauses still readable and the checkpoint, and warns (#2081 item 10). When no
 //! verified event carries bounds (no writer identity, note lost, or only
 //! pre-rev 3 events with `bounds: None`), resume refuses under
 //! `MUR_CHANNEL_REQUIRE_SIG`; otherwise it falls back to the checkpoint's
@@ -28,11 +33,15 @@ use mur_common::channel::{ChannelEvent, EventKind};
 use mur_common::hitl::Unanswered;
 use mur_common::skill::manifest::ProcedureStep;
 
+#[path = "resume_damaged.rs"]
+mod damaged;
+
 use super::checkpoint::{self, Checkpoint};
 use super::pause_events::{FleetRunPayload, NoteClassification, RunBounds, classify_note_payload};
 use super::{FleetBounds, LoopStop, run_lock};
 use crate::cmd::fleet::{control, store};
 use crate::executor::delegation::cwd::RunCwd;
+use damaged::checked_resume;
 
 /// What the loop re-enters with instead of fresh state (design §5.4 step 5).
 #[derive(Debug, Clone)]
@@ -379,30 +388,29 @@ fn stopped_message(name: &str) -> String {
 pub async fn cmd_fleet_resume(mur_home: &Path, name: &str) -> Result<()> {
     let fleet = store::load_fleet(mur_home, name)?;
     let cp = admit(mur_home, name)?;
-    let events = mur_channel::ChannelService::open(mur_home)?
-        .load_events(&fleet.channel_id)
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "cannot read channel {} to verify the paused run's limits: {e}",
-                fleet.channel_id
-            )
-        })?;
-    let signed = signed_pause(mur_home, &fleet.channel_id, &events, &cp.run_id)?;
     let unattended = !std::io::IsTerminal::is_terminal(&std::io::stdin());
-    let from = resume_from(&cp, signed, unattended)?;
-    require_authenticated(
-        name,
-        from.bounds_authenticated,
+    let (from, damage) = checked_resume(
+        mur_home,
+        &fleet,
+        &cp,
+        unattended,
         crate::channel_verify::require_sig_from_env(),
     )?;
-    if !from.bounds_authenticated {
+    if let Some(why) = &damage {
+        println!(
+            "  ⚠ channel {ch} is damaged ({why}): a run_paused with tighter limits may be missing, so this run resumes under the tightest limits still readable (the remaining signed pauses and the checkpoint), tightened by fleet.yaml — inspect it with `mur channel verify {ch}`",
+            ch = fleet.channel_id
+        );
+    }
+    // The two warnings below say "no signed run_paused"; on a damaged log
+    // that is not what happened, and the line above already says what did.
+    let unsigned = damage.is_none() && !from.bounds_authenticated;
+    if unsigned {
         println!(
             "  ⚠ no signed run_paused carries this run's original limits; resuming under the checkpoint's copy, tightened by fleet.yaml (check `mur fleet limits {name}`)"
         );
     }
-    if !from.bounds_authenticated
-        && crate::cmd::fleet::run_migrate::was_migrated(mur_home, name, &from.run_id)
-    {
+    if unsigned && crate::cmd::fleet::run_migrate::was_migrated(mur_home, name, &from.run_id) {
         println!(
             "  ⚠ this run was moved out of the shared runs/ directory and has no signed run_paused; it may have been altered before the move — review it before trusting the checkpoint"
         );
@@ -670,3 +678,7 @@ mod rekey_tests;
 #[cfg(test)]
 #[path = "resume_2081_tests.rs"]
 mod hardening_tests;
+
+#[cfg(test)]
+#[path = "resume_damaged_tests.rs"]
+mod damaged_tests;
