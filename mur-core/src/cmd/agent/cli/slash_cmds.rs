@@ -175,16 +175,19 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                     }
                     Some(t) => {
                         // Lookup window, not the listing window: a number stays
-                        // typeable after it has scrolled off the listing.
-                        let recent =
-                            match persist::list_recent(&app.home, &app.agent, CHANNEL_LOOKUP_LIMIT)
-                            {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    app.push_system(format!("could not list channels: {e}"));
-                                    return;
-                                }
-                            };
+                        // typeable after it has scrolled off the listing. Any
+                        // purpose: tailing only reads, so a run is fair game.
+                        let recent = match persist::list_followable(
+                            &app.home,
+                            &app.agent,
+                            CHANNEL_LOOKUP_LIMIT,
+                        ) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                app.push_system(format!("could not list channels: {e}"));
+                                return;
+                            }
+                        };
                         match resolve(&recent, &t) {
                             Ok(s) => {
                                 let id = s.id.clone();

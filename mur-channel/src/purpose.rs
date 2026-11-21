@@ -5,7 +5,7 @@
 //! silently migrates data produces changes nobody can audit. On-disk correction
 //! is the explicit `mur channel backfill-purpose` command.
 
-use mur_common::channel::{Channel, ChannelPurpose};
+use mur_common::channel::{Channel, ChannelActor, ChannelPurpose};
 
 /// Legacy titles created by `create_for_workflow` before purposes existed.
 const WORKFLOW_TITLE_PREFIX: &str = "workflow: ";
@@ -28,6 +28,23 @@ pub fn effective_purpose(ch: &Channel) -> ChannelPurpose {
         return ChannelPurpose::WorkflowRun;
     }
     ChannelPurpose::Conversation
+}
+
+/// Whether `agent` is a participant of `ch`, in any role.
+pub fn has_agent(ch: &Channel, agent: &str) -> bool {
+    ch.participants
+        .iter()
+        .any(|p| matches!(&p.actor, ChannelActor::Agent { id } if id == agent))
+}
+
+/// Whether `ch` is a chat `agent` can be resumed into or switched to.
+///
+/// The single test every "continue my conversation" path shares (Hub, mobile,
+/// @mention routing, `murmur --resume`). A fleet or workflow run the agent
+/// takes part in is not one: it is usually newer than the last chat, and a
+/// line typed into it lands in the run's thread (#2515).
+pub fn is_conversation_with(ch: &Channel, agent: &str) -> bool {
+    effective_purpose(ch) == ChannelPurpose::Conversation && has_agent(ch, agent)
 }
 
 #[cfg(test)]
