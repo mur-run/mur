@@ -571,6 +571,74 @@ pub(crate) fn append_with_key(
     }
 }
 
+/// Append a line `agent` signs as itself on a channel whose head the control
+/// plane owns: a fleet channel, where every other line is a `System` event
+/// sealed by [`ROUTER_AGENT`].
+///
+/// `agent`'s key signs the event; the control-plane key seals the head. Sealed
+/// under `agent`'s own key instead, the next control-plane write could not
+/// advance the head, and `agent` could not advance the control plane's
+/// (#2081 finding C). Three cases fall back to [`append_as_writer`]'s rules:
+/// `agent` is the control plane, its key came by handoff (a sandboxed process
+/// never moves a head), or it has no key.
+///
+/// With no control-plane key on this home there is no other sealer, so
+/// `agent` seals as before. With one that cannot be read, the line goes in
+/// past the head and the control plane's next write covers it.
+pub(crate) fn append_agent_line_router_sealed(
+    svc: &ChannelService,
+    home: &Path,
+    channel_id: &str,
+    agent: &str,
+    kind: EventKind,
+    payload: serde_json::Value,
+    idem: Option<String>,
+) -> anyhow::Result<ChannelEvent> {
+    let actor = ChannelActor::Agent {
+        id: agent.to_string(),
+    };
+    let key_home = home.join("agents").join(agent);
+    let key = match writer_key(home, agent)? {
+        Some(key) if key.source == KeySource::Disk && agent != ROUTER_AGENT => key,
+        Some(key) => {
+            return append_with_key(
+                svc, home, channel_id, key, &key_home, actor, kind, payload, idem,
+            );
+        }
+        None => return svc.append(channel_id, actor, kind, payload, idem),
+    };
+    let router_home = home.join("agents").join(ROUTER_AGENT);
+    match mur_common::identity::AgentIdentity::load(&router_home) {
+        Ok(router) => svc.append_and_anchor_router_sealed(
+            channel_id,
+            &key.id,
+            key.kv,
+            &key_home,
+            mur_channel::service::RouterSeal {
+                identity: &router,
+                kv: read_key_version(&router_home),
+                key_home: &router_home,
+            },
+            actor,
+            kind,
+            payload,
+            idem,
+        ),
+        Err(mur_common::identity::IdentityError::NotFound) => append_with_key(
+            svc, home, channel_id, key, &key_home, actor, kind, payload, idem,
+        ),
+        Err(error) => {
+            tracing::warn!(
+                channel_id,
+                agent,
+                %error,
+                "the control-plane key could not be read; the line is written past the signed head"
+            );
+            svc.append_signed(channel_id, &key.id, key.kv, actor, kind, payload, idem)
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "channel_writer_missing_key_tests.rs"]
 mod missing_key_tests;

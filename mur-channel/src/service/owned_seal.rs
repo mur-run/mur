@@ -7,8 +7,9 @@
 //!   head, as a sandboxed agent's would be. Never under the writer's own key
 //!   once a record is live — that head would fail every owned-channel check.
 //!
-//! A commander directive ([`HeadSealer::RouterAlways`]) is router-sealed in
-//! every case: its signer writes nothing else, so it never owns a head.
+//! A commander directive, and a fleet router's own line on its fleet channel
+//! ([`HeadSealer::RouterAlways`]), are router-sealed in every case: neither
+//! signer owns that head.
 //!
 //! A live record the head does not yet cover (a C1 crash between the line and
 //! its head) is sealed by the router like any other, as `append_human` does.

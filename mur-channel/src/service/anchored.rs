@@ -54,8 +54,8 @@ pub(super) enum HeadSealer<'a> {
     /// [`super::owned_seal::resolve`] before anything is sealed.
     Writer { router: Option<RouterSeal<'a>> },
     /// `router` seals whether or not the channel is owned: the event signer
-    /// is not a channel writer (a commander), so a head under its key is one
-    /// no writer could advance. Resolved under the append lock into `Router`.
+    /// does not own this head (a commander, a fleet's own router), so a head
+    /// under its key strands the writer that does. Resolved into `Router`.
     RouterAlways { router: RouterSeal<'a> },
     /// The channel router seals every head on an owned channel. Nothing
     /// selects this until C1/C5/C2 exist.

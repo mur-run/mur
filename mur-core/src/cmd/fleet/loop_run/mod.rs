@@ -623,4 +623,6 @@ mod pause_tests;
 #[cfg(test)]
 mod stop_tests;
 #[cfg(test)]
+mod synth_head_tests;
+#[cfg(test)]
 mod tests;
