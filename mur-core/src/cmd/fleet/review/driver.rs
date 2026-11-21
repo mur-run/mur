@@ -560,7 +560,7 @@ pub(super) fn write_paused_and_revert(
         &svc,
         mur_home,
         channel_id,
-        crate::channel_writer::ROUTER_AGENT,
+        crate::channel_writer::Signer::ControlPlane,
         ChannelActor::System,
         EventKind::Note,
         to_note_payload(&ReviewPayload::Paused {
@@ -575,7 +575,7 @@ pub(super) fn write_paused_and_revert(
         &svc,
         mur_home,
         channel_id,
-        crate::channel_writer::ROUTER_AGENT,
+        crate::channel_writer::Signer::ControlPlane,
         ChannelActor::System,
         EventKind::Note,
         to_note_payload(&ReviewPayload::ModeChanged {

@@ -156,6 +156,14 @@ impl Session {
         // C2: a typed turn is signed with the human key (router-sealed,
         // enrolling the owner on first write); the reply and the `!cmd`
         // card stay signed by the session agent.
+        //
+        // The `!cmd` card is the one write here whose signer is NOT
+        // `Signer::for_actor(&actor)`: it is a `System` note under the
+        // session agent's key, which is what the conversation watermark
+        // checks it against (`mur_channel::conversation::assess`, S1). The
+        // per-actor verifier holds a `System` actor to the control plane
+        // instead, so for an agent other than the control plane it reports
+        // this line as a bad signature (#2081 item 4 audit).
         let ev = if matches!(actor, ChannelActor::Human { .. }) {
             crate::human_writer::append_as_human(&self.svc, &self.home, &id, kind, payload, None)?
         } else {
@@ -163,7 +171,7 @@ impl Session {
                 &self.svc,
                 &self.home,
                 &id,
-                &self.agent,
+                crate::channel_writer::Signer::Agent(&self.agent),
                 actor,
                 kind,
                 payload,

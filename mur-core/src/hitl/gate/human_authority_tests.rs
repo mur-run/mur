@@ -75,7 +75,7 @@ fn answer_as(home: &Path, ch: &str, hitl_id: &str, actor: ChannelActor) {
         &svc,
         home,
         ch,
-        ROUTER_AGENT,
+        crate::channel_writer::Signer::ControlPlane,
         actor,
         EventKind::HitlResponse,
         serde_json::to_value(&resp).unwrap(),

@@ -451,7 +451,7 @@ fn record(ctx: &GrantContext<'_>, t: &DelegationTarget, outcome: &GrantOutcome) 
             &svc,
             ctx.mur_home,
             ctx.channel_id,
-            ROUTER_AGENT,
+            crate::channel_writer::Signer::ControlPlane,
             ChannelActor::System,
             EventKind::Note,
             payload,

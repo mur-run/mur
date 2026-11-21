@@ -10,8 +10,6 @@ use mur_common::identity::human::{human_identity_dir, human_key_dir, human_rotat
 use mur_common::identity::{AgentIdentity, RotationAttestation, RotationReason};
 use tempfile::TempDir;
 
-const ROUTER: &str = "mur";
-
 /// Enroll a single-key human chain under `home`.
 fn enroll_human(home: &Path) -> AgentIdentity {
     let h = AgentIdentity::generate();
@@ -65,7 +63,7 @@ impl Owned {
             &self.svc,
             self.home.path(),
             &self.id,
-            ROUTER,
+            crate::channel_writer::Signer::ControlPlane,
             ChannelActor::System,
             EventKind::Note,
             serde_json::json!({ "text": format!("event {i}") }),

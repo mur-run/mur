@@ -62,7 +62,7 @@ fn append_router(
         &svc,
         home,
         ch,
-        ROUTER_AGENT,
+        crate::channel_writer::Signer::ControlPlane,
         actor,
         kind,
         payload,

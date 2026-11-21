@@ -275,7 +275,7 @@ fn live_ledger_clears_binding_rulings_like_replay() {
             &svc,
             home,
             &channel_id,
-            crate::channel_writer::ROUTER_AGENT,
+            crate::channel_writer::Signer::ControlPlane,
             mur_common::channel::ChannelActor::System,
             EventKind::Note,
             to_note_payload(p),

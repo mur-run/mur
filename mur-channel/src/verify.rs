@@ -14,21 +14,63 @@ pub mod human;
 /// directory slug, so lowercase (matches the on-disk `name`).
 pub const ROUTER_AGENT: &str = "mur";
 
-/// The directory holding the key that should have signed `actor`'s events.
-/// Agent{id} → that agent's home; System/Human → the router ("mur") which
-/// writes them.
+/// Whose identity signs an event, and so whose key a reader checks it against.
+///
+/// The writer (`mur_core::channel_writer`) and the verifier
+/// ([`actor_key_dir`]) both resolve a key directory through this one type, so
+/// the two cannot name the trust root differently (#2081).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Signer<'a> {
+    /// The control plane: the one identity ([`ROUTER_AGENT`]) every reader
+    /// checks a `System` or keyless `Human` event against.
+    ///
+    /// Never a fleet's configured `router:`. That field lives in `fleet.yaml`,
+    /// so trusting it would let a fleet's own config choose who may speak as
+    /// the system — and a custom router's key writes `System` events its own
+    /// channel rejects (#2116, #2072).
+    ControlPlane,
+    /// A named agent speaking as itself: `ChannelActor::Agent { id }`.
+    Agent(&'a str),
+}
+
+impl<'a> Signer<'a> {
+    /// The signer a reader holds `actor`'s events to. A `Human` actor that
+    /// names its own key is resolved on the human chain before this is
+    /// consulted (see [`actor_pubkey`]).
+    pub fn for_actor(actor: &'a ChannelActor) -> Self {
+        match actor {
+            ChannelActor::Agent { id } => Signer::Agent(id),
+            _ => Signer::ControlPlane,
+        }
+    }
+
+    /// The agent directory name holding this signer's identity. Not validated:
+    /// an `Agent` name taken from an event must go through [`actor_key_dir`].
+    pub fn agent_name(self) -> &'a str {
+        match self {
+            Signer::ControlPlane => ROUTER_AGENT,
+            Signer::Agent(name) => name,
+        }
+    }
+
+    /// `<mur_home>/agents/<name>`, where this signer's identity lives. Same
+    /// caveat as [`Signer::agent_name`].
+    pub fn key_home(self, mur_home: &Path) -> PathBuf {
+        mur_home.join("agents").join(self.agent_name())
+    }
+}
+
+/// The directory holding the key that should have signed `actor`'s events:
+/// [`Signer::for_actor`]'s home.
 ///
 /// `None` when the id is not a valid agent name. The id comes from the event
 /// itself, and every agent can write `channels/`, so an unchecked join is a
 /// traversal primitive: `Agent{id: "../channels/<dir>"}` would point
 /// verification at a key the writer planted next to its own event.
 pub fn actor_key_dir(mur_home: &Path, actor: &ChannelActor) -> Option<PathBuf> {
-    let agent = match actor {
-        ChannelActor::Agent { id } => id.as_str(),
-        _ => ROUTER_AGENT,
-    };
-    mur_common::validate_agent_name(agent).ok()?;
-    Some(mur_home.join("agents").join(agent))
+    let signer = Signer::for_actor(actor);
+    mur_common::validate_agent_name(signer.agent_name()).ok()?;
+    Some(signer.key_home(mur_home))
 }
 
 /// Resolve the pubkey that should have signed `actor`'s events. `None` when
@@ -53,7 +95,7 @@ pub fn actor_pubkey(
 /// checks whose question is "did the router write this" — they must not
 /// follow `actor_pubkey` onto the human chain when an actor names a key.
 pub fn router_pubkey(mur_home: &Path, key_version: Option<u32>) -> Option<[u8; 32]> {
-    crate::sign::resolve_writer_pubkey(&mur_home.join("agents").join(ROUTER_AGENT), key_version)
+    crate::sign::resolve_writer_pubkey(&Signer::ControlPlane.key_home(mur_home), key_version)
 }
 
 /// True if `ev` verifies against its actor's key (present sig must verify;
@@ -322,5 +364,46 @@ mod tests {
             !verify_event(tmp.path(), &ch.id, &forged, true),
             "imposter sig rejected"
         );
+    }
+
+    /// #2081 item 7: the writer and the verifier resolve a key directory
+    /// through the same type. If this mapping moves, both move.
+    #[test]
+    fn the_verifier_holds_each_actor_to_signer_for_actor() {
+        let home = Path::new("/mur-home");
+        let agent = ChannelActor::Agent { id: "qa".into() };
+        assert_eq!(Signer::for_actor(&agent), Signer::Agent("qa"));
+        for actor in [ChannelActor::System, ChannelActor::local_human()] {
+            assert_eq!(Signer::for_actor(&actor), Signer::ControlPlane);
+        }
+        for actor in [agent, ChannelActor::System, ChannelActor::local_human()] {
+            assert_eq!(
+                actor_key_dir(home, &actor),
+                Some(Signer::for_actor(&actor).key_home(home)),
+                "{actor:?}"
+            );
+        }
+    }
+
+    /// The control plane is one fixed identity. It is never read from a
+    /// fleet's `router:`, which the fleet's own config controls.
+    #[test]
+    fn the_control_plane_is_the_router_agent_and_nothing_configurable() {
+        assert_eq!(Signer::ControlPlane.agent_name(), ROUTER_AGENT);
+        assert_eq!(
+            Signer::ControlPlane.key_home(Path::new("/h")),
+            Path::new("/h").join("agents").join(ROUTER_AGENT)
+        );
+        assert_eq!(Signer::Agent("orchestrator").agent_name(), "orchestrator");
+    }
+
+    /// An actor id that is not an agent name still resolves no directory:
+    /// `Signer::key_home` is unchecked, `actor_key_dir` is the checked door.
+    #[test]
+    fn actor_key_dir_still_refuses_a_traversal_id() {
+        let actor = ChannelActor::Agent {
+            id: "../channels/x".into(),
+        };
+        assert_eq!(actor_key_dir(Path::new("/h"), &actor), None);
     }
 }

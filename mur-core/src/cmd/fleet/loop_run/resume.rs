@@ -483,13 +483,13 @@ pub(super) fn record_resumed(
         active_elapsed_ms: u64::try_from(r.active_elapsed.as_millis()).unwrap_or(u64::MAX),
     }
     .to_note_payload();
-    // `System` events verify against `ROUTER_AGENT`, never the fleet's
-    // router (#2116) — same writer as `record_pause`.
+    // `System` events verify against `Signer::ControlPlane`, never the
+    // fleet's router (#2116) — same signer as `record_pause`.
     if let Err(error) = crate::channel_writer::append_as_writer(
         svc,
         mur_home,
         &fleet.channel_id,
-        crate::channel_writer::ROUTER_AGENT,
+        crate::channel_writer::Signer::ControlPlane,
         mur_common::channel::ChannelActor::System,
         EventKind::Note,
         payload,
@@ -639,12 +639,12 @@ fn announce_discard(mur_home: &Path, name: &str, run_id: &str) {
             "remedy": super::stop_remedy(LoopStop::Stopped, name),
             "run_id": id,
         });
-        // `System` events verify against `ROUTER_AGENT` (#2116).
+        // `System` events verify against `Signer::ControlPlane` (#2116).
         if let Err(error) = crate::channel_writer::append_as_writer(
             &svc,
             mur_home,
             &fleet.channel_id,
-            crate::channel_writer::ROUTER_AGENT,
+            crate::channel_writer::Signer::ControlPlane,
             mur_common::channel::ChannelActor::System,
             EventKind::StateChange,
             payload,

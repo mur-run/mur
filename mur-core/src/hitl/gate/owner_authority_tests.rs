@@ -73,7 +73,7 @@ fn router_answer(home: &Path, ch: &str, actor: ChannelActor, payload: serde_json
         &svc,
         home,
         ch,
-        ROUTER_AGENT,
+        crate::channel_writer::Signer::ControlPlane,
         actor,
         EventKind::HitlResponse,
         payload,

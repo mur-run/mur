@@ -21,7 +21,6 @@ use mur_common::hitl::{
 };
 
 use super::binding;
-use crate::channel_writer::ROUTER_AGENT;
 use crate::hitl::pin::action_hash;
 
 /// What the caller wants to do. `tool_input` must be POST-substitution.
@@ -212,7 +211,6 @@ pub async fn gate(
                     &svc,
                     mur_home,
                     channel_id,
-                    ROUTER_AGENT,
                     serde_json::to_value(&request)?,
                     !(policy.yes || granted),
                 )?;
@@ -231,7 +229,7 @@ pub async fn gate(
                     &svc,
                     mur_home,
                     channel_id,
-                    ROUTER_AGENT,
+                    crate::channel_writer::Signer::ControlPlane,
                     ChannelState::InputRequired,
                     ChannelActor::System,
                     run_id,
@@ -294,7 +292,7 @@ pub async fn gate(
                         &svc,
                         mur_home,
                         channel_id,
-                        ROUTER_AGENT,
+                        crate::channel_writer::Signer::ControlPlane,
                         ChannelActor::System,
                         EventKind::HitlResponse,
                         serde_json::to_value(&resp)?,
@@ -319,7 +317,7 @@ pub async fn gate(
                     &svc,
                     mur_home,
                     channel_id,
-                    ROUTER_AGENT,
+                    crate::channel_writer::Signer::ControlPlane,
                     ChannelState::Working,
                     ChannelActor::System,
                     run_id,

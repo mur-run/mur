@@ -88,15 +88,15 @@ pub(super) fn record_pause(svc: &mur_channel::ChannelService, s: &PauseSnapshot<
     // Best-effort: the checkpoint is the record that matters, and resume
     // works from it alone if the note is missing.
     //
-    // Signed with the trusted writer's key, NOT the fleet's router: resume
-    // authenticates this note through `is_router_signed`, which verifies a
-    // `System` actor against `ROUTER_AGENT`. Signing with a custom router
-    // (`router: orchestrator`) would write a note its own resume rejects.
+    // Signed by the control plane, NOT the fleet's router: resume
+    // authenticates this note against `Signer::ControlPlane`'s key, the same
+    // signer named here. A custom router's key (`router: orchestrator`)
+    // would write a note its own resume rejects.
     if let Err(error) = crate::channel_writer::append_as_writer(
         svc,
         s.mur_home,
         &s.fleet.channel_id,
-        crate::channel_writer::ROUTER_AGENT,
+        crate::channel_writer::Signer::ControlPlane,
         ChannelActor::System,
         mur_common::channel::EventKind::Note,
         payload,
@@ -133,14 +133,14 @@ pub(super) fn emit_stop_event(
         "spent_usd": spent_usd,
         "run_id": run_id,
     });
-    // Signed by `ROUTER_AGENT`, not the fleet's router: `channel_verify`
-    // checks every `System` actor against `ROUTER_AGENT`, so a custom
+    // Signed by the control plane, not the fleet's router: every reader
+    // checks a `System` actor against `Signer::ControlPlane`, so a custom
     // router's key writes an event its own channel rejects (#2116).
     if let Err(e) = crate::channel_writer::append_as_writer(
         svc,
         mur_home,
         &fleet.channel_id,
-        crate::channel_writer::ROUTER_AGENT,
+        crate::channel_writer::Signer::ControlPlane,
         ChannelActor::System,
         mur_common::channel::EventKind::StateChange,
         payload,

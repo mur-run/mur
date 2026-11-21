@@ -134,7 +134,7 @@ fn open_requests(mur_home: &Path, rows: &[Row]) -> anyhow::Result<Vec<ChannelEve
             &svc,
             mur_home,
             BROKER_CHANNEL_ID,
-            ROUTER_AGENT,
+            mur_core::channel_writer::Signer::ControlPlane,
             ChannelActor::System,
             EventKind::HitlRequest,
             serde_json::to_value(request_for(row)?)?,

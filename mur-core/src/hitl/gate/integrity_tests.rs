@@ -6,6 +6,7 @@
 //! either as untrustworthy: never release on it, ask again or deny.
 
 use super::*;
+use crate::channel_writer::ROUTER_AGENT;
 use tempfile::TempDir;
 
 fn action() -> ActionRequest {
@@ -72,7 +73,7 @@ fn append_router(
         &svc,
         home,
         ch,
-        ROUTER_AGENT,
+        crate::channel_writer::Signer::ControlPlane,
         actor,
         kind,
         payload,
