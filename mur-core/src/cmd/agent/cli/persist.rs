@@ -278,19 +278,44 @@ pub fn load(home: &Path, channel_id: &str, agent: &str) -> Result<Vec<TurnRecord
 /// never an agent reply.
 pub const REFUSAL_ROLE: &str = "system";
 
-/// Newest channels that involve `agent`, newest-first.
+/// How many of the newest index rows a listing scans for the agent's own.
+const CHANNEL_SCAN_LIMIT: usize = 1000;
+
+/// Newest conversations with `agent`, newest-first: what `--resume`,
+/// `/sessions` and `/channels N` may attach this pane to.
+///
+/// Conversations only. A fleet or workflow run the agent takes part in is
+/// usually the newest channel it is in, and attaching to one sends the next
+/// typed line into the run's thread (#2515).
 pub fn list_recent(home: &Path, agent: &str, limit: usize) -> Result<Vec<SessionInfo>> {
+    list_where(
+        home,
+        agent,
+        limit,
+        mur_channel::purpose::is_conversation_with,
+    )
+}
+
+/// Newest channels of any purpose that involve `agent`, newest-first. For
+/// `/channels N --follow` only: tailing reads, so a run stays watchable.
+/// Never hand a row from here to anything that writes.
+pub fn list_followable(home: &Path, agent: &str, limit: usize) -> Result<Vec<SessionInfo>> {
+    list_where(home, agent, limit, mur_channel::purpose::has_agent)
+}
+
+fn list_where(
+    home: &Path,
+    agent: &str,
+    limit: usize,
+    keep: fn(&mur_common::channel::Channel, &str) -> bool,
+) -> Result<Vec<SessionInfo>> {
     let svc = ChannelService::open(home)?;
     let mut out = Vec::new();
-    for row in svc.list(1000)? {
+    for row in svc.list(CHANNEL_SCAN_LIMIT)? {
         let involved = svc
             .store()
             .load_manifest(&row.id)
-            .map(|ch| {
-                ch.participants
-                    .iter()
-                    .any(|p| matches!(&p.actor, ChannelActor::Agent { id } if id == agent))
-            })
+            .map(|ch| keep(&ch, agent))
             .unwrap_or(false);
         if !involved {
             continue;
@@ -476,3 +501,7 @@ mod tests {
 #[cfg(test)]
 #[path = "persist_owner_tests.rs"]
 mod owner_tests;
+
+#[cfg(test)]
+#[path = "persist_purpose_tests.rs"]
+mod purpose_tests;

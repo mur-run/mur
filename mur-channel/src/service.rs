@@ -371,11 +371,7 @@ impl ChannelService {
         // list() is newest-first; load each manifest and match the participant.
         for row in self.index.list(SUMMARY_SCAN_LIMIT)? {
             if let Ok(ch) = self.store.load_manifest(&row.id)
-                && crate::purpose::effective_purpose(&ch) == ChannelPurpose::Conversation
-                && ch
-                    .participants
-                    .iter()
-                    .any(|p| matches!(&p.actor, ChannelActor::Agent { id } if id == agent))
+                && crate::purpose::is_conversation_with(&ch, agent)
             {
                 return Ok(Some(ch.id));
             }
@@ -396,12 +392,7 @@ impl ChannelService {
         let Ok(ch) = self.store.load_manifest(&id) else {
             return Ok(None);
         };
-        let ok = crate::purpose::effective_purpose(&ch) == ChannelPurpose::Conversation
-            && ch
-                .participants
-                .iter()
-                .any(|p| matches!(&p.actor, ChannelActor::Agent { id } if id == agent));
-        Ok(ok.then_some(ch))
+        Ok(crate::purpose::is_conversation_with(&ch, agent).then_some(ch))
     }
 
     /// Add an agent as a participant (idempotent on agent id). Re-indexes.
