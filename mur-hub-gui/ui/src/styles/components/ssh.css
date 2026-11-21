@@ -16,4 +16,16 @@
 .ssh-card__paste { width: 100%; margin-top: var(--space-2); font-family: var(--font-mono); }
 .ssh-card__consent { margin-top: var(--space-3); padding: var(--space-3); border: 1px solid var(--status-attention); border-radius: var(--radius-md); }
 .ssh-card__surface { font-family: var(--font-mono); font-size: var(--text-xs); white-space: pre-wrap; margin: var(--space-2) 0; }
-.ssh-card__footer { padding: 12px; display: flex; gap: 8px; justify-content: flex-end; }
+/* Fit the 360px dialog (#2529). A SHA256 fingerprint alone is wider than the
+   content box, and agent names, hosts and key comments have no useful length
+   limit, so text breaks inside a long token instead of scrolling sideways. */
+.ssh-card .modal__body, .ssh-card__title, .ssh-card__footer { overflow-wrap: anywhere; }
+/* A key's fingerprint, comment and badge share the column beside the radio. */
+.ssh-card__keytext { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--space-2); }
+/* The compare tick sits on its own line above the host key it vouches for. */
+.ssh-card__row--tick { flex-wrap: wrap; }
+/* The result pane shows up to four buttons, one of them carrying the agent
+   name. They wrap onto further rows: a row that overflows a right-aligned
+   footer runs off the LEFT edge, where it is clipped and cannot be scrolled to. */
+.ssh-card__footer { padding: 12px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.ssh-card__footer .btn { height: auto; min-height: 28px; max-width: 100%; white-space: normal; text-align: left; }

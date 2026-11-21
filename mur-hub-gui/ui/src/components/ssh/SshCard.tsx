@@ -162,7 +162,7 @@ export function SshCard({ target, onClose }: { target: SshTarget; onClose: (chan
     <div className="modal__overlay">
       <div className="modal ssh-card" role="dialog" aria-modal="true">
         <div className="modal__header">
-          <h2 className="modal__title">
+          <h2 className="modal__title ssh-card__title">
             {t("ssh.card.title", { agent: target.agent, host: plan?.host ?? target.host })}
           </h2>
         </div>
@@ -199,9 +199,11 @@ export function SshCard({ target, onClose }: { target: SshTarget; onClose: (chan
                         checked={choices.key_fp === k.fingerprint}
                         onChange={() => setChoices({ ...choices, key_fp: k.fingerprint })}
                       />
-                      <code>{k.fingerprint}</code>
-                      <span className="perm__detail">{k.comment}</span>
-                      <span className="badge-sm">{k.loaded ? t("ssh.key.loaded") : t("ssh.key.notLoaded")}</span>
+                      <span className="ssh-card__keytext">
+                        <code>{k.fingerprint}</code>
+                        <span className="perm__detail">{k.comment}</span>
+                        <span className="badge-sm">{k.loaded ? t("ssh.key.loaded") : t("ssh.key.notLoaded")}</span>
+                      </span>
                     </label>
                     {!k.loaded && k.add_cmd && choices.key_fp === k.fingerprint && (
                       <div className="ssh-card__hint">
@@ -231,7 +233,7 @@ export function SshCard({ target, onClose }: { target: SshTarget; onClose: (chan
               <p className={`ssh-card__verdict ssh-card__verdict--${plan.verdict}`}>{t(verdictKey(plan.verdict))}</p>
               <ul className="perm__list">
                 {plan.scanned.map((k) => (
-                  <li key={k.fingerprint} className="perm__row">
+                  <li key={k.fingerprint} className={plan.ticks_offered ? "perm__row ssh-card__row--tick" : "perm__row"}>
                     {plan.ticks_offered ? (
                       <label>
                         <input type="checkbox" checked={choices.ticked.includes(k.fingerprint)} onChange={() => toggle(k.fingerprint)} />{" "}
