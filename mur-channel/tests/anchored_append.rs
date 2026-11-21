@@ -101,6 +101,7 @@ fn v1_anchored_append_seals_the_head() {
             &id,
             1,
             std::path::Path::new(""),
+            None,
             ChannelActor::System,
             EventKind::Message,
             serde_json::json!({}),

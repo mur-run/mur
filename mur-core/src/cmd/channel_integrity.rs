@@ -327,9 +327,13 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
     report.owner = OwnerReport::from_trust(&trust);
     let ignored = trust.ignored_records();
 
+    // A commander directive is a `System` line under a pinned commander key,
+    // not the router's: it verifies the way `fold_governance` verifies it.
+    let commander_keys = crate::cmd::commander::accepted_pubkeys(mur_home);
     report.events = events.len();
     report.unverified_seqs = events
         .iter()
+        .filter(|ev| !crate::cmd::commander::is_signed_directive(&commander_keys, channel_id, ev))
         // A foreign owner record fails its signature by construction; it is
         // reported under `owner`, not as damage (D-7).
         .filter(|ev| !(ev.kind == EventKind::OwnerKeyEnrolled && ignored.contains(&ev.seq)))
