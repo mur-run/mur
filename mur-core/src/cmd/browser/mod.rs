@@ -142,6 +142,8 @@ pub async fn record(
     // Live mode already got them from `live_proxy::launch_args`.
     if live_config.is_none() {
         args.extend(mur_browser::chromium::system_extra_args());
+        // Replay's assert tools must exist while recording; live is never replayed.
+        args.extend(mur_browser::caps::system_record_args(&args));
     }
     // `@playwright/mcp` 0.0.82 dropped `--save-trace` and refuses to start
     // when handed it ("unknown option"), so `--trace` must not forward it.

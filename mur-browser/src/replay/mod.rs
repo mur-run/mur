@@ -10,6 +10,11 @@
 //! matched offline by [`crate::heal::find_heal`] and must be confirmed by the
 //! next element step hitting directly (design spec D3).
 //!
+//! An assert step is re-checked until [`ReplayOptions::assert_timeout`]: a
+//! `goto` returns at `load`, and a page that renders after that (any SPA
+//! route) is not wrong, only not drawn yet. Every other step is attempted
+//! once, so an action is never sent twice.
+//!
 //! The transport is behind [`ToolCaller`] so the step loop is tested without
 //! spawning `npx`; [`StdioCaller`] is the production line-JSON-RPC client.
 
@@ -22,12 +27,16 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::time::Duration;
+use tokio::time::Instant;
 
 #[cfg(test)]
 mod heal_tests;
 mod stdio;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wait_tests;
 
 pub use stdio::{StdioCaller, replay_live};
 
@@ -175,6 +184,14 @@ pub fn dry_run(run: &Run, allow: &[String]) -> Result<ReplayReport> {
     Ok(ReplayReport::new(run, steps, Vec::new()))
 }
 
+/// How long an assert step keeps re-checking the page before it fails:
+/// Playwright's default `expect` timeout, so replay is as patient as the
+/// assertions in the exported spec.
+pub const DEFAULT_ASSERT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Pause between two looks at the page while an assert step waits.
+const ASSERT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
 /// Knobs for [`replay_with`].
 #[derive(Debug, Clone, Copy)]
 pub struct ReplayOptions {
@@ -182,13 +199,17 @@ pub struct ReplayOptions {
     pub heal: bool,
     /// Heal budget as a share of element steps; enforced in `mode: test` only.
     pub max_heal_ratio: f32,
+    /// How long an assert step keeps re-checking before it fails. Zero looks
+    /// once.
+    pub assert_timeout: Duration,
 }
 
 impl ReplayOptions {
-    /// Heal off, default budget.
+    /// Heal off, default budget, default assert wait.
     pub const DEFAULT: Self = Self {
         heal: false,
         max_heal_ratio: heal::DEFAULT_HEAL_RATIO,
+        assert_timeout: DEFAULT_ASSERT_TIMEOUT,
     };
 }
 
@@ -424,8 +445,32 @@ struct Hit {
 enum StepError {
     /// Nothing in `locators[]` resolved and there was no testid to fall back on.
     LocateMiss(anyhow::Error),
-    /// Everything else: snapshot, argument shaping, or the tool call itself.
+    /// The step's tool ran and answered `isError`: the page refused the
+    /// action, or an assert's condition does not hold.
+    Refused(anyhow::Error),
+    /// Everything else: snapshot, argument shaping, or the transport.
     Action(anyhow::Error),
+}
+
+impl StepError {
+    /// Whether an assert that failed this way could hold a moment later: its
+    /// element is not in the snapshot yet, or its condition does not hold
+    /// yet. A broken transport, or a step that cannot be shaped into a call,
+    /// fails the same way every time.
+    fn may_hold_later(&self) -> bool {
+        matches!(self, StepError::LocateMiss(_) | StepError::Refused(_))
+    }
+
+    /// Say that the assert was waited on, so the report does not read like
+    /// a timing problem.
+    fn after_waiting(self, waited: Duration) -> Self {
+        let note = format!("still failing after waiting {waited:?} for the page");
+        match self {
+            StepError::LocateMiss(e) => StepError::LocateMiss(e.context(note)),
+            StepError::Refused(e) => StepError::Refused(e.context(note)),
+            StepError::Action(e) => StepError::Action(e.context(note)),
+        }
+    }
 }
 
 impl From<anyhow::Error> for StepError {
@@ -437,19 +482,58 @@ impl From<anyhow::Error> for StepError {
 impl std::fmt::Display for StepError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StepError::LocateMiss(e) | StepError::Action(e) => write!(f, "{e:#}"),
+            StepError::LocateMiss(e) | StepError::Refused(e) | StepError::Action(e) => {
+                write!(f, "{e:#}")
+            }
         }
     }
 }
 
-/// Run one step. A `LocateMiss` on an element step is healed here when
-/// `opts.heal` is on; the healed ref is used for this call only.
+/// Run one step. An assert is looked at again every [`ASSERT_POLL_INTERVAL`]
+/// until it holds or `opts.assert_timeout` is up: an assert only reads the
+/// page, so repeating it changes nothing. Every other step is attempted
+/// exactly once.
 ///
-/// `warning` is filled as soon as the target resolves ambiguously, before
-/// the tool call, so it is kept even when the call then fails.
+/// `warning` describes the attempt whose result is returned.
 async fn run_step<C: ToolCaller + Send>(
     step: &Step,
     opts: ReplayOptions,
+    caller: &mut C,
+    warning: &mut Option<String>,
+) -> Result<Hit, StepError> {
+    if !step.action.is_assert() {
+        return attempt_step(step, opts.heal, caller, warning).await;
+    }
+    let deadline = Instant::now() + opts.assert_timeout;
+    loop {
+        let last = Instant::now() >= deadline;
+        *warning = None;
+        // Before the last look a missing element may only mean the page is
+        // still rendering, which is not a stale locator: no heal until then.
+        match attempt_step(step, opts.heal && last, caller, warning).await {
+            Err(error) if error.may_hold_later() => {
+                if last {
+                    return Err(match opts.assert_timeout {
+                        Duration::ZERO => error,
+                        waited => error.after_waiting(waited),
+                    });
+                }
+                let next = (Instant::now() + ASSERT_POLL_INTERVAL).min(deadline);
+                tokio::time::sleep_until(next).await;
+            }
+            done => return done,
+        }
+    }
+}
+
+/// One attempt at a step. A `LocateMiss` on an element step is healed here
+/// when `may_heal`; the healed ref is used for this call only.
+///
+/// `warning` is filled as soon as the target resolves ambiguously, before
+/// the tool call, so it is kept even when the call then fails.
+async fn attempt_step<C: ToolCaller + Send>(
+    step: &Step,
+    may_heal: bool,
     caller: &mut C,
     warning: &mut Option<String>,
 ) -> Result<Hit, StepError> {
@@ -474,7 +558,7 @@ async fn run_step<C: ToolCaller + Send>(
                 hit.locator = Some(target.locator);
                 target.reference
             }
-            Err(StepError::LocateMiss(miss)) if opts.heal && heal::is_element_step(step.action) => {
+            Err(StepError::LocateMiss(miss)) if may_heal && heal::is_element_step(step.action) => {
                 let found = heal::find_heal(step, &nodes).map_err(|declined| {
                     StepError::LocateMiss(miss.context(format!("heal declined: {declined}")))
                 })?;
@@ -507,7 +591,7 @@ async fn run_step<C: ToolCaller + Send>(
         *values = json!([one]);
     }
     let response = caller.call_tool(&tool, args).await?;
-    ensure_ok(&tool, &response)?;
+    ensure_ok(&tool, &response).map_err(StepError::Refused)?;
     Ok(hit)
 }
 

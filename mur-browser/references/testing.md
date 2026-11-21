@@ -62,6 +62,25 @@ is one of:
 | `yellow` | some steps healed, all healed steps were verified and stayed under budget | export — a healed step's locator was already rewritten in `actions.yaml` (D3) |
 | `red` | a step failed outright, or `budget_exceeded` is set | **stop** — see below, do not export |
 
+### An assert waits for the page
+
+A `goto` returns when the document has loaded, which is before a page that
+renders its content afterwards (any single-page app) has drawn it. So an
+assert step is re-checked for up to 5 seconds
+(`mur_browser::replay::DEFAULT_ASSERT_TIMEOUT`) before it fails, and a failed
+one says so: `still failing after waiting 5s for the page: ...`. Only asserts
+are repeated. A click, fill or any other action is sent once.
+
+The wait is replay's alone. While recording, a `browser_verify_*` call looks
+at the page once, and a call that fails is not recorded as a step. So on such
+a page, call `browser_wait_for` for the text first and then verify it.
+`browser_wait_for` is not recorded as a step: replay's own wait stands in for
+it.
+
+`mur browser record` starts the server with the `testing` capability, so the
+`browser_verify_*` tools that assert steps are recorded from are available
+without passing `-- --caps=testing`. Capabilities you pass yourself are kept.
+
 ### `warning:` lines are not a verdict
 
 Below the summary line, replay may print one line per suspect step:
