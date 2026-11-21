@@ -58,6 +58,7 @@ pub async fn replay(
     let opts = mur_browser::replay::ReplayOptions {
         heal,
         max_heal_ratio,
+        ..mur_browser::replay::ReplayOptions::DEFAULT
     };
     let report = if dry_run {
         mur_browser::replay::dry_run(&run, &allow)?

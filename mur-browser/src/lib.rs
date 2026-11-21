@@ -19,6 +19,7 @@
 pub mod abandon;
 pub mod auth;
 pub mod broker;
+pub mod caps;
 pub mod chromium;
 pub mod console_inline;
 pub mod engines;

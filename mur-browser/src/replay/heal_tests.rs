@@ -176,7 +176,8 @@ async fn second_heal_in_a_row_rolls_back_the_first() {
     assert_eq!(report.verdict(), "red");
 }
 
-#[tokio::test]
+// Paused clock: the failing assert is waited on for the full timeout.
+#[tokio::test(start_paused = true)]
 async fn failed_assert_text_between_rolls_back_the_heal() {
     let run = steps(&format!(
         "{}- step: 2\n  intent: 確認標題\n  action: assert_text\n  value: 訂單\n  locators: ['text:訂單']\n{}",

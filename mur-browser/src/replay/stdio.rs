@@ -101,7 +101,7 @@ pub(super) fn live_args(storage_state: Option<&std::path::Path>) -> Vec<String> 
         "--isolated".to_owned(),
         "--browser=chromium".to_owned(),
         // browser_verify_* (assert steps) are opt-in in @playwright/mcp.
-        "--caps=testing".to_owned(),
+        crate::caps::testing_arg(),
     ];
     if let Some(path) = storage_state {
         args.push(format!("--storage-state={}", path.display()));

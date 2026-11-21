@@ -217,7 +217,8 @@ async fn locator_miss_fails_with_candidates_listed() {
     );
 }
 
-#[tokio::test]
+// Paused clock: the failing assert is waited on for the full timeout.
+#[tokio::test(start_paused = true)]
 async fn automation_mode_does_not_fail_on_assert() {
     let yaml = THREE.replace("mode: test", "mode: automation");
     let mut fake = Fake {
