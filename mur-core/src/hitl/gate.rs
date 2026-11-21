@@ -624,6 +624,7 @@ async fn wait_for_response(
 }
 
 mod log_integrity;
+pub(crate) use log_integrity::read_checked;
 
 #[cfg(test)]
 mod commander_head_tests;

@@ -33,16 +33,27 @@ pub(super) const INTEGRITY_FAILED: &str = "log integrity check failed";
 
 /// The log's events, the authority context built from the same read, and —
 /// when the log cannot be trusted — why.
-pub(super) struct Checked {
+pub(crate) struct Checked {
     pub events: Vec<ChannelEvent>,
     pub damage: Option<String>,
     /// Owner trust and keys from the same bytes as `events` (C3: one load).
     pub ctx: crate::hitl::authority::AuthorityCtx,
 }
 
+/// [`read_checked`] for the gate: damage is also logged under the gate's name.
+pub(super) fn load_checked(mur_home: &Path, channel_id: &str) -> Result<Checked> {
+    let checked = read_checked(mur_home, channel_id)?;
+    if let Some(why) = &checked.damage {
+        tracing::warn!(channel_id, damage = %why, "HITL gate: {INTEGRITY_FAILED}");
+    }
+    Ok(checked)
+}
+
 /// Read `channel_id`'s events with the integrity check, as one locked
 /// snapshot (so a concurrent anchored append is not mistaken for damage).
-pub(super) fn load_checked(mur_home: &Path, channel_id: &str) -> Result<Checked> {
+/// Says nothing itself: a reader that is not the gate (`mur fleet resume`)
+/// reports the damage in its own words.
+pub(crate) fn read_checked(mur_home: &Path, channel_id: &str) -> Result<Checked> {
     let svc = ChannelService::open(mur_home)?;
     let router_key = crate::channel_verify::actor_pubkey(mur_home, &ChannelActor::System, None);
     // One lock for both reads: an append between them could reseal the head
@@ -77,9 +88,6 @@ pub(super) fn load_checked(mur_home: &Path, channel_id: &str) -> Result<Checked>
     })?;
     drop(svc);
     let damage = describe(&report, router_key.is_some());
-    if let Some(why) = &damage {
-        tracing::warn!(channel_id, damage = %why, "HITL gate: {INTEGRITY_FAILED}");
-    }
     Ok(Checked {
         events,
         damage,
