@@ -11,13 +11,16 @@
 //! NOT against the single key `load_events_with_damage` is handed: an agent's
 //! events are signed by that agent, so a one-key check would flag every one of
 //! them.
+//!
+//! One line has no actor of its own key: murmur's `!cmd` card is a `System`
+//! note the session agent signs (see [`is_session_card`]).
 
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use mur_channel::store::AnchorMismatchKind;
 use mur_channel::store::ChannelStore;
-use mur_common::channel::{ChannelActor, EventKind};
+use mur_common::channel::{ChannelActor, ChannelPurpose, EventKind};
 
 /// Exit code for a channel that verified clean.
 pub const EXIT_INTACT: i32 = 0;
@@ -326,6 +329,7 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
     );
     report.owner = OwnerReport::from_trust(&trust);
     let ignored = trust.ignored_records();
+    let card_signers = card_signers(&store, channel_id);
 
     // A commander directive is a `System` line under a pinned commander key,
     // not the router's: it verifies the way `fold_governance` verifies it.
@@ -337,6 +341,7 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
         // A foreign owner record fails its signature by construction; it is
         // reported under `owner`, not as damage (D-7).
         .filter(|ev| !(ev.kind == EventKind::OwnerKeyEnrolled && ignored.contains(&ev.seq)))
+        .filter(|ev| !is_session_card(mur_home, channel_id, &card_signers, ev))
         .filter(|ev| !crate::channel_verify::verify_event(mur_home, channel_id, ev, require_sig))
         .map(|ev| ev.seq)
         .chain(
@@ -408,6 +413,51 @@ fn legacy_sealer_key(
     })
 }
 
+/// The agents whose key may sign a `!cmd` card on this channel: the agent
+/// participants of a conversation. Empty for a fleet or workflow channel,
+/// where every `System` line is the control plane's, and when the manifest
+/// cannot be read.
+fn card_signers(store: &ChannelStore, channel_id: &str) -> Vec<String> {
+    let Ok(ch) = store.load_manifest(channel_id) else {
+        return Vec::new();
+    };
+    if mur_channel::purpose::effective_purpose(&ch) != ChannelPurpose::Conversation {
+        return Vec::new();
+    }
+    ch.participants
+        .into_iter()
+        .filter_map(|p| match p.actor {
+            ChannelActor::Agent { id } => Some(id),
+            _ => None,
+        })
+        .collect()
+}
+
+/// True when `ev` is a murmur `!cmd` card one of `signers` signed.
+///
+/// The card is a `System` note written under the session agent's key, not the
+/// router's (`cmd/agent/cli/persist.rs`), and the conversation watermark
+/// reads it under that key (`mur_channel::conversation::assess`, S1). The
+/// per-actor check holds `System` to the router, so for any session agent but
+/// the router itself it would call every card a bad signature. The signature
+/// is always required here: an unsigned line is left to the per-actor check.
+fn is_session_card(
+    mur_home: &Path,
+    channel_id: &str,
+    signers: &[String],
+    ev: &mur_common::channel::ChannelEvent,
+) -> bool {
+    ev.sig.is_some()
+        && matches!(ev.actor, ChannelActor::System)
+        && ev.kind == EventKind::Note
+        && !mur_channel::repair_record::is_repair_record(ev)
+        && signers.iter().any(|id| {
+            let agent = ChannelActor::Agent { id: id.clone() };
+            crate::channel_verify::actor_pubkey(mur_home, &agent, ev.key_version)
+                .is_some_and(|pk| mur_channel::sign::verify_one(channel_id, ev, &pk, true))
+        })
+}
+
 /// Run the command: print the report, return the process exit code.
 pub fn run(mur_home: &Path, channel_id: &str) -> Result<i32> {
     let report = check(mur_home, channel_id)?;
@@ -422,3 +472,7 @@ mod tests;
 #[cfg(test)]
 #[path = "channel_integrity_owner_tests.rs"]
 mod owner_tests;
+
+#[cfg(test)]
+#[path = "channel_integrity_shell_card_tests.rs"]
+mod shell_card_tests;
