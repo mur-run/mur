@@ -94,6 +94,38 @@ describe("BrowserCardBody", () => {
     expect(onAnswer).toHaveBeenCalledWith({ kind: "login", reauth: false, replace: true });
   });
 
+  it("a replace_only login names the hosts it adds, as the row does (#2512)", async () => {
+    const offer: OfferView = { kind: "replace_only", with: "work", drops: ["old.example"], adds: ["github.com"] };
+    const body = login(false, offer);
+    if (body.kind === "login") body.rows[0].offer = offer;
+    await render(card(body), () => {});
+    const lines = [...host.querySelectorAll("div.field-muted")].map((d) => d.textContent ?? "");
+    const row = lines.find((l) => l.startsWith("Replaces the current login"));
+    const loginLine = lines.find((l) => l.startsWith("Logging in replaces"));
+    expect(row).toContain("Adds: github.com");
+    expect(loginLine).toContain("old.example");
+    expect(loginLine).toContain("github.com");
+  });
+
+  it("a replace with nothing to add prints no empty Adds label (#2512)", async () => {
+    const offer: OfferView = { kind: "replace_only", with: "work", drops: ["old.example"], adds: [] };
+    const body = login(false, offer);
+    if (body.kind === "login") body.rows[0].offer = offer;
+    await render(card(body), () => {});
+    expect(host.textContent).toContain("Drops: old.example");
+    expect(host.textContent).not.toContain("Adds");
+  });
+
+  // jsdom does no layout, so this only pins the hooks browser.css hangs on;
+  // the overflow itself (#2511) was measured in a real browser.
+  it("marks the row and the name-carrying buttons for wrapping (#2511)", async () => {
+    await render(card(login(true)), () => {});
+    expect(host.querySelector("li.perm__row")?.classList.contains("browser-card__row")).toBe(true);
+    expect(button("Log in again").classList.contains("browser-card__btn--wrap")).toBe(true);
+    await render(card({ kind: "reach", reach: { kind: "needs_host", missing: ["git.example"] } }), () => {});
+    expect(button("Allow git.example").classList.contains("browser-card__btn--wrap")).toBe(true);
+  });
+
   it("an already-bound row can still be used to finish the request", async () => {
     const onAnswer = vi.fn();
     await render(card(login(false)), onAnswer);

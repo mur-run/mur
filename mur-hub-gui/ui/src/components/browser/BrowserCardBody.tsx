@@ -48,6 +48,20 @@ function PortStep({ step }: { step: PortStepView }) {
   );
 }
 
+type Translate = ReturnType<typeof useT>["t"];
+type ReplaceOffer = Extract<OfferView, { kind: "replace_only" }>;
+
+/** What a replace does, for the row and the login line alike: both answers
+ *  approve the offer's `adds` (#2512), so both name them. No empty label. */
+function replaceText(
+  t: Translate,
+  dropsKey: "browser.row.replaceDrops" | "browser.login.replacesBinding",
+  o: ReplaceOffer,
+): string {
+  const drops = t(dropsKey, { drops: o.drops.join(", ") });
+  return o.adds.length > 0 ? `${drops} ${t("browser.row.replaceAdds", { adds: o.adds.join(", ") })}` : drops;
+}
+
 function Row({
   row,
   busy,
@@ -66,12 +80,12 @@ function Row({
     o.kind === "adds_hosts"
       ? t("browser.row.addsHosts", { hosts: o.missing.join(", ") })
       : o.kind === "replace_only"
-        ? `${t("browser.row.replaceDrops", { drops: o.drops.join(", ") })} ${t("browser.row.replaceAdds", { adds: o.adds.join(", ") })}`
+        ? replaceText(t, "browser.row.replaceDrops", o)
         : o.kind === "disabled"
           ? o.why
           : null;
   return (
-    <li className="perm__row">
+    <li className="perm__row browser-card__row">
       <strong>{row.name}</strong> <span className="field-muted">{row.domains.join(", ")}</span>
       {row.shared_with.length > 0 && (
         <span className="field-muted"> · {t("browser.row.sharedWith", { agents: row.shared_with.join(", ") })}</span>
@@ -142,12 +156,12 @@ export function BrowserCardBody({ card, busy, loggingIn, result, note, onAnswer,
             <>
               {b.login_offer.kind === "replace_only" && (
                 <div className="field-muted">
-                  {t("browser.login.replacesBinding", { drops: b.login_offer.drops.join(", ") })}
+                  {replaceText(t, "browser.login.replacesBinding", b.login_offer)}
                 </div>
               )}
               <button
                 type="button"
-                className="btn btn--secondary"
+                className="btn btn--secondary browser-card__btn--wrap"
                 disabled={busy}
                 onClick={() => {
                   // `reauth` overwrites the saved login of that name;
@@ -192,7 +206,7 @@ export function BrowserCardBody({ card, busy, loggingIn, result, note, onAnswer,
           {!portClosed && b.reach.kind === "needs_host" && (
             <button
               type="button"
-              className="btn btn--primary"
+              className="btn btn--primary browser-card__btn--wrap"
               disabled={busy}
               onClick={() => onAnswer({ kind: "allow" })}
             >

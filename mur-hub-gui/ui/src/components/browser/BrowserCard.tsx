@@ -73,7 +73,7 @@ export function BrowserCard({
 
   return (
     <div className="modal__overlay">
-      <div className="modal ssh-card" role="dialog" aria-modal="true">
+      <div className="modal ssh-card browser-card" role="dialog" aria-modal="true">
         <div className="modal__header">
           <h2 className="modal__title">{t("browser.card.title", { agent, site })}</h2>
         </div>
