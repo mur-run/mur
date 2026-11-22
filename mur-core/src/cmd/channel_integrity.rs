@@ -12,8 +12,10 @@
 //! events are signed by that agent, so a one-key check would flag every one of
 //! them.
 //!
-//! One line has no actor of its own key: murmur's `!cmd` card is a `System`
-//! note the session agent signs (see [`is_session_card`]).
+//! Two kinds of `System` line are read under a key that is not the router's:
+//! a commander directive, under a pinned commander key, and murmur's `!cmd`
+//! card, a note the agent running the session signs (see [`card_signer`]).
+//! A card is not damage, but the report names who signed it.
 
 use std::path::Path;
 
@@ -65,6 +67,19 @@ pub struct IntegrityReport {
     /// The channel's human-owner state (B4). Default on a channel with no
     /// owner record, which is every legacy channel.
     pub owner: OwnerReport,
+    /// `System` notes that fail under the router's key and verify under an
+    /// agent participant's (how a murmur `!cmd` card is signed), per signer
+    /// in order of first appearance. Not damage: any participant may run a
+    /// session on a conversation, so the check cannot tell whose cards
+    /// belong. It names the signers so the operator can (#2519).
+    pub participant_cards: Vec<ParticipantCards>,
+}
+
+/// The `System` notes one agent participant signed on a conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParticipantCards {
+    pub agent: String,
+    pub seqs: Vec<u64>,
 }
 
 /// What integrity sees of the owner record (B2's [`HumanTrust`]).
@@ -198,6 +213,17 @@ impl IntegrityReport {
             &self.owner.ignored_records,
         );
         push_list(&mut out, "broken hash chain at seq", &self.chain_breaks);
+        for cards in &self.participant_cards {
+            push_list(
+                &mut out,
+                &format!(
+                    "note: `System` notes under participant `{}`'s key, not the router's \
+                     (how a murmur `!cmd` card is signed; not damage) at seq",
+                    cards.agent
+                ),
+                &cards.seqs,
+            );
+        }
         push_list(
             &mut out,
             "note: written by a newer MUR (kind unknown to this binary, not damage; upgrade to read) at lines",
@@ -335,14 +361,25 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
     // not the router's: it verifies the way `fold_governance` verifies it.
     let commander_keys = crate::cmd::commander::accepted_pubkeys(mur_home);
     report.events = events.len();
+    let mut cards: Vec<ParticipantCards> = Vec::new();
     report.unverified_seqs = events
         .iter()
         .filter(|ev| !crate::cmd::commander::is_signed_directive(&commander_keys, channel_id, ev))
         // A foreign owner record fails its signature by construction; it is
         // reported under `owner`, not as damage (D-7).
         .filter(|ev| !(ev.kind == EventKind::OwnerKeyEnrolled && ignored.contains(&ev.seq)))
-        .filter(|ev| !is_session_card(mur_home, channel_id, &card_signers, ev))
         .filter(|ev| !crate::channel_verify::verify_event(mur_home, channel_id, ev, require_sig))
+        // After the per-actor check, so a card the control plane signed in
+        // its own session (router key) is not listed as someone else's.
+        .filter(
+            |ev| match card_signer(mur_home, channel_id, &card_signers, ev) {
+                Some(agent) => {
+                    record_card(&mut cards, agent, ev.seq);
+                    false
+                }
+                None => true,
+            },
+        )
         .map(|ev| ev.seq)
         .chain(
             // An unknown kind is no pass on the signature (#2287).
@@ -360,6 +397,7 @@ fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<In
                 .map(|ev| ev.seq),
         )
         .collect();
+    report.participant_cards = cards;
     report.unparseable_lines = damage.unparseable_lines;
     report.newer_kind_lines = damage.newer_kind_lines;
     report.chain_breaks = damage.chain_breaks;
@@ -433,29 +471,53 @@ fn card_signers(store: &ChannelStore, channel_id: &str) -> Vec<String> {
         .collect()
 }
 
-/// True when `ev` is a murmur `!cmd` card one of `signers` signed.
+/// The one of `signers` whose key `ev` verifies under, when `ev` has the
+/// shape of a murmur `!cmd` card.
 ///
-/// The card is a `System` note written under the session agent's key, not the
-/// router's (`cmd/agent/cli/persist.rs`), and the conversation watermark
-/// reads it under that key (`mur_channel::conversation::assess`, S1). The
-/// per-actor check holds `System` to the router, so for any session agent but
-/// the router itself it would call every card a bad signature. The signature
-/// is always required here: an unsigned line is left to the per-actor check.
-fn is_session_card(
+/// The card is a `System` note written under the key of the agent running the
+/// session, not the router's (`cmd/agent/cli/persist.rs`), and the
+/// conversation watermark reads it under that key
+/// (`mur_channel::conversation::assess`, S1). The per-actor check holds
+/// `System` to the router, so for any session agent but the router itself it
+/// would call every card a bad signature. The signature is always required
+/// here: an unsigned line is left to the per-actor check.
+///
+/// Every agent participant is tried, not one: any participant of a
+/// conversation can attach a session to it (`persist::list_recent`), and the
+/// card that session writes is signed with that participant's key. Nothing on
+/// disk says which participant a card should have come from, so the caller
+/// reports the signer instead of judging it.
+fn card_signer<'a>(
     mur_home: &Path,
     channel_id: &str,
-    signers: &[String],
+    signers: &'a [String],
     ev: &mur_common::channel::ChannelEvent,
-) -> bool {
-    ev.sig.is_some()
-        && matches!(ev.actor, ChannelActor::System)
-        && ev.kind == EventKind::Note
-        && !mur_channel::repair_record::is_repair_record(ev)
-        && signers.iter().any(|id| {
-            let agent = ChannelActor::Agent { id: id.clone() };
-            crate::channel_verify::actor_pubkey(mur_home, &agent, ev.key_version)
-                .is_some_and(|pk| mur_channel::sign::verify_one(channel_id, ev, &pk, true))
-        })
+) -> Option<&'a str> {
+    if ev.sig.is_none()
+        || !matches!(ev.actor, ChannelActor::System)
+        || ev.kind != EventKind::Note
+        || mur_channel::repair_record::is_repair_record(ev)
+    {
+        return None;
+    }
+    signers.iter().map(String::as_str).find(|id| {
+        let agent = ChannelActor::Agent {
+            id: (*id).to_owned(),
+        };
+        crate::channel_verify::actor_pubkey(mur_home, &agent, ev.key_version)
+            .is_some_and(|pk| mur_channel::sign::verify_one(channel_id, ev, &pk, true))
+    })
+}
+
+/// Add `seq` to `agent`'s entry, keeping signers in order of first appearance.
+fn record_card(cards: &mut Vec<ParticipantCards>, agent: &str, seq: u64) {
+    match cards.iter_mut().find(|c| c.agent == agent) {
+        Some(c) => c.seqs.push(seq),
+        None => cards.push(ParticipantCards {
+            agent: agent.to_owned(),
+            seqs: vec![seq],
+        }),
+    }
 }
 
 /// Run the command: print the report, return the process exit code.
