@@ -35,7 +35,7 @@ mod gate;
 mod messages;
 
 pub use gate::live_run_id;
-pub use gate::{allowed, enabled_in};
+pub use gate::{allowed, enabled_in, runs_locally};
 pub(crate) use messages::spawn_error_message;
 use messages::unreadable_config_message;
 
@@ -217,11 +217,13 @@ cost_usd) and by `mur fleet stop`."
         // what the caller polls. One path segment under ~/.mur/fleet-state/<fleet>/runs/.
         let run_id = format!("fleet-{fleet}-{}", uuid::Uuid::now_v7());
 
-        // #2116: a fleet routed by ANOTHER agent must be signed with that
-        // agent's key, which this sealed process can neither read nor hand
-        // over. Ask the daemon — outside every sandbox — to launch it instead.
+        // A child spawned here holds this agent's key and no other. A run
+        // also needs the router's key (#2116) and the control plane's (#2081),
+        // neither of which this sealed process can read or hand over. Unless
+        // this agent is both, ask the daemon — outside every sandbox — to
+        // launch it instead.
         let router = parsed.router_or_concierge();
-        if !router.eq_ignore_ascii_case(&self.agent_name) {
+        if !runs_locally(&self.agent_name, router) {
             let dispatch = mur_track::fleet_dispatch_request::FleetDispatch {
                 requested_by: self.agent_name.clone(),
                 fleet: fleet.clone(),

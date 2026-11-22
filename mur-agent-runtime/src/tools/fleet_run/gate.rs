@@ -36,3 +36,17 @@ pub fn allowed(cfg: &mur_common::config::FleetRunConfig, agent: &str, fleet: &st
 pub fn enabled_in(cfg: &mur_common::config::FleetRunConfig, agent: &str) -> bool {
     cfg.agents.iter().any(|a| a == agent) && !cfg.fleets.is_empty()
 }
+
+/// Can a child spawned by `requester`'s runtime sign everything this run
+/// writes? That child holds one key, the requester's own. The fleet's router
+/// signs the agent events and the control plane signs the `System` ones
+/// (`run_paused`, the stop event, HITL requests), so one key covers the run
+/// only when the requester is both. Every other run is launched by the
+/// daemon, whose child reads keys from disk (#2116, #2081 items 5 and 6).
+///
+/// The runtime and the daemon both decide with this, so a run one side sends
+/// is never a run the other side refuses.
+pub fn runs_locally(requester: &str, router: &str) -> bool {
+    requester.eq_ignore_ascii_case(mur_channel::verify::CONTROL_PLANE_AGENT)
+        && router.eq_ignore_ascii_case(requester)
+}
