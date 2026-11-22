@@ -153,6 +153,7 @@ fn unsigned_when_identity_absent() {
     // under enforcement the same call is a refusal (covered separately in
     // `missing_key_tests`).
     let ev = append_as_writer_with(
+        None,
         &svc,
         tmp.path(),
         &ch.id,

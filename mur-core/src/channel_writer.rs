@@ -112,13 +112,39 @@ pub(crate) fn read_key_version(agent_home: &Path) -> u32 {
     }
 }
 
+/// A signing capability a parent handed its sealed child: one agent's key,
+/// good for that agent's name and no other.
+pub(crate) struct Handoff {
+    pub(crate) agent: String,
+    pub(crate) kv: u32,
+    pub(crate) id: mur_common::identity::AgentIdentity,
+}
+
+impl Handoff {
+    /// The handed-over identity, but only for the writer it actually belongs
+    /// to.
+    ///
+    /// A child signs as the agent that spawned it and as nothing else — a run
+    /// that writes on behalf of some other agent falls back to the disk path.
+    fn key_for(&self, signer_agent: &str) -> Option<(&mur_common::identity::AgentIdentity, u32)> {
+        (self.agent == signer_agent).then_some((&self.id, self.kv))
+    }
+}
+
 /// The signing capability our parent handed us on stdin, if any.
 ///
 /// Set once, at process start, by `ingest_signing_handoff`. `None` for every
 /// ordinary invocation — a `mur` the user runs reads the key from disk like
 /// it always has.
-static HANDOFF: std::sync::OnceLock<Option<(String, u32, mur_common::identity::AgentIdentity)>> =
-    std::sync::OnceLock::new();
+static HANDOFF: std::sync::OnceLock<Option<Handoff>> = std::sync::OnceLock::new();
+
+/// This process's handoff. Key resolution takes it as an argument
+/// ([`resolve_writer_key_in`]) so a test can stand in a sealed child's
+/// handoff without setting a once-per-process global every other test in the
+/// binary would then inherit.
+fn process_handoff() -> Option<&'static Handoff> {
+    HANDOFF.get()?.as_ref()
+}
 
 /// Read a `SigningHandoff` from stdin when the parent said one is there.
 ///
@@ -163,17 +189,12 @@ pub fn ingest_signing_handoff() -> anyhow::Result<()> {
         )
     })?;
     let id = mur_common::identity::AgentIdentity::from_secret_bytes(&h.secret);
-    let _ = HANDOFF.set(Some((h.agent, h.key_version, id)));
+    let _ = HANDOFF.set(Some(Handoff {
+        agent: h.agent,
+        kv: h.key_version,
+        id,
+    }));
     Ok(())
-}
-
-/// The handed-over identity, but only for the writer it actually belongs to.
-///
-/// A child signs as the agent that spawned it and as nothing else — a run
-/// that writes on behalf of some other agent falls back to the disk path.
-fn handoff_for(signer_agent: &str) -> Option<(&'static mur_common::identity::AgentIdentity, u32)> {
-    let (agent, kv, id) = HANDOFF.get()?.as_ref()?;
-    (agent == signer_agent).then_some((id, *kv))
 }
 
 /// Leave a durable, readable mark when a write is refused.
@@ -301,6 +322,17 @@ fn resolve_writer_key(
     signer_agent: &str,
     refuse: Refuse,
 ) -> anyhow::Result<Option<WriterKey>> {
+    resolve_writer_key_in(process_handoff(), home, signer_agent, refuse)
+}
+
+/// [`resolve_writer_key`] with the handoff passed in rather than read from
+/// the process.
+fn resolve_writer_key_in(
+    handoff: Option<&Handoff>,
+    home: &Path,
+    signer_agent: &str,
+    refuse: Refuse,
+) -> anyhow::Result<Option<WriterKey>> {
     let Refuse {
         require_sig,
         awaits_answer,
@@ -310,7 +342,7 @@ fn resolve_writer_key(
     // and handed it over stdin, so prefer that when it is for THIS writer.
     // Checked before the disk read because the disk read is the thing that
     // cannot work here, not a faster path we are skipping.
-    if let Some((id, kv)) = handoff_for(signer_agent) {
+    if let Some((id, kv)) = handoff.and_then(|h| h.key_for(signer_agent)) {
         return Ok(Some(WriterKey {
             id: id.clone(),
             kv,
@@ -443,6 +475,7 @@ pub fn append_as_writer(
 ) -> anyhow::Result<ChannelEvent> {
     let signer_agent = author.signer().agent_name().to_string();
     append_as_writer_with(
+        process_handoff(),
         svc,
         home,
         channel_id,
@@ -458,8 +491,10 @@ pub fn append_as_writer(
 /// [`append_as_writer`] with the enforcement policy passed in, for the same
 /// reason as [`writer_key_with`]: a test of the keyless path must not change
 /// meaning when `MUR_CHANNEL_REQUIRE_SIG` is set in the test process (#2145).
+/// The handoff is passed in for the reason [`process_handoff`] gives.
 #[allow(clippy::too_many_arguments)]
 fn append_as_writer_with(
+    handoff: Option<&Handoff>,
     svc: &ChannelService,
     home: &Path,
     channel_id: &str,
@@ -470,7 +505,11 @@ fn append_as_writer_with(
     idem: Option<String>,
     require_sig: bool,
 ) -> anyhow::Result<ChannelEvent> {
-    match writer_key_with(home, signer_agent, require_sig)? {
+    let refuse = Refuse {
+        require_sig,
+        awaits_answer: false,
+    };
+    match resolve_writer_key_in(handoff, home, signer_agent, refuse)? {
         Some(key) => {
             let key_home = home.join("agents").join(signer_agent);
             append_with_key(
@@ -646,6 +685,10 @@ pub(crate) fn append_agent_line_router_sealed(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "channel_writer_handoff_tests.rs"]
+mod handoff_tests;
 
 #[cfg(test)]
 #[path = "channel_writer_missing_key_tests.rs"]
