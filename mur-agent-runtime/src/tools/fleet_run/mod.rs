@@ -196,8 +196,8 @@ cost_usd) and by `mur fleet stop`."
         {
             return Err(ToolError::Execution(format!(
                 "fleet '{fleet}' lists '{}' — the agent triggering this run — as a member, so the \
-                 run would delegate the same goal back to itself. Drop that member from \
-                 fleet.yaml, or run the fleet from the CLI instead.",
+                 run would delegate the same goal back to itself. Ask the user to drop that \
+                 member from fleet.yaml.",
                 self.agent_name
             )));
         }

@@ -374,6 +374,11 @@ pub async fn cmd_fleet_run(
             "fleet '{name}' is stopped (kill-switch). Run `mur fleet start {name}` to re-enable."
         );
     }
+    // Before the job is queued: a run that cannot sign must leave no trace.
+    super::sign_preflight::require_signing(mur_home, &fleet)?;
+    // One live run per fleet, as `--loop` takes it (#2531). Held to the end of
+    // this function; the kernel drops it if the process dies.
+    let _run_lock = super::loop_run::run_lock::acquire(mur_home, name)?;
     let (goal, mut active_job) = resolve_run_goal(mur_home, name, job_arg, &fleet.goal)?;
     if goal.is_empty() {
         bail!(

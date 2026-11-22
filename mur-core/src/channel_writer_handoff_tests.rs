@@ -160,3 +160,22 @@ fn a_request_awaiting_an_answer_under_another_agents_handoff_is_unanswerable() {
         "typed, so the caller can name the surface that can ask: {err:#}"
     );
 }
+
+/// #2531: the run preflight treats a handoff for the signer as signable, an
+/// unreadable key with no handoff for it as not, and an absent key as the
+/// keyless bootstrap home (signable in the sense that nothing is lost).
+#[cfg(unix)]
+#[test]
+fn unsignable_reason_follows_the_handoff_and_the_sandbox() {
+    let h = handoff();
+    with_sealed_keys(|home, _, _| {
+        assert!(unsignable_reason_in(None, home, &control_plane()).is_some());
+        assert!(
+            unsignable_reason_in(Some(&h), home, &control_plane()).is_some(),
+            "another agent's handoff does not cover the control plane"
+        );
+        assert!(unsignable_reason_in(Some(&h), home, SELF_ROUTER).is_none());
+    });
+    let tmp = TempDir::new().unwrap();
+    assert!(unsignable_reason_in(None, tmp.path(), &control_plane()).is_none());
+}
