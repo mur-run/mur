@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::channel_writer::CONTROL_PLANE_AGENT;
+use mur_common::channel::ChannelActor;
 use tempfile::TempDir;
 
 fn action() -> ActionRequest {
@@ -73,8 +74,10 @@ fn append_router(
         &svc,
         home,
         ch,
-        crate::channel_writer::Signer::ControlPlane,
-        actor,
+        crate::channel_writer::Authorship::out_of_role(
+            crate::channel_writer::Signer::ControlPlane,
+            actor,
+        ),
         kind,
         payload,
         None,

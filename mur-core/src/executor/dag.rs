@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use mur_channel::ChannelService;
-use mur_common::channel::{ChannelActor, ChannelState};
+use mur_common::channel::ChannelState;
 use mur_common::pipeline::{PipelineOutput, PipelineStatus, inject_input};
 use mur_common::skill::event_log::{RunRecord, record_run};
 use mur_common::skill::manifest::{FailureAction, Procedure, ProcedureStep};

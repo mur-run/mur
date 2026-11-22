@@ -7,6 +7,7 @@ use crate::hitl::authority_fixtures::{
     Labelled, enroll, human_signer, human_write, owned_workflow, previous_human_key, rekey_human,
 };
 use mur_channel::service::HumanSign;
+use mur_common::channel::ChannelActor;
 use mur_common::identity::AgentIdentity;
 use tempfile::TempDir;
 
@@ -73,8 +74,10 @@ fn router_answer(home: &Path, ch: &str, actor: ChannelActor, payload: serde_json
         &svc,
         home,
         ch,
-        crate::channel_writer::Signer::ControlPlane,
-        actor,
+        crate::channel_writer::Authorship::out_of_role(
+            crate::channel_writer::Signer::ControlPlane,
+            actor,
+        ),
         EventKind::HitlResponse,
         payload,
         None,

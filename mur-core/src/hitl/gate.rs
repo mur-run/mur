@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use mur_channel::ChannelService;
-use mur_common::channel::{ChannelActor, ChannelState, EventKind};
+use mur_common::channel::{ChannelState, EventKind};
 use mur_common::hitl::{
     HitlMode, HitlRequest, HitlResponse, RiskTier, Unanswered, check_fresh, default_mode,
 };
@@ -229,9 +229,8 @@ pub async fn gate(
                     &svc,
                     mur_home,
                     channel_id,
-                    crate::channel_writer::Signer::ControlPlane,
+                    crate::channel_writer::Authorship::system(),
                     ChannelState::InputRequired,
-                    ChannelActor::System,
                     run_id,
                 )?;
                 Ok(())
@@ -292,8 +291,7 @@ pub async fn gate(
                         &svc,
                         mur_home,
                         channel_id,
-                        crate::channel_writer::Signer::ControlPlane,
-                        ChannelActor::System,
+                        crate::channel_writer::Authorship::system(),
                         EventKind::HitlResponse,
                         serde_json::to_value(&resp)?,
                         None,
@@ -317,9 +315,8 @@ pub async fn gate(
                     &svc,
                     mur_home,
                     channel_id,
-                    crate::channel_writer::Signer::ControlPlane,
+                    crate::channel_writer::Authorship::system(),
                     ChannelState::Working,
-                    ChannelActor::System,
                     run_id,
                 )?;
                 Ok(())

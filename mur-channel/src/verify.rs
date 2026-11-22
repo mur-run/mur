@@ -62,6 +62,93 @@ impl<'a> Signer<'a> {
     }
 }
 
+/// An event's actor together with the identity that signs it: what a writer
+/// hands to `mur_core::channel_writer`.
+///
+/// The writer used to take the two separately, and nothing tied them: a
+/// `System` actor under a fleet router's key compiled, was written, and was
+/// then rejected by every reader (#2072, #2116). Here the signer is derived
+/// from the actor ([`Signer::for_actor`]), so a pair a reader would reject
+/// cannot be built by accident. The one way to name a different signer is
+/// [`Authorship::out_of_role`], which says so at the call site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Authorship<'a> {
+    actor: ChannelActor,
+    /// `None` for a matched pair; the signer is then the actor's own.
+    out_of_role: Option<Signer<'a>>,
+}
+
+impl Authorship<'static> {
+    fn matched(actor: ChannelActor) -> Self {
+        Self {
+            actor,
+            out_of_role: None,
+        }
+    }
+
+    /// A `System` event, signed by the control plane.
+    pub fn system() -> Self {
+        Self::matched(ChannelActor::System)
+    }
+
+    /// `agent` speaking as itself, signed with its own key.
+    pub fn agent(agent: &str) -> Self {
+        Self::matched(ChannelActor::Agent {
+            id: agent.to_string(),
+        })
+    }
+
+    /// The local human owner without a key of their own on the event
+    /// ([`ChannelActor::local_human`]), signed by the control plane.
+    pub fn local_human() -> Self {
+        Self::matched(ChannelActor::local_human())
+    }
+
+    /// The matched pair for `actor`, whatever it is.
+    ///
+    /// `None` for a `Human` that names its own key: a reader resolves that
+    /// one on the human chain ([`actor_pubkey`]), which no [`Signer`] stands
+    /// for. Such an event is written by `mur_core::human_writer`.
+    pub fn matching(actor: ChannelActor) -> Option<Self> {
+        match actor {
+            ChannelActor::Human { key: Some(_), .. } => None,
+            actor => Some(Self::matched(actor)),
+        }
+    }
+}
+
+impl<'a> Authorship<'a> {
+    /// `actor`'s event signed by `signer`, whether or not a reader holds
+    /// `actor` to that signer.
+    ///
+    /// When the two disagree, [`verify_event`] rejects the event. Reach for
+    /// this only when another check is the one that matters (the conversation
+    /// watermark holds a session's `System` card to the session agent's key),
+    /// or in a test that needs a line signed by the wrong identity.
+    pub fn out_of_role(signer: Signer<'a>, actor: ChannelActor) -> Self {
+        Self {
+            actor,
+            out_of_role: Some(signer),
+        }
+    }
+
+    /// The identity that signs this event.
+    pub fn signer(&self) -> Signer<'_> {
+        match self.out_of_role {
+            Some(signer) => signer,
+            None => Signer::for_actor(&self.actor),
+        }
+    }
+
+    pub fn actor(&self) -> &ChannelActor {
+        &self.actor
+    }
+
+    pub fn into_actor(self) -> ChannelActor {
+        self.actor
+    }
+}
+
 /// The directory holding the key that should have signed `actor`'s events:
 /// [`Signer::for_actor`]'s home.
 ///

@@ -331,8 +331,10 @@ fn answer(w: &World, hitl_id: &str, hash: &str, allow: bool, actor: ChannelActor
         &svc,
         w.home.path(),
         BROKER_CHANNEL_ID,
-        mur_core::channel_writer::Signer::ControlPlane,
-        actor,
+        mur_core::channel_writer::Authorship::out_of_role(
+            mur_core::channel_writer::Signer::ControlPlane,
+            actor,
+        ),
         EventKind::HitlResponse,
         serde_json::json!({
             "hitl_id": hitl_id, "action_hash": hash, "allow": allow,

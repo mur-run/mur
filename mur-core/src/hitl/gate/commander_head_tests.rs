@@ -5,6 +5,7 @@ use super::*;
 use crate::channel_writer::{
     CONTROL_PLANE_AGENT, append_with_key, plant_writer_identity, writer_key,
 };
+use mur_common::channel::ChannelActor;
 use tempfile::TempDir;
 
 #[test]

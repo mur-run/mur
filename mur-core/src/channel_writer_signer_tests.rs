@@ -25,19 +25,12 @@ fn channel(svc: &ChannelService, label: &str) -> String {
         .id
 }
 
-fn write(
-    svc: &ChannelService,
-    home: &Path,
-    channel: &str,
-    signer: Signer<'_>,
-    actor: ChannelActor,
-) -> ChannelEvent {
+fn write(svc: &ChannelService, home: &Path, channel: &str, author: Authorship<'_>) -> ChannelEvent {
     append_as_writer(
         svc,
         home,
         channel,
-        signer,
-        actor,
+        author,
         EventKind::Note,
         serde_json::json!({ "text": "x" }),
         None,
@@ -45,9 +38,9 @@ fn write(
     .unwrap()
 }
 
-/// Whatever the actor, an event written with `Signer::for_actor(&actor)` is
-/// one the verifier accepts with signatures required. A writer that follows
-/// the type cannot produce an event its own reader drops.
+/// Whatever the actor, a matched [`Authorship`] is one the verifier accepts
+/// with signatures required. A writer that follows the type cannot produce
+/// an event its own reader drops.
 #[test]
 fn an_event_written_by_its_actors_signer_verifies() {
     let (tmp, svc) = home_with_keys();
@@ -60,8 +53,9 @@ fn an_event_written_by_its_actors_signer_verifies() {
     ];
     for (i, actor) in actors.into_iter().enumerate() {
         let id = channel(&svc, &format!("actor-{i}"));
-        let signer = Signer::for_actor(&actor);
-        let ev = write(&svc, tmp.path(), &id, signer, actor.clone());
+        let author = Authorship::matching(actor.clone()).expect("a keyless actor");
+        assert_eq!(author.signer(), Signer::for_actor(&actor));
+        let ev = write(&svc, tmp.path(), &id, author);
         assert!(ev.sig.is_some(), "{actor:?} must be signed");
         assert!(
             crate::channel_verify::verify_event(tmp.path(), &id, &ev, true),
@@ -82,15 +76,15 @@ fn a_system_event_under_a_custom_routers_key_authenticates_nowhere() {
     let home = tmp.path();
 
     let id = channel(&svc, "control-plane");
-    let ours = write(&svc, home, &id, Signer::ControlPlane, ChannelActor::System);
+    let ours = write(&svc, home, &id, Authorship::system());
     let ctx = AuthorityCtx::load(home, &id).unwrap();
     assert!(crate::channel_verify::verify_event(home, &id, &ours, true));
     assert!(is_control_plane_signed(&ctx, &ours));
     assert!(is_durable_router_record(&ctx, &ours));
 
     let id = channel(&svc, "custom-router");
-    let signer = Signer::Agent(CUSTOM_ROUTER);
-    let theirs = write(&svc, home, &id, signer, ChannelActor::System);
+    let author = Authorship::out_of_role(Signer::Agent(CUSTOM_ROUTER), ChannelActor::System);
+    let theirs = write(&svc, home, &id, author);
     let ctx = AuthorityCtx::load(home, &id).unwrap();
     assert!(theirs.sig.is_some(), "it is signed — by the wrong identity");
     assert!(!crate::channel_verify::verify_event(
@@ -109,4 +103,35 @@ fn a_hitl_request_is_always_signed_by_the_control_plane() {
     assert_eq!(ev.actor, ChannelActor::System);
     let ctx = crate::hitl::authority::AuthorityCtx::load(tmp.path(), &id).unwrap();
     assert!(crate::hitl::authority::is_control_plane_signed(&ctx, &ev));
+}
+
+/// The three named constructors pair each actor with the signer its reader
+/// uses, and nothing else does: the only way to a mismatched pair is the
+/// constructor that says so.
+#[test]
+fn a_matched_authorship_names_its_actors_own_signer() {
+    assert_eq!(Authorship::system().signer(), Signer::ControlPlane);
+    assert_eq!(Authorship::local_human().signer(), Signer::ControlPlane);
+    assert_eq!(
+        Authorship::agent(CUSTOM_ROUTER).signer(),
+        Signer::Agent(CUSTOM_ROUTER)
+    );
+    assert_eq!(
+        Authorship::agent(CUSTOM_ROUTER).actor(),
+        &ChannelActor::Agent {
+            id: CUSTOM_ROUTER.into()
+        }
+    );
+    let forged = Authorship::out_of_role(Signer::Agent(CUSTOM_ROUTER), ChannelActor::System);
+    assert_ne!(forged.signer(), Signer::for_actor(forged.actor()));
+}
+
+/// A `Human` that names its own key is verified on the human chain, which no
+/// `Signer` stands for, so it has no matched pair here: it is written by
+/// `human_writer`, not by naming the control plane.
+#[test]
+fn a_keyed_human_has_no_matched_authorship() {
+    let keyed = ChannelActor::local_human_with_key("z6Mk-some-key");
+    assert!(Authorship::matching(keyed).is_none());
+    assert!(Authorship::matching(ChannelActor::local_human()).is_some());
 }

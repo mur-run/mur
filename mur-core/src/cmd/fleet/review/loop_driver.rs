@@ -49,7 +49,7 @@ use crate::cmd::fleet::control;
 use crate::cmd::fleet::loop_run::{LoopStop, check_guards};
 use anyhow::Result;
 use mur_channel::ChannelService;
-use mur_common::channel::{ChannelActor, EventKind};
+use mur_common::channel::EventKind;
 use mur_common::limits::Stuck;
 
 /// Why [`run_review_loop`] stopped.
@@ -103,8 +103,7 @@ pub(super) fn append(
         svc,
         mur_home,
         channel_id,
-        crate::channel_writer::Signer::ControlPlane,
-        ChannelActor::System,
+        crate::channel_writer::Authorship::system(),
         EventKind::Note,
         to_note_payload(payload),
         None,

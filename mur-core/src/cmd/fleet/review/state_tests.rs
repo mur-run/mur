@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use mur_channel::ChannelService;
-use mur_common::channel::{ChannelActor, EventKind};
+use mur_common::channel::EventKind;
 
 use super::{SessionState, observe};
 use crate::cmd::fleet::review::constants::REVIEW_CORRUPTED_MARKER_FILE;
@@ -28,8 +28,7 @@ pub(crate) fn session(
             &svc,
             home,
             &fleet.channel_id,
-            crate::channel_writer::Signer::ControlPlane,
-            ChannelActor::System,
+            crate::channel_writer::Authorship::system(),
             EventKind::Note,
             to_note_payload(p),
             None,
