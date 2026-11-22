@@ -73,13 +73,14 @@ impl App {
     pub fn start_follow(
         &mut self,
         channel_id: &str,
+        handle: &str,
         now: std::time::Instant,
     ) -> anyhow::Result<()> {
         if self.channel.as_ref().is_some_and(|c| c.id == channel_id) {
             anyhow::bail!("that is the channel this pane is on — nothing to follow");
         }
         self.follow = Some(super::super::follow::Follow::start(
-            &self.home, channel_id, now,
+            &self.home, channel_id, handle, now,
         )?);
         Ok(())
     }
@@ -118,9 +119,11 @@ impl App {
         let on_own_pane = self.channel.as_ref().is_some_and(|c| c.id == channel_id);
         let can_follow = self.follow.is_none() && !on_own_pane;
         if can_follow {
+            let handle = super::super::persist::handle_for(&self.home, &channel_id);
             self.follow = Some(super::super::follow::Follow::start_auto(
                 &self.home,
                 &channel_id,
+                &handle,
                 now,
             ));
         }

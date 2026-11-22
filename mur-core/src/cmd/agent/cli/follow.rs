@@ -44,6 +44,9 @@ pub enum FollowMode {
 /// append-only log.
 pub struct Follow {
     pub channel_id: String,
+    /// The handle that names this channel at `/channels`, fixed when the
+    /// follow starts; see `persist::typeable`.
+    handle: String,
     /// NEXT `seq` to render — the dedup cursor. Starts one past the log's
     /// current head so following never replays history. ("One past" and not
     /// "highest rendered" because seq starts at 0: a follow armed on an empty
@@ -68,11 +71,12 @@ pub struct Follow {
 
 impl Follow {
     /// Start following `channel_id` from its current head.
-    pub fn start(home: &Path, channel_id: &str, now: Instant) -> Result<Self> {
+    pub fn start(home: &Path, channel_id: &str, handle: &str, now: Instant) -> Result<Self> {
         let store = ChannelStore::new(home);
         let evs = store.load_events(channel_id)?;
         Ok(Self {
             channel_id: channel_id.to_string(),
+            handle: handle.to_string(),
             cursor: evs.last().map(|e| e.seq + 1).unwrap_or(0),
             last_len: log_len(&store, channel_id),
             next_poll: now + POLL_INTERVAL,
@@ -87,7 +91,7 @@ impl Follow {
     /// fleet's channel may not exist yet at arm time (the run's first event
     /// creates it), so a missing log reads as an empty one and the cursor
     /// starts at whatever head exists.
-    pub fn start_auto(home: &Path, channel_id: &str, now: Instant) -> Self {
+    pub fn start_auto(home: &Path, channel_id: &str, handle: &str, now: Instant) -> Self {
         let store = ChannelStore::new(home);
         let cursor = store
             .load_events(channel_id)
@@ -96,6 +100,7 @@ impl Follow {
             .unwrap_or(0);
         Self {
             channel_id: channel_id.to_string(),
+            handle: handle.to_string(),
             cursor,
             last_len: log_len(&store, channel_id),
             next_poll: now + POLL_INTERVAL,
@@ -109,7 +114,7 @@ impl Follow {
     /// at `/channels`. Not a fixed-width prefix of the id — a followed
     /// channel is often a fleet's, and those share their first characters.
     pub fn tag(&self) -> String {
-        super::slash_cmds::id_handle(&self.channel_id)
+        self.handle.clone()
     }
 
     /// Lines for events that landed since the last poll, oldest-first. Empty
@@ -377,7 +382,7 @@ mod tests {
         );
 
         let now = Instant::now();
-        let mut f = Follow::start(home.path(), &ch.id, now).unwrap();
+        let mut f = Follow::start(home.path(), &ch.id, &ch.id[..8], now).unwrap();
         assert!(
             f.drain(home.path(), now).unwrap().is_empty(),
             "history must not replay"
@@ -411,7 +416,7 @@ mod tests {
             .create_for_agent("rustsmith", mur_channel::service::ChannelOwner::Legacy)
             .unwrap();
         let now = Instant::now();
-        let mut f = Follow::start(home.path(), &ch.id, now).unwrap();
+        let mut f = Follow::start(home.path(), &ch.id, &ch.id[..8], now).unwrap();
 
         append(
             home.path(),
@@ -630,7 +635,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let home = dir.path();
         let now = Instant::now();
-        let mut f = Follow::start_auto(home, "fleet-x", now);
+        let mut f = Follow::start_auto(home, "fleet-x", "#fleet-x", now);
         assert!(f.auto);
         append(
             home,

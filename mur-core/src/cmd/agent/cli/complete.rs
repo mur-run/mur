@@ -152,12 +152,7 @@ impl MenuContext {
                 recent
                     .iter()
                     .map(|s| {
-                        let desc = format!(
-                            "{} · {} turns · {}",
-                            super::slash_cmds::short_id(&s.id),
-                            s.turns,
-                            s.preview
-                        );
+                        let desc = format!("{} · {} turns · {}", s.handle, s.turns, s.preview);
                         (super::slash_cmds::channel_handle(s), desc)
                     })
                     .collect()

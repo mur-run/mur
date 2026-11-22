@@ -84,11 +84,11 @@ export function ChatChannelRail({ agentName, activeId, onSelect, width }: Props)
         key={c.id}
         className={`cw-rail__channel${isActive ? " cw-rail__channel--active" : ""}`}
         onClick={() => onSelect(c.id)}
-        title={`${num ? `${num} · ` : ""}${shortId(c.id)} — ${c.title || c.id}`}
+        title={`${num ? `${num} · ` : ""}${shortId(c.id, c.handle)} — ${c.title || c.id}`}
       >
         <span className="cw-rail__ch-hash">{num || "#"}</span>
         <span className="cw-rail__ch-name">{channelLabel(c, names)}</span>
-        <span className="cw-rail__ch-id">{shortId(c.id)}</span>
+        <span className="cw-rail__ch-id">{shortId(c.id, c.handle)}</span>
         <span className="cw-rail__ch-time">{relativeTime(c.updated_at, now)}</span>
         {c.turns > 0 && !isActive && (
           <span className="cw-rail__ch-badge">{c.turns > 99 ? "99+" : c.turns}</span>

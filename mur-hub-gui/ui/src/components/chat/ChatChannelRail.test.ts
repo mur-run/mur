@@ -5,7 +5,7 @@ import type { ChannelSummary } from "../../work/types";
 const UUID = "019ed0af-5e38-7912-b554-dc335a8fc2db";
 const base: ChannelSummary = {
   id: UUID, title: "", state: "working", goal: "", created_at: "", updated_at: "",
-  participants: [], agents: ["mur"], turns: 1, preview: "", ordinal: 2,
+  participants: [], agents: ["mur"], turns: 1, preview: "", ordinal: 2, handle: "",
 };
 
 describe("channelLabel", () => {

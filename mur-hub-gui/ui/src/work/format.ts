@@ -66,13 +66,16 @@ export function stateBadge(state: string): string {
   return STATE_BADGE_MAP[state] ?? "unknown";
 }
 
-/** Characters of a channel uuid shown as its typeable handle. Must match the
- *  CLI's footer chip and `/channels <prefix>` resolver (8). */
+/** Characters of a channel uuid shown when the backend sent no handle. The
+ *  backend's handle (`mur_channel::handle`) is never shorter than this. */
 export const SHORT_ID_LEN = 8;
 
-/** The id prefix a human can type into `/channels` to reach this channel. */
-export function shortId(id: string): string {
-  return id.slice(0, SHORT_ID_LEN);
+/** The id prefix a human can type into `/channels` to reach this channel:
+ *  the backend's `handle` — the shortest prefix no other local channel
+ *  shares, so channels minted in the same minute stay apart (#2538) — or
+ *  the first {@link SHORT_ID_LEN} characters when there is none. */
+export function shortId(id: string, handle?: string): string {
+  return handle || id.slice(0, SHORT_ID_LEN);
 }
 
 /** `name → display_name` for {@link channelTitle}; keeps the uppercase label

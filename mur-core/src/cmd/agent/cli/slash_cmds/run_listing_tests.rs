@@ -274,38 +274,36 @@ async fn tailed_lines_and_the_stop_row_carry_the_whole_run_id() {
     assert!(tailed[0].contains("iteration 2"), "{tailed:?}");
 }
 
-/// A conversation's id is a UUID: its label stays the eight-character prefix
-/// the listing and the Hub show for it.
-///
-/// Typing it back is not asserted here: the two conversations in this test
-/// are created milliseconds apart, and UUIDv7 ids minted within the same
-/// ~65 s share those eight characters. `resolve_tests` covers a prefix that
-/// is unique.
+/// A conversation's id is a UUID: its label is the id handle the listing
+/// shows for it, and that label typed back follows the same conversation —
+/// even though both conversations here are minted milliseconds apart and so
+/// share their first eight characters (#2538).
 #[tokio::test]
-async fn the_label_of_a_followed_conversation_is_still_its_short_id() {
+async fn the_label_of_a_followed_conversation_types_back_to_it() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = pane_with_a_run(tmp.path());
     let mut other = Session::create(tmp.path(), AGENT).unwrap();
     other.append("user", "another thread", None, &[]).unwrap();
-    let other_id = persist::list_recent(tmp.path(), AGENT, 10)
-        .unwrap()
-        .into_iter()
+    let listed = persist::list_recent(tmp.path(), AGENT, 10).unwrap();
+    let row = listed
+        .iter()
         .find(|s| s.preview.contains("another thread"))
-        .expect("the second conversation is listed")
-        .id;
+        .expect("the second conversation is listed");
+    let (other_id, handle) = (row.id.clone(), row.handle.clone());
+    assert!(other_id.replace('-', "").starts_with(&handle), "{handle}");
 
     // A whole UUID carries dashes, so it is an id only behind the `#`.
     let text = type_line(&mut app, &format!("/channels #{other_id} --follow")).await;
 
     assert_eq!(followed(&app), Some(other_id.as_str()), "{text}");
-    assert_eq!(
-        label_after(&text, "following "),
-        super::short_id(&other_id),
-        "{text}"
-    );
+    assert_eq!(label_after(&text, "following "), handle, "{text}");
     let stopped = type_line(&mut app, "/channels --stop").await;
+    assert_eq!(label_after(&stopped, "stopped following "), handle);
+
+    type_line(&mut app, &format!("/channels {handle} --follow")).await;
     assert_eq!(
-        label_after(&stopped, "stopped following "),
-        super::short_id(&other_id)
+        followed(&app),
+        Some(other_id.as_str()),
+        "typed back: {handle}"
     );
 }

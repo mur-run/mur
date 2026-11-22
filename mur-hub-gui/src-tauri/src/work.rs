@@ -45,6 +45,10 @@ pub struct ChannelSummary {
     /// Stable per-machine display number from the channel index (`#2`). Local
     /// view state, never synced — see `ChannelRow::ordinal`.
     pub ordinal: i64,
+    /// What names this channel by id at murmur's `/channels`: the shortest id
+    /// prefix no other local channel shares (`mur_channel::handle`, #2538).
+    /// Empty for a run, which has no short handle.
+    pub handle: String,
 }
 
 /// Serialize a `ChannelState`/role/actor enum to its kebab/lowercase string.
@@ -70,7 +74,12 @@ fn participant_of(actor: &ChannelActor, role_str: String) -> WorkParticipant {
 
 /// Pure: build a rail summary from a manifest + its events. No I/O. `ordinal`
 /// comes from the channel index row, which is the only place it is assigned.
-pub fn summary_of(ch: &Channel, events: &[ChannelEvent], ordinal: i64) -> ChannelSummary {
+pub fn summary_of(
+    ch: &Channel,
+    events: &[ChannelEvent],
+    ordinal: i64,
+    handles: &mur_channel::handle::Handles,
+) -> ChannelSummary {
     let participants: Vec<WorkParticipant> = ch
         .participants
         .iter()
@@ -101,6 +110,7 @@ pub fn summary_of(ch: &Channel, events: &[ChannelEvent], ordinal: i64) -> Channe
         turns: events.len(),
         preview,
         ordinal,
+        handle: handles.of(&ch.id).unwrap_or_default(),
     }
 }
 
@@ -113,6 +123,7 @@ const WORK_LIST_LIMIT: usize = 200;
 /// hidden so the rail never shows blank rows.
 pub fn list_channels(home: &Path) -> anyhow::Result<Vec<ChannelSummary>> {
     let svc = ChannelService::open(home)?;
+    let handles = svc.index().handles()?;
     let mut out = Vec::new();
     for row in svc.list(WORK_LIST_LIMIT)? {
         let events = svc.load_events(&row.id).unwrap_or_default();
@@ -122,7 +133,7 @@ pub fn list_channels(home: &Path) -> anyhow::Result<Vec<ChannelSummary>> {
         let Ok(manifest) = svc.store().load_manifest(&row.id) else {
             continue;
         };
-        out.push(summary_of(&manifest, &events, row.ordinal));
+        out.push(summary_of(&manifest, &events, row.ordinal, &handles));
     }
     Ok(out)
 }
@@ -173,7 +184,7 @@ mod tests {
         let manifest = svc.store().load_manifest(&ch.id).unwrap();
         let events = svc.load_events(&ch.id).unwrap();
 
-        let s = summary_of(&manifest, &events, 7);
+        let s = summary_of(&manifest, &events, 7, &Default::default());
         assert_eq!(s.id, ch.id);
         assert_eq!(s.ordinal, 7, "ordinal is passed through, not recomputed");
         assert_eq!(s.agents, vec!["qa".to_string()]);
@@ -212,7 +223,10 @@ mod tests {
                 serde_json::json!({ "text": "find the bug" }),
             ),
         ];
-        assert_eq!(summary_of(&manifest, &events, 1).preview, "find the bug");
+        assert_eq!(
+            summary_of(&manifest, &events, 1, &Default::default()).preview,
+            "find the bug"
+        );
     }
 
     #[test]

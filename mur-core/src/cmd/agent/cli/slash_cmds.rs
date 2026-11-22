@@ -27,33 +27,28 @@ const FIRST_ORDINAL: u64 = 1;
 /// Not `0`: that reads as a handle the user can type, and it is not one.
 const NO_ORDINAL: &str = "-";
 
-/// Characters of a channel id shown as its typeable handle. Must stay in step
-/// with the Hub's `SHORT_ID_LEN` (`mur-hub-gui/ui/src/work/format.ts`) — the
-/// two surfaces show the same channel and a user copies the handle between
-/// them.
-const SHORT_ID_LEN: usize = 8;
-
-/// The id prefix a human can read back and type at `/channels`. Only for a
-/// channel known to be a conversation (a hex id): a run's id is
-/// `fleet-<name>`, and eight characters of that are `fleet-de` for every
-/// fleet starting `de`. Anything that may be a run uses `id_handle`.
-pub(super) fn short_id(id: &str) -> &str {
-    &id[..id.len().min(SHORT_ID_LEN)]
-}
-
 /// What a user types at `/channels` to name this channel: its ordinal, or
-/// the short id when it has no number yet.
+/// its id handle when it has no number yet.
 pub(super) fn channel_handle(s: &persist::SessionInfo) -> String {
-    handle_of(s.ordinal, &s.id)
+    handle_of(s.ordinal, &s.handle)
 }
 
 /// `channel_handle` from the raw parts, for callers holding a `ChannelMeta`.
-pub(super) fn handle_of(ordinal: u64, id: &str) -> String {
+/// `handle` is the id handle (`persist::typeable`), not the id.
+pub(super) fn handle_of(ordinal: u64, handle: &str) -> String {
     if ordinal >= FIRST_ORDINAL {
         ordinal.to_string()
     } else {
-        short_id(id).to_string()
+        handle.to_string()
     }
+}
+
+/// True when the typed id prefix `p` (lowercase) starts channel `id`, read
+/// either as it is stored or with its dashes removed — the form handles are
+/// prefixes of, so a handle longer than eight characters still matches.
+fn id_starts_with(id: &str, p: &str) -> bool {
+    id.to_ascii_lowercase().starts_with(p)
+        || mur_channel::handle::handle_key(id).is_some_and(|k| k.starts_with(p))
 }
 
 /// One row of the `/channels` listing.
@@ -65,10 +60,7 @@ fn channel_line(s: &persist::SessionInfo) -> String {
     };
     format!(
         "  {} · {} · {} turns · {}\n",
-        n,
-        short_id(&s.id),
-        s.turns,
-        s.preview
+        n, s.handle, s.turns, s.preview
     )
 }
 
@@ -96,17 +88,13 @@ pub(super) fn resolve<'a>(
             if let (Some(only), None) = (whole.next(), whole.next()) {
                 return Ok(only);
             }
-            let hits: Vec<&persist::SessionInfo> = recent
-                .iter()
-                .filter(|s| s.id.to_ascii_lowercase().starts_with(p))
-                .collect();
+            let hits: Vec<&persist::SessionInfo> =
+                recent.iter().filter(|s| id_starts_with(&s.id, p)).collect();
             match hits.len() {
                 0 => Err(ResolveErr::NotFound),
                 1 => Ok(hits[0]),
                 _ => Err(ResolveErr::Ambiguous(
-                    hits.iter()
-                        .map(|s| channel_listing::id_handle(&s.id))
-                        .collect(),
+                    hits.iter().map(|s| s.handle.clone()).collect(),
                 )),
             }
         }
@@ -161,9 +149,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                 for s in list {
                     out.push_str(&format!(
                         "  {} · {} turns · {}\n",
-                        short_id(&s.id),
-                        s.turns,
-                        s.preview
+                        s.handle, s.turns, s.preview
                     ));
                 }
                 app.push_system(out.trim_end().to_string());
@@ -203,11 +189,10 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                         };
                         match resolve(&recent, &t) {
                             Ok(s) => {
-                                let id = s.id.clone();
-                                match app.start_follow(&id, StdInstant::now()) {
+                                let (id, handle) = (s.id.clone(), s.handle.clone());
+                                match app.start_follow(&id, &handle, StdInstant::now()) {
                                     Ok(()) => app.push_system(format!(
-                                        "following {} — new events appear here; /channels --stop to stop",
-                                        id_handle(&id)
+                                        "following {handle} — new events appear here; /channels --stop to stop"
                                     )),
                                     Err(e) => app.push_system(format!("could not follow: {e:#}")),
                                 }
@@ -238,12 +223,12 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                         };
                     match resolve(&recent, &t) {
                         Ok(s) => {
-                            let id = s.id.clone();
+                            let (id, handle) = (s.id.clone(), s.handle.clone());
                             stop_shell(app, false);
                             match app.switch_channel(&id) {
                                 Ok(()) => app.push_system(format!(
                                     "switched to channel {} ({} turns)",
-                                    short_id(&id),
+                                    handle,
                                     app.messages
                                         .iter()
                                         .filter(|m| matches!(m.role, Role::User | Role::Agent))
@@ -710,13 +695,16 @@ pub(super) async fn resolve_memory_confirm(app: &mut App, line: &str) {
 /// The `/channels` listing and the refusal for a run. New code kept out of
 /// this file for the 800-line rule.
 mod channel_listing;
-pub(in crate::cmd::agent::cli) use channel_listing::{follow_only_msg, id_handle, listing};
+pub(in crate::cmd::agent::cli) use channel_listing::{follow_only_msg, listing};
 
 #[cfg(test)]
 mod resolve_tests;
 
 #[cfg(test)]
 mod run_listing_tests;
+
+#[cfg(test)]
+mod handle_tests;
 
 /// The lookup window is wider than the listing window. A number is promised to
 /// stay typeable "across sessions"; it must not quietly stop working because

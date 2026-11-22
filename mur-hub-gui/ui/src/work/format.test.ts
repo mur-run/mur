@@ -80,6 +80,11 @@ describe("channel handles", () => {
     expect(shortId(UUID)).toHaveLength(SHORT_ID_LEN);
   });
 
+  it("shows the backend's handle when it had to be longer than eight", () => {
+    expect(shortId(UUID, "019ed0af5")).toBe("019ed0af5");
+    expect(shortId(UUID, "")).toBe("019ed0af");
+  });
+
   it("labels an ordinal with a hash", () => {
     expect(ordinalLabel(2)).toBe("#2");
   });

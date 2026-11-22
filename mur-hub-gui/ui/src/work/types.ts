@@ -25,6 +25,9 @@ export interface ChannelSummary {
   preview: string;
   /** Stable per-machine display number (`#2`). Local view state, never synced. */
   ordinal: number;
+  /** murmur's `/channels` id handle: the shortest id prefix no other local
+   *  channel shares (#2538). Empty for a run. */
+  handle: string;
 }
 
 export interface ChannelEvent {
