@@ -1,0 +1,62 @@
+name: CI edit-run refresh
+
+# A `CI (title/body edit)` run (see ci.yml) mirrors the PR's real CI run once
+# and then stops. If that real run failed and is later re-run to success, the
+# edit run's red `CI pass` stays on the PR, because nothing triggers the edit
+# run again (#2539). This workflow re-runs the failed edit runs for the same
+# commit whenever a real CI run attempt succeeds.
+#
+# It never sets a result itself. The re-run edit run goes through the same
+# `Mirror the PR's real CI run` step and reads the real run's state again, so
+# fail-closed behavior is unchanged.
+#
+# Why `workflow_run` and not a step in ci.yml's `CI pass`: re-running a run
+# needs `actions: write`, and a fork PR's pull_request token is read-only.
+# `workflow_run` runs in this repository's context. It checks out no PR code,
+# so the write token never runs untrusted code.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  actions: write # re-run the stale edit run's failed jobs
+
+jobs:
+  refresh:
+    name: Re-run stale edit runs
+    # Only a successful real pull_request run can clear a stale edit run. The
+    # edit run's own completion also fires this event and is filtered out by
+    # its run name, so a re-run never triggers another re-run.
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.display_title != 'CI (title/body edit)'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-run failed edit runs for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REAL_RUN_ID: ${{ github.event.workflow_run.id }}
+          # Keep in sync with ci.yml `run-name` and its EDIT_RUN_NAME.
+          EDIT_RUN_NAME: 'CI (title/body edit)'
+        run: |
+          set -euo pipefail
+          echo "real run $REAL_RUN_ID succeeded for $HEAD_SHA"
+          ids=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" \
+            | jq -r --arg name "$EDIT_RUN_NAME" \
+                '.workflow_runs[]
+                 | select(.display_title == $name and .status == "completed"
+                          and .conclusion == "failure")
+                 | .id')
+          if [ -z "$ids" ]; then
+            echo "No stale edit run for $HEAD_SHA."
+            exit 0
+          fi
+          for id in $ids; do
+            echo "re-run failed jobs of edit run $id"
+            gh api -X POST "repos/$REPO/actions/runs/$id/rerun-failed-jobs"
+          done
