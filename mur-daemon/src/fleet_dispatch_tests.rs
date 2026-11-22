@@ -72,6 +72,10 @@ fn drop_request(home: &Path, req: &FleetDispatchRequest) -> PathBuf {
 
 /// `None` when this sandbox refuses to exec under $TMPDIR (unrelated to the
 /// behaviour under test), so the caller skips instead of failing.
+///
+/// `grep -c` exits 1 when it counts zero lines. Without the `|| true` the
+/// script fails exactly when the handoff variable is absent, which is the
+/// probe below and every launch these tests expect, so each caller skipped.
 #[cfg(unix)]
 fn fake_mur(home: &Path) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
@@ -80,7 +84,7 @@ fn fake_mur(home: &Path) -> Option<PathBuf> {
     std::fs::write(
         &fake,
         format!(
-            "#!/bin/sh\n{{ echo \"$@\"; env | grep -c '^{}=' ; }} > {}.tmp && mv {}.tmp {}\n",
+            "#!/bin/sh\n{{ echo \"$@\"; env | grep -c '^{}=' || true; }} > {}.tmp && mv {}.tmp {}\n",
             mur_common::identity::SIGNING_HANDOFF_ENV,
             out.display(),
             out.display(),
@@ -161,7 +165,9 @@ fn verified_request_launches_without_a_handoff_and_records_provenance() {
     assert_eq!(rec.dispatched_by, "mur");
     assert_eq!(rec.router.as_deref(), Some("orchestrator"));
     assert!(
-        f.home().join("runs/fleet-council-1/fleet_run.log").exists(),
+        mur_common::paths::fleet_run_dir(f.home(), "council", "fleet-council-1")
+            .join(RUN_LOG_FILE)
+            .exists(),
         "the log path the handle promised exists"
     );
 }
