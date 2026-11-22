@@ -56,6 +56,32 @@ fn a_shared_id_prefix_is_ambiguous_and_names_the_candidates() {
     }
 }
 
+/// A fleet's channel id is `fleet-<name>`, and the listing prints it whole.
+/// Typed whole it names that fleet, even when another fleet's name starts
+/// with it: there is no longer prefix to give for an id typed in full.
+#[test]
+fn a_whole_id_wins_over_a_longer_id_it_is_a_prefix_of() {
+    let r = vec![si("fleet-devteam", 4), si("fleet-dev", 3)];
+    assert_eq!(
+        resolve(&r, &ChannelRef::IdPrefix("fleet-dev".into()))
+            .expect("the whole id resolves")
+            .ordinal,
+        3
+    );
+    // A real prefix of both is still ambiguous, and the candidates are named
+    // by something the user can type: eight characters of either is
+    // `fleet-de`, which tells them apart no better than the prefix did.
+    match resolve(&r, &ChannelRef::IdPrefix("fleet-d".into())) {
+        Err(ResolveErr::Ambiguous(ids)) => {
+            assert_eq!(
+                ids,
+                vec!["#fleet-devteam".to_string(), "#fleet-dev".to_string()]
+            );
+        }
+        other => panic!("expected ambiguous, got {other:?}"),
+    }
+}
+
 #[test]
 fn a_too_short_id_prefix_is_refused_before_matching() {
     assert!(matches!(

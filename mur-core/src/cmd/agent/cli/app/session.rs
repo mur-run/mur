@@ -124,12 +124,21 @@ impl App {
                 now,
             ));
         }
-        self.push_system(if can_follow {
-            format!(
-                "⛴ fleet {fleet} started — following {channel_id} (milestones land here; /channels N --follow for the raw log)"
-            )
-        } else {
-            format!("⛴ fleet {fleet} started")
+        // `--follow` only resolves a run this pane's agent takes part in, so
+        // the raw-log command is offered only where it would be accepted (a
+        // channel the run has not created yet counts as not accepted). It
+        // names the channel by id: the line has it, and has no number to give.
+        let raw_log = mur_channel::ChannelStore::new(&self.home)
+            .load_manifest(&channel_id)
+            .is_ok_and(|ch| mur_channel::purpose::has_agent(&ch, &self.agent));
+        self.push_system(match (can_follow, raw_log) {
+            (true, true) => format!(
+                "⛴ fleet {fleet} started — following {channel_id} (milestones land here; /channels #{channel_id} --follow for the raw log)"
+            ),
+            (true, false) => {
+                format!("⛴ fleet {fleet} started — following {channel_id} (milestones land here)")
+            }
+            (false, _) => format!("⛴ fleet {fleet} started"),
         });
     }
 

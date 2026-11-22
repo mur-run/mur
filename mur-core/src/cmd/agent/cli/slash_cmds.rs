@@ -7,7 +7,8 @@ use super::*;
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum ResolveErr {
     NotFound,
-    /// An id prefix matched more than one channel; carries the short ids.
+    /// An id prefix matched more than one channel; carries a typeable handle
+    /// for each.
     Ambiguous(Vec<String>),
     /// An id prefix so short it would match almost anything.
     TooShort,
@@ -85,6 +86,13 @@ pub(super) fn resolve<'a>(
             if p.len() < MIN_ID_PREFIX {
                 return Err(ResolveErr::TooShort);
             }
+            // An id typed whole names that channel. Without this `fleet-dev`
+            // is ambiguous for ever once `fleet-devteam` exists: there is no
+            // longer prefix to give.
+            let mut whole = recent.iter().filter(|s| s.id.eq_ignore_ascii_case(p));
+            if let (Some(only), None) = (whole.next(), whole.next()) {
+                return Ok(only);
+            }
             let hits: Vec<&persist::SessionInfo> = recent
                 .iter()
                 .filter(|s| s.id.to_ascii_lowercase().starts_with(p))
@@ -93,7 +101,9 @@ pub(super) fn resolve<'a>(
                 0 => Err(ResolveErr::NotFound),
                 1 => Ok(hits[0]),
                 _ => Err(ResolveErr::Ambiguous(
-                    hits.iter().map(|s| short_id(&s.id).to_string()).collect(),
+                    hits.iter()
+                        .map(|s| channel_listing::id_handle(&s.id))
+                        .collect(),
                 )),
             }
         }
@@ -239,27 +249,28 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                                 Err(e) => app.push_system(format!("could not switch channel: {e}")),
                             }
                         }
-                        Err(e) => app.push_system(resolve_msg(&t, &e)),
+                        Err(e) => {
+                            // Only "nothing switchable has that name" can mean
+                            // "it is a run". A too-short or ambiguous prefix
+                            // keeps its own message.
+                            let run = matches!(e, ResolveErr::NotFound)
+                                .then(|| follow_only_msg(&app.home, &app.agent, &t))
+                                .flatten();
+                            app.push_system(run.unwrap_or_else(|| resolve_msg(&t, &e)));
+                        }
                     }
                 }
                 None => {
-                    let recent = match persist::list_recent(&app.home, &app.agent, RECENT_LIMIT) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            app.push_system(format!("could not list channels: {e}"));
-                            return;
-                        }
-                    };
-                    if recent.is_empty() {
-                        app.push_system("no channels yet");
-                    } else {
-                        let mut out = String::from(
-                            "channels (/channels N or id-prefix to switch · add --follow to tail):\n",
-                        );
-                        for s in recent.iter() {
-                            out.push_str(&channel_line(s));
-                        }
-                        app.push_system(out.trim_end().to_string());
+                    let listed = persist::list_recent(&app.home, &app.agent, RECENT_LIMIT)
+                        .and_then(|c| {
+                            Ok((c, persist::list_runs(&app.home, &app.agent, RECENT_LIMIT)?))
+                        });
+                    match listed {
+                        Ok((conversations, runs)) => match listing(&conversations, &runs) {
+                            Some(out) => app.push_system(out),
+                            None => app.push_system("no channels yet"),
+                        },
+                        Err(e) => app.push_system(format!("could not list channels: {e}")),
                     }
                 }
             }
@@ -693,8 +704,16 @@ pub(super) async fn resolve_memory_confirm(app: &mut App, line: &str) {
         app.push_system(format!("cancelled — '{}' is unchanged.", pending.name));
     }
 }
+/// The `/channels` listing and the refusal for a run. New code kept out of
+/// this file for the 800-line rule.
+mod channel_listing;
+pub(in crate::cmd::agent::cli) use channel_listing::{follow_only_msg, listing};
+
 #[cfg(test)]
 mod resolve_tests;
+
+#[cfg(test)]
+mod run_listing_tests;
 
 /// The lookup window is wider than the listing window. A number is promised to
 /// stay typeable "across sessions"; it must not quietly stop working because
