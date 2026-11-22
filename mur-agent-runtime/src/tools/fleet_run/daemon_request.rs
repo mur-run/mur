@@ -1,11 +1,12 @@
-//! Cross-router dispatch (#2116): the sealed half of the daemon handoff.
+//! Daemon dispatch (#2116, #2081): the sealed half of the daemon handoff.
 //!
-//! When the fleet's `router` is another agent, this process cannot give the
-//! child a key that signs as that router — it may not read `keys/<router>/`,
-//! and the stdin handoff only ever carries its own key. Spawning anyway is what
-//! produced whole runs of UNSIGNED channel events. So it writes one signed
-//! request file and lets `mur-daemon` (outside every sandbox) launch the run;
-//! the daemon's child reads the router's key from disk like a terminal run.
+//! A child spawned here holds one key, this agent's own: it may not read
+//! `keys/`, and the stdin handoff carries nothing else. A run needs two
+//! signers, the fleet's `router` for agent events and the control plane for
+//! `System` ones. When this agent is not both (`runs_locally`), spawning
+//! anyway is what produced runs of UNSIGNED channel events. So it writes one
+//! signed request file and lets `mur-daemon` (outside every sandbox) launch
+//! the run; the daemon's child reads keys from disk like a terminal run.
 
 use std::path::Path;
 
@@ -13,6 +14,7 @@ use mur_track::fleet_dispatch_request::{
     FLEET_DISPATCH_REQUEST_DIR, FLEET_RUN_LOG_FILE, FleetDispatch, FleetDispatchRequest,
 };
 
+use super::messages::needs_the_daemon_because;
 use super::{FleetRunTool, ToolError, ToolOutput, dispatched_reply};
 
 pub(super) fn dispatch_via_daemon(
@@ -28,20 +30,19 @@ pub(super) fn dispatch_via_daemon(
 
     // Without a key there is nothing the daemon could verify, and an
     // unverifiable request is one it must reject. Say so now, not later.
+    let why = needs_the_daemon_because(&fleet, &tool.agent_name, router);
     let Some(identity) = tool.signing.as_ref() else {
         return Err(ToolError::Execution(format!(
-            "fleet '{fleet}' is routed by '{router}', so it has to be launched by the MUR \
-             daemon, and this agent has no signing key to sign that request with. Run it \
-             from a terminal instead: mur fleet run {fleet}"
+            "{why}, so it has to be launched by the MUR daemon, and this agent has no signing \
+             key to sign that request with. Run it from a terminal instead: mur fleet run {fleet}"
         )));
     };
     // A request nobody sweeps is a run that silently never starts, while the
     // caller holds a handle that claims "dispatched".
     if !daemon_alive(&tool.mur_home, cfg.heartbeat_stale_secs, chrono::Utc::now()) {
         return Err(ToolError::Execution(format!(
-            "fleet '{fleet}' is routed by '{router}', so the MUR daemon has to launch it (it \
-             signs as '{router}'; this agent cannot), and the daemon is not running. Start it \
-             with `mur daemon start`, then dispatch again."
+            "{why}, so the MUR daemon has to launch it, and the daemon is not running. Start \
+             it with `mur daemon start`, then dispatch again."
         )));
     }
 

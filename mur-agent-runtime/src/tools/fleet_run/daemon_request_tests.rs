@@ -200,6 +200,36 @@ async fn self_routed_fleet_of_another_agent_goes_to_the_daemon() {
     assert_eq!(req.dispatch.run_id, v["run_id"].as_str().unwrap());
 }
 
+/// A self-routed run is sent to the daemon for the control plane's key, not
+/// the router's: the agent IS the router. A refusal that says "it signs as
+/// '<router>'; this agent cannot" would tell the user something false.
+#[tokio::test]
+async fn a_self_routed_refusal_names_the_control_plane_not_the_router() {
+    let cannot_sign_as_itself = format!("signs as '{OTHER_AGENT}'; this agent cannot");
+    for (signing, daemon_up, needle) in [
+        (true, false, "mur daemon start"),
+        (false, true, "signing key"),
+    ] {
+        let tmp = home_for(OTHER_AGENT, Some(OTHER_AGENT));
+        let home = tmp.path();
+        let age = if daemon_up { 0 } else { 1 };
+        beat(home, chrono::Utc::now() - chrono::Duration::hours(age));
+        let id = signing.then(mur_common::identity::AgentIdentity::generate);
+        let err = tool_as(OTHER_AGENT, home, id)
+            .execute(serde_json::json!({"fleet": "council"}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(needle), "{err}");
+        assert!(!err.contains(&cannot_sign_as_itself), "{err}");
+        assert!(
+            err.contains(&format!("control plane ('{CONTROL_PLANE}')")),
+            "the refusal must say whose key the run needs: {err}"
+        );
+        assert!(pending(home).is_empty());
+    }
+}
+
 #[test]
 fn daemon_alive_reads_the_heartbeat_not_the_pid() {
     let tmp = tempfile::tempdir().unwrap();

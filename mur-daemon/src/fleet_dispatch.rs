@@ -1,12 +1,14 @@
 //! Sweep `~/.mur/inbox/fleet-dispatch-requests/` (#2116): launch fleets that
 //! a sealed agent asked for but could not sign.
 //!
-//! An agent dispatching a fleet routed by ANOTHER agent cannot give its child
-//! the router's key (the seal denies `keys/`, and the stdin handoff only ever
-//! carries the agent's own key), so it drops a signed request instead. This
-//! process runs outside every sandbox: its child reads `keys/<router>/` from
-//! disk exactly like a terminal `mur fleet run`, so the run's channel events
-//! are signed by the router and no agent ever holds another agent's key.
+//! A sealed agent's child holds only that agent's key (the seal denies
+//! `keys/`, and the stdin handoff carries nothing else). A run is signed by
+//! the fleet's router and, for its `System` events, by the control plane; an
+//! agent that is not both (`fleet_run::runs_locally`) drops a signed request
+//! instead (#2116 for the router, #2081 for the control plane). This process
+//! runs outside every sandbox: its child reads `keys/` from disk exactly like
+//! a terminal `mur fleet run`, so every event is signed by the identity it
+//! names and no agent ever holds another agent's key.
 //!
 //! The request file is attacker-writable, so nothing in it is trusted until
 //! the signature verifies against the requester's on-disk pubkey, and then
