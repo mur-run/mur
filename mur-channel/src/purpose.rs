@@ -47,6 +47,13 @@ pub fn is_conversation_with(ch: &Channel, agent: &str) -> bool {
     effective_purpose(ch) == ChannelPurpose::Conversation && has_agent(ch, agent)
 }
 
+/// Whether `ch` is a fleet or workflow run `agent` takes part in: a channel
+/// it may watch and must never be attached to. The complement of
+/// [`is_conversation_with`] among the channels `agent` is in.
+pub fn is_run_with(ch: &Channel, agent: &str) -> bool {
+    effective_purpose(ch) != ChannelPurpose::Conversation && has_agent(ch, agent)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,6 +100,37 @@ mod tests {
     fn everything_else_infers_conversation() {
         let ch = legacy("019ed0af-5e38-7912-b554-dc335a8fc2db", "chat with mur");
         assert_eq!(effective_purpose(&ch), ChannelPurpose::Conversation);
+    }
+
+    /// Every channel an agent is in is exactly one of the two, so a listing
+    /// built from both predicates neither drops a channel nor shows it twice.
+    #[test]
+    fn a_channel_with_the_agent_is_a_conversation_or_a_run_never_both() {
+        use mur_common::channel::{Participant, ParticipantRole};
+        let with_agent = |mut ch: Channel| {
+            ch.participants.push(Participant {
+                actor: ChannelActor::Agent { id: "qa".into() },
+                role: ParticipantRole::Delegate,
+                joined_at: Utc::now(),
+            });
+            ch
+        };
+        for ch in [
+            with_agent(legacy("fleet-projectx", "fleet: projectx")),
+            with_agent(legacy("019ed0af", "workflow: release")),
+            with_agent(legacy("019ed0af", "chat with qa")),
+        ] {
+            assert_ne!(
+                is_run_with(&ch, "qa"),
+                is_conversation_with(&ch, "qa"),
+                "{}",
+                ch.id
+            );
+        }
+        // Not a participant: neither, whatever the purpose.
+        let outsider = legacy("fleet-projectx", "fleet: projectx");
+        assert!(!is_run_with(&outsider, "qa"));
+        assert!(!is_conversation_with(&outsider, "qa"));
     }
 
     #[test]

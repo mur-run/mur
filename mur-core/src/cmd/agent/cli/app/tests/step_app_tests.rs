@@ -139,6 +139,52 @@ fn an_auto_armed_fleet_rail_lands_in_the_transcript_and_retires() {
     assert!(last.lines().count() > 1, "rail view not committed: {last}");
 }
 
+/// The start line tells the user how to get the raw log. It has the fleet's
+/// channel id in hand, so it names it: `/channels N --follow` asked for a
+/// number the line did not give.
+#[test]
+fn the_fleet_start_line_names_the_channel_to_follow() {
+    let home = tempfile::TempDir::new().unwrap();
+    let mut a = persisting_app(&home);
+    mur_channel::ChannelService::open(&a.home)
+        .unwrap()
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["a".to_string()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
+        .unwrap();
+    a.arm_auto_fleet("s1", "dev", std::time::Instant::now());
+    let last = a.messages.last().expect("start message").text.clone();
+    assert!(
+        last.contains("/channels #fleet-dev --follow"),
+        "got: {last}"
+    );
+}
+
+/// `--follow` only resolves a run this pane's agent takes part in. An agent
+/// that delegates to a fleet it is not in still gets the milestones, but the
+/// raw-log command would be refused, so the line does not offer it.
+#[test]
+fn the_fleet_start_line_offers_no_command_that_would_be_refused() {
+    let home = tempfile::TempDir::new().unwrap();
+    let mut a = persisting_app(&home);
+    mur_channel::ChannelService::open(&a.home)
+        .unwrap()
+        .create_for_fleet(
+            "dev",
+            "mur",
+            &["someone-else".to_string()],
+            mur_channel::service::ChannelOwner::Legacy,
+        )
+        .unwrap();
+    a.arm_auto_fleet("s1", "dev", std::time::Instant::now());
+    let last = a.messages.last().expect("start message").text.clone();
+    assert!(last.contains("following fleet-dev"), "got: {last}");
+    assert!(!last.contains("--follow"), "got: {last}");
+}
+
 /// A run that hit a cap is not "finished". The headline takes the rail's
 /// stop word so the transcript's first line already says why.
 #[test]

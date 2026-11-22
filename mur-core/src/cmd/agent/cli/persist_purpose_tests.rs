@@ -104,3 +104,97 @@ fn a_fleet_run_is_followable_by_the_id_the_user_can_guess() {
     let switchable = list_recent(tmp.path(), AGENT, 10).unwrap();
     assert!(resolve(&switchable, &target).is_err());
 }
+
+/// The follow-only half of the `/channels` listing: runs, and nothing a typed
+/// line could be sent into. A run has no human line, so its title is what the
+/// row shows.
+#[test]
+fn the_run_listing_holds_only_runs() {
+    let tmp = TempDir::new().unwrap();
+    let (_, fleet) = conversation_then_fleet_run(tmp.path());
+    let runs = list_runs(tmp.path(), AGENT, 10).unwrap();
+    assert_eq!(
+        runs.len(),
+        1,
+        "the conversation must not be listed as a run"
+    );
+    assert_eq!(runs[0].id, fleet);
+    assert_eq!(runs[0].preview, format!("fleet: {FLEET}"));
+}
+
+/// A human line inside a run is not what the run is. Channels attached to by
+/// mistake before #2515 carry one, and it must not become the row's label.
+#[test]
+fn a_run_is_labelled_by_its_title_even_with_a_human_line_in_it() {
+    let tmp = TempDir::new().unwrap();
+    let (_, fleet) = conversation_then_fleet_run(tmp.path());
+    let mut stray = Session::open_existing(tmp.path(), AGENT, &fleet).unwrap();
+    stray.append("user", "HI", None, &[]).unwrap();
+
+    let runs = list_runs(tmp.path(), AGENT, 10).unwrap();
+    assert_eq!(runs[0].preview, format!("fleet: {FLEET}"));
+}
+
+/// `/channels N --follow` takes a run's number, so the listing has to show
+/// it: a handle the user is told to type and cannot read anywhere is not one.
+/// Round trip: the number printed on the run's row follows that run.
+#[test]
+fn the_number_the_listing_prints_for_a_run_follows_that_run() {
+    use crate::cmd::agent::cli::app::{SlashCmd, parse_slash};
+    use crate::cmd::agent::cli::slash_cmds::{listing, resolve};
+    let tmp = TempDir::new().unwrap();
+    let (_, fleet) = conversation_then_fleet_run(tmp.path());
+    let conversations = list_recent(tmp.path(), AGENT, 10).unwrap();
+    let runs = list_runs(tmp.path(), AGENT, 10).unwrap();
+
+    let text = listing(&conversations, &runs).expect("a listing");
+    let (above, below) = text
+        .split_once("runs (")
+        .unwrap_or_else(|| panic!("no run section: {text}"));
+    assert!(
+        !above.contains(&fleet),
+        "a run must not sit among the switchable rows: {text}"
+    );
+    let row = below
+        .lines()
+        .find(|l| l.contains(&fleet))
+        .unwrap_or_else(|| panic!("the run's whole id is its other handle: {text}"));
+    let number = row.split_whitespace().next().expect("a number column");
+
+    let typed = format!("/channels {number} --follow");
+    let Some(SlashCmd::Channels {
+        target: Some(target),
+        follow: true,
+    }) = parse_slash(&typed)
+    else {
+        panic!("{typed} did not parse as a follow");
+    };
+    let followable = list_followable(tmp.path(), AGENT, 10).unwrap();
+    assert_eq!(resolve(&followable, &target).expect("resolves").id, fleet);
+}
+
+/// The run's number is on screen now, so `/channels N` without `--follow`
+/// will be typed. "no channel N — /channels to list" would contradict the
+/// listing it points at; the refusal names the command that does work.
+#[test]
+fn switching_to_a_run_is_refused_with_the_follow_command() {
+    use crate::cmd::agent::cli::app::ChannelRef;
+    use crate::cmd::agent::cli::slash_cmds::follow_only_msg;
+    let tmp = TempDir::new().unwrap();
+    let (conversation, fleet) = conversation_then_fleet_run(tmp.path());
+    let all = list_followable(tmp.path(), AGENT, 10).unwrap();
+    let number_of = |id: &str| all.iter().find(|s| s.id == id).unwrap().ordinal;
+
+    let run = ChannelRef::Ordinal(number_of(&fleet));
+    let msg = follow_only_msg(tmp.path(), AGENT, &run).expect("a run gets its own refusal");
+    assert!(
+        msg.contains(&format!("/channels {} --follow", number_of(&fleet))),
+        "got: {msg}"
+    );
+
+    // Only a run: a conversation is switchable, and an unknown number is
+    // simply unknown.
+    let chat = ChannelRef::Ordinal(number_of(&conversation));
+    assert!(follow_only_msg(tmp.path(), AGENT, &chat).is_none());
+    assert!(follow_only_msg(tmp.path(), AGENT, &ChannelRef::Ordinal(999)).is_none());
+}

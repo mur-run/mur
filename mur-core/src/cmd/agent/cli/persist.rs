@@ -281,12 +281,16 @@ pub const REFUSAL_ROLE: &str = "system";
 /// How many of the newest index rows a listing scans for the agent's own.
 const CHANNEL_SCAN_LIMIT: usize = 1000;
 
+/// Characters of a listing row's preview.
+const PREVIEW_CHARS: usize = 60;
+
 /// Newest conversations with `agent`, newest-first: what `--resume`,
 /// `/sessions` and `/channels N` may attach this pane to.
 ///
 /// Conversations only. A fleet or workflow run the agent takes part in is
 /// usually the newest channel it is in, and attaching to one sends the next
-/// typed line into the run's thread (#2515).
+/// typed line into the run's thread (#2515). Runs are listed by
+/// [`list_runs`], under their own heading.
 pub fn list_recent(home: &Path, agent: &str, limit: usize) -> Result<Vec<SessionInfo>> {
     list_where(
         home,
@@ -303,6 +307,14 @@ pub fn list_followable(home: &Path, agent: &str, limit: usize) -> Result<Vec<Ses
     list_where(home, agent, limit, mur_channel::purpose::has_agent)
 }
 
+/// Newest fleet and workflow runs `agent` takes part in, newest-first: the
+/// follow-only rows of the `/channels` listing. Every row here also resolves
+/// through [`list_followable`]; none is in [`list_recent`]. Never hand a row
+/// from here to anything that writes.
+pub fn list_runs(home: &Path, agent: &str, limit: usize) -> Result<Vec<SessionInfo>> {
+    list_where(home, agent, limit, mur_channel::purpose::is_run_with)
+}
+
 fn list_where(
     home: &Path,
     agent: &str,
@@ -312,28 +324,36 @@ fn list_where(
     let svc = ChannelService::open(home)?;
     let mut out = Vec::new();
     for row in svc.list(CHANNEL_SCAN_LIMIT)? {
-        let involved = svc
+        let Some(ch) = svc
             .store()
             .load_manifest(&row.id)
-            .map(|ch| keep(&ch, agent))
-            .unwrap_or(false);
-        if !involved {
+            .ok()
+            .filter(|ch| keep(ch, agent))
+        else {
             continue;
-        }
+        };
         let evs = svc.load_events(&row.id)?;
         // Skip empty channels (e.g. legacy stubs from before lazy creation) so
         // `--resume`/`/sessions` never surface a blank conversation.
         if evs.is_empty() {
             continue;
         }
-        let preview = evs
-            .iter()
-            .find(|e| e.is_human_message())
-            .and_then(|e| e.payload.get("text").and_then(|v| v.as_str()))
-            .unwrap_or("")
-            .chars()
-            .take(60)
-            .collect();
+        // A run is labelled by its title (`fleet: <name>`, `workflow:
+        // <skill>`), which is what tells two runs apart. Not by a human line:
+        // a run rarely has one, and where it does (a pane attached by mistake
+        // before #2515) the line is not what the run is. A conversation keeps
+        // its first human line; its title is not something the user wrote.
+        let preview: String = if mur_channel::purpose::is_run_with(&ch, agent) {
+            ch.title.chars().take(PREVIEW_CHARS).collect()
+        } else {
+            evs.iter()
+                .find(|e| e.is_human_message())
+                .and_then(|e| e.payload.get("text").and_then(|v| v.as_str()))
+                .unwrap_or("")
+                .chars()
+                .take(PREVIEW_CHARS)
+                .collect()
+        };
         out.push(SessionInfo {
             id: row.id,
             preview,
