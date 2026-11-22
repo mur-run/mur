@@ -11,7 +11,11 @@ use std::path::Path;
 /// short prefix is typeable as it stands. A fleet's id is `fleet-<name>`: it
 /// needs the `#` (a bare word that is not hex is refused), and it is shown
 /// whole, because eight characters of it name no fleet.
-pub(super) fn id_handle(id: &str) -> String {
+///
+/// Every line that names a channel which may be a run goes through here —
+/// the listing, the ambiguity message, and the follow label — so what is
+/// printed is always something the user can type back.
+pub(in crate::cmd::agent::cli) fn id_handle(id: &str) -> String {
     let short = short_id(id);
     if short.chars().all(|c| c.is_ascii_hexdigit()) {
         short.to_string()

@@ -33,7 +33,10 @@ const NO_ORDINAL: &str = "-";
 /// them.
 const SHORT_ID_LEN: usize = 8;
 
-/// The id prefix a human can read back and type at `/channels`.
+/// The id prefix a human can read back and type at `/channels`. Only for a
+/// channel known to be a conversation (a hex id): a run's id is
+/// `fleet-<name>`, and eight characters of that are `fleet-de` for every
+/// fleet starting `de`. Anything that may be a run uses `id_handle`.
 pub(super) fn short_id(id: &str) -> &str {
     &id[..id.len().min(SHORT_ID_LEN)]
 }
@@ -204,7 +207,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                                 match app.start_follow(&id, StdInstant::now()) {
                                     Ok(()) => app.push_system(format!(
                                         "following {} — new events appear here; /channels --stop to stop",
-                                        short_id(&id)
+                                        id_handle(&id)
                                     )),
                                     Err(e) => app.push_system(format!("could not follow: {e:#}")),
                                 }
@@ -707,7 +710,7 @@ pub(super) async fn resolve_memory_confirm(app: &mut App, line: &str) {
 /// The `/channels` listing and the refusal for a run. New code kept out of
 /// this file for the 800-line rule.
 mod channel_listing;
-pub(in crate::cmd::agent::cli) use channel_listing::{follow_only_msg, listing};
+pub(in crate::cmd::agent::cli) use channel_listing::{follow_only_msg, id_handle, listing};
 
 #[cfg(test)]
 mod resolve_tests;

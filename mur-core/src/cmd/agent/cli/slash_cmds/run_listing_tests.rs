@@ -1,7 +1,8 @@
 //! `/channels` typed in the composer, on a home where the agent has one
 //! conversation and takes part in one fleet run: the listing shows the run's
 //! number, that number follows it, and the same number without `--follow`
-//! says why it will not switch.
+//! says why it will not switch. Once it is followed, every line that names it
+//! names it by a handle that can be typed back.
 
 use crate::cmd::agent::cli::Role;
 use crate::cmd::agent::cli::app::App;
@@ -172,4 +173,139 @@ async fn a_too_short_prefix_is_not_reported_as_a_run() {
 
     assert!(text.contains("too short"), "{text}");
     assert!(!text.contains("--follow"), "{text}");
+}
+
+/// A second fleet whose id shares its first eight characters with
+/// `FLEET_CHANNEL` — the pair an eight-character label cannot tell apart.
+const SIBLING_FLEET: &str = "devteam";
+const SIBLING_CHANNEL: &str = "fleet-devteam";
+
+fn note_in(home: &Path, channel: &str, text: &str) {
+    let svc = mur_channel::ChannelService::open(home).unwrap();
+    crate::channel_writer::append_as_writer(
+        &svc,
+        home,
+        channel,
+        crate::channel_writer::Authorship::system(),
+        mur_common::channel::EventKind::Note,
+        serde_json::json!({ "text": text }),
+        None,
+    )
+    .unwrap();
+}
+
+/// A channel with no events is not listed, so the sibling gets one.
+fn add_sibling_fleet(home: &Path) {
+    mur_channel::ChannelService::open(home)
+        .unwrap()
+        .create_for_fleet(
+            SIBLING_FLEET,
+            crate::channel_writer::CONTROL_PLANE_AGENT,
+            &[AGENT.to_string()],
+            ChannelOwner::Legacy,
+        )
+        .unwrap();
+    note_in(home, SIBLING_CHANNEL, "iteration 1");
+}
+
+/// The word after "following " in a system line.
+fn label_after<'a>(text: &'a str, lead: &str) -> &'a str {
+    let rest = text
+        .split_once(lead)
+        .unwrap_or_else(|| panic!("no `{lead}` in: {text}"))
+        .1;
+    rest.split_whitespace().next().unwrap_or_default()
+}
+
+fn followed(app: &App) -> Option<&str> {
+    app.follow.as_ref().map(|f| f.channel_id.as_str())
+}
+
+/// The label is a handle, so it has to work as one: typed back at
+/// `/channels`, it follows the channel it was printed for. With two fleets
+/// starting `fleet-de`, eight characters of the id did not.
+#[tokio::test]
+async fn the_label_of_a_followed_run_types_back_to_that_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = pane_with_a_run(tmp.path());
+    add_sibling_fleet(tmp.path());
+
+    for channel in [FLEET_CHANNEL, SIBLING_CHANNEL] {
+        let text = type_line(&mut app, &format!("/channels #{channel} --follow")).await;
+        let label = label_after(&text, "following ").to_string();
+        assert_eq!(label, format!("#{channel}"), "{text}");
+
+        let stopped = type_line(&mut app, "/channels --stop").await;
+        assert_eq!(label_after(&stopped, "stopped following "), label);
+        assert!(app.follow.is_none());
+
+        type_line(&mut app, &format!("/channels {label} --follow")).await;
+        assert_eq!(followed(&app), Some(channel), "typed back: {label}");
+        type_line(&mut app, "/channels --stop").await;
+    }
+}
+
+/// The same label heads every tailed line and the `--stop` row of the menu,
+/// so two followed fleets are told apart there too.
+#[tokio::test]
+async fn tailed_lines_and_the_stop_row_carry_the_whole_run_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = pane_with_a_run(tmp.path());
+    add_sibling_fleet(tmp.path());
+    type_line(&mut app, &format!("/channels #{SIBLING_CHANNEL} --follow")).await;
+
+    assert_eq!(
+        app.current_values().following.as_deref(),
+        Some(format!("#{SIBLING_CHANNEL}").as_str())
+    );
+
+    note_in(tmp.path(), SIBLING_CHANNEL, "iteration 2");
+    let before = app.messages.len();
+    app.poll_follow(std::time::Instant::now());
+    let tailed: Vec<&str> = app.messages[before..]
+        .iter()
+        .map(|m| m.text.as_str())
+        .collect();
+    assert_eq!(tailed.len(), 1, "{tailed:?}");
+    assert!(
+        tailed[0].starts_with(&format!("⟨#{SIBLING_CHANNEL}⟩ ")),
+        "{tailed:?}"
+    );
+    assert!(tailed[0].contains("iteration 2"), "{tailed:?}");
+}
+
+/// A conversation's id is a UUID: its label stays the eight-character prefix
+/// the listing and the Hub show for it.
+///
+/// Typing it back is not asserted here: the two conversations in this test
+/// are created milliseconds apart, and UUIDv7 ids minted within the same
+/// ~65 s share those eight characters. `resolve_tests` covers a prefix that
+/// is unique.
+#[tokio::test]
+async fn the_label_of_a_followed_conversation_is_still_its_short_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = pane_with_a_run(tmp.path());
+    let mut other = Session::create(tmp.path(), AGENT).unwrap();
+    other.append("user", "another thread", None, &[]).unwrap();
+    let other_id = persist::list_recent(tmp.path(), AGENT, 10)
+        .unwrap()
+        .into_iter()
+        .find(|s| s.preview.contains("another thread"))
+        .expect("the second conversation is listed")
+        .id;
+
+    // A whole UUID carries dashes, so it is an id only behind the `#`.
+    let text = type_line(&mut app, &format!("/channels #{other_id} --follow")).await;
+
+    assert_eq!(followed(&app), Some(other_id.as_str()), "{text}");
+    assert_eq!(
+        label_after(&text, "following "),
+        super::short_id(&other_id),
+        "{text}"
+    );
+    let stopped = type_line(&mut app, "/channels --stop").await;
+    assert_eq!(
+        label_after(&stopped, "stopped following "),
+        super::short_id(&other_id)
+    );
 }

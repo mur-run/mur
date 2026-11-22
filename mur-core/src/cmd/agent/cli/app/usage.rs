@@ -117,7 +117,7 @@ impl App {
                 .channel
                 .as_ref()
                 .map(|c| super::super::slash_cmds::handle_of(c.ordinal, &c.id)),
-            following: self.follow.as_ref().map(|f| f.tag().to_string()),
+            following: self.follow.as_ref().map(|f| f.tag()),
             open_findings: super::super::review::open_findings(self),
         }
     }
