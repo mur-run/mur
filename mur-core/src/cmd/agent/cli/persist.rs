@@ -161,9 +161,10 @@ impl Session {
         // actor's own, and the type makes it say so: it is a `System` note
         // under the session agent's key, which is what the conversation
         // watermark checks it against (`mur_channel::conversation::assess`,
-        // S1). The per-actor verifier holds a `System` actor to the control
-        // plane instead, so for an agent other than the control plane it
-        // reports this line as a bad signature (#2081 item 4 audit).
+        // S1). The per-actor verifier (`verify_event`) holds a `System` actor
+        // to the control plane instead, so for any other agent it rejects
+        // this line. `mur channel verify` reads the card under the signer's
+        // key and names the signer in its report (#2508, #2519).
         use crate::channel_writer::{Authorship, Signer};
         let author = match actor {
             ChannelActor::Human { .. } => None,
