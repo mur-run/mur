@@ -239,6 +239,22 @@ fn authorize_and_launch(
         "fleet '{}' is routed by the requester itself; dispatch it locally",
         d.fleet
     );
+    // The loop never writes in `cwd`; members do, each inside its own sandbox.
+    // A one-shot Tier 1 run is the exception: it runs `git status` and `git
+    // worktree add` in the repository `cwd` names, and both execute what that
+    // repository's config and hooks say. Spawned by the requester, that stayed
+    // inside the requester's sandbox. Here it would not, in a directory a
+    // sandboxed agent chose, so it stays a terminal-only run. (`--worktree`
+    // cannot ride in on the job text: `dispatch_argv` puts it after `--`.)
+    anyhow::ensure!(
+        !(mur_agent_runtime::tools::fleet_run::runs_once(d.goal.as_deref(), d.job.as_deref())
+            && fleet.parallel.is_some()
+            && mur_core::cmd::fleet::run::parallel_exec_enabled(false)),
+        "fleet '{}' would create per-track git worktrees itself, outside the sandbox of the \
+         agent that asked; run it from a terminal: mur fleet run {} \"<job>\" --worktree",
+        d.fleet,
+        d.fleet
+    );
     anyhow::ensure!(
         !launched.contains(&d.fleet),
         "a {} run was launched earlier in this sweep",

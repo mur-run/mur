@@ -210,9 +210,11 @@ pub fn resolve_run_goal(
 /// Tier 1 worktree execution is gated (experimental, default OFF). When set,
 /// a fleet that has a `parallel:` block fans each track into its own git
 /// worktree instead of broadcasting to members in the shared checkout.
-const EXEC_FLAG_ENV: &str = "MUR_PARALLEL_EXEC";
+pub const EXEC_FLAG_ENV: &str = "MUR_PARALLEL_EXEC";
 
-fn parallel_exec_enabled(force: bool) -> bool {
+/// `pub` for the daemon, which refuses to launch such a run for a sandboxed
+/// requester (`mur-daemon/src/fleet_dispatch.rs`).
+pub fn parallel_exec_enabled(force: bool) -> bool {
     force || std::env::var(EXEC_FLAG_ENV).as_deref() == Ok("1")
 }
 

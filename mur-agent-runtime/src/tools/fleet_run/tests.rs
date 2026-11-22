@@ -305,9 +305,9 @@ async fn fleet_run_returns_a_handle_and_leaves_the_child_running() {
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     };
     assert!(argv.contains(&format!("--run-id {run_id}")), "{argv}");
-    assert!(
-        argv.starts_with("deep-research why is the sky blue"),
-        "{argv}"
+    assert_eq!(
+        argv.trim_end(),
+        format!("deep-research --run-id {run_id} -- why is the sky blue"),
     );
     assert!(std::path::Path::new(v["log"].as_str().unwrap()).exists());
     // The dispatch deliberately detaches the child; don't leave the fake
@@ -463,42 +463,99 @@ async fn fleet_run_rejects_relative_cwd() {
 
 /// `goal` overrides the run's goal (loop + `--goal=`), `job` is one-shot,
 /// both together queue the job and loop toward the goal; nothing → plain
-/// loop on the standing goal. deep-research keeps its own verb.
+/// loop on the standing goal. deep-research keeps its own verb. Free text
+/// always lands after `--`, so it is never read as a flag.
 #[test]
-fn child_args_maps_goal_and_job() {
+fn dispatch_argv_maps_goal_and_job() {
+    let argv = |fleet: &str, goal: Option<&str>, job: Option<&str>| {
+        dispatch_argv(fleet, goal, job, "r", None, false)
+    };
     let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     assert_eq!(
-        child_args("coder", Some("ship it"), None),
-        v(&["fleet", "run", "coder", "--loop", "--goal=ship it"])
-    );
-    assert_eq!(
-        child_args("coder", None, Some("fix #1")),
-        v(&["fleet", "run", "coder", "fix #1"])
-    );
-    assert_eq!(
-        child_args("coder", Some("ship it"), Some("fix #1")),
+        argv("coder", Some("ship it"), None),
         v(&[
             "fleet",
             "run",
             "coder",
-            "fix #1",
             "--loop",
-            "--goal=ship it"
+            "--goal=ship it",
+            "--run-id",
+            "r"
         ])
     );
     assert_eq!(
-        child_args("coder", None, None),
-        v(&["fleet", "run", "coder", "--loop"])
+        argv("coder", None, Some("fix #1")),
+        v(&["fleet", "run", "coder", "--run-id", "r", "--", "fix #1"])
+    );
+    assert_eq!(
+        argv("coder", Some("ship it"), Some("fix #1")),
+        v(&[
+            "fleet",
+            "run",
+            "coder",
+            "--loop",
+            "--goal=ship it",
+            "--run-id",
+            "r",
+            "--",
+            "fix #1"
+        ])
+    );
+    assert_eq!(
+        argv("coder", None, None),
+        v(&["fleet", "run", "coder", "--loop", "--run-id", "r"])
     );
     // A goal that looks like a flag stays one value.
     assert_eq!(
-        child_args("coder", Some("--yes"), None),
-        v(&["fleet", "run", "coder", "--loop", "--goal=--yes"])
+        argv("coder", Some("--yes"), None),
+        v(&[
+            "fleet",
+            "run",
+            "coder",
+            "--loop",
+            "--goal=--yes",
+            "--run-id",
+            "r"
+        ])
     );
     assert_eq!(
-        child_args(DEEP_RESEARCH, Some("why"), None),
-        v(&[DEEP_RESEARCH, "why"])
+        argv(DEEP_RESEARCH, Some("why"), None),
+        v(&[DEEP_RESEARCH, "--run-id", "r", "--", "why"])
     );
+}
+
+/// The job text is the agent's. In flag position `--worktree` would turn on
+/// the one run the daemon refuses, and `--cwd=/x` would retarget a run whose
+/// `cwd` was checked; after `--` both stay text, and the real `--cwd` stands.
+#[test]
+fn job_text_that_looks_like_a_flag_stays_text() {
+    for job in ["--worktree", "--cwd=/elsewhere", "--loop"] {
+        let a = dispatch_argv(
+            "coder",
+            None,
+            Some(job),
+            "r",
+            Some(std::path::Path::new("/w")),
+            false,
+        );
+        let sep = a.iter().position(|t| t == "--").expect("separator");
+        assert_eq!(a[sep + 1..], [job.to_string()], "{a:?}");
+        assert!(
+            !a[..sep].iter().any(|t| t == job),
+            "{job} in flag position: {a:?}"
+        );
+        assert_eq!(a[sep - 2..sep], ["--cwd".to_string(), "/w".into()], "{a:?}");
+    }
+}
+
+/// Only `job` without `goal` is a one-shot run (the shape that can take the
+/// Tier 1 worktree path the daemon guards).
+#[test]
+fn runs_once_is_job_without_goal() {
+    assert!(runs_once(None, Some("j")));
+    assert!(!runs_once(Some("g"), Some("j")));
+    assert!(!runs_once(Some("g"), None));
+    assert!(!runs_once(None, None));
 }
 
 #[tokio::test]

@@ -268,6 +268,62 @@ fn a_replayed_request_is_rejected_and_keeps_the_original_record() {
     );
 }
 
+/// The one path where the run itself, not a member, executes git in the
+/// directory the requester named. Launched here it would do that outside the
+/// requester's sandbox, so the daemon refuses exactly that shape and nothing
+/// wider: the same fleet looping, or with the experiment off, still launches.
+#[test]
+fn a_one_shot_worktree_run_is_not_launched_for_a_sandboxed_requester() {
+    const NEEDLE: &str = "per-track git worktrees";
+    let exec_flag = mur_core::cmd::fleet::run::EXEC_FLAG_ENV;
+    // (experiment on, goal, job, refused)
+    let cases = [
+        (true, None, Some("fix it"), true),
+        (false, None, Some("fix it"), false),
+        (true, Some("decide"), None, false),
+        (true, Some("decide"), Some("fix it"), false),
+    ];
+    for (flag_on, goal, job, refused) in cases {
+        let mut env = mur_common::test_env::EnvGuard::hold();
+        if flag_on {
+            env.set_var(exec_flag, "1");
+        } else {
+            env.unset_var(exec_flag);
+        }
+        let f = fixture("council");
+        std::fs::write(
+            f.home().join("fleets/council/fleet.yaml"),
+            "name: council\nrouter: orchestrator\ngoal: g\nchannel_id: fleet-council\n\
+             members: [a, b]\nparallel:\n  judge:\n    model: m\n  tracks:\n\
+             \x20   - name: t1\n      approach: one\n",
+        )
+        .unwrap();
+        let mut d = dispatch("council", 1);
+        d.goal = goal.map(str::to_owned);
+        d.job = job.map(str::to_owned);
+        let req = FleetDispatchRequest::create(d, &f.requester, 0, Utc::now());
+        drop_request(f.home(), &req);
+        // A binary that cannot be spawned: a case that gets past the guard is
+        // rejected too, but for the spawn, which is how the two are told apart.
+        sweep(
+            f.home(),
+            &f.home().join(FLEET_DISPATCH_REQUEST_DIR),
+            &cfg(f.home()),
+            Path::new("/nonexistent/mur"),
+        )
+        .unwrap();
+        let reason = record(f.home(), "fleet-council-1")
+            .expect("record")
+            .reason
+            .unwrap_or_default();
+        let case = format!("flag {flag_on}, goal {goal:?}, job {job:?}: {reason}");
+        assert_eq!(reason.contains(NEEDLE), refused, "{case}");
+        if !refused {
+            assert!(reason.contains("spawn"), "reached the launch: {case}");
+        }
+    }
+}
+
 /// Builds one tampered or unauthorized request from a fixture.
 type MakeRequest = Box<dyn Fn(&Fixture) -> FleetDispatchRequest>;
 
