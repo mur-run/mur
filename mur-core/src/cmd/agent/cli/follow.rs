@@ -105,9 +105,11 @@ impl Follow {
         }
     }
 
-    /// Short display tag for transcript lines.
-    pub fn tag(&self) -> &str {
-        super::slash_cmds::short_id(&self.channel_id)
+    /// Display tag for transcript lines: the handle that names this channel
+    /// at `/channels`. Not a fixed-width prefix of the id — a followed
+    /// channel is often a fleet's, and those share their first characters.
+    pub fn tag(&self) -> String {
+        super::slash_cmds::id_handle(&self.channel_id)
     }
 
     /// Lines for events that landed since the last poll, oldest-first. Empty
