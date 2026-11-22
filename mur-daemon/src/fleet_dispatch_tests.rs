@@ -172,6 +172,75 @@ fn verified_request_launches_without_a_handoff_and_records_provenance() {
     );
 }
 
+/// An agent other than the control plane, with its own key, that routes its
+/// own fleet `scouted` and is allowed to run it.
+const SELF_ROUTER: &str = "scout";
+const SELF_ROUTED_FLEET: &str = "scouted";
+
+fn self_routed_fixture() -> Fixture {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path();
+    let agent_home = home.join("agents").join(SELF_ROUTER);
+    std::fs::create_dir_all(&agent_home).unwrap();
+    let requester = AgentIdentity::generate();
+    requester.save(&agent_home).unwrap();
+    std::fs::write(
+        home.join("config.yaml"),
+        format!("fleet_run:\n  agents: [{SELF_ROUTER}]\n  fleets: [{SELF_ROUTED_FLEET}]\n"),
+    )
+    .unwrap();
+    let dir = home.join("fleets").join(SELF_ROUTED_FLEET);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("fleet.yaml"),
+        format!(
+            "name: {SELF_ROUTED_FLEET}\nrouter: {SELF_ROUTER}\ngoal: g\n\
+             channel_id: fleet-{SELF_ROUTED_FLEET}\nmembers: [a, b]\n"
+        ),
+    )
+    .unwrap();
+    Fixture { tmp, requester }
+}
+
+/// #2081 items 5 and 6: the runtime sends a self-routed run here whenever the
+/// requester is not the control plane, because a local child could not sign
+/// the run's `System` events. The daemon has to launch it, not send it back.
+#[cfg(unix)]
+#[test]
+fn a_self_routed_fleet_of_a_non_control_plane_agent_is_launched() {
+    let f = self_routed_fixture();
+    let Some(fake) = fake_mur(f.home()) else {
+        eprintln!("skipping: this sandbox cannot exec under $TMPDIR");
+        return;
+    };
+    let mut d = dispatch(SELF_ROUTED_FLEET, 1);
+    d.requested_by = SELF_ROUTER.into();
+    let req = FleetDispatchRequest::create(d, &f.requester, 0, Utc::now());
+    drop_request(f.home(), &req);
+    sweep(
+        f.home(),
+        &f.home().join(FLEET_DISPATCH_REQUEST_DIR),
+        &cfg(f.home()),
+        &fake,
+    )
+    .unwrap();
+
+    let rec = record(f.home(), &req.dispatch.run_id).expect("dispatch record");
+    assert_eq!(
+        rec.status,
+        FleetDispatchStatus::Launched,
+        "reason: {:?}",
+        rec.reason
+    );
+    assert_eq!(rec.dispatched_by, SELF_ROUTER);
+    assert_eq!(rec.router.as_deref(), Some(SELF_ROUTER));
+
+    let out = launched(f.home()).expect("the daemon launched the fleet");
+    // No handoff: the child reads the control plane's key from disk, which
+    // is the reason this run is here at all.
+    assert_eq!(out.lines().nth(1).unwrap().trim(), "0", "no handoff env");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_replayed_request_is_rejected_and_keeps_the_original_record() {

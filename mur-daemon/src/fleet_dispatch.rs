@@ -229,10 +229,11 @@ fn authorize_and_launch(
         d.fleet
     );
     let router = fleet.router_or_concierge().to_string();
-    // This path exists for a router that is NOT the requester; a same-router
-    // fleet uses the runtime's local handoff and has no business here.
+    // A run the requester's own child can sign in full uses the runtime's
+    // local handoff and has no business here. Decided by the same predicate
+    // the runtime uses, so the two sides cannot disagree about a run.
     anyhow::ensure!(
-        !router.eq_ignore_ascii_case(&d.requested_by),
+        !mur_agent_runtime::tools::fleet_run::runs_locally(&d.requested_by, &router),
         "fleet '{}' is routed by the requester itself; dispatch it locally",
         d.fleet
     );
