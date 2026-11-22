@@ -59,6 +59,32 @@ fn allowed_is_deny_by_default() {
     assert!(!allowed(&cfg, "mur", "other"));
 }
 
+/// The table in the design (#2081 items 5 and 6): a local child holds only
+/// the trigger agent's key, so the run stays local only when that agent is
+/// the control plane AND routes the fleet. Expected values are that table's
+/// rows, not a recomputation.
+#[test]
+fn only_a_control_plane_agent_routing_its_own_fleet_runs_locally() {
+    // (trigger agent, fleet router, runs locally)
+    let rows = [
+        ("mur", "mur", true),
+        ("mur", "MUR", true),
+        ("MUR", "mur", true),
+        ("mur", "orchestrator", false),
+        ("orchestrator", "mur", false),
+        ("orchestrator", "scout", false),
+        ("orchestrator", "orchestrator", false),
+        ("orchestrator", "ORCHESTRATOR", false),
+    ];
+    for (requester, router, local) in rows {
+        assert_eq!(
+            runs_locally(requester, router),
+            local,
+            "trigger '{requester}', router '{router}'"
+        );
+    }
+}
+
 #[tokio::test]
 async fn denies_unauthorized_agent() {
     let tmp = tempfile::tempdir().unwrap();

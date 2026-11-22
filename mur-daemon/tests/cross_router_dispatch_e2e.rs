@@ -20,6 +20,10 @@
 //! event uses. Router-actor events (`synth`) need a model and stay covered by
 //! `channel_writer`'s `a_cross_router_run_outside_the_seal_signs_as_the_router`.
 //!
+//! A second case has `scout` route the fleet itself (#2081 items 5 and 6): the
+//! same three processes, and the same assertions, because the run's `System`
+//! events need the control plane's key whoever the router is.
+//!
 //! The requester is `scout`, not `mur`: `System` events verify against
 //! `CONTROL_PLANE_AGENT` (`mur`), so a `mur` requester would make "not signed by the
 //! requester" impossible to assert.
@@ -136,14 +140,15 @@ fn save_identity(home: &Path, agent: &str) -> AgentIdentity {
     id
 }
 
-/// Requester `scout` may run `council`; `orchestrator` routes it; members get
-/// a write grant on the work dir so the grant gate passes without a prompt.
+/// Requester `scout` may run `council`; `router` routes it; members get a
+/// write grant on the work dir so the grant gate passes without a prompt.
+/// `case` keeps two tests in one process from sharing a home.
 /// The home is under `CARGO_TARGET_TMPDIR`: the system temp dir is
 /// write-exempt in the macOS baseline and would make the seal vacuous.
-fn fresh_home(work: &Path) -> PathBuf {
+fn fresh_home(work: &Path, case: &str, router: &str) -> PathBuf {
     let home = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join("cross_router_dispatch_e2e")
-        .join(format!("run-{}", std::process::id()));
+        .join(format!("{case}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(&home).unwrap();
     std::fs::write(
@@ -156,7 +161,7 @@ fn fresh_home(work: &Path) -> PathBuf {
     std::fs::write(
         fleet_dir.join("fleet.yaml"),
         format!(
-            "name: {FLEET}\nrouter: {ROUTER}\ngoal: g\nchannel_id: {CHANNEL}\nmembers: [{}]\n",
+            "name: {FLEET}\nrouter: {router}\ngoal: g\nchannel_id: {CHANNEL}\nmembers: [{}]\n",
             MEMBERS.join(", ")
         ),
     )
@@ -227,6 +232,20 @@ fn wait_for_stop(home: &Path, run_id: &str, log: &Path) -> Vec<mur_common::chann
 
 #[test]
 fn sealed_cross_router_dispatch_yields_verifiable_events_not_signed_by_the_requester() {
+    sealed_dispatch_yields_verifiable_events_not_signed_by_the_requester("cross", ROUTER);
+}
+
+/// #2081 items 5 and 6: `scout` routes the fleet itself. A locally spawned
+/// child would hold `scout`'s key and write the run's `System` events (here
+/// the grant notes and the stop event) unsigned, or have them refused under
+/// `MUR_CHANNEL_REQUIRE_SIG`. Through the daemon they are signed by the
+/// control plane, exactly as in the cross-router case.
+#[test]
+fn sealed_self_routed_dispatch_yields_verifiable_events_not_signed_by_the_requester() {
+    sealed_dispatch_yields_verifiable_events_not_signed_by_the_requester("self", REQUESTER);
+}
+
+fn sealed_dispatch_yields_verifiable_events_not_signed_by_the_requester(case: &str, router: &str) {
     let Some(mur) = mur_bin() else {
         assert!(
             !require_sandbox(),
@@ -239,7 +258,7 @@ fn sealed_cross_router_dispatch_yields_verifiable_events_not_signed_by_the_reque
     // target is this directory and the members' grant covers it.
     let work = tempfile::tempdir().unwrap();
     let work = work.path().canonicalize().unwrap();
-    let home = fresh_home(&work);
+    let home = fresh_home(&work, case, router);
     let requester = save_identity(&home, REQUESTER);
     save_identity(&home, ROUTER);
     let writer = save_identity(&home, mur_core::channel_writer::CONTROL_PLANE_AGENT);
@@ -285,7 +304,7 @@ fn sealed_cross_router_dispatch_yields_verifiable_events_not_signed_by_the_reque
             .unwrap();
     assert_eq!(record.status, FleetDispatchStatus::Launched, "{record:?}");
     assert_eq!(record.dispatched_by, REQUESTER);
-    assert_eq!(record.router.as_deref(), Some(ROUTER));
+    assert_eq!(record.router.as_deref(), Some(router));
 
     let log = run_dir.join(RUN_LOG_FILE);
     let events = wait_for_stop(&home, &run_id, &log);

@@ -11,12 +11,22 @@ const WORK: &str = r"C:\work";
 #[cfg(not(windows))]
 const WORK: &str = "/work";
 
+/// The agent whose key signs a run's `System` events.
+const CONTROL_PLANE: &str = mur_channel::verify::CONTROL_PLANE_AGENT;
+/// Any agent that is not the control plane.
+const OTHER_AGENT: &str = "orchestrator";
+
 fn home_with(router: Option<&str>) -> tempfile::TempDir {
+    home_for(CONTROL_PLANE, router)
+}
+
+/// A home whose `fleet_run` allowlist names `agent`, with one fleet, `council`.
+fn home_for(agent: &str, router: Option<&str>) -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     std::fs::write(
         home.join("config.yaml"),
-        "fleet_run:\n  agents: [mur]\n  fleets: [council]\n",
+        format!("fleet_run:\n  agents: [{agent}]\n  fleets: [council]\n"),
     )
     .unwrap();
     let dir = home.join("fleets/council");
@@ -43,9 +53,17 @@ fn beat(home: &std::path::Path, at: chrono::DateTime<chrono::Utc>) {
 }
 
 fn tool(home: &std::path::Path, id: Option<mur_common::identity::AgentIdentity>) -> FleetRunTool {
+    tool_as(CONTROL_PLANE, home, id)
+}
+
+fn tool_as(
+    agent: &str,
+    home: &std::path::Path,
+    id: Option<mur_common::identity::AgentIdentity>,
+) -> FleetRunTool {
     FleetRunTool {
         mur_home: home.to_path_buf(),
-        agent_name: "mur".into(),
+        agent_name: agent.into(),
         signing: id.map(std::sync::Arc::new),
         key_version: 0,
         session_cwd: None,
@@ -144,6 +162,71 @@ async fn same_router_fleet_keeps_the_local_spawn_path() {
             "router {router:?}: {err}"
         );
         assert!(pending(home).is_empty(), "router {router:?}");
+    }
+}
+
+/// #2081 items 5 and 6: a locally spawned child holds only the trigger
+/// agent's key. When that agent is not the control plane, the run's `System`
+/// events (`run_paused`, the stop event, HITL requests) would go out unsigned
+/// even though the agent routes the fleet itself. So this run goes to the
+/// daemon as well: one signed request, and no local spawn.
+#[tokio::test]
+async fn self_routed_fleet_of_another_agent_goes_to_the_daemon() {
+    let tmp = home_for(OTHER_AGENT, Some(OTHER_AGENT));
+    let home = tmp.path();
+    beat(home, chrono::Utc::now());
+    // Any spawn would fail loudly: this binary does not exist.
+    let _env = mur_common::test_env::EnvGuard::set([("MUR_BIN", "/nonexistent/mur")]);
+    let id = mur_common::identity::AgentIdentity::generate();
+    let pk = id.verifying_key_bytes();
+    let out = tool_as(OTHER_AGENT, home, Some(id))
+        .execute(serde_json::json!({"fleet": "council", "goal": "decide", "cwd": WORK}))
+        .await
+        .expect("a self-routed run of a non-control-plane agent must not spawn locally");
+    let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(v["status"], "dispatched");
+    assert_eq!(v["via"], "daemon");
+    assert_eq!(v["signed_as"], OTHER_AGENT);
+
+    let files = pending(home);
+    assert_eq!(files.len(), 1, "exactly one request: {files:?}");
+    let req: FleetDispatchRequest =
+        serde_yaml_ng::from_str(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
+    assert!(
+        req.verify(&pk),
+        "request must verify under the caller's key"
+    );
+    assert_eq!(req.dispatch.requested_by, OTHER_AGENT);
+    assert_eq!(req.dispatch.run_id, v["run_id"].as_str().unwrap());
+}
+
+/// A self-routed run is sent to the daemon for the control plane's key, not
+/// the router's: the agent IS the router. A refusal that says "it signs as
+/// '<router>'; this agent cannot" would tell the user something false.
+#[tokio::test]
+async fn a_self_routed_refusal_names_the_control_plane_not_the_router() {
+    let cannot_sign_as_itself = format!("signs as '{OTHER_AGENT}'; this agent cannot");
+    for (signing, daemon_up, needle) in [
+        (true, false, "mur daemon start"),
+        (false, true, "signing key"),
+    ] {
+        let tmp = home_for(OTHER_AGENT, Some(OTHER_AGENT));
+        let home = tmp.path();
+        let age = if daemon_up { 0 } else { 1 };
+        beat(home, chrono::Utc::now() - chrono::Duration::hours(age));
+        let id = signing.then(mur_common::identity::AgentIdentity::generate);
+        let err = tool_as(OTHER_AGENT, home, id)
+            .execute(serde_json::json!({"fleet": "council"}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(needle), "{err}");
+        assert!(!err.contains(&cannot_sign_as_itself), "{err}");
+        assert!(
+            err.contains(&format!("control plane ('{CONTROL_PLANE}')")),
+            "the refusal must say whose key the run needs: {err}"
+        );
+        assert!(pending(home).is_empty());
     }
 }
 
