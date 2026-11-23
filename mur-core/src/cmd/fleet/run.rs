@@ -212,10 +212,22 @@ pub fn resolve_run_goal(
 /// worktree instead of broadcasting to members in the shared checkout.
 pub const EXEC_FLAG_ENV: &str = "MUR_PARALLEL_EXEC";
 
-/// `pub` for the daemon, which refuses to launch such a run for a sandboxed
-/// requester (`mur-daemon/src/fleet_dispatch.rs`).
-pub fn parallel_exec_enabled(force: bool) -> bool {
+/// What a launcher sets [`EXEC_FLAG_ENV`] to when the run it starts must not
+/// take the worktree path. An explicit value, not an absent variable: `mur`
+/// loads `~/.mur/.env` at startup, and that fills in only what is not set.
+#[allow(dead_code)] // consumed by mur-daemon; the `mur` bin target compiles this module too
+pub const EXEC_FLAG_OFF: &str = "0";
+
+pub(crate) fn parallel_exec_enabled(force: bool) -> bool {
     force || std::env::var(EXEC_FLAG_ENV).as_deref() == Ok("1")
+}
+
+/// Does a one-shot run of `fleet` fan its tracks into git worktrees? The run
+/// asks this to pick its path, and the daemon asks it to refuse that run for
+/// a sandboxed requester (`mur-daemon/src/fleet_dispatch.rs`): one rule, so
+/// the refusal cannot drift from what the run does.
+pub fn takes_worktree_path(fleet: &mur_common::fleet::Fleet, force: bool) -> bool {
+    parallel_exec_enabled(force) && fleet.parallel.is_some()
 }
 
 /// Concurrency cap for the fan-out — closes the unbounded-spawn gap documented
@@ -408,7 +420,7 @@ pub async fn cmd_fleet_run(
     // per track and route each delegate into it. Otherwise: router plan, else
     // broadcast-to-all. The router does not model worktrees, so the parallel
     // path deliberately bypasses it.
-    let exec_parallel = parallel_exec_enabled(force_worktree) && fleet.parallel.is_some();
+    let exec_parallel = takes_worktree_path(&fleet, force_worktree);
     if force_worktree && !exec_parallel {
         eprintln!(
             "warning: --worktree has no effect -- fleet '{name}' has no parallel: config block, so Tier 1 worktree isolation cannot activate; falling back to normal delegation"

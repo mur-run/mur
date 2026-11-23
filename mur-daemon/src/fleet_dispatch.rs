@@ -239,17 +239,22 @@ fn authorize_and_launch(
         "fleet '{}' is routed by the requester itself; dispatch it locally",
         d.fleet
     );
-    // The loop never writes in `cwd`; members do, each inside its own sandbox.
+    // The run itself never writes in `cwd`; members do, each inside its own
+    // sandbox. What it does run there is `git rev-parse`, to name the
+    // directory members are routed to and granted, and that runs no hook.
     // A one-shot Tier 1 run is the exception: it runs `git status` and `git
     // worktree add` in the repository `cwd` names, and both execute what that
     // repository's config and hooks say. Spawned by the requester, that stayed
     // inside the requester's sandbox. Here it would not, in a directory a
     // sandboxed agent chose, so it stays a terminal-only run. (`--worktree`
     // cannot ride in on the job text: `dispatch_argv` puts it after `--`.)
+    //
+    // This check is the message, not the boundary: it reads this process's
+    // environment and this moment's `fleet.yaml`. The boundary is the flag
+    // pinned on the child below.
     anyhow::ensure!(
         !(mur_agent_runtime::tools::fleet_run::runs_once(d.goal.as_deref(), d.job.as_deref())
-            && fleet.parallel.is_some()
-            && mur_core::cmd::fleet::run::parallel_exec_enabled(false)),
+            && mur_core::cmd::fleet::run::takes_worktree_path(&fleet, false)),
         "fleet '{}' would create per-track git worktrees itself, outside the sandbox of the \
          agent that asked; run it from a terminal: mur fleet run {} \"<job>\" --worktree",
         d.fleet,
@@ -277,8 +282,18 @@ fn authorize_and_launch(
     let log_err = log.try_clone()?;
     // No signing handoff: this process is unsealed, so the child loads the
     // router's key from disk — the whole point of launching it here.
+    //
+    // Tier 1 is pinned off in the child, not inherited. The child decides for
+    // itself whether to create worktrees, from its own environment (after
+    // `mur` loads `~/.mur/.env`, which this daemon never reads) and from its
+    // own read of `fleet.yaml`, so the refusal above cannot speak for it. An
+    // explicit value is what `.env` loading leaves alone.
     let mut child = std::process::Command::new(mur_bin)
         .args(&args)
+        .env(
+            mur_core::cmd::fleet::run::EXEC_FLAG_ENV,
+            mur_core::cmd::fleet::run::EXEC_FLAG_OFF,
+        )
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log))
         .stderr(std::process::Stdio::from(log_err))

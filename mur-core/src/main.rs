@@ -230,6 +230,31 @@ mod tests {
         }
     }
 
+    /// `mur-daemon` launches a fleet run with Tier 1 pinned off
+    /// (`fleet_dispatch::authorize_and_launch`). That pin holds only while
+    /// `.env` loading fills in what is absent and never replaces what is set.
+    #[test]
+    fn dotenv_does_not_replace_a_variable_the_launcher_set() {
+        use cmd::fleet::run::{EXEC_FLAG_ENV, EXEC_FLAG_OFF, parallel_exec_enabled};
+        let home = tempfile::TempDir::new().unwrap();
+        std::fs::write(home.path().join(".env"), format!("{EXEC_FLAG_ENV}=1\n")).unwrap();
+        let mut env = mur_common::test_env::EnvGuard::hold();
+        env.set_var(mur_common::home::MUR_HOME_ENV, home.path());
+
+        env.set_var(EXEC_FLAG_ENV, EXEC_FLAG_OFF);
+        load_dotenv();
+        assert!(!parallel_exec_enabled(false), "the launcher's value wins");
+
+        // The same file does switch it on when nothing was set, which is why
+        // the launcher has to set it instead of leaving it out.
+        env.unset_var(EXEC_FLAG_ENV);
+        load_dotenv();
+        assert!(
+            parallel_exec_enabled(false),
+            "an absent variable is filled in"
+        );
+    }
+
     #[test]
     fn ask_parses_no_summarize_flag() {
         let (no_summarize, model) = parse_ask(&["mur", "ask", "q?", "--no-summarize"]);
