@@ -38,6 +38,12 @@ pub(super) async fn run_fleet(action: FleetAction) -> Result<()> {
                     }
                     // job arg + --loop: enqueue the job first, then the loop drains it.
                     if let Some(text) = job {
+                        // Refuse before queueing, so a run that cannot sign
+                        // leaves no job behind (#2531).
+                        cmd::fleet::sign_preflight::require_signing(
+                            &mur_home,
+                            &cmd::fleet::store::load_fleet(&mur_home, &name)?,
+                        )?;
                         cmd::fleet::jobs::enqueue_job(&mur_home, &name, &text, "cli")?;
                     }
                     // Same target as a one-shot run: `--cwd`, else the

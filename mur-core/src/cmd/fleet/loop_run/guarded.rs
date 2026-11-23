@@ -73,6 +73,11 @@ async fn run_guarded_inner(
     cwd: Option<RunCwd>,
     mut resume: Option<super::resume::ResumeFrom>,
 ) -> Result<(LoopStop, u32, f64)> {
+    // A run that could not sign is refused before it takes anything (#2531).
+    crate::cmd::fleet::sign_preflight::require_signing(
+        mur_home,
+        &store::load_fleet(mur_home, name)?,
+    )?;
     // One live run per fleet, taken before any admission check and held (via
     // the guard) until this function returns or the process dies.
     let _run_lock = run_lock::acquire(mur_home, name)?;

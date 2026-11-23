@@ -27,6 +27,7 @@ pub mod run_migrate;
 pub mod run_monitor;
 pub mod settings;
 pub mod show;
+pub(crate) mod sign_preflight;
 pub mod state_migrate;
 pub mod status;
 pub mod store;
