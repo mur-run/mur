@@ -50,6 +50,81 @@ async fn a_server_the_live_profile_does_not_know_falls_back_to_boot() {
     pool.shutdown().await;
 }
 
+/// What the mock generations wrote to `journal`, in order.
+fn journal_of(journal: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(journal)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// #2543: a server may save state on its way out (the browser writes its
+/// login back to the profile), and the next generation reads that state as
+/// it starts. With nothing still using the old generation, it must have
+/// exited before the new one is started, or the new one starts from a copy
+/// the old one is about to replace.
+#[tokio::test]
+async fn an_idle_old_generation_exits_before_the_new_one_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("journal");
+    let j = journal.to_str().unwrap();
+    // Long enough that an unordered swap always starts the new server first.
+    let boot = mock(&["--journal", j, "--exit-delay-ms", "400"]);
+    let pool = McpPool::new(vec![boot.clone()], SandboxPolicy::default(), None, None);
+    let served = Arc::new(Mutex::new(boot));
+    let source = served.clone();
+    pool.attach_live(Box::new(move |name| {
+        let e = source.lock().unwrap().clone();
+        (e.name == name).then_some(e)
+    }));
+
+    // No call holds the first generation once this returns.
+    drop(pool.client("mock").await.expect("first generation"));
+    assert_eq!(journal_of(&journal), ["start"]);
+
+    *served.lock().unwrap() = mock(&["--journal", j]);
+    drop(pool.client("mock").await.expect("second generation"));
+    assert_eq!(
+        journal_of(&journal),
+        ["start", "exit", "start"],
+        "the old generation must finish exiting before the new one starts"
+    );
+
+    pool.shutdown().await;
+}
+
+/// A caller that stops waiting (a timeout, a cancelled turn) must not cut
+/// the old generation's exit short, and the next caller still waits for it.
+#[tokio::test]
+async fn giving_up_on_the_swap_does_not_let_the_new_generation_overtake() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("journal");
+    let j = journal.to_str().unwrap();
+    let boot = mock(&["--journal", j, "--exit-delay-ms", "400"]);
+    let pool = McpPool::new(vec![boot.clone()], SandboxPolicy::default(), None, None);
+    let served = Arc::new(Mutex::new(boot));
+    let source = served.clone();
+    pool.attach_live(Box::new(move |name| {
+        let e = source.lock().unwrap().clone();
+        (e.name == name).then_some(e)
+    }));
+    drop(pool.client("mock").await.expect("first generation"));
+
+    *served.lock().unwrap() = mock(&["--journal", j]);
+    let impatient = std::time::Duration::from_millis(50);
+    assert!(
+        tokio::time::timeout(impatient, pool.client("mock"))
+            .await
+            .is_err(),
+        "the old generation is still exiting"
+    );
+    drop(pool.client("mock").await.expect("second generation"));
+    assert_eq!(journal_of(&journal), ["start", "exit", "start"]);
+
+    pool.shutdown().await;
+}
+
 fn restricted(mut e: McpServerEntry, host: &str) -> McpServerEntry {
     e.network = Some(mur_common::agent::McpServerNetwork {
         mode: mur_common::agent::McpNetMode::Restricted,

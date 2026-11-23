@@ -11,6 +11,40 @@ fn main() {
     // `--silent`: stay alive, read every request, answer none — a server
     // that hangs on `initialize` / `tools/list` after a hot edit.
     let silent = argv.iter().any(|a| a == "--silent");
+    // `--journal <file>`: append `start` when the server comes up and `exit`
+    // once its stdin closed, so a test can read the order two generations
+    // ran in. `--exit-delay-ms <n>`: work that long after stdin EOF before
+    // exiting, like a browser server saving its login on the way out.
+    let journal = value_of(&argv, "--journal");
+    let exit_delay = value_of(&argv, "--exit-delay-ms").and_then(|ms| ms.parse().ok());
+    note(journal.as_deref(), "start");
+    serve(extra.as_deref(), silent);
+    if let Some(ms) = exit_delay {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+    note(journal.as_deref(), "exit");
+}
+
+/// The value following `flag` in `argv`.
+fn value_of(argv: &[String], flag: &str) -> Option<String> {
+    let at = argv.iter().position(|a| a == flag)?;
+    argv.get(at + 1).cloned()
+}
+
+/// Append one line to the journal, when one was asked for.
+fn note(journal: Option<&str>, event: &str) {
+    let Some(path) = journal else { return };
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path);
+    if let Ok(mut f) = file {
+        let _ = writeln!(f, "{event}");
+    }
+}
+
+/// Answer requests until stdin closes.
+fn serve(extra: Option<&str>, silent: bool) {
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -62,7 +96,7 @@ fn main() {
                         "inputSchema": {"type": "object"}
                     }),
                 ];
-                if let Some(name) = &extra {
+                if let Some(name) = extra {
                     tools.push(serde_json::json!({
                         "name": name,
                         "description": "extra",
