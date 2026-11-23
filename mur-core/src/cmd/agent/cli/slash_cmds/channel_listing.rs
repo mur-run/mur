@@ -3,26 +3,8 @@
 
 use super::{
     CHANNEL_LOOKUP_LIMIT, ChannelRef, FIRST_ORDINAL, NO_ORDINAL, channel_line, persist, resolve,
-    short_id,
 };
 use std::path::Path;
-
-/// What a user types at `/channels` to name a channel by id. A hex id's
-/// short prefix is typeable as it stands. A fleet's id is `fleet-<name>`: it
-/// needs the `#` (a bare word that is not hex is refused), and it is shown
-/// whole, because eight characters of it name no fleet.
-///
-/// Every line that names a channel which may be a run goes through here —
-/// the listing, the ambiguity message, and the follow label — so what is
-/// printed is always something the user can type back.
-pub(in crate::cmd::agent::cli) fn id_handle(id: &str) -> String {
-    let short = short_id(id);
-    if short.chars().all(|c| c.is_ascii_hexdigit()) {
-        short.to_string()
-    } else {
-        format!("#{id}")
-    }
-}
 
 /// One row of the run section of the `/channels` listing. Counts events, not
 /// turns: nobody takes turns in a run.
@@ -34,10 +16,7 @@ fn run_line(s: &persist::SessionInfo) -> String {
     };
     format!(
         "  {} · {} · {} events · {}\n",
-        n,
-        id_handle(&s.id),
-        s.turns,
-        s.preview
+        n, s.handle, s.turns, s.preview
     )
 }
 

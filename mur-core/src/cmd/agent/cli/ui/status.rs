@@ -148,7 +148,7 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         // wins and the stale one is gone (#940).
         // at-mention C3: the ordinal reads as the `@` address of this
         // conversation (`@mur#3`), so the chip shows `{agent}#{ordinal}`.
-        let short: String = meta.id.chars().take(8).collect();
+        let short = &meta.handle;
         let chip = if meta.ordinal > 0 {
             format!(" ⏵ {}#{} · {short} ", app.agent, meta.ordinal)
         } else {
@@ -550,6 +550,7 @@ mod status_chip_tests {
         app.channel = Some(ChannelMeta {
             id: "019ff831dead".into(),
             ordinal: 2,
+            handle: "019ff831".into(),
         });
         let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
         term.draw(|f| render_status(f, &app, f.area())).unwrap();
@@ -571,6 +572,7 @@ mod status_chip_tests {
         app.channel = Some(ChannelMeta {
             id: "019ff831dead".into(),
             ordinal: 7,
+            handle: "019ff831".into(),
         });
         let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
         term.draw(|f| render_status(f, &app, f.area())).unwrap();
@@ -587,6 +589,7 @@ mod status_chip_tests {
         app.channel = Some(ChannelMeta {
             id: "019ff831dead".into(),
             ordinal: 7,
+            handle: "019ff831".into(),
         });
         let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
         term.draw(|f| render_status(f, &app, f.area())).unwrap();
@@ -603,6 +606,7 @@ mod status_chip_tests {
         app.channel = Some(ChannelMeta {
             id: "019ff831dead".into(),
             ordinal: 0,
+            handle: "019ff831".into(),
         });
         let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
         term.draw(|f| render_status(f, &app, f.area())).unwrap();

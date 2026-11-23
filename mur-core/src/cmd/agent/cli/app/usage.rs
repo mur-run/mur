@@ -116,7 +116,7 @@ impl App {
             active_channel: self
                 .channel
                 .as_ref()
-                .map(|c| super::super::slash_cmds::handle_of(c.ordinal, &c.id)),
+                .map(|c| super::super::slash_cmds::handle_of(c.ordinal, &c.handle)),
             following: self.follow.as_ref().map(|f| f.tag()),
             open_findings: super::super::review::open_findings(self),
         }

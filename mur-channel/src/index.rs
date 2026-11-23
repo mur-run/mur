@@ -553,6 +553,22 @@ impl ChannelIndex {
         Ok(id)
     }
 
+    /// The typeable handle of every channel in the index (#2538). Computed
+    /// over all of them, not a listing window, so a handle stays unique in
+    /// whatever subset a resolver searches.
+    ///
+    /// Reads and sorts every id, so the cost follows the number of channels
+    /// on the machine, not the number shown: one indexed column, well under a
+    /// millisecond at a thousand channels. Callers recompute rather than
+    /// cache — see [`crate::handle`] for why.
+    pub fn handles(&self) -> Result<crate::handle::Handles> {
+        let mut stmt = self.conn.prepare("SELECT id FROM channels")?;
+        let ids = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(crate::handle::Handles::from_ids(ids))
+    }
+
     /// Newest-first channel list (the Hub left-rail / CLI "my work" inbox).
     pub fn list(&self, limit: usize) -> Result<Vec<ChannelRow>> {
         let mut stmt = self.conn.prepare(

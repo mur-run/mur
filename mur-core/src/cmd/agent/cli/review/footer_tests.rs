@@ -200,6 +200,7 @@ fn crowded_footer(app: &mut App, width: u16) -> String {
     app.channel = Some(crate::cmd::agent::cli::persist::ChannelMeta {
         id: "01a15531-c974-7ba0-985f-68a6b1028be2".into(),
         ordinal: 12,
+        handle: "01a15531".into(),
     });
     app.session_tool_allow.insert("bash".into());
     app.monitor_total = 2;

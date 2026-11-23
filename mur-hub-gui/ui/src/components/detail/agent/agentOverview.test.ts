@@ -3,7 +3,7 @@ import { activityFor } from "./agentOverview";
 import type { ChannelSummary } from "../../../work/types";
 
 const ch = (id: string, agents: string[], state: string, updated_at: string): ChannelSummary =>
-  ({ id, title: id, state, goal: "", created_at: updated_at, updated_at, participants: [], agents, turns: 1, preview: "", ordinal: 1 });
+  ({ id, title: id, state, goal: "", created_at: updated_at, updated_at, participants: [], agents, turns: 1, preview: "", ordinal: 1, handle: "" });
 
 describe("activityFor", () => {
   it("now = newest non-terminal channel; recent = newest first, capped", () => {

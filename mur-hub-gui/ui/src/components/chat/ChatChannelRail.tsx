@@ -7,7 +7,6 @@ import {
   displayNameMap,
   ordinalLabel,
   relativeTime,
-  shortId,
 } from "../../work/format";
 import { useAgents } from "../../context/AgentContext";
 
@@ -53,6 +52,20 @@ function shortName(id: string): string {
   return parts.length > 1 ? parts.slice(1).join("-") : "main";
 }
 
+/** The id handle printed on a row. A uuid channel shows its handle. A
+ *  name-keyed one (a run's `fleet-x`) shows none: its handle is the whole id,
+ *  which the row's label already carries and the narrow rail has no room to
+ *  repeat. {@link rowTooltip} keeps it readable. */
+export function idChip(c: ChannelSummary): string {
+  return UUID_RE.test(c.id) ? c.handle : "";
+}
+
+/** Hover text for a row: every handle that reaches it, then what it is. */
+export function rowTooltip(c: ChannelSummary): string {
+  const num = ordinalLabel(c.ordinal);
+  return `${num ? `${num} · ` : ""}${c.handle} — ${c.title || c.id}`;
+}
+
 export function ChatChannelRail({ agentName, activeId, onSelect, width }: Props) {
   const { agents } = useAgents();
   const names = displayNameMap(agents);
@@ -79,16 +92,17 @@ export function ChatChannelRail({ agentName, activeId, onSelect, width }: Props)
   function renderChannel(c: ChannelSummary) {
     const isActive = c.id === highlighted;
     const num = ordinalLabel(c.ordinal);
+    const chip = idChip(c);
     return (
       <button
         key={c.id}
         className={`cw-rail__channel${isActive ? " cw-rail__channel--active" : ""}`}
         onClick={() => onSelect(c.id)}
-        title={`${num ? `${num} · ` : ""}${shortId(c.id)} — ${c.title || c.id}`}
+        title={rowTooltip(c)}
       >
         <span className="cw-rail__ch-hash">{num || "#"}</span>
         <span className="cw-rail__ch-name">{channelLabel(c, names)}</span>
-        <span className="cw-rail__ch-id">{shortId(c.id)}</span>
+        {chip && <span className="cw-rail__ch-id">{chip}</span>}
         <span className="cw-rail__ch-time">{relativeTime(c.updated_at, now)}</span>
         {c.turns > 0 && !isActive && (
           <span className="cw-rail__ch-badge">{c.turns > 99 ? "99+" : c.turns}</span>

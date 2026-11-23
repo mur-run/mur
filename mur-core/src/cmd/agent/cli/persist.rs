@@ -35,6 +35,8 @@ pub struct ChannelMeta {
     /// reused. `0` means "not numbered yet" — an index row older than the
     /// ordinals table that has not been backfilled.
     pub ordinal: u64,
+    /// What names this channel by id at `/channels`; see [`handle_for`].
+    pub handle: String,
 }
 
 /// Listing entry; `id` is the channel id (was the session file stem).
@@ -45,6 +47,21 @@ pub struct SessionInfo {
     pub turns: usize,
     /// Stable per-channel number; see `ChannelMeta::ordinal`.
     pub ordinal: u64,
+    /// What names this channel by id at `/channels`; see [`handle_for`].
+    pub handle: String,
+}
+
+/// What a user types at `/channels` to name channel `id` by id
+/// ([`Handles::typeable`]), reading the index for its neighbours. Fail-soft:
+/// an unreadable index gives the minimum-length handle, which is what every
+/// handle was before #2538.
+///
+/// [`Handles::typeable`]: mur_channel::handle::Handles::typeable
+pub fn handle_for(home: &Path, id: &str) -> String {
+    ChannelService::open(home)
+        .and_then(|svc| svc.index().handles())
+        .unwrap_or_default()
+        .typeable(id)
 }
 
 /// A live conversation handle. The backing channel is created lazily on the
@@ -94,7 +111,15 @@ impl Session {
     pub fn current(&self) -> Option<ChannelMeta> {
         let id = self.channel_id.clone()?;
         let ordinal = self.svc.index().ordinal_of(&id).ok().flatten().unwrap_or(0);
-        Some(ChannelMeta { id, ordinal })
+        // Recomputed on every call, which is once a turn: a conversation
+        // minted next to this one makes its handle longer, and the footer
+        // must not keep showing the one that has become ambiguous.
+        let handle = self.svc.index().handles().unwrap_or_default().typeable(&id);
+        Some(ChannelMeta {
+            id,
+            ordinal,
+            handle,
+        })
     }
 
     /// Append one turn, creating the channel on first write. `role` ∈
@@ -323,6 +348,7 @@ fn list_where(
     keep: fn(&mur_common::channel::Channel, &str) -> bool,
 ) -> Result<Vec<SessionInfo>> {
     let svc = ChannelService::open(home)?;
+    let handles = svc.index().handles()?;
     let mut out = Vec::new();
     for row in svc.list(CHANNEL_SCAN_LIMIT)? {
         let Some(ch) = svc
@@ -356,6 +382,7 @@ fn list_where(
                 .collect()
         };
         out.push(SessionInfo {
+            handle: handles.typeable(&row.id),
             id: row.id,
             preview,
             // The owner record C2 writes ahead of the first human line is

@@ -66,15 +66,6 @@ export function stateBadge(state: string): string {
   return STATE_BADGE_MAP[state] ?? "unknown";
 }
 
-/** Characters of a channel uuid shown as its typeable handle. Must match the
- *  CLI's footer chip and `/channels <prefix>` resolver (8). */
-export const SHORT_ID_LEN = 8;
-
-/** The id prefix a human can type into `/channels` to reach this channel. */
-export function shortId(id: string): string {
-  return id.slice(0, SHORT_ID_LEN);
-}
-
 /** `name → display_name` for {@link channelTitle}; keeps the uppercase label
  *  (rule 8) without each surface rebuilding the map. */
 export function displayNameMap(
@@ -92,10 +83,11 @@ export const TITLE_FALLBACK_SEP = " · ";
  * companion message, an agent-authored opener) has none until the human
  * replies. Spec §7.5: render `{agent display name} · {local date}` then — a
  * display-only fallback, never written back. A channel with neither an agent
- * nor a parseable date keeps the short id, the last resort.
+ * nor a parseable date keeps its id handle, the last resort — the backend's,
+ * because a slice of the id taken here is not something `/channels` accepts.
  */
 export function channelTitle(
-  ch: Pick<ChannelSummary, "id" | "title" | "agents" | "created_at">,
+  ch: Pick<ChannelSummary, "id" | "title" | "agents" | "created_at" | "handle">,
   displayNames: Record<string, string> = {},
   locale?: string,
 ): string {
@@ -103,7 +95,7 @@ export function channelTitle(
   if (title) return title;
   const who = ch.agents.map((a) => displayNames[a] || a).join(", ");
   const created = new Date(ch.created_at);
-  if (!who || Number.isNaN(created.getTime())) return shortId(ch.id);
+  if (!who || Number.isNaN(created.getTime())) return ch.handle || ch.id;
   return `${who}${TITLE_FALLBACK_SEP}${created.toLocaleDateString(locale)}`;
 }
 

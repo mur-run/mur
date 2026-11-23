@@ -45,6 +45,10 @@ pub struct ChannelSummary {
     /// Stable per-machine display number from the channel index (`#2`). Local
     /// view state, never synced — see `ChannelRow::ordinal`.
     pub ordinal: i64,
+    /// What names this channel by id at murmur's `/channels`
+    /// (`Handles::typeable`): the shortest id prefix no other local channel
+    /// shares (#2538), or for a run its whole id behind `#`.
+    pub handle: String,
 }
 
 /// Serialize a `ChannelState`/role/actor enum to its kebab/lowercase string.
@@ -70,7 +74,12 @@ fn participant_of(actor: &ChannelActor, role_str: String) -> WorkParticipant {
 
 /// Pure: build a rail summary from a manifest + its events. No I/O. `ordinal`
 /// comes from the channel index row, which is the only place it is assigned.
-pub fn summary_of(ch: &Channel, events: &[ChannelEvent], ordinal: i64) -> ChannelSummary {
+pub fn summary_of(
+    ch: &Channel,
+    events: &[ChannelEvent],
+    ordinal: i64,
+    handles: &mur_channel::handle::Handles,
+) -> ChannelSummary {
     let participants: Vec<WorkParticipant> = ch
         .participants
         .iter()
@@ -101,6 +110,7 @@ pub fn summary_of(ch: &Channel, events: &[ChannelEvent], ordinal: i64) -> Channe
         turns: events.len(),
         preview,
         ordinal,
+        handle: handles.typeable(&ch.id),
     }
 }
 
@@ -113,6 +123,7 @@ const WORK_LIST_LIMIT: usize = 200;
 /// hidden so the rail never shows blank rows.
 pub fn list_channels(home: &Path) -> anyhow::Result<Vec<ChannelSummary>> {
     let svc = ChannelService::open(home)?;
+    let handles = svc.index().handles()?;
     let mut out = Vec::new();
     for row in svc.list(WORK_LIST_LIMIT)? {
         let events = svc.load_events(&row.id).unwrap_or_default();
@@ -122,7 +133,7 @@ pub fn list_channels(home: &Path) -> anyhow::Result<Vec<ChannelSummary>> {
         let Ok(manifest) = svc.store().load_manifest(&row.id) else {
             continue;
         };
-        out.push(summary_of(&manifest, &events, row.ordinal));
+        out.push(summary_of(&manifest, &events, row.ordinal, &handles));
     }
     Ok(out)
 }
@@ -173,7 +184,7 @@ mod tests {
         let manifest = svc.store().load_manifest(&ch.id).unwrap();
         let events = svc.load_events(&ch.id).unwrap();
 
-        let s = summary_of(&manifest, &events, 7);
+        let s = summary_of(&manifest, &events, 7, &Default::default());
         assert_eq!(s.id, ch.id);
         assert_eq!(s.ordinal, 7, "ordinal is passed through, not recomputed");
         assert_eq!(s.agents, vec!["qa".to_string()]);
@@ -212,7 +223,10 @@ mod tests {
                 serde_json::json!({ "text": "find the bug" }),
             ),
         ];
-        assert_eq!(summary_of(&manifest, &events, 1).preview, "find the bug");
+        assert_eq!(
+            summary_of(&manifest, &events, 1, &Default::default()).preview,
+            "find the bug"
+        );
     }
 
     #[test]
@@ -247,5 +261,43 @@ mod tests {
         assert_eq!(evs.len(), 1);
         let m = manifest_for(tmp.path(), &a.id).unwrap();
         assert_eq!(m.id, a.id);
+    }
+
+    /// The rail prints `handle` as what reaches the channel at murmur's
+    /// `/channels`. Eight characters of a run's id are `fleet-de` for every
+    /// fleet starting `de` (#2537); a run is named whole, behind the `#`.
+    #[test]
+    fn a_listed_handle_is_what_murmur_accepts_for_that_channel() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let say = |id: &str| {
+            svc.append_message(
+                id,
+                ChannelActor::local_human(),
+                EventKind::Message,
+                "hi",
+                None,
+            )
+            .unwrap();
+        };
+        let owner = || mur_channel::service::ChannelOwner::Legacy;
+        let run = svc
+            .create_for_fleet("develop-rust", "mur", &["qa".into()], owner())
+            .unwrap();
+        say(&run.id);
+        let one = svc.create_for_agent("qa", owner()).unwrap();
+        say(&one.id);
+        let two = svc.create_for_agent("qa", owner()).unwrap();
+        say(&two.id);
+
+        let rows = list_channels(tmp.path()).unwrap();
+        let handle_of = |id: &str| rows.iter().find(|r| r.id == id).unwrap().handle.clone();
+        assert_eq!(handle_of(&run.id), "#fleet-develop-rust");
+        for ch in [&one, &two] {
+            let handle = handle_of(&ch.id);
+            assert!(handle.len() >= mur_channel::handle::MIN_HANDLE_LEN);
+            assert!(ch.id.replace('-', "").starts_with(&handle), "{handle}");
+        }
+        assert_ne!(handle_of(&one.id), handle_of(&two.id));
     }
 }
