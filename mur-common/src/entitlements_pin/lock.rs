@@ -18,10 +18,12 @@
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use fs2::FileExt;
 
 use super::{PINS_DIR, PinError, checked_name};
+use crate::lock_file::LOCK_POLL;
 
 /// Suffix of the lock file beside `<agent>.json` in [`PINS_DIR`].
 const LOCK_SUFFIX: &str = "profile.lock";
@@ -30,6 +32,20 @@ const LOCK_SUFFIX: &str = "profile.lock";
 #[derive(Debug)]
 pub struct ProfileLock {
     _file: File,
+    mur_home: PathBuf,
+    agent: String,
+}
+
+impl ProfileLock {
+    /// The agent this lock was taken for. A writer refuses a lock taken for
+    /// another name.
+    pub fn agent(&self) -> &str {
+        &self.agent
+    }
+
+    pub fn mur_home(&self) -> &Path {
+        &self.mur_home
+    }
 }
 
 /// `<mur_home>/entitlement-pins/<agent>.profile.lock`.
@@ -65,5 +81,54 @@ pub fn lock_profile(
         on_wait();
         file.lock_exclusive().map_err(io_err)?;
     }
-    Ok(ProfileLock { _file: file })
+    Ok(ProfileLock {
+        _file: file,
+        mur_home: mur_home.to_path_buf(),
+        agent: agent.to_string(),
+    })
 }
+
+/// Take `agent's profile lock, polling a non-blocking `flock` until
+/// `deadline` (one monotonic deadline for the whole wait, like the lifecycle
+/// lock). A caller that holds the lifecycle lock passes that lock's deadline.
+pub fn lock_profile_until(
+    mur_home: &Path,
+    agent: &str,
+    deadline: Instant,
+) -> Result<ProfileLock, PinError> {
+    checked_name(agent)?;
+    let path = lock_path(mur_home, agent);
+    let io_err = |source: io::Error| PinError::Io {
+        path: path.clone(),
+        source,
+    };
+    std::fs::create_dir_all(mur_home.join(PINS_DIR)).map_err(io_err)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(io_err)?;
+    loop {
+        match file.try_lock_exclusive() {
+            Ok(()) => {
+                return Ok(ProfileLock {
+                    _file: file,
+                    mur_home: mur_home.to_path_buf(),
+                    agent: agent.to_string(),
+                });
+            }
+            Err(e) if e.kind() == fs2::lock_contended_error().kind() => {}
+            Err(e) => return Err(io_err(e)),
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(PinError::Timeout { path });
+        }
+        std::thread::sleep(LOCK_POLL.min(deadline - now));
+    }
+}
+
+#[cfg(test)]
+mod tests;

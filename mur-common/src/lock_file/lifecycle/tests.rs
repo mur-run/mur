@@ -1,5 +1,5 @@
 use super::*;
-use crate::lock_file::{SENTINEL_FILE, agent_exists};
+use crate::lock_file::{SENTINEL_FILE, SentinelOpenError, agent_exists, open_sentinel};
 use std::time::{Duration, Instant};
 
 const SHORT: Duration = Duration::from_millis(150);
@@ -119,4 +119,49 @@ fn agent_exists_is_false_for_a_bad_name_a_directory_or_nothing() {
     assert!(!agent_exists(home.path(), "missing"));
     assert!(!agent_exists(home.path(), "../agents/d"));
     assert!(!agent_exists(home.path(), ""));
+}
+
+#[test]
+fn open_sentinel_never_creates_the_home_and_tells_the_two_absences_apart() {
+    let m = tempfile::tempdir().unwrap();
+    let no_agents = m.path().join("agents").join("a");
+    assert!(matches!(
+        open_sentinel(&no_agents),
+        Err(SentinelOpenError::NoAgentsDir(_))
+    ));
+    assert!(!m.path().join("agents").exists(), "agents/ was created");
+
+    std::fs::create_dir_all(m.path().join("agents")).unwrap();
+    assert!(matches!(
+        open_sentinel(&no_agents),
+        Err(SentinelOpenError::NoHome(_))
+    ));
+    assert!(!no_agents.exists(), "the home was created");
+}
+
+#[test]
+fn open_sentinel_creates_the_file_in_an_existing_home_and_reuses_it() {
+    let m = tempfile::tempdir().unwrap();
+    let home = m.path().join("agents").join("a");
+    std::fs::create_dir_all(&home).unwrap();
+    let first = open_sentinel(&home).unwrap();
+    let second = open_sentinel(&home).unwrap();
+    assert!(same_file(&first, &home.join(SENTINEL_FILE)).unwrap());
+    assert!(same_file(&second, &home.join(SENTINEL_FILE)).unwrap());
+}
+
+#[test]
+fn probe_sentinel_reports_no_agent_dir_for_both_absences() {
+    let m = tempfile::tempdir().unwrap();
+    let home = m.path().join("agents").join("a");
+    assert!(matches!(
+        crate::lock_file::probe_sentinel(&home),
+        crate::lock_file::SentinelProbe::NoAgentDir
+    ));
+    std::fs::create_dir_all(m.path().join("agents")).unwrap();
+    assert!(matches!(
+        crate::lock_file::probe_sentinel(&home),
+        crate::lock_file::SentinelProbe::NoAgentDir
+    ));
+    assert!(!home.exists());
 }
