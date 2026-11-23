@@ -32,6 +32,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 use super::reqwest_guard::{host_allowed, host_matches_pattern};
 
+mod dial;
 mod http_forward;
 mod lease;
 mod live;
@@ -273,10 +274,11 @@ async fn handle_conn(
         "egress proxy {kind} ALLOW"
     );
     // SSRF screen + IP-pin: resolve the CONNECT target once, drop link-local /
-    // unspecified (cloud-metadata) addresses, connect to the pinned SocketAddr
-    // (no re-resolution → no DNS-rebinding window). Loopback/LAN intentionally
-    // kept (local-first). Backstops the hostname allow/deny list for
-    // browser-rendered sub-resource CONNECTs the gateway never screened.
+    // unspecified (cloud-metadata) addresses, connect only to addresses from
+    // that one resolution (no re-resolution → no DNS-rebinding window).
+    // Loopback/LAN intentionally kept (local-first). Backstops the hostname
+    // allow/deny list for browser-rendered sub-resource CONNECTs the gateway
+    // never screened.
     // Resolve + SSRF-screen off the async worker thread: to_socket_addrs() is a
     // blocking DNS call and this one proxy serves every sandboxed child, so an
     // inline blocking resolve could starve tokio workers under concurrent slow
@@ -289,19 +291,30 @@ async fn handle_conn(
     .ok()
     .and_then(|r| r.ok())
     .unwrap_or_default();
-    // Pin the first screened address. (Trade-off: a multi-A-record/dual-stack
-    // host loses std's automatic try-all-addresses fallback — accepted for the
-    // no-rebinding guarantee.)
-    let Some(pinned) = safe_addrs.into_iter().next() else {
+    if safe_addrs.is_empty() {
         tracing::info!(host, reason = "ssrf", "egress proxy {kind} DENY");
         client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await?;
         return Ok(());
-    };
-    let mut upstream = match TcpStream::connect(pinned).await {
-        Ok(u) => u,
-        Err(e) => {
+    }
+    // Try the screened addresses in order (#2541): a dual-stack host whose
+    // first address has no route still connects through a later one.
+    let mut upstream = match dial::connect_first(&safe_addrs).await {
+        Ok((upstream, connected)) => {
+            if safe_addrs.first() != Some(&connected) {
+                tracing::info!(
+                    host,
+                    %connected,
+                    skipped = safe_addrs.iter().position(|a| *a == connected),
+                    "egress proxy connected through a later resolved address"
+                );
+            }
+            upstream
+        }
+        Err(failures) => {
             let server = entry.as_ref().map(|e| e.server.as_str());
-            report_dial_failure(events, agent, server, host, pinned, &e);
+            for (addr, e) in &failures {
+                report_dial_failure(events, agent, server, host, *addr, e);
+            }
             // Answer the request rather than hanging up, so the client
             // reports a proxy failure instead of a bare reset.
             client
