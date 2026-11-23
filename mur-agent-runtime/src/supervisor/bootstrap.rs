@@ -183,12 +183,9 @@ pub fn stale_cap_warnings(hitl: &mur_common::agent::HitlConfig) -> Vec<String> {
 /// agent has no pin and no trusted writer. Best-effort: a failure leaves the
 /// profile as it was, and `mur agent doctor` still names the fix.
 pub(super) fn migrate_bundled_spawn_grant(agent_home: &Path, mur_home: &Path) {
-    let Some(name) = agent_home.file_name().and_then(|n| n.to_str()) else {
+    let Some(name) = mur_common::agent_home::installed_agent(agent_home, mur_home) else {
         return;
     };
-    if agent_home != mur_home.join("agents").join(name) {
-        return;
-    }
     let bundled = mur_common::exec::bundled_mcp_server_path();
     if let Err(e) = crate::mcp_spawn_migrate::migrate_bundled_spawn_grant(mur_home, name, &bundled)
     {
@@ -201,12 +198,9 @@ pub(super) fn migrate_bundled_spawn_grant(agent_home: &Path, mur_home: &Path) {
 /// unable to do anything (see `crate::concierge_spawn_migrate`). Installed
 /// agents only; best-effort like the grant migration above.
 pub(super) fn migrate_concierge_spawn_mode(agent_home: &Path, mur_home: &Path) {
-    let Some(name) = agent_home.file_name().and_then(|n| n.to_str()) else {
+    let Some(name) = mur_common::agent_home::installed_agent(agent_home, mur_home) else {
         return;
     };
-    if agent_home != mur_home.join("agents").join(name) {
-        return;
-    }
     if let Err(e) = crate::concierge_spawn_migrate::migrate_concierge_spawn_mode(mur_home, name) {
         tracing::warn!(error = %e, "could not migrate the concierge's spawn mode");
     }
@@ -248,3 +242,7 @@ pub(super) fn spawn_companion(
         }
     }))
 }
+
+#[cfg(test)]
+#[path = "bootstrap_tests.rs"]
+mod tests;

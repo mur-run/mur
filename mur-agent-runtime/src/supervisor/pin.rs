@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+use mur_common::agent_home::installed_agent;
 use mur_common::entitlements_pin::{self, PinCheck};
 use mur_common::start_refusal;
 use tracing::{debug, warn};
@@ -49,7 +50,8 @@ pub(super) fn verify(profile: &Profile, agent_home: &Path, mur_home: &Path) -> V
     let name = profile.inner.name.as_str();
     // Only an installed agent has a pin: embedded / exported binaries run from
     // a cache dir outside `<mur_home>/agents`, with no trusted writer to pin.
-    if agent_home != mur_home.join("agents").join(name) {
+    // The home's directory name must also equal the profile's name.
+    if installed_agent(agent_home, mur_home) != Some(name) {
         debug!(home = %agent_home.display(), "agent not under mur_home; entitlement pin not applied");
         return Verdict::Start(PinTrust::Unpinned);
     }
@@ -199,6 +201,34 @@ mod tests {
             Verdict::Start(PinTrust::Unpinned)
         );
         assert!(!entitlements_pin::pin_path(tmp.path(), "bridge_test").exists());
+    }
+
+    #[test]
+    fn cache_home_and_purged_home_are_not_pinned() {
+        let (tmp, home) = setup(|y| y);
+        let profile = load(&home);
+        let cache = tmp.path().join("cache").join("bridge_test");
+        let purged = tmp.path().join("agents").join(".purged.bridge_test.1");
+        for not_installed in [cache, purged] {
+            assert_eq!(
+                verify(&profile, &not_installed, tmp.path()),
+                Verdict::Start(PinTrust::Unpinned),
+                "{}",
+                not_installed.display()
+            );
+        }
+        assert!(!entitlements_pin::pin_path(tmp.path(), "bridge_test").exists());
+    }
+
+    #[test]
+    fn installed_home_named_differently_from_its_profile_is_not_pinned() {
+        let (tmp, home) = setup(|y| y);
+        let other = tmp.path().join("agents").join("someone_else");
+        std::fs::rename(&home, &other).unwrap();
+        assert_eq!(
+            verify(&load(&other), &other, tmp.path()),
+            Verdict::Start(PinTrust::Unpinned)
+        );
     }
 
     /// #2015: a refusal leaves the marker that stops the service manager

@@ -67,6 +67,21 @@ fn directory_outside_agents_is_never_pinned() {
 }
 
 #[test]
+fn cache_home_and_purged_home_are_not_installed() {
+    let tmp = tempfile::tempdir().unwrap();
+    for home in [
+        tmp.path().join("cache").join(AGENT),
+        tmp.path().join("agents").join(AGENT).join("sub"),
+        tmp.path().join("agents").join(".purged.qa.1"),
+    ] {
+        assert!(split_agent_home(&home).is_none(), "{}", home.display());
+        assert!(resolve(&home).is_none(), "{}", home.display());
+    }
+    let (tmp, home, _) = agent();
+    assert_eq!(split_agent_home(&home), Some((tmp.path(), AGENT)));
+}
+
+#[test]
 fn pin_from_disk_records_the_current_identity() {
     let (tmp, home, id) = agent();
     let pin = pin_from_disk(tmp.path(), AGENT).unwrap();

@@ -7,29 +7,26 @@
 use std::path::{Path, PathBuf};
 
 /// `(mur_home, agent)` for `<mur_home>/agents/<agent>/profile.yaml`, the only
-/// shape that has a pin (and a profile lock). `None` for any other path.
+/// shape that has a pin (and a profile lock). `None` for any other path,
+/// including one whose name fails `validate_agent_name` (a `.purged.*`
+/// leftover): the shape rule is `mur_common::agent_home::installed_agent`.
 pub fn pin_target(profile_path: &Path) -> Option<(PathBuf, String)> {
     let agent_dir = profile_path.parent()?;
-    let agents_root = agent_dir.parent()?;
-    let name = agent_dir.file_name()?.to_str()?;
-    if agents_root.file_name()?.to_str()? != "agents" {
-        return None;
-    }
-    Some((agents_root.parent()?.to_path_buf(), name.to_string()))
+    let mur_home = agent_dir.parent()?.parent()?;
+    let name = mur_common::agent_home::installed_agent(agent_dir, mur_home)?;
+    Some((mur_home.to_path_buf(), name.to_string()))
 }
 
 /// Take the profile lock for the agent owning `profile_path` (see
 /// `mur_common::entitlements_pin::lock_profile`). `None` when the path has no
-/// pin, or the name could never be pinned: nothing to serialize against.
+/// pin (`pin_target` already rejects a name that could never be pinned):
+/// nothing to serialize against.
 pub fn lock_for_profile(
     profile_path: &Path,
 ) -> anyhow::Result<Option<mur_common::entitlements_pin::ProfileLock>> {
     let Some((mur_home, name)) = pin_target(profile_path) else {
         return Ok(None);
     };
-    if mur_common::agent_name::validate_agent_name(&name).is_err() {
-        return Ok(None);
-    }
     let lock = mur_common::entitlements_pin::lock_profile(&mur_home, &name, || {
         eprintln!("waiting for another command changing '{name}' to finish…");
     })?;
@@ -94,5 +91,51 @@ pub fn advance_entitlements_pin(
             tracing::warn!(agent = name, error = %e, "entitlement pin not updated");
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn m() -> PathBuf {
+        PathBuf::from("/m")
+    }
+
+    #[test]
+    fn pin_target_names_an_installed_profile() {
+        let p = m().join("agents").join("bob").join("profile.yaml");
+        assert_eq!(pin_target(&p), Some((m(), "bob".to_string())));
+    }
+
+    #[test]
+    fn pin_target_is_none_for_a_cache_home() {
+        let p = m().join("cache").join("bob").join("profile.yaml");
+        assert_eq!(pin_target(&p), None);
+    }
+
+    #[test]
+    fn pin_target_is_none_for_a_purged_leftover() {
+        let p = m().join("agents").join(".purged.x.1").join("profile.yaml");
+        assert_eq!(pin_target(&p), None);
+    }
+
+    #[test]
+    fn pin_target_is_none_for_a_name_that_fails_validation() {
+        for bad in ["-x", "a..b", ".mur.seeding", "has space"] {
+            let p = m().join("agents").join(bad).join("profile.yaml");
+            assert_eq!(pin_target(&p), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn lock_for_profile_takes_no_lock_for_an_unpinnable_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp
+            .path()
+            .join("agents")
+            .join(".purged.x.1")
+            .join("profile.yaml");
+        assert!(lock_for_profile(&p).unwrap().is_none());
     }
 }
