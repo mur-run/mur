@@ -100,6 +100,19 @@ async fn a_failed_upstream_dial_answers_502_instead_of_hanging_up() {
     assert!(resp.starts_with("HTTP/1.1 502"), "{resp}");
 }
 
+/// #2541, end to end: `localhost` resolves to `::1` and `127.0.0.1` on most
+/// machines, in an order the resolver picks. The upstream listens on IPv4
+/// only, so when `::1` comes first the tunnel is up only if the proxy goes on
+/// to the second address.
+#[tokio::test]
+async fn a_host_with_an_unreachable_first_address_still_tunnels() {
+    let up = upstream().await;
+    let proxy = start_egress_proxy("test").await.unwrap();
+    let token = proxy.register(vec!["localhost".to_string()]);
+    let resp = connect_via(proxy.addr, &token, &format!("localhost:{}", up.port())).await;
+    assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+}
+
 #[test]
 fn proxy_auth_token_is_header_case_insensitive() {
     let b64 = base64::engine::general_purpose::STANDARD.encode("mytoken:x");
