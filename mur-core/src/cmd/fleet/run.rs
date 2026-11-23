@@ -378,7 +378,7 @@ pub async fn cmd_fleet_run(
     super::sign_preflight::require_signing(mur_home, &fleet)?;
     // One live run per fleet, as `--loop` takes it (#2531). Held to the end of
     // this function; the kernel drops it if the process dies.
-    let _run_lock = super::loop_run::run_lock::acquire(mur_home, name)?;
+    let _run_lock = super::loop_run::run_lock::acquire_one_shot(mur_home, name)?;
     // With the lock held, as `--loop` checks it: a run started over a paused
     // one would strand it, since `stop` and `pause` read this lock as "live".
     super::loop_run::resume::refuse_fresh_run_over_pause(mur_home, name)?;

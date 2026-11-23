@@ -21,8 +21,40 @@ use mur_common::paths::{FLEET_RUN_LOCK_FILE, FLEET_RUN_OWNER_FILE, fleet_state_d
 #[derive(Debug)]
 pub struct RunLock(#[allow(dead_code)] File);
 
-/// Take the run lock for `name` without blocking, or say who holds it.
+/// What kind of run holds the lock. Recorded in the owner file so a reader can
+/// tell a pausable `--loop` run from a one-shot, which reads no pause marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HolderKind {
+    Loop,
+    OneShot,
+}
+
+impl HolderKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Loop => OWNER_KIND_LOOP,
+            Self::OneShot => OWNER_KIND_ONE_SHOT,
+        }
+    }
+}
+
+/// Owner-file field naming the [`HolderKind`], and its two values.
+const OWNER_KIND_FIELD: &str = "kind";
+const OWNER_KIND_LOOP: &str = "loop";
+const OWNER_KIND_ONE_SHOT: &str = "one_shot";
+
+/// Take the run lock for a `--loop` run of `name` without blocking, or say
+/// who holds it.
 pub fn acquire(mur_home: &Path, name: &str) -> Result<RunLock> {
+    acquire_as(mur_home, name, HolderKind::Loop)
+}
+
+/// [`acquire`] for a one-shot run: same lock, recorded as not pausable.
+pub fn acquire_one_shot(mur_home: &Path, name: &str) -> Result<RunLock> {
+    acquire_as(mur_home, name, HolderKind::OneShot)
+}
+
+fn acquire_as(mur_home: &Path, name: &str, kind: HolderKind) -> Result<RunLock> {
     // Validate before touching the filesystem: the name is joined into a
     // path, so `..` or an absolute path would create files outside
     // `fleet-state/`.
@@ -31,10 +63,10 @@ pub fn acquire(mur_home: &Path, name: &str) -> Result<RunLock> {
     }
     let dir = fleet_state_dir(mur_home, name);
     std::fs::create_dir_all(&dir)?;
-    acquire_at(&dir.join(FLEET_RUN_LOCK_FILE), name)
+    acquire_at(&dir.join(FLEET_RUN_LOCK_FILE), name, kind)
 }
 
-fn acquire_at(path: &Path, name: &str) -> Result<RunLock> {
+fn acquire_at(path: &Path, name: &str, kind: HolderKind) -> Result<RunLock> {
     let f = std::fs::OpenOptions::new()
         .create(true)
         .read(true)
@@ -51,6 +83,7 @@ fn acquire_at(path: &Path, name: &str) -> Result<RunLock> {
                 "pid": std::process::id(),
                 "started_at": Utc::now(),
                 "host": host,
+                OWNER_KIND_FIELD: kind.as_str(),
             });
             let _ = std::fs::write(owner_path(path), body.to_string());
             Ok(RunLock(f))
@@ -108,6 +141,24 @@ fn owner_pid(lock: &Path) -> Option<u32> {
     let text = std::fs::read_to_string(owner_path(lock)).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
     v.get("pid")?.as_u64().and_then(|p| u32::try_from(p).ok())
+}
+
+/// Is the lock held right now by a one-shot run? Liveness still comes from the
+/// try-lock alone. An owner file with no kind (written by an older binary, or
+/// not written yet) reads as `false`: the holder is treated as a loop run, as
+/// every holder was before one-shot runs took this lock.
+pub fn is_held_by_one_shot(mur_home: &Path, name: &str) -> bool {
+    if !is_held(mur_home, name) {
+        return false;
+    }
+    let lock = fleet_state_dir(mur_home, name).join(FLEET_RUN_LOCK_FILE);
+    owner_kind(&lock).as_deref() == Some(OWNER_KIND_ONE_SHOT)
+}
+
+fn owner_kind(lock: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(owner_path(lock)).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some(v.get(OWNER_KIND_FIELD)?.as_str()?.to_owned())
 }
 
 fn owner_path(lock: &Path) -> PathBuf {
@@ -178,6 +229,32 @@ mod tests {
             !is_held_by(home.path(), "f", me),
             "a stale owner file is not a holder"
         );
+    }
+
+    /// #2554: only a live one-shot holder reads as one. A loop that takes the
+    /// lock after a one-shot overwrites the kind, and an owner file with no
+    /// kind (an older binary's) reads as a loop.
+    #[test]
+    fn is_held_by_one_shot_follows_the_live_holder() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        assert!(!is_held_by_one_shot(h, "f"), "no lock file yet");
+        let one_shot = acquire_one_shot(h, "f").unwrap();
+        assert!(is_held_by_one_shot(h, "f"));
+        drop(one_shot);
+        assert!(
+            !is_held_by_one_shot(h, "f"),
+            "a stale owner file is not a holder"
+        );
+        let looped = acquire(h, "f").unwrap();
+        assert!(!is_held_by_one_shot(h, "f"), "the loop replaced the kind");
+        std::fs::write(
+            fleet_state_dir(h, "f").join(FLEET_RUN_OWNER_FILE),
+            format!(r#"{{"pid":{}}}"#, std::process::id()),
+        )
+        .unwrap();
+        assert!(!is_held_by_one_shot(h, "f"), "no kind reads as a loop");
+        drop(looped);
     }
 
     #[test]
