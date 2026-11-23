@@ -27,6 +27,10 @@ pub const FLEET_SHARED_DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 pub const FLEET_SHARED_DEFAULT_POLL_SECS: u64 = 1;
 /// Seconds any path waits for the reply-directory lifecycle lock.
 pub const FLEET_SHARED_DEFAULT_LIFECYCLE_LOCK_TIMEOUT_SECS: u64 = 10;
+/// Request markers one member may have outstanding.
+pub const FLEET_SHARED_DEFAULT_MAX_MEMBER_MARKERS: u64 = 256;
+/// Request markers all members together may have outstanding.
+pub const FLEET_SHARED_DEFAULT_MAX_TOTAL_MARKERS: u64 = 4096;
 
 /// Keys that exist only in a later version; a v1 config that sets one is
 /// told so and the key has no effect.
@@ -88,6 +92,8 @@ pub struct FleetSharedAreaConfig {
     pub request_timeout_secs: u64,
     pub poll_secs: u64,
     pub lifecycle_lock_timeout_secs: u64,
+    pub max_member_markers: u64,
+    pub max_total_markers: u64,
     /// Entries of the block that were not applied. Never written back.
     #[serde(skip)]
     pub problems: Vec<FleetSharedConfigProblem>,
@@ -106,6 +112,8 @@ impl Default for FleetSharedAreaConfig {
             request_timeout_secs: FLEET_SHARED_DEFAULT_REQUEST_TIMEOUT_SECS,
             poll_secs: FLEET_SHARED_DEFAULT_POLL_SECS,
             lifecycle_lock_timeout_secs: FLEET_SHARED_DEFAULT_LIFECYCLE_LOCK_TIMEOUT_SECS,
+            max_member_markers: FLEET_SHARED_DEFAULT_MAX_MEMBER_MARKERS,
+            max_total_markers: FLEET_SHARED_DEFAULT_MAX_TOTAL_MARKERS,
             problems: Vec::new(),
         }
     }
@@ -124,6 +132,8 @@ impl PartialEq for FleetSharedAreaConfig {
             && self.request_timeout_secs == other.request_timeout_secs
             && self.poll_secs == other.poll_secs
             && self.lifecycle_lock_timeout_secs == other.lifecycle_lock_timeout_secs
+            && self.max_member_markers == other.max_member_markers
+            && self.max_total_markers == other.max_total_markers
     }
 }
 
@@ -179,6 +189,8 @@ impl<'de> Deserialize<'de> for FleetSharedAreaConfig {
                 "lifecycle_lock_timeout_secs" => {
                     positive(&value, &mut cfg.lifecycle_lock_timeout_secs)
                 }
+                "max_member_markers" => positive(&value, &mut cfg.max_member_markers),
+                "max_total_markers" => positive(&value, &mut cfg.max_total_markers),
                 "on_expiry" => match serde_json::from_value(value) {
                     Ok(v) => {
                         cfg.on_expiry = v;
@@ -240,6 +252,8 @@ mod tests {
         assert_eq!(c.request_timeout_secs, 30);
         assert_eq!(c.poll_secs, 1);
         assert_eq!(c.lifecycle_lock_timeout_secs, 10);
+        assert_eq!(c.max_member_markers, 256);
+        assert_eq!(c.max_total_markers, 4096);
         assert!(c.problems.is_empty());
         assert!(c.is_default());
         assert_eq!(parse("fleet:\n  autorun: true\n"), c);
@@ -325,6 +339,28 @@ mod tests {
                 )],
                 "input {bad}"
             );
+        }
+    }
+
+    #[test]
+    fn marker_caps_are_read_and_never_zero() {
+        let c =
+            parse("fleet:\n  shared_area:\n    max_member_markers: 8\n    max_total_markers: 64\n");
+        assert_eq!(c.max_member_markers, 8);
+        assert_eq!(c.max_total_markers, 64);
+        assert!(c.problems.is_empty());
+        assert!(!c.is_default());
+        for key in ["max_member_markers", "max_total_markers"] {
+            for bad in ["0", "-1", "1.5", "never"] {
+                let c = parse(&format!("fleet:\n  shared_area:\n    {key}: {bad}\n"));
+                assert_eq!(c.max_member_markers, 256, "{key}: {bad}");
+                assert_eq!(c.max_total_markers, 4096, "{key}: {bad}");
+                assert_eq!(
+                    c.problems,
+                    vec![FleetSharedConfigProblem::InvalidValue(key.into())],
+                    "{key}: {bad}"
+                );
+            }
         }
     }
 
