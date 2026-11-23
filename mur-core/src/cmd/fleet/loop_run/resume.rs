@@ -544,7 +544,7 @@ fn pending_resume(mur_home: &Path, name: &str, run_id: &str) -> bool {
 /// removed as a crash leftover only when the record is not paused AND no
 /// checkpoint exists (design §8.5): a checkpoint is a pause nobody discarded,
 /// so only `mur fleet stop` may drop it.
-pub(super) fn refuse_fresh_run_over_pause(mur_home: &Path, name: &str) -> Result<()> {
+pub(crate) fn refuse_fresh_run_over_pause(mur_home: &Path, name: &str) -> Result<()> {
     let Some(run_id) = control::paused_run_id(mur_home, name) else {
         return Ok(());
     };
@@ -668,6 +668,10 @@ mod tests;
 #[cfg(test)]
 #[path = "resume_scope_tests.rs"]
 mod scope_tests;
+
+#[cfg(test)]
+#[path = "resume_oneshot_tests.rs"]
+mod oneshot_tests;
 
 #[cfg(test)]
 #[path = "resume_rekey_tests.rs"]

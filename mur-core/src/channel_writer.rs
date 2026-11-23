@@ -421,9 +421,19 @@ fn resolve_writer_key_in(
 /// unreadable, with no handoff for that name, is the sandbox: `keys/` is
 /// denied inside it. A run started there would write its control-plane events
 /// unsigned and could never ask for an approval, so it must not start. This
-/// keys off the file system, not an environment variable, so a shell inside
-/// the sandbox cannot switch it off. An ABSENT key is not a refusal: that is
-/// the keyless bootstrap home, which [`resolve_writer_key`] also allows.
+/// keys off the file system, not `MUR_SEALED` or `MUR_RUN_OWNER`, so a shell
+/// inside the sandbox cannot switch it off for `home`. An ABSENT key is not a
+/// refusal: that is the keyless bootstrap home, which [`resolve_writer_key`]
+/// also allows.
+///
+/// That allowance is deliberate and is per `home`. A shell that points
+/// `MUR_HOME` at a directory it can write passes this check, and its run then
+/// writes its events and state under that directory, not the real channels:
+/// the guarantee here is that no unsigned event lands in a home that has
+/// keys. Reaching a member from there is no wider than `mur agent send` from
+/// the same shell: a member names its caller by process lineage against its
+/// own agents directory, not the caller's `MUR_HOME`, and applies
+/// `accepts_from` to that.
 pub(crate) fn unsignable_reason(home: &Path, signer_agent: &str) -> Option<String> {
     unsignable_reason_in(process_handoff(), home, signer_agent)
 }

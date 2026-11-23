@@ -44,6 +44,10 @@ fn a_custom_router_is_checked_as_well_as_the_control_plane() {
 #[tokio::test]
 async fn a_one_shot_run_that_cannot_sign_leaves_no_trace() {
     use std::os::unix::fs::PermissionsExt;
+    // Root reads a mode-000 file, so the denial this test needs never happens.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     crate::channel_writer::plant_writer_identity(home);
