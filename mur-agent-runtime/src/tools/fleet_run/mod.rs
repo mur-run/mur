@@ -342,6 +342,11 @@ fn dispatched_reply(
 /// The full `mur` argv for one dispatch. Shared with `mur-daemon`, which
 /// launches cross-router fleets (#2116): one builder, so the two launch paths
 /// cannot drift. Argv only — never a shell — so goal text cannot inject.
+///
+/// The free text (`job`, or the deep-research question) goes last, after
+/// `--`. It is written by the agent, and in flag position `--worktree` or
+/// `--cwd=/elsewhere` would parse as the flag: a one-shot worktree run the
+/// daemon refuses, or a target directory no check ever saw.
 pub fn dispatch_argv(
     fleet: &str,
     goal: Option<&str>,
@@ -350,7 +355,7 @@ pub fn dispatch_argv(
     cwd: Option<&std::path::Path>,
     cwd_inferred: bool,
 ) -> Vec<String> {
-    let mut args = child_args(fleet, goal, job);
+    let (mut args, text) = child_args(fleet, goal, job);
     args.push("--run-id".into());
     args.push(run_id.into());
     // `mur deep-research` has no `--cwd`: research has no target tree.
@@ -363,23 +368,40 @@ pub fn dispatch_argv(
             args.push("--cwd-inferred".into());
         }
     }
+    if let Some(t) = text {
+        args.push("--".into());
+        args.push(t.into());
+    }
     args
 }
 
-/// The `mur` argv for one dispatch (before `--run-id` / `--cwd`).
+/// Does this dispatch run once instead of looping? `job` with no `goal`.
+///
+/// Only a one-shot run can take the Tier 1 worktree path (`--worktree` is
+/// refused with `--loop`), which is why the daemon asks. Named here, beside
+/// the argv it describes.
+pub fn runs_once(goal: Option<&str>, job: Option<&str>) -> bool {
+    goal.is_none() && job.is_some()
+}
+
+/// The `mur` argv for one dispatch, split into its flags (before `--run-id`
+/// / `--cwd`) and the free text that [`dispatch_argv`] puts after `--`.
 ///
 /// `goal` rides as `--goal=<text>` — one token, so text starting with `-`
 /// cannot be read as a flag — and is a run-scoped override: `fleet.yaml`'s
 /// standing goal is left alone. `job` alone is a one-shot run; with `goal`
 /// it is queued first and the loop drains it.
-fn child_args(fleet: &str, goal: Option<&str>, job: Option<&str>) -> Vec<String> {
-    let mut args: Vec<String> = match (fleet, goal) {
-        (DEEP_RESEARCH, Some(g)) => return vec![DEEP_RESEARCH.into(), g.into()],
-        _ => vec!["fleet".into(), "run".into(), fleet.into()],
-    };
-    if let Some(j) = job {
-        args.push(j.into());
+fn child_args<'a>(
+    fleet: &str,
+    goal: Option<&'a str>,
+    job: Option<&'a str>,
+) -> (Vec<String>, Option<&'a str>) {
+    if fleet == DEEP_RESEARCH
+        && let Some(g) = goal
+    {
+        return (vec![DEEP_RESEARCH.into()], Some(g));
     }
+    let mut args: Vec<String> = vec!["fleet".into(), "run".into(), fleet.into()];
     match (goal, job) {
         (Some(g), _) => {
             args.push("--loop".into());
@@ -388,7 +410,7 @@ fn child_args(fleet: &str, goal: Option<&str>, job: Option<&str>) -> Vec<String>
         (None, None) => args.push("--loop".into()),
         (None, Some(_)) => {}
     }
-    args
+    (args, job)
 }
 
 #[cfg(test)]

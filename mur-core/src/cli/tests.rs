@@ -413,3 +413,57 @@ fn every_port_step_command_parses_as_a_browser_answer() {
     // a, b, c, d, the login; then --allow.
     assert_eq!(seen, 6);
 }
+
+/// The runtime's `fleet_run` and the daemon put an agent's job text after
+/// `--` (`fleet_run::dispatch_argv`). Pin that clap reads it there as the job
+/// even when it spells a flag, and that the flags before it still apply.
+#[test]
+fn cli_fleet_run_job_after_separator_is_text_not_a_flag() {
+    use crate::cli::actions::FleetAction;
+    use clap::Parser;
+    for job in ["--worktree", "--cwd=/elsewhere", "--loop"] {
+        let argv = [
+            "mur", "fleet", "run", "coder", "--run-id", "r", "--cwd", "/w", "--", job,
+        ];
+        let cli = Cli::try_parse_from(argv).unwrap();
+        let Commands::Fleet {
+            action:
+                FleetAction::Run {
+                    job: Some(parsed),
+                    worktree,
+                    loop_flag,
+                    cwd,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected fleet run with a job: {argv:?}");
+        };
+        assert_eq!(parsed, job);
+        assert!(!worktree && !loop_flag, "{job} parsed as a flag");
+        assert_eq!(cwd.as_deref(), Some(std::path::Path::new("/w")));
+    }
+    // The loop shape keeps its job too.
+    let cli = Cli::try_parse_from([
+        "mur", "fleet", "run", "coder", "--loop", "--goal=g", "--run-id", "r", "--", "fix #1",
+    ])
+    .unwrap();
+    assert!(matches!(
+        cli.command,
+        Commands::Fleet { action: FleetAction::Run { job: Some(ref j), loop_flag: true, .. } }
+            if j == "fix #1"
+    ));
+}
+
+/// Same for deep-research: a question after `--` is a question, even one that
+/// names a subcommand.
+#[test]
+fn cli_deep_research_question_after_separator_is_text() {
+    use clap::Parser;
+    let cli =
+        Cli::try_parse_from(["mur", "deep-research", "--run-id", "r", "--", "status"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Commands::DeepResearch { action: None, question: Some(ref q), .. } if q == "status"
+    ));
+}

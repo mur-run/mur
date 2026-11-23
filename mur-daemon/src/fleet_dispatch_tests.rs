@@ -76,6 +76,9 @@ fn drop_request(home: &Path, req: &FleetDispatchRequest) -> PathBuf {
 /// `grep -c` exits 1 when it counts zero lines. Without the `|| true` the
 /// script fails exactly when the handoff variable is absent, which is the
 /// probe below and every launch these tests expect, so each caller skipped.
+///
+/// Third line: the Tier 1 flag as the launched run sees it (`unset` when it
+/// is absent), which is not what the daemon's own environment says.
 #[cfg(unix)]
 fn fake_mur(home: &Path) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
@@ -84,8 +87,9 @@ fn fake_mur(home: &Path) -> Option<PathBuf> {
     std::fs::write(
         &fake,
         format!(
-            "#!/bin/sh\n{{ echo \"$@\"; env | grep -c '^{}=' || true; }} > {}.tmp && mv {}.tmp {}\n",
+            "#!/bin/sh\n{{ echo \"$@\"; env | grep -c '^{}=' || true; echo \"${{{}-unset}}\"; }} > {}.tmp && mv {}.tmp {}\n",
             mur_common::identity::SIGNING_HANDOFF_ENV,
+            mur_core::cmd::fleet::run::EXEC_FLAG_ENV,
             out.display(),
             out.display(),
             out.display()
@@ -266,6 +270,117 @@ fn a_replayed_request_is_rejected_and_keeps_the_original_record() {
         record(f.home(), "fleet-council-1").unwrap().status,
         FleetDispatchStatus::Launched
     );
+}
+
+/// [`fixture`] with a `parallel:` block on `council`: the fleet shape a
+/// one-shot run fans into per-track git worktrees when Tier 1 is on.
+fn parallel_fixture() -> Fixture {
+    let f = fixture("council");
+    std::fs::write(
+        f.home().join("fleets/council/fleet.yaml"),
+        "name: council\nrouter: orchestrator\ngoal: g\nchannel_id: fleet-council\n\
+         members: [a, b]\nparallel:\n  judge:\n    model: m\n  tracks:\n\
+         \x20   - name: t1\n      approach: one\n",
+    )
+    .unwrap();
+    f
+}
+
+/// The one path where the run itself, not a member, executes git in the
+/// directory the requester named. Launched here it would do that outside the
+/// requester's sandbox, so the daemon refuses exactly that shape and nothing
+/// wider: the same fleet looping, or with the experiment off, still launches.
+#[test]
+fn a_one_shot_worktree_run_is_not_launched_for_a_sandboxed_requester() {
+    const NEEDLE: &str = "per-track git worktrees";
+    let exec_flag = mur_core::cmd::fleet::run::EXEC_FLAG_ENV;
+    // (experiment on, goal, job, refused)
+    let cases = [
+        (true, None, Some("fix it"), true),
+        (false, None, Some("fix it"), false),
+        (true, Some("decide"), None, false),
+        (true, Some("decide"), Some("fix it"), false),
+    ];
+    for (flag_on, goal, job, refused) in cases {
+        let mut env = mur_common::test_env::EnvGuard::hold();
+        if flag_on {
+            env.set_var(exec_flag, "1");
+        } else {
+            env.unset_var(exec_flag);
+        }
+        let f = parallel_fixture();
+        let mut d = dispatch("council", 1);
+        d.goal = goal.map(str::to_owned);
+        d.job = job.map(str::to_owned);
+        let req = FleetDispatchRequest::create(d, &f.requester, 0, Utc::now());
+        drop_request(f.home(), &req);
+        // A binary that cannot be spawned: a case that gets past the guard is
+        // rejected too, but for the spawn, which is how the two are told apart.
+        sweep(
+            f.home(),
+            &f.home().join(FLEET_DISPATCH_REQUEST_DIR),
+            &cfg(f.home()),
+            Path::new("/nonexistent/mur"),
+        )
+        .unwrap();
+        let reason = record(f.home(), "fleet-council-1")
+            .expect("record")
+            .reason
+            .unwrap_or_default();
+        let case = format!("flag {flag_on}, goal {goal:?}, job {job:?}: {reason}");
+        assert_eq!(reason.contains(NEEDLE), refused, "{case}");
+        if !refused {
+            assert!(reason.contains("spawn"), "reached the launch: {case}");
+        }
+    }
+}
+
+/// The refusal above reads the DAEMON's environment. The run reads its own,
+/// after `mur` loads `~/.mur/.env`, which this daemon never does, and it
+/// reads `fleet.yaml` again. So a flag set only in `.env`, or a `parallel:`
+/// block added after the check, would take the worktree path anyway. The
+/// launch therefore pins the flag off in the child, whatever this process
+/// has: absent (the `.env` case) or on (a loop run, which the guard lets by).
+#[cfg(unix)]
+#[test]
+fn a_launched_run_has_worktree_execution_pinned_off() {
+    let exec_flag = mur_core::cmd::fleet::run::EXEC_FLAG_ENV;
+    // (the daemon's own flag, goal, job)
+    let cases = [
+        (None, None, Some("fix it")),
+        (Some("1"), Some("decide"), None),
+    ];
+    for (daemon_flag, goal, job) in cases {
+        let mut env = mur_common::test_env::EnvGuard::hold();
+        match daemon_flag {
+            Some(v) => env.set_var(exec_flag, v),
+            None => env.unset_var(exec_flag),
+        };
+        let f = parallel_fixture();
+        let Some(fake) = fake_mur(f.home()) else {
+            eprintln!("skipping: this sandbox cannot exec under $TMPDIR");
+            return;
+        };
+        let mut d = dispatch("council", 1);
+        d.goal = goal.map(str::to_owned);
+        d.job = job.map(str::to_owned);
+        let req = FleetDispatchRequest::create(d, &f.requester, 0, Utc::now());
+        drop_request(f.home(), &req);
+        sweep(
+            f.home(),
+            &f.home().join(FLEET_DISPATCH_REQUEST_DIR),
+            &cfg(f.home()),
+            &fake,
+        )
+        .unwrap();
+        let case = format!("daemon flag {daemon_flag:?}, goal {goal:?}, job {job:?}");
+        let out = launched(f.home()).unwrap_or_else(|| panic!("not launched: {case}"));
+        assert_eq!(
+            out.lines().nth(2).map(str::trim),
+            Some(mur_core::cmd::fleet::run::EXEC_FLAG_OFF),
+            "the launched run must see {exec_flag} pinned off: {case}"
+        );
+    }
 }
 
 /// Builds one tampered or unauthorized request from a fixture.
