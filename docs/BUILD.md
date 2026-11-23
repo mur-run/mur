@@ -236,3 +236,5 @@ worktree is safe and does not touch its source.
 script to a temp dir and execute it. A sandbox that denies exec from the temp
 dir fails them with `Operation not permitted (os error 1)`. This is the
 environment, not the code; run those four outside the sandbox (or in CI).
+
+<!-- throwaway line: verifying ci-edit-rerun.yml (#2539), this PR is never merged -->
