@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { channelLabel } from "./ChatChannelRail";
+import { channelLabel, idChip, rowTooltip } from "./ChatChannelRail";
 import type { ChannelSummary } from "../../work/types";
 
 const UUID = "019ed0af-5e38-7912-b554-dc335a8fc2db";
@@ -25,5 +25,22 @@ describe("channelLabel", () => {
   });
   it("keeps the short fleet name for fleet channels without a title", () => {
     expect(channelLabel({ ...base, id: "fleet-develop-rust" })).toBe("develop-rust");
+  });
+});
+
+describe("the id handle on a rail row", () => {
+  const run: ChannelSummary = {
+    ...base, id: "fleet-develop-rust", title: "fleet: develop-rust", handle: "#fleet-develop-rust",
+  };
+  it("prints a conversation's handle as the backend computed it", () => {
+    expect(idChip({ ...base, handle: "019ed0af5" })).toBe("019ed0af5");
+  });
+  it("never prints eight characters of a run's id, which name no run", () => {
+    expect(idChip(run)).toBe("");
+    expect(idChip(run)).not.toBe("fleet-de");
+  });
+  it("keeps a run's whole handle in the tooltip, where it can be read back", () => {
+    expect(rowTooltip(run)).toBe("#2 · #fleet-develop-rust — fleet: develop-rust");
+    expect(rowTooltip({ ...base, handle: "019ed0af5", ordinal: 0 })).toBe(`019ed0af5 — ${UUID}`);
   });
 });

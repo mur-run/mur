@@ -25,8 +25,9 @@ export interface ChannelSummary {
   preview: string;
   /** Stable per-machine display number (`#2`). Local view state, never synced. */
   ordinal: number;
-  /** murmur's `/channels` id handle: the shortest id prefix no other local
-   *  channel shares (#2538). Empty for a run. */
+  /** What names this channel by id at murmur's `/channels`: the shortest id
+   *  prefix no other local channel shares (#2538), or for a run its whole id
+   *  behind `#`. Computed by the backend; never derive one from `id` here. */
   handle: string;
 }
 

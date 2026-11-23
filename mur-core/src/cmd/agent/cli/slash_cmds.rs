@@ -34,7 +34,7 @@ pub(super) fn channel_handle(s: &persist::SessionInfo) -> String {
 }
 
 /// `channel_handle` from the raw parts, for callers holding a `ChannelMeta`.
-/// `handle` is the id handle (`persist::typeable`), not the id.
+/// `handle` is the id handle (`Handles::typeable`), not the id.
 pub(super) fn handle_of(ordinal: u64, handle: &str) -> String {
     if ordinal >= FIRST_ORDINAL {
         ordinal.to_string()

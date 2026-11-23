@@ -11,12 +11,30 @@
 //! the id the same way ([`handle_key`]). Uniqueness is computed over every
 //! channel in the index, so a handle is also unique within any subset of
 //! them that a resolver happens to search.
+//!
+//! A handle is unique when it is computed, not for ever. A channel minted
+//! later in the same window makes an earlier handle longer (`01a16c01`
+//! becomes `01a16c01c`). The shorter one is still a prefix of both ids, so
+//! typed back it is reported ambiguous — it never names the wrong channel.
+//! That is why handles are recomputed wherever they are printed and never
+//! stored: a cached handle is the one that goes stale. The channel's ordinal
+//! is the handle that does not change.
+//!
+//! Real ids are UUIDv7, `fleet-<name>`, or an old agent-named id. Two things
+//! only a hex id that is not a UUID can do: ids differing only in dashes or
+//! letter case share one key and so one handle, and an id that is a prefix of
+//! another is capped at its own length and stays ambiguous as a prefix
+//! (typing it whole still reaches it).
 
 use std::collections::HashMap;
 
 /// Shortest handle ever shown. Eight is what a handle always was, so a
 /// channel with no near neighbour keeps the handle it had before.
 pub const MIN_HANDLE_LEN: usize = 8;
+
+/// Typed before an id that is given whole rather than by handle
+/// (`#fleet-dev`): it tells `/channels` the word is an id, not a number.
+pub const WHOLE_ID_SIGIL: char = '#';
 
 /// The form of `id` that handles are prefixes of: lowercase, dashes removed.
 /// `None` for an id that is not a hex UUID-like string (a run's
@@ -77,6 +95,15 @@ impl Handles {
             .min(key.len());
         Some(key[..len].to_string())
     }
+
+    /// What a user types at murmur's `/channels` to name channel `id` by id:
+    /// its handle, or for an id that has none (see [`handle_key`]) the whole
+    /// id behind [`WHOLE_ID_SIGIL`]. A run's `fleet-<name>` is not hex, so a
+    /// bare word is refused and a prefix of it names no fleet.
+    pub fn typeable(&self, id: &str) -> String {
+        self.of(id)
+            .unwrap_or_else(|| format!("{WHOLE_ID_SIGIL}{id}"))
+    }
 }
 
 #[cfg(test)]
@@ -124,5 +151,13 @@ mod tests {
         assert_eq!(h.of("fleet-dev"), None);
         assert_eq!(handle_key("fleet-dev"), None);
         assert_eq!(handle_key("01A1-6C"), Some("01a16c".into()));
+    }
+
+    #[test]
+    fn a_run_is_named_whole_behind_a_hash() {
+        let h = Handles::from_ids(["fleet-dev", "fleet-devteam", A]);
+        assert_eq!(h.typeable("fleet-dev"), "#fleet-dev");
+        assert_eq!(h.typeable("fleet-devteam"), "#fleet-devteam");
+        assert_eq!(h.typeable(A), "01a16c01");
     }
 }

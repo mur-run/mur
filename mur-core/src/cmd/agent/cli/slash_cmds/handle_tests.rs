@@ -70,3 +70,31 @@ fn the_footer_handle_is_the_listing_handle() {
         meta.handle
     );
 }
+
+/// A handle is unique when it is computed, not for ever: a conversation
+/// minted beside this one lengthens it. The footer reads it again each turn,
+/// so it never keeps showing a handle that has since become ambiguous —
+/// which is what caching it in the session would do.
+#[test]
+fn the_footer_handle_lengthens_when_a_neighbour_appears() {
+    let tmp = TempDir::new().unwrap();
+    crate::channel_writer::plant_identity_for(tmp.path(), AGENT);
+    crate::channel_writer::plant_human_identity(tmp.path());
+    let mut first = Session::create(tmp.path(), AGENT).unwrap();
+    first.append("user", "one", None, &[]).unwrap();
+    let alone = first.current().unwrap().handle;
+    assert_eq!(alone.len(), 8, "no neighbour yet: {alone}");
+
+    let mut second = Session::create(tmp.path(), AGENT).unwrap();
+    second.append("user", "two", None, &[]).unwrap();
+    let crowded = first.current().unwrap().handle;
+    assert!(crowded.len() > 8, "the neighbour shares {alone}: {crowded}");
+
+    let window = persist::list_recent(tmp.path(), AGENT, CHANNEL_LOOKUP_LIMIT).unwrap();
+    let own = first.current().unwrap().id;
+    assert_eq!(resolve(&window, &typed_ref(&crowded)).unwrap().id, own);
+    assert!(
+        resolve(&window, &typed_ref(&alone)).is_err(),
+        "the outgrown handle is refused as ambiguous, never resolved to a neighbour"
+    );
+}

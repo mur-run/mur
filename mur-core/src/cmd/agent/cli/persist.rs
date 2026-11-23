@@ -35,7 +35,7 @@ pub struct ChannelMeta {
     /// reused. `0` means "not numbered yet" — an index row older than the
     /// ordinals table that has not been backfilled.
     pub ordinal: u64,
-    /// What names this channel by id at `/channels`; see [`typeable`].
+    /// What names this channel by id at `/channels`; see [`handle_for`].
     pub handle: String,
 }
 
@@ -47,28 +47,21 @@ pub struct SessionInfo {
     pub turns: usize,
     /// Stable per-channel number; see `ChannelMeta::ordinal`.
     pub ordinal: u64,
-    /// What names this channel by id at `/channels`; see [`typeable`].
+    /// What names this channel by id at `/channels`; see [`handle_for`].
     pub handle: String,
 }
 
-/// What a user types at `/channels` to name channel `id` by id. A hex id
-/// gets its shortest prefix no other channel on this machine shares (#2538) —
-/// a fixed eight characters is the creation minute of a UUIDv7, shared by
-/// every channel minted in it. A run's id is `fleet-<name>`: it is not hex,
-/// needs the `#` (a bare word that is not hex is refused), and is shown
-/// whole, because a prefix of it names no fleet.
-pub fn typeable(handles: &mur_channel::handle::Handles, id: &str) -> String {
-    handles.of(id).unwrap_or_else(|| format!("#{id}"))
-}
-
-/// [`typeable`] for one id, reading the index for its neighbours. Fail-soft:
+/// What a user types at `/channels` to name channel `id` by id
+/// ([`Handles::typeable`]), reading the index for its neighbours. Fail-soft:
 /// an unreadable index gives the minimum-length handle, which is what every
 /// handle was before #2538.
+///
+/// [`Handles::typeable`]: mur_channel::handle::Handles::typeable
 pub fn handle_for(home: &Path, id: &str) -> String {
-    let handles = ChannelService::open(home)
+    ChannelService::open(home)
         .and_then(|svc| svc.index().handles())
-        .unwrap_or_default();
-    typeable(&handles, id)
+        .unwrap_or_default()
+        .typeable(id)
 }
 
 /// A live conversation handle. The backing channel is created lazily on the
@@ -118,8 +111,10 @@ impl Session {
     pub fn current(&self) -> Option<ChannelMeta> {
         let id = self.channel_id.clone()?;
         let ordinal = self.svc.index().ordinal_of(&id).ok().flatten().unwrap_or(0);
-        let handles = self.svc.index().handles().unwrap_or_default();
-        let handle = typeable(&handles, &id);
+        // Recomputed on every call, which is once a turn: a conversation
+        // minted next to this one makes its handle longer, and the footer
+        // must not keep showing the one that has become ambiguous.
+        let handle = self.svc.index().handles().unwrap_or_default().typeable(&id);
         Some(ChannelMeta {
             id,
             ordinal,
@@ -386,7 +381,7 @@ fn list_where(
                 .collect()
         };
         out.push(SessionInfo {
-            handle: typeable(&handles, &row.id),
+            handle: handles.typeable(&row.id),
             id: row.id,
             preview,
             // The owner record C2 writes ahead of the first human line is

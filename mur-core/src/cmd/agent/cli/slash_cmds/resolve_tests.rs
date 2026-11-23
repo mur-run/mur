@@ -3,10 +3,7 @@ use crate::cmd::agent::cli::persist::SessionInfo;
 
 fn si(id: &str, ordinal: u64) -> SessionInfo {
     SessionInfo {
-        handle: crate::cmd::agent::cli::persist::typeable(
-            &mur_channel::handle::Handles::default(),
-            id,
-        ),
+        handle: mur_channel::handle::Handles::default().typeable(id),
         id: id.into(),
         preview: String::new(),
         turns: 1,

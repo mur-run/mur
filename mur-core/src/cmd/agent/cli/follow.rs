@@ -45,7 +45,9 @@ pub enum FollowMode {
 pub struct Follow {
     pub channel_id: String,
     /// The handle that names this channel at `/channels`, fixed when the
-    /// follow starts; see `persist::typeable`.
+    /// follow starts (`Handles::typeable`). If a neighbour minted during the
+    /// follow lengthens it, the tag typed back is reported ambiguous with
+    /// the current handles; it never names another channel.
     handle: String,
     /// NEXT `seq` to render — the dedup cursor. Starts one past the log's
     /// current head so following never replays history. ("One past" and not

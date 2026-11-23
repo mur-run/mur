@@ -5,8 +5,6 @@ import {
   actorName,
   relativeTime,
   ordinalLabel,
-  shortId,
-  SHORT_ID_LEN,
   channelTitle,
   displayNameMap,
   TITLE_FALLBACK_SEP,
@@ -73,18 +71,6 @@ describe("relativeTime", () => {
 });
 
 describe("channel handles", () => {
-  const UUID = "019ed0af-5e38-7912-b554-dc335a8fc2db";
-
-  it("shortens an id to the same prefix the CLI accepts", () => {
-    expect(shortId(UUID)).toBe("019ed0af");
-    expect(shortId(UUID)).toHaveLength(SHORT_ID_LEN);
-  });
-
-  it("shows the backend's handle when it had to be longer than eight", () => {
-    expect(shortId(UUID, "019ed0af5")).toBe("019ed0af5");
-    expect(shortId(UUID, "")).toBe("019ed0af");
-  });
-
   it("labels an ordinal with a hash", () => {
     expect(ordinalLabel(2)).toBe("#2");
   });
@@ -98,7 +84,7 @@ describe("channel handles", () => {
 describe("channelTitle", () => {
   const UUID = "019ed0af-5e38-7912-b554-dc335a8fc2db";
   const CREATED = "2026-11-05T06:43:08Z";
-  const base = { id: UUID, title: "", agents: ["mur"], created_at: CREATED };
+  const base = { id: UUID, title: "", agents: ["mur"], created_at: CREATED, handle: "019ed0af5" };
   const date = new Date(CREATED).toLocaleDateString("en-US");
 
   it("uses the stored title when there is one", () => {
@@ -113,9 +99,13 @@ describe("channelTitle", () => {
   it("treats a whitespace-only title as untitled", () => {
     expect(channelTitle({ ...base, title: "  " }, {}, "en-US")).toBe(`mur${TITLE_FALLBACK_SEP}${date}`);
   });
-  it("keeps the short id only when there is no agent or no date", () => {
-    expect(channelTitle({ ...base, agents: [] })).toBe(shortId(UUID));
-    expect(channelTitle({ ...base, created_at: "" })).toBe(shortId(UUID));
+  it("keeps the id handle only when there is no agent or no date", () => {
+    expect(channelTitle({ ...base, agents: [] })).toBe("019ed0af5");
+    expect(channelTitle({ ...base, created_at: "" })).toBe("019ed0af5");
+  });
+  it("names an untitled run whole, never by eight characters of its id", () => {
+    const run = { id: "fleet-dev", title: "", agents: [], created_at: "", handle: "#fleet-dev" };
+    expect(channelTitle(run)).toBe("#fleet-dev");
   });
 });
 

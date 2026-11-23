@@ -204,8 +204,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* The 8-char id prefix: the other handle that reaches this channel. Dim and
-   last so it never competes with the title, but always present to be copied. */
+/* The id handle: the other handle that reaches this channel (eight characters,
+   more when a neighbour shares them). Dim and last so it never competes with
+   the title. A run has none here — see idChip. */
 .cw-rail__ch-id {
   font-size: 10px;
   font-family: var(--font-mono, ui-monospace, monospace);
