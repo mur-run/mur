@@ -21,10 +21,11 @@ use mur_common::proposal::Proposal;
 
 use super::browser_live_effect::Effect;
 pub(crate) use super::browser_live_ops::ProfileOps;
-use super::browser_live_preview::{render_preview, saved_line, will_save_line};
+use super::browser_live_preview::{render_preview, saved_line, signed_in_as, will_save_line};
 #[cfg(test)]
 use super::manage;
 use super::manage::Managed;
+use crate::cmd::browser::live_entry::attached_profiles;
 
 pub(super) use crate::cmd::browser::live_entry::{LIVE_ENTRY, LiveOps};
 
@@ -608,6 +609,16 @@ pub(super) fn run(
     let mut servers = ops.servers()?;
     // #1905 Part 2: show what will be written, and write only on `--yes`.
     let existing = servers.iter().find(|e| e.name == LIVE_ENTRY);
+    // What a flagless rerun leaves bound: `ProfileArg::Keep` never touches
+    // the entry's args, so this is also what the browser carries afterwards.
+    let bound: Vec<String> = existing
+        .map(|e| {
+            attached_profiles(e)
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
     let mut after = after;
     carry_deny_hosts(&mut after, existing.and_then(|e| e.network.as_ref()));
     let kept = if flags.replace {
@@ -712,21 +723,18 @@ pub(super) fn run(
         notes.push(format!("browser live mode may reach: {}", reach.join(", ")));
     }
     match &profile {
-        ProfileArg::Set(sites) => notes.push(match sites.as_slice() {
-            [site] => format!("signed in as the saved profile `{site}`"),
-            many => format!(
-                "signed in as the saved profiles {} (merged into one session)",
-                many.iter()
-                    .map(|s| format!("`{s}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        }),
+        ProfileArg::Set(sites) => notes.push(signed_in_as(sites)),
         ProfileArg::Clear => notes.push(
             "profile unbound: the browser now carries no session; the saved profile itself \
              is kept, so `--profile <site>` binds it again."
                 .to_owned(),
         ),
+        // With neither flag, the invocation says nothing about the session:
+        // report what the entry has, not what this run named (#2545).
+        ProfileArg::Keep if !bound.is_empty() => notes.push(format!(
+            "still {}; rerun with `--no-profile` to unbind",
+            signed_in_as(&bound)
+        )),
         ProfileArg::Keep => notes.push(
             "no profile: the browser carries no session, so pages behind a login will \
              redirect there. Add one with `mur browser auth <site> --url <login url>`, \

@@ -102,6 +102,21 @@ pub(crate) fn render_preview(
     out.join("\n")
 }
 
+/// "signed in as …" for one or several bound profiles: the same wording
+/// whether a run binds them or a flagless rerun keeps them (#2545).
+pub(super) fn signed_in_as(sites: &[String]) -> String {
+    match sites {
+        [site] => format!("signed in as the saved profile `{site}`"),
+        many => format!(
+            "signed in as the saved profiles {} (merged into one session)",
+            many.iter()
+                .map(|s| format!("`{s}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
