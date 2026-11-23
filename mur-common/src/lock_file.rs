@@ -218,6 +218,27 @@ pub fn probe_sentinel(agent_dir: &Path) -> SentinelProbe {
     SentinelProbe::Free(file)
 }
 
+/// `<mur_home>/agents/<name>/profile.yaml` is a regular file and `name` is a
+/// valid agent name. The one predicate for "this agent exists": a bare home
+/// (a half-finished create, a file removed by hand, a sentinel left by a
+/// probe) does not count.
+pub fn agent_exists(mur_home: &Path, name: &str) -> bool {
+    crate::agent_name::validate_agent_name(name).is_ok()
+        && std::fs::metadata(
+            mur_home
+                .join(crate::paths::AGENTS)
+                .join(name)
+                .join("profile.yaml"),
+        )
+        .is_ok_and(|m| m.is_file())
+}
+
+mod lifecycle;
+pub use lifecycle::{
+    FLEET_SHARED_DIR, LIFECYCLE_LOCK_FILE, LOCK_POLL, LifecycleGuard, LifecycleLockError,
+    lock_reply_dirs,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
