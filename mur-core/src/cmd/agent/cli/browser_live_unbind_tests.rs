@@ -145,20 +145,25 @@ fn a_flagless_run_with_nothing_bound_still_says_no_profile() {
     assert!(!text.contains("still signed in"), "{text}");
 }
 
-// #2545: the note reads the binding back out of the entry's argv, so the
-// reader must invert `live_argv` and agree with the runtime's own test
-// (`wants_state_key`) on the `--profile=<site>` spelling.
+// #2545: the note reads the binding back out of the entry's argv with the
+// shared reader, so that reader must invert `live_argv` and agree with the
+// runtime's own test (`wants_state_key`) on the `--profile=<site>` spelling.
 #[test]
-fn bound_profiles_reads_back_what_live_argv_wrote() {
-    assert!(bound_profiles(&live_argv("bob", &[])).is_empty());
+fn attached_profiles_reads_back_what_live_argv_wrote() {
+    let entry = |args: Vec<String>| {
+        let mut e: McpServerEntry = serde_yaml_ng::from_str("name: browser\ncommand: mur").unwrap();
+        e.args = args;
+        e
+    };
+    assert!(attached_profiles(&entry(live_argv("bob", &[]))).is_empty());
     assert_eq!(
-        bound_profiles(&live_argv("bob", &s(&["one", "two"]))),
-        s(&["one", "two"])
+        attached_profiles(&entry(live_argv("bob", &s(&["one", "two"])))),
+        ["one", "two"]
     );
     let mut hand_edited = live_argv("bob", &[]);
     hand_edited.push("--profile=site".to_owned());
-    assert_eq!(bound_profiles(&hand_edited), s(&["site"]));
     assert!(mur_common::browser_state_key::wants_state_key(&hand_edited));
+    assert_eq!(attached_profiles(&entry(hand_edited)), ["site"]);
 }
 
 // #2545: several kept profiles are named the way `--profile a --profile b`

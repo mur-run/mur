@@ -25,6 +25,7 @@ use super::browser_live_preview::{render_preview, saved_line, signed_in_as, will
 #[cfg(test)]
 use super::manage;
 use super::manage::Managed;
+use crate::cmd::browser::live_entry::attached_profiles;
 
 pub(super) use crate::cmd::browser::live_entry::{LIVE_ENTRY, LiveOps};
 
@@ -378,22 +379,6 @@ fn same_policy(a: &McpServerNetwork, b: &McpServerNetwork) -> bool {
     (a.mode, &a.allow_hosts, &a.deny_hosts) == (b.mode, &b.allow_hosts, &b.deny_hosts)
 }
 
-/// The saved profiles a live entry's argv binds: the inverse of what
-/// [`live_argv`] writes. Also reads `--profile=<site>`, which a hand-edited
-/// entry may carry and `mur browser record` accepts.
-pub(super) fn bound_profiles(args: &[String]) -> Vec<String> {
-    let mut sites = Vec::new();
-    let mut it = args.iter();
-    while let Some(arg) = it.next() {
-        if arg == "--profile" {
-            sites.extend(it.next().cloned());
-        } else if let Some(site) = arg.strip_prefix("--profile=") {
-            sites.push(site.to_owned());
-        }
-    }
-    sites
-}
-
 /// `--run` for the live entry: `live-<agent>`. Agent names are already
 /// restricted to `[A-Za-z0-9_-]` (`validate_agent_name`), so no sanitizing;
 /// per-agent so two agents never share a run even if runs are global.
@@ -626,8 +611,13 @@ pub(super) fn run(
     let existing = servers.iter().find(|e| e.name == LIVE_ENTRY);
     // What a flagless rerun leaves bound: `ProfileArg::Keep` never touches
     // the entry's args, so this is also what the browser carries afterwards.
-    let bound = existing
-        .map(|e| bound_profiles(&e.args))
+    let bound: Vec<String> = existing
+        .map(|e| {
+            attached_profiles(e)
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        })
         .unwrap_or_default();
     let mut after = after;
     carry_deny_hosts(&mut after, existing.and_then(|e| e.network.as_ref()));
@@ -739,8 +729,8 @@ pub(super) fn run(
              is kept, so `--profile <site>` binds it again."
                 .to_owned(),
         ),
-        // Neither flag says nothing about the session: report what the entry
-        // has, not what this invocation named (#2545).
+        // With neither flag, the invocation says nothing about the session:
+        // report what the entry has, not what this run named (#2545).
         ProfileArg::Keep if !bound.is_empty() => notes.push(format!(
             "still {}; rerun with `--no-profile` to unbind",
             signed_in_as(&bound)
