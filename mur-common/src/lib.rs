@@ -94,6 +94,7 @@ pub mod startup_override;
 pub mod sync_types;
 pub mod telemetry;
 pub mod test_env;
+pub mod test_pause;
 pub mod trust;
 pub mod variable;
 pub mod workflow;

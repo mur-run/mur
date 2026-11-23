@@ -57,6 +57,14 @@ fd-lock = "4"
 tempfile = "3"
 globset = "0.4"
 
+[features]
+# Test-only. Off by default, enabled by no release profile and by no other
+# crate's dependency on this one. `pause_point("<name>")` then blocks while
+# `$MUR_TEST_PAUSE_DIR/<name>` exists. CI builds with it (job `test-pause`);
+# the release workflow fails if a shipped binary carries its marker
+# (`scripts/check-no-test-pause.sh`).
+test-pause = []
+
 [target.'cfg(unix)'.dependencies]
 # `pinned_dir`: open the requests dir once, then act relative to its descriptor.
 rustix = { version = "1.1", features = ["fs"] }
