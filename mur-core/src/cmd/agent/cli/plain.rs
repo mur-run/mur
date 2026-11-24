@@ -28,19 +28,21 @@ pub(super) fn run_plain(
     let egress_seen: RefCell<super::egress_denied::EgressChips> = RefCell::new(Default::default());
 
     loop {
-        if interactive {
-            let _ = write!(out2.borrow_mut(), "you › ");
-            let _ = out2.borrow_mut().flush();
-        }
-        let mut line = String::new();
-        // Lock only per-read so a HITL callback (Task 3) can read stdin mid-turn.
-        if io::stdin().lock().read_line(&mut line)? == 0 {
-            break; // EOF (Ctrl-D / end of pipe)
-        }
-        let text = line.trim().to_string();
-        if text.is_empty() {
-            continue;
-        }
+        // Lock only per-read so a HITL callback (Task 3) can read stdin
+        // mid-turn. A `/command` is held back here, never dialled (#2563).
+        let next = super::plain_line::next_message(
+            |buf| io::stdin().lock().read_line(buf),
+            || {
+                if interactive {
+                    let _ = write!(out2.borrow_mut(), "you › ");
+                    let _ = out2.borrow_mut().flush();
+                }
+            },
+            &mut io::stderr(),
+        )?;
+        let Some(text) = next else {
+            break; // EOF (Ctrl-D / end of pipe) or `/quit`
+        };
         // Same Required-budget gate as the TUI (plan §9). The runtime injects
         // Required unconditionally, so a non-TTY send would otherwise be the
         // one path that silently overruns the reservation.
