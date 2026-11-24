@@ -160,6 +160,32 @@ fn every_creator_takes_an_owner() {
     }
 }
 
+/// #2559: an agent channel can be minted under a chosen id, and the same
+/// guards as the workflow variant refuse a non-UUID or a taken id.
+#[test]
+fn create_for_agent_with_id_keeps_the_id_and_refuses_bad_ones() {
+    let h = Home::new();
+    let svc = h.svc();
+    let id = uuid::Builder::from_unix_timestamp_millis(1 << 40, &[7; 10])
+        .into_uuid()
+        .to_string();
+    let ch = svc
+        .create_for_agent_with_id("qa", &id, ChannelOwner::Legacy)
+        .unwrap();
+    assert_eq!(ch.id, id);
+    assert!(svc.exists(&id));
+    assert!(
+        svc.create_for_agent_with_id("qa", &id, ChannelOwner::Legacy)
+            .is_err(),
+        "a taken id is refused"
+    );
+    assert!(
+        svc.create_for_agent_with_id("qa", "../x", ChannelOwner::Legacy)
+            .is_err(),
+        "a non-UUID id is refused"
+    );
+}
+
 /// Crash between the manifest and the record: the channel is a v3 manifest
 /// with an empty log — legacy-shaped, and never trusted.
 #[test]

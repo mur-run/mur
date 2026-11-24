@@ -9,6 +9,30 @@ use tempfile::TempDir;
 const AGENT: &str = "qa";
 /// More than the listing shows, so the lookup window is exercised too.
 const CHANNELS: usize = RECENT_LIMIT + 5;
+/// A UUIDv7's first eight hex characters are the top 32 bits of its 48-bit
+/// millisecond timestamp, so they change every 2^16 ms (~65.5 s).
+const WINDOW_BITS: u32 = 16;
+/// Start of one such window. Its prefix `019abcde` carries hex letters on
+/// purpose: an all-digit handle is read back as an ordinal, not an id.
+const WINDOW_START_MS: u64 = 0x019a_bcde << WINDOW_BITS;
+
+/// The `n`th channel id inside one time window, so the ids share their first
+/// eight characters however slowly the test runs (#2559). Minting them from
+/// the wall clock failed whenever the loop crossed a window boundary.
+fn id_in_window(n: u8) -> String {
+    let ms = WINDOW_START_MS + u64::from(n);
+    assert_eq!(ms >> WINDOW_BITS, WINDOW_START_MS >> WINDOW_BITS);
+    uuid::Builder::from_unix_timestamp_millis(ms, &[n; 10])
+        .into_uuid()
+        .to_string()
+}
+
+/// A conversation with one user line, under [`id_in_window`]`(n)`.
+fn session_in_window(home: &std::path::Path, n: u8, text: &str) -> Session {
+    let mut s = Session::create_with_id(home, AGENT, &id_in_window(n)).unwrap();
+    s.append("user", text, None, &[]).unwrap();
+    s
+}
 
 /// What `/channels <handle>` parses to: the path a typed line takes.
 fn typed_ref(handle: &str) -> ChannelRef {
@@ -26,9 +50,8 @@ fn every_listed_handle_types_back_to_its_own_channel() {
     crate::channel_writer::plant_identity_for(tmp.path(), AGENT);
     crate::channel_writer::plant_human_identity(tmp.path());
     for i in 0..CHANNELS {
-        let mut s = Session::create(tmp.path(), AGENT).unwrap();
-        s.append("user", &format!("conversation {i}"), None, &[])
-            .unwrap();
+        let n = u8::try_from(i).unwrap();
+        session_in_window(tmp.path(), n, &format!("conversation {i}"));
     }
     let window = persist::list_recent(tmp.path(), AGENT, CHANNEL_LOOKUP_LIMIT).unwrap();
     assert_eq!(window.len(), CHANNELS);
@@ -55,10 +78,8 @@ fn the_footer_handle_is_the_listing_handle() {
     let tmp = TempDir::new().unwrap();
     crate::channel_writer::plant_identity_for(tmp.path(), AGENT);
     crate::channel_writer::plant_human_identity(tmp.path());
-    let mut first = Session::create(tmp.path(), AGENT).unwrap();
-    first.append("user", "one", None, &[]).unwrap();
-    let mut second = Session::create(tmp.path(), AGENT).unwrap();
-    second.append("user", "two", None, &[]).unwrap();
+    session_in_window(tmp.path(), 0, "one");
+    let second = session_in_window(tmp.path(), 1, "two");
 
     let meta = second.current().unwrap();
     let listed = persist::list_recent(tmp.path(), AGENT, RECENT_LIMIT).unwrap();
@@ -80,13 +101,11 @@ fn the_footer_handle_lengthens_when_a_neighbour_appears() {
     let tmp = TempDir::new().unwrap();
     crate::channel_writer::plant_identity_for(tmp.path(), AGENT);
     crate::channel_writer::plant_human_identity(tmp.path());
-    let mut first = Session::create(tmp.path(), AGENT).unwrap();
-    first.append("user", "one", None, &[]).unwrap();
+    let first = session_in_window(tmp.path(), 0, "one");
     let alone = first.current().unwrap().handle;
     assert_eq!(alone.len(), 8, "no neighbour yet: {alone}");
 
-    let mut second = Session::create(tmp.path(), AGENT).unwrap();
-    second.append("user", "two", None, &[]).unwrap();
+    session_in_window(tmp.path(), 1, "two");
     let crowded = first.current().unwrap().handle;
     assert!(crowded.len() > 8, "the neighbour shares {alone}: {crowded}");
 
