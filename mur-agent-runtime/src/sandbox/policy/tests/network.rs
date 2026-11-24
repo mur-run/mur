@@ -343,3 +343,29 @@ fn connect_tcp_ports_off_and_unrestricted_are_empty() {
     let unr = SandboxPolicy::default(); // Unrestricted: net_allow_ports = None
     assert!(connect_tcp_ports(&unr).is_empty());
 }
+
+/// #2541: a grant's IPv6 flag survives only for ports the posture admits, and
+/// a port asked for in both families ends up dual-stack, listed once.
+#[test]
+fn loopback_grants_record_ipv6_only_for_admitted_ports() {
+    let mut p = SandboxPolicy {
+        net_allow_ports: Some(vec![443]),
+        ..Default::default()
+    };
+    p.allow_loopback_grants(&[
+        LoopbackGrant::v4(54321),
+        LoopbackGrant::v4(8088),
+        LoopbackGrant::dual_stack(8088),
+    ]);
+    assert_eq!(p.net_allow_loopback_ports, vec![54321, 8088]);
+    assert_eq!(p.net_allow_loopback_v6_ports, vec![8088]);
+
+    // Off: nothing is admitted, so no IPv6 record either.
+    let mut off = SandboxPolicy {
+        net_allow_ports: Some(Vec::new()),
+        ..Default::default()
+    };
+    off.allow_loopback_grants(&[LoopbackGrant::dual_stack(8088)]);
+    assert!(off.net_allow_loopback_ports.is_empty());
+    assert!(off.net_allow_loopback_v6_ports.is_empty());
+}

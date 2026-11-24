@@ -516,8 +516,12 @@ fn restricted_profiles_compile() {
         let mut policy = policy_with(vec![], vec![]);
         policy.scratch_dir = Some(PathBuf::from("/Users/someone/.mur/tmp/agent_x"));
         policy.net_allow_ports = Some(ports.clone());
-        policy.net_allow_loopback_ports = vec![8080];
+        // One IPv4-only and one dual-stack port, so both families compile.
+        policy.net_allow_loopback_ports = vec![8080, 8081];
+        policy.net_allow_loopback_v6_ports = vec![8081];
         let sbpl = build_sbpl_profile(&policy);
+        assert!(sbpl.contains("(remote tcp4 \"localhost:8080\")"), "{sbpl}");
+        assert!(sbpl.contains("(remote tcp \"localhost:8081\")"), "{sbpl}");
         let c = std::ffi::CString::new(sbpl.clone()).unwrap();
         let mut err: *mut libc::c_char = std::ptr::null_mut();
         let compiled = unsafe { sandbox_compile_string(c.as_ptr(), std::ptr::null(), &mut err) };
@@ -655,8 +659,8 @@ fn loopback_port_carveout_is_localhost_scoped() {
     policy.allow_loopback_ports(&[54321]);
     let sbpl = build_sbpl_profile(&policy);
     assert!(
-        sbpl.contains("(allow network-outbound (remote tcp \"localhost:54321\"))"),
-        "proxy port must be loopback-scoped: {sbpl}"
+        sbpl.contains("(allow network-outbound (remote tcp4 \"localhost:54321\"))"),
+        "proxy port must be loopback-scoped and IPv4-only: {sbpl}"
     );
     assert!(
         !sbpl.contains("\"*:54321\""),
@@ -696,8 +700,8 @@ fn proxy_only_sbpl_allows_loopback_and_dns_but_no_wildcard() {
 
     assert!(sbpl.contains("(deny network-outbound)"));
     // loopback carve-outs present…
-    assert!(sbpl.contains("(remote tcp \"localhost:8088\")"));
-    assert!(sbpl.contains("(remote tcp \"localhost:54321\")"));
+    assert!(sbpl.contains("(remote tcp4 \"localhost:8088\")"));
+    assert!(sbpl.contains("(remote tcp4 \"localhost:54321\")"));
     // …name resolution restored (loopback host resolution)…
     assert!(sbpl.contains("/private/var/run/mDNSResponder"));
     // …and NO wildcard-host tcp allow (the escape hatch).

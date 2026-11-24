@@ -16,7 +16,7 @@ pub mod macos;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
-pub use policy::SandboxPolicy;
+pub use policy::{LoopbackGrant, SandboxPolicy};
 
 use mur_common::agent::Entitlements;
 use std::path::Path;
@@ -82,7 +82,7 @@ pub fn apply(
     entitlements: &Entitlements,
     agent_home: &Path,
     extra_ports: &[u16],
-    loopback_ports: &[u16],
+    loopback_ports: &[LoopbackGrant],
     extra_write_paths: &[std::path::PathBuf],
 ) -> anyhow::Result<SandboxStatus> {
     let policy = build_policy(
@@ -115,14 +115,14 @@ pub fn build_policy(
     entitlements: &Entitlements,
     agent_home: &Path,
     extra_ports: &[u16],
-    loopback_ports: &[u16],
+    loopback_ports: &[LoopbackGrant],
     extra_write_paths: &[std::path::PathBuf],
 ) -> SandboxPolicy {
     let mut policy = SandboxPolicy::from_entitlements(entitlements, agent_home);
     // An agent must always be able to reach its own configured local LLM.
     policy.allow_extra_ports(extra_ports);
     // …and the pre-seal loopback egress proxy its MCP children dial.
-    policy.allow_loopback_ports(loopback_ports);
+    policy.allow_loopback_grants(loopback_ports);
     // The proxy lives IN this process: when it exists, the self profile must
     // keep general TCP open for its upstream dials or every granted child
     // egress dies with EPERM after CONNECT ALLOW (ProxyOnly regression).

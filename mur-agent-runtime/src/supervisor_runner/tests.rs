@@ -318,14 +318,20 @@ fn llm_loopback_ports_cover_current_and_every_registry_entry() {
     let current = entry("ollama", None);
     let home = std::path::Path::new("/nonexistent");
 
+    // 8088 is reached as `127.0.0.1` by one entry and `localhost` by another,
+    // so it stays dual-stack; the rest are literal 127.0.0.1 → IPv4 only.
     assert_eq!(
         llm_loopback_ports(Some(&current), Some(&reg), &no_env, home),
-        vec![8000, 8088, 11434]
+        vec![
+            LoopbackGrant::v4(8000),
+            LoopbackGrant::dual_stack(8088),
+            LoopbackGrant::v4(11434)
+        ]
     );
     // No registry (unreadable / absent) → the current model alone.
     assert_eq!(
         llm_loopback_ports(Some(&current), None, &no_env, home),
-        vec![11434]
+        vec![LoopbackGrant::v4(11434)]
     );
     // Nothing resolvable → nothing granted.
     assert!(llm_loopback_ports(None, None, &no_env, home).is_empty());
@@ -341,11 +347,40 @@ fn entry_loopback_port_reads_injected_env() {
     let remote =
         |k: &str| (k == "ANTHROPIC_BASE_URL").then(|| "https://api.anthropic.com".to_string());
     let e = entry("anthropic", None);
-    assert_eq!(entry_loopback_port(&e, &bridged, home), Some(9123));
+    assert_eq!(
+        entry_loopback_port(&e, &bridged, home),
+        Some(LoopbackGrant::v4(9123))
+    );
     assert_eq!(entry_loopback_port(&e, &remote, home), None);
     // An explicit loopback base_url beats the provider default.
     let pinned = entry("ollama", Some("http://127.0.0.1:12000"));
-    assert_eq!(entry_loopback_port(&pinned, &no_env, home), Some(12000));
+    assert_eq!(
+        entry_loopback_port(&pinned, &no_env, home),
+        Some(LoopbackGrant::v4(12000))
+    );
+}
+
+/// #2541: only a base URL whose client may dial `::1` opens IPv6 on macOS,
+/// because SBPL's IPv6 `localhost` also matches `fe80::1` on any interface.
+#[test]
+fn loopback_family_follows_the_base_url_host() {
+    let home = std::path::Path::new("/nonexistent");
+    for (url, want) in [
+        ("http://127.0.0.1:8088/v1", Some(LoopbackGrant::v4(8088))),
+        (
+            "http://localhost:8088/v1",
+            Some(LoopbackGrant::dual_stack(8088)),
+        ),
+        (
+            "http://[::1]:8088/v1",
+            Some(LoopbackGrant::dual_stack(8088)),
+        ),
+        ("http://192.168.1.5:8088/v1", None),
+        ("http://[fe80::1]:8088/v1", None),
+    ] {
+        let e = entry("openai", Some(url));
+        assert_eq!(entry_loopback_port(&e, &no_env, home), want, "{url}");
+    }
 }
 
 /// #1880: a missing credential is not a model-selection problem. The notice
