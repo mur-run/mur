@@ -389,3 +389,45 @@ async fn broad_audited_link_local_target_is_ssrf_denied() {
         "link-local CONNECT must be 403 (SSRF screen), got: {resp}"
     );
 }
+
+/// Every address of one host shares a port, so a port the seal refuses is
+/// one finding however many addresses were tried — not one per address.
+#[cfg(unix)]
+#[test]
+fn a_port_the_seal_refuses_is_reported_once_however_many_addresses_were_tried() {
+    let (a, b, c): (SocketAddr, SocketAddr, SocketAddr) = (
+        "203.0.113.1:3000".parse().unwrap(),
+        "203.0.113.2:3000".parse().unwrap(),
+        "203.0.113.3:3000".parse().unwrap(),
+    );
+    for errno in SEAL_ERRNOS {
+        let seal = || std::io::Error::from_raw_os_error(errno);
+        let failures = vec![(a, seal()), (b, seal()), (c, seal())];
+        let reported: Vec<SocketAddr> = failures_to_report(&failures)
+            .into_iter()
+            .map(|(addr, _)| *addr)
+            .collect();
+        assert_eq!(reported, [a], "errno {errno}");
+    }
+}
+
+/// Failures that are not the seal differ per address (no route, refused,
+/// timed out), so each one is still reported — around a seal refusal too.
+#[cfg(unix)]
+#[test]
+fn failures_that_are_not_the_seal_are_each_reported() {
+    let (a, b, c, d): (SocketAddr, SocketAddr, SocketAddr, SocketAddr) = (
+        "203.0.113.1:3000".parse().unwrap(),
+        "203.0.113.2:3000".parse().unwrap(),
+        "203.0.113.3:3000".parse().unwrap(),
+        "203.0.113.4:3000".parse().unwrap(),
+    );
+    let refused = || std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+    let seal = || std::io::Error::from_raw_os_error(libc::EPERM);
+    let failures = vec![(a, refused()), (b, seal()), (c, seal()), (d, refused())];
+    let reported: Vec<SocketAddr> = failures_to_report(&failures)
+        .into_iter()
+        .map(|(addr, _)| *addr)
+        .collect();
+    assert_eq!(reported, [a, b, d]);
+}

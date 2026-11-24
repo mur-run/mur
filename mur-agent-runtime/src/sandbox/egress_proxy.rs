@@ -312,7 +312,7 @@ async fn handle_conn(
         }
         Err(failures) => {
             let server = entry.as_ref().map(|e| e.server.as_str());
-            for (addr, e) in &failures {
+            for (addr, e) in failures_to_report(&failures) {
                 report_dial_failure(events, agent, server, host, *addr, e);
             }
             // Answer the request rather than hanging up, so the client
@@ -334,6 +334,24 @@ async fn handle_conn(
     }
     tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
     Ok(())
+}
+
+/// The failures worth reporting: every one, except that the seal's refusals
+/// collapse into the first.
+///
+/// The seal gates the port, and every address of one host shares it, so N
+/// refused addresses are one finding. Reporting each would log the same
+/// `allow-port` line N times and record the port N times for the tool call.
+///
+/// The dial loop still tries every address rather than stopping at the first
+/// refusal: a loopback-only port carve-out (`remote tcp "localhost:{port}"` on
+/// macOS) refuses a host's LAN address and admits its loopback one.
+fn failures_to_report(failures: &[dial::DialFailure]) -> Vec<&dial::DialFailure> {
+    let mut seal_reported = false;
+    failures
+        .iter()
+        .filter(|(_, err)| !is_seal_denial(err) || !std::mem::replace(&mut seal_reported, true))
+        .collect()
 }
 
 /// Log a failed upstream dial; when the seal refused it on the port (#2418),
