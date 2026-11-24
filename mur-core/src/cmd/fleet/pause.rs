@@ -52,6 +52,14 @@ fn verdict(mur_home: &Path, name: &str) -> Verdict {
     if !held {
         return Verdict::Refuse(format!("fleet '{name}' has no running run to pause"));
     }
+    // A one-shot run holds the same lock (#2531) but writes no progress and
+    // reads no pause marker. Whatever progress is on disk is a crashed loop's,
+    // so it must not name the run to pause (#2554).
+    if run_lock::is_held_by_one_shot(mur_home, name) {
+        return Verdict::Refuse(format!(
+            "fleet '{name}' is on a one-shot run, which cannot be paused; only a `--loop` run can"
+        ));
+    }
     let Some(p) = progress else {
         return Verdict::Refuse(format!("fleet '{name}' has no running run to pause"));
     };
@@ -372,17 +380,49 @@ mod tests {
         assert_eq!(phase(h, "dev"), PausePhase::None);
     }
 
-    /// A goal-mode loop holds the run lock and writes progress but queues no
-    /// job: it must still read as pausable, or the Hub never offers Pause.
+    /// #2554: a crashed loop leaves progress with no `finished_at`. A one-shot
+    /// run then holds the lock, but it writes no progress and reads no pause
+    /// marker, so that stale record must not make it the run to pause.
     #[test]
-    fn a_goal_loop_with_no_jobs_is_pausable_while_it_holds_the_lock() {
+    fn a_one_shot_run_over_a_crashed_loops_progress_is_not_pausable() {
         let home = tempfile::tempdir().unwrap();
         let h = home.path();
         save_dev(h);
-        assert!(!pausable(h, "dev"), "no run");
-        let progress = crate::cmd::fleet::progress::RunProgress {
+        unfinished_progress("r1").save(h, "dev");
+        let lock = run_lock::acquire_one_shot(h, "dev").unwrap();
+        assert!(!pausable(h, "dev"));
+        let err = cmd_fleet_pause(h, "dev").expect_err("a one-shot cannot be paused");
+        assert_eq!(
+            format!("{err}"),
+            "fleet 'dev' is on a one-shot run, which cannot be paused; only a `--loop` run can"
+        );
+        assert!(
+            !control::paused_path(h, "dev").exists(),
+            "no pause marker for a run that will never read it"
+        );
+        drop(lock);
+    }
+
+    /// #2554 review: the same, with pause landing after the one-shot took the
+    /// run lock but before it rewrote the crashed loop's owner file.
+    #[test]
+    fn a_one_shot_is_not_pausable_before_its_owner_file_is_written() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        save_dev(h);
+        drop(run_lock::acquire(h, "dev").unwrap());
+        unfinished_progress("r1").save(h, "dev");
+        let lock = run_lock::acquire_one_shot_before_owner_write(h, "dev");
+        assert!(!pausable(h, "dev"));
+        cmd_fleet_pause(h, "dev").expect_err("a one-shot cannot be paused");
+        assert!(!control::paused_path(h, "dev").exists());
+        drop(lock);
+    }
+
+    fn unfinished_progress(run_id: &str) -> crate::cmd::fleet::progress::RunProgress {
+        crate::cmd::fleet::progress::RunProgress {
             schema_version: 1,
-            run_id: "r1".into(),
+            run_id: run_id.into(),
             question: "g".into(),
             started_at: "t".into(),
             finished_at: None,
@@ -396,8 +436,18 @@ mod tests {
             artifact_path: None,
             error: None,
             paused_at: None,
-        };
-        progress.save(h, "dev");
+        }
+    }
+
+    /// A goal-mode loop holds the run lock and writes progress but queues no
+    /// job: it must still read as pausable, or the Hub never offers Pause.
+    #[test]
+    fn a_goal_loop_with_no_jobs_is_pausable_while_it_holds_the_lock() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        save_dev(h);
+        assert!(!pausable(h, "dev"), "no run");
+        unfinished_progress("r1").save(h, "dev");
         assert!(
             super::super::jobs::list_jobs(h, "dev")
                 .unwrap_or_default()

@@ -52,6 +52,12 @@ pub const FLEET_RUN_LOCK_FILE: &str = "run.lock";
 /// Display-only owner record (pid, start time, host) beside the run lock.
 pub const FLEET_RUN_OWNER_FILE: &str = "run.owner";
 
+/// Shared advisory lock a one-shot fleet run holds from before it takes
+/// [`FLEET_RUN_LOCK_FILE`] until after it releases it, so a reader that sees
+/// the run lock held can tell a one-shot holder by the kernel's lock state
+/// alone, with no window where the holder is not yet described (#2554).
+pub const FLEET_RUN_ONE_SHOT_LOCK_FILE: &str = "run.one_shot.lock";
+
 /// Every directory an in-sandbox fleet run must be able to write.
 ///
 /// Add here FIRST, then use it. A directory the runner writes but this list
