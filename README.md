@@ -220,6 +220,20 @@ refusal instead of retrying it. Checks run in this order; the first failure wins
 A damaged conversation is fixed with `mur channel repair <channel>`. The full
 reference is in [docs/cookbook/at-mention-conversations.md](docs/cookbook/at-mention-conversations.md).
 
+`mur channel delete <handle>` removes a conversation for good: its log, its
+index and search rows, its signed head, and every agent's copy of its history
+(`~/.mur/agents/<agent>/conversations/<id>.json`). The handle is the one
+`/channels` shows (at least 4 characters), or the whole id; a prefix that
+matches more than one channel deletes nothing and lists the matches. It shows
+the conversation and asks first (`--yes` without a terminal), refuses while an
+approval request is still pending (`--force` overrides), and refuses fleet and
+workflow run channels outright — those are audit records.
+
+In `--plain` mode a line starting with `/` is never sent to the agent:
+`/quit` and `/exit` end the session, and any other slash command prints a
+one-line hint on stderr (slash commands need the TUI). Start a line with `//`
+to send text that begins with `/`; a path such as `/etc/hosts` is sent as is.
+
 ### Models & providers
 
 Agents draw from a local provider/model registry at `~/.mur/models.yaml`:

@@ -205,6 +205,13 @@ pub async fn run(cli: Cli) -> Result<()> {
                     std::process::exit(code);
                 }
             }
+            ChannelAction::Delete { handle, yes, force } => {
+                let home = cmd::agent::resolve_mur_home()?;
+                let code = cmd::channel_delete::run(&home, &handle, yes, force)?;
+                if code != 0 {
+                    std::process::exit(code);
+                }
+            }
             ChannelAction::BackfillPurpose { apply, limit } => {
                 let home = cmd::agent::resolve_mur_home()?;
                 cmd::channel::backfill_purpose(&home, apply, limit)?;

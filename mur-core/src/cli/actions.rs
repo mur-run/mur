@@ -213,6 +213,19 @@ pub enum ChannelAction {
         #[arg(long)]
         yes: bool,
     },
+    /// Delete a conversation for good: its log, index rows, signed head, and
+    /// every agent's copy of its history. Run and audit channels are refused.
+    /// Exits 0 when deleted, 2 when declined.
+    Delete {
+        /// Channel handle (a prefix of at least 4), or the whole id
+        handle: String,
+        /// Skip the confirmation prompt (required without a terminal)
+        #[arg(long)]
+        yes: bool,
+        /// Delete even with an approval request still pending
+        #[arg(long)]
+        force: bool,
+    },
     /// Classify legacy channels missing a `purpose` (dry run unless --apply)
     BackfillPurpose {
         /// Write the inferred purposes to disk

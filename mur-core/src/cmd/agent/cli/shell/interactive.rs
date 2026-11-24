@@ -20,6 +20,8 @@ const INTERACTIVE_PREFIXES: &[&[&str]] = &[
     &["mur", "agent", "turn", "undo"],
     // Confirms before quarantining a damaged channel log.
     &["mur", "channel", "repair"],
+    // Shows the conversation and asks before deleting it; `--yes` opts out.
+    &["mur", "channel", "delete"],
     // The review-pair wizard asks for names and models and refuses a
     // non-tty stdin (unless `--no-interactive`, see `PIPED_OPT_OUTS`).
     &["mur", "fleet", "review-setup"],
@@ -43,6 +45,7 @@ const PIPED_OPT_OUTS: &[(&[&str], &str)] = &[
     (&["mur", "agent", "ssh", "allow"], "--yes"),
     (&["mur", "agent", "ssh", "revoke"], "--yes"),
     (&["mur", "identity", "rekey"], "--yes"),
+    (&["mur", "channel", "delete"], "--yes"),
 ];
 
 /// Commands that need the terminal only with one flag: (prefix, flag).
@@ -196,6 +199,8 @@ mod tests {
         assert!(needs_terminal("mur deep-research secret --brave"));
         assert!(needs_terminal("mur agent turn undo mur t1"));
         assert!(needs_terminal("mur channel repair c1"));
+        assert!(needs_terminal("mur channel delete 01a20c26"));
+        assert!(!needs_terminal("mur channel delete 01a20c26 --yes"));
         assert!(!needs_terminal("mur agent turn list mur"));
         assert!(!needs_terminal("mur deep-research \"some question\""));
         assert!(!needs_terminal("mur deep-research"));
