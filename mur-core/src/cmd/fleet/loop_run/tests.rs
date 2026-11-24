@@ -340,6 +340,7 @@ fn unpriced_registry_yields_no_ceiling_rather_than_a_free_one() {
 fn iteration_goal_drains_queue_then_falls_back_to_standing() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
+    crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
     super::super::create::cmd_fleet_create(
         home,
         "dev",

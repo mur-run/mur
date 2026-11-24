@@ -32,12 +32,13 @@ pub fn cmd_fleet_create(
 
     // Comma-split (mirrors `mur fleet add`'s handling of "--members a,b c")
     // then canonicalize member names and router to match the agent
-    // runtime's on-disk ids. `create` does not validate agent existence
-    // today; this change only adds splitting, not a new failure mode.
+    // runtime's on-disk ids. Unknown members are rejected before the
+    // channel or fleet.yaml is written, same rule as `mur fleet add`.
     let members: Vec<String> = super::roster::parse_member_args(&members)
         .into_iter()
         .map(|m| crate::a2a_dial::canonicalize_agent_name(mur_home, &m))
         .collect();
+    super::roster::reject_unknown_agents(mur_home, &members)?;
     let canonical_router: Option<String> =
         router.map(|r| crate::a2a_dial::canonicalize_agent_name(mur_home, &r));
     let router_name = canonical_router
@@ -85,6 +86,7 @@ mod tests {
     fn create_writes_fleet_and_channel() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm"]);
         cmd_fleet_create(
             home,
             "dev",
@@ -110,5 +112,26 @@ mod tests {
         let err = cmd_fleet_create(home, "review-x", vec![], None, None, None).unwrap_err();
         assert!(err.to_string().contains("reserved"), "got: {err}");
         assert!(!super::super::store::fleet_path(home, "review-x").exists());
+    }
+
+    /// Members without `agents/<name>/profile.yaml` (misspelled, or an
+    /// embedded agent whose home lives in the cache dir) are rejected before
+    /// anything is written — same rule as `mur fleet add`.
+    #[test]
+    fn create_rejects_unknown_member_and_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm"]);
+        let err =
+            cmd_fleet_create(home, "dev", vec!["pm,ghost".into()], None, None, None).unwrap_err();
+        assert!(err.to_string().contains("ghost"), "got: {err}");
+        assert!(!super::super::store::fleet_path(home, "dev").exists());
+        assert!(
+            !home.join("channels").exists()
+                || std::fs::read_dir(home.join("channels"))
+                    .unwrap()
+                    .next()
+                    .is_none()
+        );
     }
 }

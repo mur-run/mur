@@ -169,6 +169,7 @@ mod tests {
     fn set_loop_merges_onto_existing_config_without_clobbering_other_fields() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
         super::super::create::cmd_fleet_create(
             home,
             "dev",
@@ -221,6 +222,7 @@ mod tests {
     fn set_loop_on_fleet_with_no_prior_loop_cfg_uses_field_defaults() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
         super::super::create::cmd_fleet_create(
             home,
             "dev",
@@ -279,6 +281,7 @@ mod tests {
         // would make one stale value block every future edit.
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
         super::super::create::cmd_fleet_create(
             home,
             "dev",
@@ -320,6 +323,7 @@ mod tests {
         // contrived input — neither the CLI nor the Hub trims before calling.
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
         super::super::create::cmd_fleet_create(
             home,
             "dev",

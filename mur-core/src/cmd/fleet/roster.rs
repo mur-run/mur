@@ -31,6 +31,36 @@ fn agent_exists(mur_home: &Path, agent: &str) -> bool {
         .is_file()
 }
 
+/// Fail if any canonical name has no `<mur_home>/agents/<name>/profile.yaml`.
+/// Shared by `create`, `add`: membership is only ever granted to installed
+/// agents (an embedded or misspelled name would be an unreachable member).
+pub(crate) fn reject_unknown_agents(mur_home: &Path, canonical: &[String]) -> Result<()> {
+    let unknown: Vec<&str> = canonical
+        .iter()
+        .filter(|a| !agent_exists(mur_home, a))
+        .map(|a| a.as_str())
+        .collect();
+    if !unknown.is_empty() {
+        bail!(
+            "unknown agent(s), not found in '{}': {}",
+            mur_home.join("agents").display(),
+            unknown.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Test helper: write minimal `agents/<name>/profile.yaml` files so
+/// `create`/`add` accept these names as installed agents.
+#[cfg(test)]
+pub(crate) fn touch_agents_for_test(home: &Path, names: &[&str]) {
+    for name in names {
+        let dir = home.join("agents").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("profile.yaml"), format!("name: {name}\n")).unwrap();
+    }
+}
+
 /// Add one or more agents as Delegate members. Idempotent per agent.
 ///
 /// `agents` may contain comma-separated tokens (`"a,b"`) as well as
@@ -46,18 +76,7 @@ pub fn cmd_fleet_add(mur_home: &Path, name: &str, agents: Vec<String>) -> Result
         .map(|raw| crate::a2a_dial::canonicalize_agent_name(mur_home, &raw))
         .collect();
 
-    let unknown: Vec<&str> = canonical
-        .iter()
-        .filter(|a| !agent_exists(mur_home, a))
-        .map(|a| a.as_str())
-        .collect();
-    if !unknown.is_empty() {
-        bail!(
-            "unknown agent(s), not found in '{}': {}",
-            mur_home.join("agents").display(),
-            unknown.join(", ")
-        );
-    }
+    reject_unknown_agents(mur_home, &canonical)?;
 
     let svc = mur_channel::ChannelService::open(mur_home)?;
     // ponytail: not transactional across N agents; channel ops are idempotent so re-running reconciles
@@ -137,6 +156,7 @@ mod tests {
         let home = tmp.path();
         touch_agent(home, "pm");
         touch_agent(home, "qa");
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
         create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("g".into()), None)
             .unwrap();
 
@@ -157,6 +177,7 @@ mod tests {
         touch_agent(home, "a");
         touch_agent(home, "b");
         touch_agent(home, "c");
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
         create::cmd_fleet_create(home, "dev", vec![], None, Some("g".into()), None).unwrap();
 
         cmd_fleet_add(home, "dev", vec!["a,b".into(), "c".into()]).unwrap();
@@ -171,6 +192,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         touch_agent(home, "pm");
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
         create::cmd_fleet_create(home, "dev", vec![], None, Some("g".into()), None).unwrap();
 
         // "pm" is real, "ghost" is not — batch must be rejected wholesale,
@@ -190,6 +212,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         // router defaults to the concierge "mur"; make it a member too
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
         create::cmd_fleet_create(
             home,
             "dev",
@@ -207,6 +230,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         // router defaults to "mur"; pm is a non-router member
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
         create::cmd_fleet_create(
             home,
             "dev",
