@@ -707,7 +707,7 @@ fn sandbox_loopback_connect_subprocess_main() {
         &profile.entitlements,
         &agent_home,
         &[],
-        &[granted_port],
+        &[sandbox::LoopbackGrant::v4(granted_port)],
         &[],
     ) {
         Ok(s) if s.enforcing => {}

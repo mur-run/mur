@@ -11,6 +11,7 @@ pub mod exec_reach;
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 pub(crate) use exec_deny::split_exec_grants;
 pub use exec_reach::{ExecBackend, ExecReach};
+pub use widen::LoopbackGrant;
 mod spawn;
 mod widen;
 
@@ -171,6 +172,10 @@ pub struct SandboxPolicy {
     /// `NetPort ConnectTcp` rule. Only populated in Restricted mode — see
     /// `allow_loopback_ports`.
     pub net_allow_loopback_ports: Vec<u16>,
+    /// The subset of `net_allow_loopback_ports` that must also be reachable
+    /// over IPv6. macOS emits these as `tcp` and the rest as `tcp4`; see
+    /// [`LoopbackGrant`] for why IPv6 is opt-in. Ignored on Linux.
+    pub net_allow_loopback_v6_ports: Vec<u16>,
     /// True when the posture permits loopback carve-outs (Restricted +
     /// ProxyOnly) but NOT Off/Unrestricted. This is the signal that
     /// distinguishes a ProxyOnly `net_allow_ports = Some([])` (deny general TCP,
@@ -218,6 +223,7 @@ impl Default for SandboxPolicy {
             spawn_allowed_prefixes: Vec::new(),
             net_allow_ports: None,
             net_allow_loopback_ports: Vec::new(),
+            net_allow_loopback_v6_ports: Vec::new(),
             net_loopback_allowed: false,
             net_allow_hosts: None,
             memory_limit_mb: None,

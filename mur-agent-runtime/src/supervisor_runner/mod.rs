@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::hitl::HitlApprovals;
 use crate::hooks::{HookChain, HookCtx};
+use crate::sandbox::LoopbackGrant;
 use crate::skills::RuntimeSkills;
 use crate::task_runner::TaskRunner;
 use mur_common::config::SkillsConfig;
@@ -83,12 +84,16 @@ pub(crate) fn provider_host(entry: &ModelEntry) -> Option<String> {
     }
 }
 
-/// The TCP port of `url` when its host is loopback (`127.0.0.1`, `localhost`,
-/// `::1`); `None` for remote hosts or unparsable URLs.
-fn loopback_port(url: &str) -> Option<u16> {
+/// The loopback carve-out `url` needs when its host is loopback; `None` for
+/// remote hosts or unparsable URLs. A literal `127.0.0.1` stays IPv4-only. A
+/// `localhost` or `[::1]` host may resolve to `::1`, so that port is granted
+/// dual-stack (see [`LoopbackGrant`] for what IPv6 costs on macOS).
+fn loopback_port(url: &str) -> Option<LoopbackGrant> {
     let u = url.parse::<reqwest::Url>().ok()?;
+    let port = u.port_or_known_default()?;
     match u.host_str()? {
-        "127.0.0.1" | "localhost" | "::1" | "[::1]" => u.port_or_known_default(),
+        "127.0.0.1" => Some(LoopbackGrant::v4(port)),
+        "localhost" | "::1" | "[::1]" => Some(LoopbackGrant::dual_stack(port)),
         _ => None,
     }
 }
@@ -104,7 +109,7 @@ pub(crate) fn entry_loopback_port(
     entry: &ModelEntry,
     env: &dyn Fn(&str) -> Option<String>,
     mur_home: &std::path::Path,
-) -> Option<u16> {
+) -> Option<LoopbackGrant> {
     if let Some(base) = entry.base_url.as_deref()
         && let Some(p) = loopback_port(base)
     {
@@ -139,15 +144,23 @@ pub(crate) fn llm_loopback_ports(
     registry: Option<&mur_common::model::ModelRegistry>,
     env: &dyn Fn(&str) -> Option<String>,
     mur_home: &std::path::Path,
-) -> Vec<u16> {
-    let mut ports: Vec<u16> = current
+) -> Vec<LoopbackGrant> {
+    let grants: Vec<LoopbackGrant> = current
         .into_iter()
         .chain(registry.into_iter().flat_map(|r| r.models.values()))
         .filter_map(|e| entry_loopback_port(e, env, mur_home))
         .collect();
+    // One grant per port; a port any entry reaches over IPv6 stays dual-stack.
+    let mut ports: Vec<u16> = grants.iter().map(|g| g.port).collect();
     ports.sort_unstable();
     ports.dedup();
     ports
+        .into_iter()
+        .map(|port| LoopbackGrant {
+            port,
+            ipv6: grants.iter().any(|g| g.port == port && g.ipv6),
+        })
+        .collect()
 }
 
 /// [`llm_loopback_ports`] against the live process: the profile's resolved
@@ -156,7 +169,7 @@ pub(crate) fn llm_loopback_ports(
 pub(crate) fn local_llm_ports(
     profile: &mur_common::agent::AgentProfile,
     mur_home: &std::path::Path,
-) -> Vec<u16> {
+) -> Vec<LoopbackGrant> {
     let current = crate::supervisor::resolve_model_entry(profile).ok();
     let registry = mur_common::model::ModelRegistry::default_path()
         .ok()
@@ -176,7 +189,7 @@ pub(crate) fn local_llm_port(
     mur_home: &std::path::Path,
 ) -> Option<u16> {
     let entry = crate::supervisor::resolve_model_entry(profile).ok()?;
-    entry_loopback_port(&entry, &|k| std::env::var(k).ok(), mur_home)
+    entry_loopback_port(&entry, &|k| std::env::var(k).ok(), mur_home).map(|g| g.port)
 }
 
 /// Resolve the local model base URL: entry.base_url → env → shared file → default.

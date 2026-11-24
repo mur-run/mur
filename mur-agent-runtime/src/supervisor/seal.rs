@@ -373,9 +373,12 @@ pub(super) fn prepare_and_seal(
         }
     };
 
-    let loopback_ports: Vec<u16> = egress_proxy
+    // The egress proxy listens on 127.0.0.1 and children reach it through a
+    // literal `HTTP_PROXY=http://…@127.0.0.1:<port>`, so IPv4 is enough; each
+    // LLM port carries the family its base URL needs (#2541).
+    let loopback_ports: Vec<crate::sandbox::LoopbackGrant> = egress_proxy
         .iter()
-        .map(|(h, _)| h.addr.port())
+        .map(|(h, _)| crate::sandbox::LoopbackGrant::v4(h.addr.port()))
         .chain(llm_ports)
         .collect();
     let granted_digest =

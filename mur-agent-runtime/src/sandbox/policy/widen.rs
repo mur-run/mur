@@ -1,5 +1,31 @@
 use super::*;
 
+/// One loopback TCP carve-out and the address families it must reach.
+///
+/// macOS SBPL's IPv6 `localhost` match ignores the scope id, so
+/// `(remote tcp "localhost:P")` also admits `fe80::1%<any interface>` — a
+/// LAN peer that happens to hold that link-local address (measured, #2541).
+/// `tcp4` has no such hole, so a port only opens IPv6 when its client may
+/// actually dial `::1`: a base URL naming `localhost` or `[::1]`. Literal
+/// `127.0.0.1` endpoints (the egress proxy, the default local LLM ports,
+/// VLC) stay IPv4-only. Linux Landlock is port-only and ignores the family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoopbackGrant {
+    pub port: u16,
+    /// Also reachable over IPv6 (`::1`), at the cost of the `fe80::1` match.
+    pub ipv6: bool,
+}
+
+impl LoopbackGrant {
+    pub const fn v4(port: u16) -> Self {
+        Self { port, ipv6: false }
+    }
+
+    pub const fn dual_stack(port: u16) -> Self {
+        Self { port, ipv6: true }
+    }
+}
+
 impl SandboxPolicy {
     /// Grant outbound to `extra` TCP ports for the agent's own LLM endpoint.
     /// Under Restricted (non-empty general list) they join the general list
@@ -41,6 +67,21 @@ impl SandboxPolicy {
                 if !self.net_allow_loopback_ports.contains(p) {
                     self.net_allow_loopback_ports.push(*p);
                 }
+            }
+        }
+    }
+
+    /// [`allow_loopback_ports`](Self::allow_loopback_ports) per grant, then
+    /// record which granted ports also need IPv6. A port asked for twice with
+    /// different families ends up dual-stack.
+    pub fn allow_loopback_grants(&mut self, grants: &[LoopbackGrant]) {
+        for g in grants {
+            self.allow_loopback_ports(&[g.port]);
+            if g.ipv6
+                && self.net_allow_loopback_ports.contains(&g.port)
+                && !self.net_allow_loopback_v6_ports.contains(&g.port)
+            {
+                self.net_allow_loopback_v6_ports.push(g.port);
             }
         }
     }

@@ -645,6 +645,7 @@ impl SandboxPolicy {
             spawn_allowed_prefixes,
             net_allow_ports,
             net_allow_loopback_ports: Vec::new(),
+            net_allow_loopback_v6_ports: Vec::new(),
             net_loopback_allowed,
             net_allow_hosts,
             memory_limit_mb: Some(ent.limits.memory_mb),

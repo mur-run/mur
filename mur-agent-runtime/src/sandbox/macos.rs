@@ -480,12 +480,9 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
                     "(allow network-outbound (remote unix-socket (path-literal \"{MDNSRESPONDER_SOCKET}\")))"
                 ));
                 push_unix_socket_allows(&mut lines, policy);
-                // `localhost` = any local address, never another host; see
-                // the comment on the matching loop below.
+                // Family per port; see `loopback_tcp_rule`.
                 for port in &policy.net_allow_loopback_ports {
-                    lines.push(format!(
-                        "(allow network-outbound (remote tcp \"localhost:{port}\"))"
-                    ));
+                    lines.push(loopback_tcp_rule(policy, *port));
                 }
             }
         }
@@ -504,24 +501,39 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
                     "(allow network-outbound (remote tcp \"*:{port}\"))"
                 ));
             }
-            // Loopback carve-outs (egress proxy listener). SBPL's `localhost`
-            // host means "any address of THIS machine", not just 127.0.0.1:
-            // measured on macOS (#2541), a dial on an allowed port to the
-            // host's own LAN address (e.g. 192.168.x.y) is let through, while
-            // the same port to the LAN gateway or a public IP is denied with
-            // EPERM. So this does NOT widen egress to other hosts; the only
-            // extra reach is a local service bound solely to a non-loopback
-            // interface on that port. IPv6 (::1, local v6 addresses) is
-            // unmeasured.
             for port in &policy.net_allow_loopback_ports {
-                lines.push(format!(
-                    "(allow network-outbound (remote tcp \"localhost:{port}\"))"
-                ));
+                lines.push(loopback_tcp_rule(policy, *port));
             }
         }
     }
 
     lines.join("\n")
+}
+
+/// The SBPL allow for one loopback carve-out port.
+///
+/// SBPL's `localhost` host means "any address of THIS machine", not just
+/// 127.0.0.1. Measured on macOS with `sandbox-exec` (#2541):
+///
+/// - IPv4: the host's own LAN address on the port is let through; the LAN
+///   gateway and public IPs are denied with `EPERM`. No other host is
+///   reachable.
+/// - IPv6: the match drops the scope id. `fe80::1%<any interface>` matches
+///   as if it were lo0's own `fe80::1%lo0`, so a LAN peer holding the
+///   link-local address `fe80::1` is reachable on the port. Other link-local
+///   addresses, ULA (`fd00::/8`) and global IPv6 are denied with `EPERM`.
+///
+/// So a port is emitted as `tcp4` unless its client may dial `::1` (a base
+/// URL naming `localhost` or `[::1]`, recorded in
+/// `net_allow_loopback_v6_ports`). Only those ports keep `tcp` and accept the
+/// `fe80::1` peer.
+fn loopback_tcp_rule(policy: &SandboxPolicy, port: u16) -> String {
+    let family = if policy.net_allow_loopback_v6_ports.contains(&port) {
+        "tcp"
+    } else {
+        "tcp4"
+    };
+    format!("(allow network-outbound (remote {family} \"localhost:{port}\"))")
 }
 
 /// See [`super::current_process_sealed`]. `sandbox_check(pid, NULL, 0)`
@@ -555,6 +567,8 @@ unsafe extern "C" {
 }
 #[cfg(test)]
 mod exec_deny_tests;
+#[cfg(test)]
+mod loopback_family_tests;
 #[cfg(test)]
 mod own_home_deny_tests;
 #[cfg(test)]
