@@ -141,7 +141,10 @@ fn fleet_job_and_roster_round_trip() {
 
     let home = tmp.path();
 
-    // create (members need not exist on disk; names canonicalize themselves)
+    // create (members must exist on disk, same rule as `fleet add`)
+    let pm_dir = home.join("agents").join("pm");
+    std::fs::create_dir_all(&pm_dir).unwrap();
+    std::fs::write(pm_dir.join("profile.yaml"), "name: pm\n").unwrap();
     create::cmd_fleet_create(
         home,
         "dev",
@@ -153,7 +156,7 @@ fn fleet_job_and_roster_round_trip() {
     .unwrap();
 
     // add member → fleet manifest stays in sync (the member must exist on
-    // disk: `fleet add` validates agent existence, unlike `create`).
+    // disk, as for `create`).
     let qa_dir = home.join("agents").join("qa");
     std::fs::create_dir_all(&qa_dir).unwrap();
     std::fs::write(qa_dir.join("profile.yaml"), "name: qa\n").unwrap();

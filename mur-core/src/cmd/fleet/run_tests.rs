@@ -155,6 +155,7 @@ fn resolve_goal_prefers_arg_then_queued_then_standing() {
     use mur_common::fleet::JobStatus;
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
+    crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
     super::super::create::cmd_fleet_create(
         home,
         "dev",

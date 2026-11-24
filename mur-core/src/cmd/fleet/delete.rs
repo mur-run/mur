@@ -122,6 +122,7 @@ mod tests {
     fn delete_removes_fleet_dir_and_channel() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
         create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("g".into()), None)
             .unwrap();
         assert!(store::fleet_path(home, "dev").exists());
@@ -152,6 +153,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         for f in ["dev", "keep"] {
+            crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
             create::cmd_fleet_create(home, f, vec!["pm".into()], None, Some("g".into()), None)
                 .unwrap();
         }

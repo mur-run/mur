@@ -58,6 +58,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         assert!(cmd_fleet_show(home, "dev").is_err());
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
         super::super::create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, None, None)
             .unwrap();
         assert!(cmd_fleet_show(home, "dev").is_ok());

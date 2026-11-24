@@ -420,6 +420,7 @@ mod tests {
         use crate::cmd::fleet::loop_run::checkpoint::{self, CHECKPOINT_SCHEMA, Checkpoint};
         let home = tempfile::tempdir().unwrap();
         let h = home.path();
+        crate::cmd::fleet::roster::touch_agents_for_test(h, &["pm", "mur"]);
         crate::cmd::fleet::create::cmd_fleet_create(
             h,
             "dev",
@@ -587,6 +588,7 @@ mod tests {
         let home = tmp.path();
         // no fleet yet → error
         assert!(cmd_fleet_send(home, "dev", "do it").is_err());
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
         super::super::create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, None, None)
             .unwrap();
         cmd_fleet_send(home, "dev", "do it").unwrap();
@@ -634,6 +636,7 @@ mod tests {
     fn cancel_marks_job_terminal_so_next_queued_skips_it() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
+        crate::cmd::fleet::roster::touch_agents_for_test(home, &["pm", "mur"]);
         super::super::create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, None, None)
             .unwrap();
         let a = enqueue_job(home, "dev", "first", "cli").unwrap();
