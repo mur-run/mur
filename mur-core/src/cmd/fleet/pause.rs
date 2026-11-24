@@ -403,6 +403,22 @@ mod tests {
         drop(lock);
     }
 
+    /// #2554 review: the same, with pause landing after the one-shot took the
+    /// run lock but before it rewrote the crashed loop's owner file.
+    #[test]
+    fn a_one_shot_is_not_pausable_before_its_owner_file_is_written() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        save_dev(h);
+        drop(run_lock::acquire(h, "dev").unwrap());
+        unfinished_progress("r1").save(h, "dev");
+        let lock = run_lock::acquire_one_shot_before_owner_write(h, "dev");
+        assert!(!pausable(h, "dev"));
+        cmd_fleet_pause(h, "dev").expect_err("a one-shot cannot be paused");
+        assert!(!control::paused_path(h, "dev").exists());
+        drop(lock);
+    }
+
     fn unfinished_progress(run_id: &str) -> crate::cmd::fleet::progress::RunProgress {
         crate::cmd::fleet::progress::RunProgress {
             schema_version: 1,

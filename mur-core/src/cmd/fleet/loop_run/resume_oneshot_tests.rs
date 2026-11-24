@@ -35,11 +35,9 @@ async fn a_one_shot_run_over_a_paused_run_is_refused_and_leaves_it_resumable() {
         "the refused run released the lock"
     );
     // #2554: it took the lock as a one-shot, which is what lets `pause` tell
-    // it from a `--loop` run.
-    let owner = std::fs::read_to_string(
-        mur_common::paths::fleet_state_dir(home.path(), "dev")
-            .join(mur_common::paths::FLEET_RUN_OWNER_FILE),
-    )
-    .unwrap();
-    assert!(owner.contains(r#""kind":"one_shot""#), "{owner}");
+    // it from a `--loop` run; and gave the marker back with the lock.
+    let marker = mur_common::paths::fleet_state_dir(home.path(), "dev")
+        .join(mur_common::paths::FLEET_RUN_ONE_SHOT_LOCK_FILE);
+    assert!(marker.exists(), "the one-shot marker was never taken");
+    assert!(!run_lock::is_held_by_one_shot(home.path(), "dev"));
 }
