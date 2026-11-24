@@ -102,7 +102,8 @@ impl McpPool {
     /// A warm client started from an entry that has since been hot-reloaded is
     /// retired and a new generation started from the current entry. A call
     /// still holding the old client finishes on it; the old one is then
-    /// stopped gracefully in the background (`retire`).
+    /// stopped gracefully in the background (`retire`). An old stdio client
+    /// nobody holds has exited before the new one is started (#2543).
     pub async fn client(&self, server: &str) -> Result<Arc<Mutex<McpClient>>, McpError> {
         let entry = self.current_entry(server).ok_or_else(|| {
             McpError::Server(format!("no MCP server named `{server}` on this agent"))
@@ -112,14 +113,21 @@ impl McpPool {
             Some((started, c)) if *started == entry => return Ok(c.clone()),
             Some(_) => {
                 tracing::info!(server = %server, "MCP entry changed; starting a new client generation");
+                // A generation before this one may still be exiting; its
+                // stop holds the exit lock the retirement below needs.
+                self.retiring.exited(server).await;
                 if let Some((_, old)) = guard.remove(server) {
-                    // Stopped in the background once its in-flight calls let
-                    // go; the turn does not wait (spec "Mid-run eviction").
-                    self.retiring.retire(server.to_string(), old);
+                    // Held by an in-flight call: stopped in the background
+                    // once that lets go; the turn does not wait (spec
+                    // "Mid-run eviction"). Idle: stopped first, below.
+                    self.retiring.retire_before_restart(server.to_string(), old);
                 }
             }
             None => {}
         }
+        // Also reached with no warm client, when an earlier caller gave up
+        // while the old generation was still exiting.
+        self.retiring.exited(server).await;
         let entry = &entry;
         // serena loads (and may migrate) its config before answering
         // `initialize`, so hash before spawn and compare after (#1688).
