@@ -367,6 +367,14 @@ pub(super) async fn execute_step(
         .await
         {
             DelegateDial::Replied(r) => r,
+            // #2503: the member refused (or never got) the cancel, so its turn
+            // may still be running and billing. That is a failed step, not a
+            // clean stop: route it through the failure path below (Note,
+            // stderr, late-usage recovery, `Failed` event).
+            DelegateDial::CancelRefused(error) => Err(anyhow::anyhow!(
+                "stop requested but member {canonical} refused the tasks/cancel \
+                 (its turn may still be running): {error:#}"
+            )),
             DelegateDial::Stopped => {
                 // Say so in the channel: the member's reply will never land,
                 // and a reader should not wonder why the delegation dangles.

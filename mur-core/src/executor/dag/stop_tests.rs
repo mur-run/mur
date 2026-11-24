@@ -297,6 +297,136 @@ async fn a_stop_mid_turn_cancels_the_member_task_and_returns_promptly() {
     );
 }
 
+/// #2503: a `tasks/cancel` the member refuses (or that never reaches it)
+/// leaves its turn running and billing. The step must fail loudly and name the
+/// refusal, not read as a clean `Stopped` with the member still working.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_refused_cancel_is_not_reported_as_stopped() {
+    if std::env::var("MUR_TEST_SOCKETS").as_deref() != Ok("1") {
+        eprintln!("skipping a_refused_cancel_is_not_reported_as_stopped: set MUR_TEST_SOCKETS=1");
+        return;
+    }
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path();
+    let svc = ChannelService::open(home).unwrap();
+    let ch = svc
+        .create_for_workflow("t", mur_channel::service::ChannelOwner::Legacy)
+        .unwrap();
+
+    // Fake member: holds `channel/delegate` until `tasks/cancel` arrives, then
+    // REFUSES the cancel with an RPC error (and lets the delegate go so the
+    // abandoned dial does not outlive the test runtime).
+    let sock = home.join("m.sock");
+    let listener = UnixListener::bind(&sock).unwrap();
+    let agent_dir = home.join("agents").join("member");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    std::fs::write(
+        agent_dir.join("running.lock"),
+        serde_json::json!({
+            "schema": 1, "uuid": "u", "name": "member", "pid": 1, "ppid": 1,
+            "started_at": "t", "binary_version": "test", "proto_version": 1,
+            "transports": { "stdio": true, "unix_socket": sock.to_str().unwrap() },
+            "card_digest": "d", "capabilities": [],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let cancelled = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(conn) = conn else { break };
+            let cancelled = cancelled.clone();
+            std::thread::spawn(move || {
+                let mut w = conn.try_clone().unwrap();
+                let mut line = String::new();
+                if BufReader::new(conn).read_line(&mut line).unwrap_or(0) == 0 {
+                    return;
+                }
+                let req: serde_json::Value = serde_json::from_str(&line).unwrap();
+                let method = req["method"].as_str().unwrap_or("").to_string();
+                let (lock, cv) = &*cancelled;
+                let reply = match method.as_str() {
+                    "tasks/cancel" => {
+                        *lock.lock().unwrap() = true;
+                        cv.notify_all();
+                        serde_json::json!({"jsonrpc":"2.0","id":req["id"],
+                            "error":{"code":-32000,"message":"cancel refused"}})
+                    }
+                    "channel/delegate" => {
+                        let g = lock.lock().unwrap();
+                        let _ = cv
+                            .wait_timeout_while(g, Duration::from_secs(20), |c| !*c)
+                            .unwrap();
+                        serde_json::json!({"jsonrpc":"2.0","id":req["id"],"result":{
+                            "id": req["params"]["task_id"],
+                            "status": { "state": "canceled" },
+                        }})
+                    }
+                    _ => serde_json::json!({"jsonrpc":"2.0","id":req["id"],"result":{}}),
+                };
+                let _ = writeln!(w, "{reply}");
+            });
+        }
+    });
+
+    let (f, stop) = flag();
+    let events = Arc::new(std::sync::Mutex::new(
+        Vec::<(StepEventKind, Option<String>)>::new(),
+    ));
+    let on_step: Arc<dyn Fn(StepEvent) + Send + Sync> = {
+        let events = events.clone();
+        Arc::new(move |e: StepEvent| events.lock().unwrap().push((e.kind, e.error)))
+    };
+    let proc = Procedure {
+        variables: vec![],
+        steps: vec![ProcedureStep {
+            id: Some("s1".into()),
+            description: "research".into(),
+            delegate_to: Some("member".into()),
+            ..Default::default()
+        }],
+    };
+    let flip = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        f.store(true, Ordering::SeqCst);
+    });
+    execute_dag(
+        home,
+        "t",
+        &proc,
+        &DagExecOptions {
+            channel_id: Some(ch.id.clone()),
+            run_id: "r".into(),
+            stop: Some(stop),
+            on_step: Some(on_step),
+            ..DagExecOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    flip.await.unwrap();
+
+    let events = events.lock().unwrap().clone();
+    assert!(
+        !events.iter().any(|(k, _)| *k == StepEventKind::Stopped),
+        "a refused cancel must not read as a clean stop: {events:?}"
+    );
+    let failed = events
+        .iter()
+        .find(|(k, _)| *k == StepEventKind::Failed)
+        .unwrap_or_else(|| panic!("the step must fail: {events:?}"));
+    let why = failed.1.clone().unwrap_or_default();
+    assert!(why.contains("member"), "error names the member: {why}");
+    assert!(
+        why.contains("tasks/cancel"),
+        "error names the refusal: {why}"
+    );
+}
+
 /// #2083 P3: a delegation whose dial fails after the member ran the turn is
 /// not counted as free. The step's usage comes from the member's `tasks/get`
 /// for the delegation's own task id.
