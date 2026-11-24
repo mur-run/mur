@@ -88,6 +88,20 @@ impl Session {
         })
     }
 
+    /// A session whose channel already exists under `id` — a test minting
+    /// channels in one UUIDv7 time window without the wall clock (#2559).
+    #[cfg(test)]
+    pub(crate) fn create_with_id(home: &Path, agent: &str, id: &str) -> Result<Self> {
+        let mut s = Self::create(home, agent)?;
+        let ch = s.svc.create_for_agent_with_id(
+            agent,
+            id,
+            mur_channel::service::ChannelOwner::Legacy,
+        )?;
+        s.channel_id = Some(ch.id);
+        Ok(s)
+    }
+
     /// Re-open an existing channel by id (used by `--resume`).
     pub fn open_existing(home: &Path, agent: &str, channel_id: &str) -> Result<Self> {
         let svc = ChannelService::open(home)?;

@@ -92,10 +92,25 @@ impl ChannelService {
     /// Create a fresh channel whose participants are the local human (owner)
     /// and one agent (delegate). Used by both CLI and Hub when opening a chat.
     pub fn create_for_agent(&self, agent: &str, owner: ChannelOwner<'_>) -> Result<Channel> {
+        self.create_for_agent_with_id(agent, &uuid::Uuid::now_v7().to_string(), owner)
+    }
+
+    /// [`Self::create_for_agent`] under an id the caller chose. Lets a test
+    /// place channels in one UUIDv7 time window instead of depending on the
+    /// wall clock (#2559). Same refusals as
+    /// [`Self::create_for_workflow_with_id`]: not a UUID, or already taken.
+    pub fn create_for_agent_with_id(
+        &self,
+        agent: &str,
+        id: &str,
+        owner: ChannelOwner<'_>,
+    ) -> Result<Channel> {
+        uuid::Uuid::parse_str(id).map_err(|e| anyhow::anyhow!("channel id {id:?}: {e}"))?;
+        anyhow::ensure!(!self.exists(id), "channel {id} already exists");
         let now = Utc::now();
         let ch = Channel {
             v: CHANNEL_SCHEMA_VERSION,
-            id: uuid::Uuid::now_v7().to_string(),
+            id: id.to_string(),
             title: String::new(),
             goal: Goal::default(),
             state: ChannelState::Working,
