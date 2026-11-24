@@ -480,6 +480,8 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
                     "(allow network-outbound (remote unix-socket (path-literal \"{MDNSRESPONDER_SOCKET}\")))"
                 ));
                 push_unix_socket_allows(&mut lines, policy);
+                // `localhost` = any local address, never another host; see
+                // the comment on the matching loop below.
                 for port in &policy.net_allow_loopback_ports {
                     lines.push(format!(
                         "(allow network-outbound (remote tcp \"localhost:{port}\"))"
@@ -502,9 +504,15 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
                     "(allow network-outbound (remote tcp \"*:{port}\"))"
                 ));
             }
-            // Loopback-only carve-outs (egress proxy listener): SBPL's
-            // `remote tcp` accepts `localhost` as the host, so this does NOT
-            // widen general egress — only dials to 127.0.0.1/::1 on the port.
+            // Loopback carve-outs (egress proxy listener). SBPL's `localhost`
+            // host means "any address of THIS machine", not just 127.0.0.1:
+            // measured on macOS (#2541), a dial on an allowed port to the
+            // host's own LAN address (e.g. 192.168.x.y) is let through, while
+            // the same port to the LAN gateway or a public IP is denied with
+            // EPERM. So this does NOT widen egress to other hosts; the only
+            // extra reach is a local service bound solely to a non-loopback
+            // interface on that port. IPv6 (::1, local v6 addresses) is
+            // unmeasured.
             for port in &policy.net_allow_loopback_ports {
                 lines.push(format!(
                     "(allow network-outbound (remote tcp \"localhost:{port}\"))"
