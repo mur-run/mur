@@ -303,7 +303,10 @@ pub fn verify_chain(
 /// Canonical JSON: sorted keys, no whitespace. Used so that signers and
 /// verifiers compute identical byte sequences regardless of language /
 /// serializer choices.
-fn canonical_json<T: serde::Serialize>(value: &T) -> Vec<u8> {
+///
+/// Public so other signed formats (the fleet shared-area reference) reuse this
+/// one encoder instead of copying it.
+pub fn canonical_json<T: serde::Serialize>(value: &T) -> Vec<u8> {
     // serde_json with a BTreeMap-like ordering. The simplest approach: round-trip
     // through a `serde_json::Value`, then walk it depth-first emitting bytes.
     let v: serde_json::Value =

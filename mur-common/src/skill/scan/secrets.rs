@@ -44,6 +44,14 @@ pub struct SecretFinding {
     pub matched: String,
 }
 
+/// Every label [`scan_secrets`] can emit, in pattern order. Lets a consumer
+/// that maps labels to a closed set (the fleet shared-area wire) prove its map
+/// covers the scanner, so adding a pattern here breaks that test instead of
+/// silently becoming `other`.
+pub fn scanner_labels() -> impl Iterator<Item = &'static str> {
+    patterns().iter().map(|(_, label)| *label)
+}
+
 pub fn scan_secrets(body: &str) -> Vec<SecretFinding> {
     let mut out = Vec::new();
     for (rx, label) in patterns() {

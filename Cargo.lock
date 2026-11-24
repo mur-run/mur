@@ -6819,6 +6819,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mur-fleet-shared"
+version = "2.106.0"
+dependencies = [
+ "mur-channel",
+ "mur-common",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "mur-git-broker"
 version = "2.106.0"
 dependencies = [

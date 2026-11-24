@@ -23,6 +23,7 @@ members = [
     "mur-git-broker",
     "mur-trash",
     "mur-test-log",
+    "mur-fleet-shared",
     # "mur-commander",  # separate crate — v0.2.0 released
 ]
 exclude = [
