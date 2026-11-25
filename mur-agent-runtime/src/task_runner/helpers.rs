@@ -339,6 +339,15 @@ pub(crate) fn denied_args_preview(input: &serde_json::Value) -> String {
 /// it from an interactive surface, then resend.
 pub(crate) const HITL_APPROVAL_REQUIRED: &str = "hitl_approval_required";
 
+/// #2581: appended to every approval refusal the model can read. This text
+/// stays in the conversation, so a model asked to "resend" sees it again in
+/// the next turn too. In the incident the model got an `rm -rf` refusal,
+/// then did the same delete through `python3` with `shutil.rmtree` once the
+/// request was resent. The tier classifier cannot catch every rewrite, so
+/// the model is told plainly not to try.
+pub(crate) const NO_WORKAROUND: &str = "do not get the same effect through another tool, \
+     command or language — wait for the approval, or report back that it is needed";
+
 /// Message for [`HITL_APPROVAL_REQUIRED`]. The remembered decision written
 /// by that approval is what lets the resend through — no permission changes.
 pub(crate) fn approval_required_message(reason: Option<&str>) -> String {
@@ -346,15 +355,17 @@ pub(crate) fn approval_required_message(reason: Option<&str>) -> String {
     let resend = "approve it once there (the answer is remembered for this exact call), \
                   then resend the same request";
     match why {
-        Some(r) => format!("tool call needs approval: {r}; {resend}"),
-        None => format!("tool call needs approval; {resend}"),
+        Some(r) => format!("tool call needs approval: {r}; {resend}. {NO_WORKAROUND}"),
+        None => format!("tool call needs approval; {resend}. {NO_WORKAROUND}"),
     }
 }
 
 pub(crate) fn deny_message(reason: Option<&str>) -> String {
     match reason.map(str::trim) {
-        Some(r) if !r.is_empty() && r != "denied" => format!("tool call denied: {r}"),
-        _ => "tool call denied".to_string(),
+        Some(r) if !r.is_empty() && r != "denied" => {
+            format!("tool call denied: {r}; {NO_WORKAROUND}")
+        }
+        _ => format!("tool call denied; {NO_WORKAROUND}"),
     }
 }
 

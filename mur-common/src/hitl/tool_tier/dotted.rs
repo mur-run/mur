@@ -1,4 +1,5 @@
-//! #2312: module-qualified privileged calls (`os.chmod(...)`).
+//! #2312: module-qualified privileged calls (`os.chmod(...)`), and #2581:
+//! module-qualified deletes (`shutil.rmtree(...)`).
 //!
 //! `tokens()` does not split on `.`, so `os.chmod` is one token and never
 //! equals the deny-list's `chmod` — a Python heredoc or `python3 -c` body
@@ -15,7 +16,7 @@
 //! `chmodsync` is not a deny-list head) are not seen. A bare `chmod(...)`
 //! after `from os import *` is already caught by the plain head scan.
 
-use super::PRIVILEGED_HEADS;
+use super::{DESTRUCTIVE_HEADS, PRIVILEGED_HEADS};
 
 /// Standard-library modules whose functions act on the real system:
 /// Python `os` / `posix` / `shutil`, Node `fs` (incl. `fs.promises.*`).
@@ -37,9 +38,49 @@ const PRIVILEGED_FUNCTIONS: &[&str] = &[
     "lchownsync",
 ];
 
+/// Modules whose module-qualified calls can delete: the system modules plus
+/// Python `pathlib` (`pathlib.Path.unlink(p)`). Kept apart from
+/// [`SYSTEM_MODULES`] so #2581 does not widen the privileged rule.
+const DELETE_MODULES: &[&str] = &["os", "posix", "shutil", "fs", "pathlib"];
+
+/// Module-function spellings of a delete that are not themselves a
+/// destructive head (`rm` / `rmdir` / `truncate` already match through
+/// [`DESTRUCTIVE_HEADS`]). Lowercase, like the classifier's input.
+const DELETE_FUNCTIONS: &[&str] = &[
+    "rmtree",
+    "remove",
+    "unlink",
+    "removedirs",
+    "rmsync",
+    "rmdirsync",
+    "unlinksync",
+];
+
 /// The first privileged function `cmd` (already lowercased) calls through a
 /// system module, e.g. `os.chmod` or `fs.promises.chown`.
 pub(super) fn privileged_call(cmd: &str) -> Option<&str> {
+    module_call(cmd, SYSTEM_MODULES, |f| {
+        PRIVILEGED_HEADS.contains(&f) || PRIVILEGED_FUNCTIONS.contains(&f)
+    })
+}
+
+/// #2581: the first delete `cmd` (already lowercased) calls through a module,
+/// e.g. `shutil.rmtree` or `fs.promises.rm`. A delete through an interpreter
+/// is the same delete as `rm -rf`, so it tiers the same.
+///
+/// Known gaps, accepted (the same as the privileged rule's, above): an
+/// aliased import (`import shutil as s; s.rmtree`) and a method call on an
+/// expression (`Path(p).unlink()`). The sandbox is the boundary for those,
+/// not more patterns here.
+pub(super) fn destructive_call(cmd: &str) -> Option<&str> {
+    module_call(cmd, DELETE_MODULES, |f| {
+        DESTRUCTIVE_HEADS.contains(&f) || DELETE_FUNCTIONS.contains(&f)
+    })
+}
+
+/// The first dotted name in `cmd` whose FIRST segment is one of `modules`
+/// and whose LAST segment satisfies `func`.
+fn module_call<'a>(cmd: &'a str, modules: &[&str], func: impl Fn(&str) -> bool) -> Option<&'a str> {
     // Split on anything that cannot be part of a dotted name, not just on
     // `tokens()`'s separators: `map(os.chmod,`, `f=os.chmod`, `{os.chmod(`
     // and `[os.chmod]` would otherwise glue punctuation to the module or the
@@ -50,9 +91,8 @@ pub(super) fn privileged_call(cmd: &str) -> Option<&str> {
         let Some((module, _)) = t.split_once('.') else {
             return false;
         };
-        let func = t.rsplit('.').next().unwrap_or(t);
-        SYSTEM_MODULES.contains(&module)
-            && (PRIVILEGED_HEADS.contains(&func) || PRIVILEGED_FUNCTIONS.contains(&func))
+        let last = t.rsplit('.').next().unwrap_or(t);
+        modules.contains(&module) && func(last)
     })
 }
 
@@ -84,6 +124,44 @@ mod tests {
             "python3 -c 'import os; [os.chmod][0](\"x\", 0o777)'",
         ] {
             assert_eq!(tier(cmd), RiskTier::Privileged, "cmd: {cmd}");
+        }
+    }
+
+    /// #2581: a delete routed through an interpreter is the same delete as
+    /// `rm -rf` — the incident was `shutil.rmtree` in a python heredoc.
+    #[test]
+    fn module_qualified_deletes_are_destructive() {
+        for cmd in [
+            "python3 - <<'PY'\nfrom pathlib import Path\nimport shutil\nshutil.rmtree(Path('x'))\nPY",
+            "python3 -c 'import shutil; shutil.rmtree(\"x\")'",
+            "python3 -c 'import os; os.remove(\"x\")'",
+            "python3 -c 'import os; os.unlink(\"x\")'",
+            "python3 -c 'import os; os.rmdir(\"x\")'",
+            "python3 -c 'import os; os.removedirs(\"a/b\")'",
+            "python3 -c 'import pathlib; pathlib.Path.unlink(p)'",
+            "node -e 'fs.rmSync(\"x\",{recursive:true})'",
+            "node -e 'fs.unlinkSync(\"x\")'",
+            "node -e 'fs.rmdirSync(\"x\")'",
+            "node -e 'fs.promises.rm(\"x\",{recursive:true})'",
+            "python3 -c 'import shutil; list(map(shutil.rmtree, [\"x\"]))'",
+        ] {
+            assert_eq!(tier(cmd), RiskTier::Destructive, "cmd: {cmd}");
+        }
+    }
+
+    /// Interpreter bodies without a module-qualified delete stay `Write`:
+    /// raising every body is the prompt storm `opaque_shell` records.
+    #[test]
+    fn interpreter_bodies_without_deletes_stay_write() {
+        for cmd in [
+            "python3 -c 'print(1)'",
+            "python3 - <<'PY'\nimport os\nprint(os.path.join('a', 'b'))\nPY",
+            "python3 -c 'xs = [1]; xs.remove(1)'",
+            "python3 -c 'import os; os.removexattr'",
+            "node -e 'fs.readFileSync(\"x\")'",
+            "node -e 'el.remove()'",
+        ] {
+            assert_eq!(tier(cmd), RiskTier::Write, "cmd: {cmd}");
         }
     }
 
