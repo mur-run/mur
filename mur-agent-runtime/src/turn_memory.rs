@@ -12,7 +12,7 @@
 //! Re-exported from `turn_ledger`; a separate file only because that module
 //! is already past the 800-line rule.
 
-use crate::turn_ledger::{Outcome, RUNAWAY_BACKSTOP, TurnLedger, after_cd_prefix, truncate};
+use crate::turn_ledger::{Outcome, RUNAWAY_BACKSTOP, TurnLedger, gate_command, truncate};
 use serde::{Deserialize, Serialize};
 
 /// Tool rows kept per remembered turn; the rest is a count. A turn that made
@@ -29,7 +29,7 @@ pub const MEMORY_CLOSE: &str = "</turn_ledger>";
 /// `None` — an absent excerpt is honest, a first-line-of-output excerpt is
 /// usually a progress bar.
 pub fn excerpt_for(command: &str, content: &str) -> Option<String> {
-    let cmd = after_cd_prefix(command);
+    let cmd = gate_command(command);
     let picked = if cmd.starts_with("cargo test") || cmd.starts_with("cargo nextest") {
         content
             .lines()
