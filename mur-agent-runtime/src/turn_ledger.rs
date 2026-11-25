@@ -304,7 +304,8 @@ impl TurnLedger {
     /// never count as evidence (#2578). When a wait reports the job finished,
     /// the outcome moves onto the original command, which is what actually
     /// passed or failed. The wait itself is then recorded `Ok`: it did its
-    /// job, and a failure stays attributed once, to the command.
+    /// job, and a failure stays attributed once, to the command. Earlier
+    /// waits on the same job that came back still running settle the same way.
     fn settle_waited_job(&mut self, wait: &mut Action) {
         if wait.tool != "bash_wait" || matches!(wait.outcome, Outcome::Running(_)) {
             return;
@@ -323,6 +324,15 @@ impl TurnLedger {
             return;
         }
         original.outcome = std::mem::replace(&mut wait.outcome, Outcome::Ok);
+        // A long job is often polled more than once; the waits that came back
+        // still running would otherwise stay `Running` and keep a `still
+        // running` row on the card after the job finished. They did their job
+        // too, so they settle `Ok` and any failure stays on the command.
+        for earlier in self.actions.iter_mut().filter(|a| {
+            a.tool == "bash_wait" && matches!(&a.outcome, Outcome::Running(j) if *j == job)
+        }) {
+            earlier.outcome = Outcome::Ok;
+        }
     }
 
     /// Commands that ran, succeeded, and are recognisable gate runs (test,

@@ -740,3 +740,42 @@ fn env_assignments_before_a_non_gate_command_are_still_not_evidence() {
     l.record(act("bash", "FOO=cargo test", Outcome::Ok));
     assert!(l.verified().is_empty(), "{l:?}");
 }
+
+// #2580 review: a job polled more than once leaves no `still running` wait
+// behind once a later wait collects its exit.
+#[test]
+fn intermediate_waits_settle_when_the_job_passes() {
+    let mut l = TurnLedger::default();
+    l.record(act("bash", "cargo test", Outcome::Running("j-5".into())));
+    l.record(act(
+        "bash_wait",
+        r#"{"job_id":"j-5"}"#,
+        Outcome::Running("j-5".into()),
+    ));
+    l.record(act("bash_wait", r#"{"job_id":"j-5"}"#, Outcome::Ok));
+    assert_eq!(l.verified().len(), 1, "{l:?}");
+    assert!(l.running().is_empty(), "{l:?}");
+    assert!(!render(&l).contains("still running"), "{}", render(&l));
+}
+
+#[test]
+fn intermediate_waits_settle_when_the_job_fails() {
+    let mut l = TurnLedger::default();
+    l.record(act("bash", "cargo test", Outcome::Running("j-6".into())));
+    l.record(act(
+        "bash_wait",
+        r#"{"job_id":"j-6"}"#,
+        Outcome::Running("j-6".into()),
+    ));
+    l.record(act(
+        "bash_wait",
+        r#"{"job_id":"j-6"}"#,
+        Outcome::Failed("exit 101".into()),
+    ));
+    assert!(l.verified().is_empty());
+    assert!(l.running().is_empty(), "{l:?}");
+    assert!(!render(&l).contains("still running"), "{}", render(&l));
+    let blocked = l.blocked();
+    assert_eq!(blocked.len(), 1, "{blocked:?}");
+    assert_eq!(blocked[0].target, "cargo test");
+}
