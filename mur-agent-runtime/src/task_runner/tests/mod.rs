@@ -238,6 +238,7 @@ mod startup_waiver;
 mod system_prompt;
 mod tool_allowlist;
 mod truncation;
+mod turn_lease;
 mod turn_track;
 mod turn_track_target;
 mod unknown_tool_hint;

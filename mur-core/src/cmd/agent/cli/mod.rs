@@ -54,6 +54,7 @@ mod panel;
 mod paste;
 pub mod persist;
 mod plain;
+mod plain_line;
 mod proposal;
 mod recover;
 mod render_card;

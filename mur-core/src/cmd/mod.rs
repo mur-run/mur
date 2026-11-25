@@ -24,6 +24,7 @@ pub(crate) mod agent_webhook;
 pub mod browser;
 pub mod capability;
 pub mod channel;
+pub mod channel_delete;
 pub mod channel_integrity;
 pub mod channel_repair;
 mod channel_repair_gate_b;

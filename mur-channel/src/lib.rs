@@ -16,6 +16,7 @@ pub mod service;
 pub mod sign;
 pub mod store;
 pub mod summary;
+pub mod turn_lease;
 pub mod verify;
 pub mod watch;
 

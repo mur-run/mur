@@ -19,8 +19,9 @@ use super::conversation::{conversation_file_stem, drop_oldest_turn, estimated_to
 use super::{DEFAULT_CONV_BUDGET_TOKENS, MAX_CHANNEL_CONVERSATIONS, MAX_CONV_MESSAGES};
 use crate::llm::RichMessage;
 
-/// Subdirectory of the runtime's conversation dir holding channel histories.
-const CHANNELS_SUBDIR: &str = "channels";
+/// Subdirectory of the runtime's conversation dir holding channel histories;
+/// `mur channel delete` finds them (and their turn leases) by the same name.
+const CHANNELS_SUBDIR: &str = mur_channel::turn_lease::AGENT_CHANNEL_HISTORY_DIR[1];
 
 /// Tracing target of the Phase 1 conversation audit (§6). The runtime never
 /// writes to the channel, so the audit is the runtime log; a channel-signed
@@ -487,6 +488,9 @@ pub(crate) struct ChannelConversations {
     pub(crate) mur_home: PathBuf,
     pub(crate) store: std::sync::Mutex<ChannelConversationStore>,
     pub(crate) locks: ConversationLocks,
+    /// Where each turn takes its conversation's lease (`turn_lease`): the
+    /// history dir. `None` (memory-only store) takes none.
+    pub(crate) lease_dir: Option<PathBuf>,
     /// Signs the refusal note (§4.3) as this agent; `None` = refusals are
     /// audit-only (stub runners, tests that do not exercise it).
     pub(crate) signer: Option<RefusalSigner>,
@@ -506,6 +510,7 @@ impl ChannelConversations {
                 budget_tokens,
             )),
             locks: ConversationLocks::new(max_waiting),
+            lease_dir: conversation_dir.map(|d| d.join(CHANNELS_SUBDIR)),
             signer: None,
         }
     }

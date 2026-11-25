@@ -165,7 +165,7 @@ impl TaskRunner {
         }
         // Held to the end of the turn: dropping it admits the next waiter.
         let (_channel_permit, channel_prior) = match channel_turn {
-            Some(t) => (Some(t.permit), Some(t.prior)),
+            Some(t) => (Some((t.permit, t.lease)), Some(t.prior)),
             None => (None, None),
         };
         let channel = channel.as_ref();

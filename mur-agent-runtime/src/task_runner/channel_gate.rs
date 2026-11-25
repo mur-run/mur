@@ -118,6 +118,10 @@ pub(crate) fn wire_code(e: &HandlerError) -> &'static str {
 /// the turn ends, and the reconciled history to send.
 pub(crate) struct ChannelTurn {
     pub(crate) permit: tokio::sync::OwnedSemaphorePermit,
+    /// The conversation's live-turn lease, held as long as `permit`: while
+    /// it lives `mur channel delete` refuses, so the history this turn
+    /// writes at its end cannot outlive a delete (#2564).
+    pub(crate) lease: Option<mur_channel::turn_lease::TurnLease>,
     pub(crate) prior: Vec<RichMessage>,
     /// Who the turn's event came from, by signature (E1).
     pub(crate) originator: Originator,
@@ -179,9 +183,26 @@ impl TaskRunner {
                 return Err(HandlerError::ConversationBusy(ctx.channel_id.clone()));
             }
         };
+        // Before the locked read: a delete holding the lease is waited out,
+        // and the read then finds the channel gone and refuses the turn.
+        let lease = match cc.lease_dir.clone() {
+            Some(dir) => {
+                let id = ctx.channel_id.clone();
+                Some(
+                    blocking(move || {
+                        mur_channel::turn_lease::begin_turn(&dir, &id).map_err(|e| {
+                            HandlerError::Internal(format!("conversation turn lease: {e:#}"))
+                        })
+                    })
+                    .await?,
+                )
+            }
+            None => None,
+        };
         let (prior, originator) = self.channel_assessed(ctx, input).await?;
         Ok(Some(ChannelTurn {
             permit,
+            lease,
             prior,
             originator,
         }))
