@@ -607,6 +607,7 @@ fn delegate_result(
         success: landed,
         blocked: false,
         stopped: false,
+        cancel_refused: false,
         // Real tokens the specialist's turn consumed, from Task.usage.
         usage: extract_usage(task),
     }

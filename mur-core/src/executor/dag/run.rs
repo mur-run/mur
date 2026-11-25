@@ -243,6 +243,9 @@ pub async fn execute_dag(
     // Set once the kill-switch halts any step (#2036). The run then starts
     // nothing further and ends `Stopped`, whatever else happened.
     let mut stopped = false;
+    // A delegate whose kill-switch `tasks/cancel` was refused (#2503): its turn
+    // may still be running, so the run ends `Failed`, never a clean `Stopped`.
+    let mut cancel_refused = false;
 
     for rank in 0..=max_rank {
         // Rank boundary: a stop issued while the previous rank ran starts no
@@ -380,6 +383,7 @@ pub async fn execute_dag(
                         success: false,
                         blocked: false,
                         stopped: false,
+                        cancel_refused: false,
                         usage: TokenUsage::default(),
                     });
                 }
@@ -444,6 +448,12 @@ pub async fn execute_dag(
 
             if result.exit_code != 0 {
                 overall_exit_code = result.exit_code;
+                if result.cancel_refused {
+                    // Decided by the dial, not by error text: no retry (the
+                    // stop is still tripped) and no on_failure handling.
+                    cancel_refused = true;
+                    continue;
+                }
                 // A failure that lands after the stop (a cancelled member can
                 // answer with an error before the poll notices) is the stop's
                 // doing: no abort, no retry — the run ends `Stopped`.
@@ -571,7 +581,9 @@ pub async fn execute_dag(
     // Blocked outranks a clean exit code: every blocked step exits 0 (nothing
     // ran, nothing failed), so reading the exit code alone would report a run
     // waiting on a human as a success.
-    let outcome = if stopped {
+    let outcome = if cancel_refused {
+        RunOutcome::Failed
+    } else if stopped {
         // A halt is a pause only when the signal still says so: a stop that
         // landed too (checked first inside `halt_reason`) wins, and a halt
         // whose signal has since cleared stays the conservative `Stopped`.

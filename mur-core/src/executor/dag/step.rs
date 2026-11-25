@@ -15,6 +15,11 @@ pub(super) struct StepResult {
     /// The kill-switch halted this step (#2036): it never started, or its
     /// member turn was cancelled. Like `blocked`, never a failure to act on.
     pub(super) stopped: bool,
+    /// The kill-switch tripped mid-turn but the member refused (or never got)
+    /// `tasks/cancel` (#2503): its turn may still be running and billing, so
+    /// the step failed AND the run must not end as a clean `Stopped`. Set only
+    /// from `DelegateDial::CancelRefused`, never inferred from error text.
+    pub(super) cancel_refused: bool,
     /// Real LLM tokens this step consumed, input and output kept apart so a
     /// cost guard can price each side at its own rate — non-zero only for
     /// delegate steps, read from the specialist's `Task.usage`. Its total is
@@ -78,6 +83,7 @@ pub(super) async fn execute_step_inner(
                             success: false,
                             blocked: false,
                             stopped: false,
+                            cancel_refused: false,
                             usage: TokenUsage::default(),
                         };
                     }
@@ -94,6 +100,7 @@ pub(super) async fn execute_step_inner(
                             success: false,
                             blocked: false,
                             stopped: false,
+                            cancel_refused: false,
                             usage: TokenUsage::default(),
                         };
                     }
@@ -114,6 +121,7 @@ pub(super) async fn execute_step_inner(
                             success: false,
                             blocked: false,
                             stopped: false,
+                            cancel_refused: false,
                             usage: TokenUsage::default(),
                         };
                     }
@@ -147,6 +155,7 @@ pub(super) async fn execute_step_inner(
             success: exit_code == 0,
             blocked: false,
             stopped: false,
+            cancel_refused: false,
             usage: TokenUsage::default(),
         }
     } else {
@@ -178,6 +187,7 @@ pub(super) async fn execute_step_inner(
             success: true,
             blocked: false,
             stopped: false,
+            cancel_refused: false,
             usage: TokenUsage::default(),
         }
     }
@@ -275,6 +285,7 @@ pub(super) async fn execute_step(
                 success: true,
                 blocked: false,
                 stopped: false,
+                cancel_refused: false,
                 usage: TokenUsage::default(),
             };
         }
@@ -357,6 +368,7 @@ pub(super) async fn execute_step(
             &opts.needs,
         );
         let watch = watch_signal(opts);
+        let mut cancel_refused = false;
         let dial = match dial_delegate_watched(
             mur_home,
             &canonical,
@@ -371,10 +383,13 @@ pub(super) async fn execute_step(
             // may still be running and billing. That is a failed step, not a
             // clean stop: route it through the failure path below (Note,
             // stderr, late-usage recovery, `Failed` event).
-            DelegateDial::CancelRefused(error) => Err(anyhow::anyhow!(
-                "stop requested but member {canonical} refused the tasks/cancel \
+            DelegateDial::CancelRefused(error) => {
+                cancel_refused = true;
+                Err(anyhow::anyhow!(
+                    "stop requested but member {canonical} refused the tasks/cancel \
                  (its turn may still be running): {error:#}"
-            )),
+                ))
+            }
             DelegateDial::Stopped => {
                 // Say so in the channel: the member's reply will never land,
                 // and a reader should not wonder why the delegation dangles.
@@ -459,6 +474,7 @@ pub(super) async fn execute_step(
                     success: false,
                     blocked: false,
                     stopped: false,
+                    cancel_refused,
                     usage,
                 }
             }
@@ -539,6 +555,7 @@ pub(super) async fn execute_step(
                 success: false,
                 blocked: true,
                 stopped: false,
+                cancel_refused: false,
                 usage: TokenUsage::default(),
             };
         }
@@ -557,6 +574,7 @@ pub(super) async fn execute_step(
                 success: false,
                 blocked: false,
                 stopped: false,
+                cancel_refused: false,
                 usage: TokenUsage::default(),
             };
         }
@@ -577,6 +595,7 @@ pub(super) async fn execute_step(
                 success: false,
                 blocked: false,
                 stopped: false,
+                cancel_refused: false,
                 usage: TokenUsage::default(),
             };
         }
@@ -626,6 +645,7 @@ pub(super) async fn execute_step(
                 success: false,
                 blocked: !refused,
                 stopped: false,
+                cancel_refused: false,
                 usage: TokenUsage::default(),
             };
         }
@@ -718,6 +738,7 @@ pub(super) fn stopped_result(duration_ms: u64) -> StepResult {
         success: false,
         blocked: false,
         stopped: true,
+        cancel_refused: false,
         usage: TokenUsage::default(),
     }
 }
