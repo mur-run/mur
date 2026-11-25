@@ -110,6 +110,9 @@ pub fn delete(mur_home: &Path, handle: &str, force: bool, confirm: Confirm<'_>) 
     }
     let histories = remove_agent_histories(mur_home, &row.id)?;
     svc.delete_channel(&row.id)?;
+    // Only now: a turn that opens a fresh lease inode after this unlink is
+    // admitted at once, but its read then finds no channel.
+    remove_turn_leases(mur_home, &row.id)?;
     Ok(Outcome::Deleted {
         id: row.id.clone(),
         histories,
@@ -174,7 +177,9 @@ fn resolve<'a>(rows: &'a [ChannelRow], typed: &str) -> Result<&'a ChannelRow> {
 }
 
 /// Every agent's history files for `channel_id`, removed: the channel turn
-/// cache with its lease, and the older task-keyed copy. Every agent is
+/// cache and the older task-keyed copy. Lease files stay: unlinking one while
+/// the channel still exists lets a new turn lock a fresh inode and write its
+/// history back (see [`remove_turn_leases`]). Every agent is
 /// searched, not just today's participants: one that left still holds its
 /// copy. The runtime names the files after the channel id verbatim. Returns
 /// the history files removed (not temp or lease files).
@@ -192,9 +197,18 @@ fn remove_agent_histories(mur_home: &Path, channel_id: &str) -> Result<Vec<PathB
                 removed.push(json);
             }
         }
-        remove_if_present(&turn_lease::lease_path(&channels, channel_id)?)?;
     }
     Ok(removed)
+}
+
+/// Every agent's lease file for `channel_id`, removed. Call only after the
+/// channel itself is gone.
+fn remove_turn_leases(mur_home: &Path, channel_id: &str) -> Result<()> {
+    for agent in crate::a2a_dial::agent_dir_names(mur_home) {
+        let channels = turn_lease::agent_history_dir(&agent_home(mur_home, &agent));
+        remove_if_present(&turn_lease::lease_path(&channels, channel_id)?)?;
+    }
+    Ok(())
 }
 
 /// `true` when `path` was there and is now gone.
