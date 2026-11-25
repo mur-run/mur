@@ -44,6 +44,7 @@ mur-mobile-sdk
 mur-monitor
 mur-open-items
 mur-ssh-request
+mur-fleet-shared
 mur-browser-request
 mur-research-gateway
 mur-test-log
