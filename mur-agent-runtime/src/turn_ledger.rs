@@ -760,8 +760,8 @@ pub fn render(ledger: &TurnLedger) -> String {
 }
 
 mod gate;
+pub(crate) use gate::gate_command;
 use gate::waited_job;
-pub(crate) use gate::{after_cd_prefix, gate_command};
 
 #[cfg(test)]
 mod tests;
