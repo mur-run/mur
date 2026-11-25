@@ -11,7 +11,6 @@ fn lock_path(home: &Path) -> PathBuf {
 }
 
 /// Swap the lock file for a new one, the way a hand edit would.
-#[cfg(unix)]
 fn replace(path: &Path) {
     let next = path.with_extension("next");
     std::fs::write(&next, b"").unwrap();
@@ -52,9 +51,6 @@ fn a_second_taker_times_out_while_the_first_is_held() {
     assert!(waited < SHORT + LOCK_POLL + SLACK, "too late: {waited:?}");
 }
 
-// Replacement detection is Unix-only for now: off Unix `same_file` reports the
-// path as unchanged (see its doc), so these two cannot hold there yet.
-#[cfg(unix)]
 #[test]
 fn a_lock_file_replaced_once_ends_with_the_lock_on_the_new_file() {
     let home = tempfile::tempdir().unwrap();
@@ -75,7 +71,6 @@ fn a_lock_file_replaced_once_ends_with_the_lock_on_the_new_file() {
     assert!(path.is_file());
 }
 
-#[cfg(unix)]
 #[test]
 fn a_lock_file_replaced_on_every_attempt_ends_in_the_timeout_error() {
     let home = tempfile::tempdir().unwrap();

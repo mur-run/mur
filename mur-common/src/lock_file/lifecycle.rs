@@ -133,9 +133,60 @@ fn same_file(file: &File, path: &Path) -> io::Result<bool> {
     }
 }
 
-/// Not implemented off Unix: reports the path as unchanged. The Windows
-/// comparison (volume serial and file index) belongs to the runtime task.
-#[cfg(not(unix))]
+/// Windows: compare the volume serial number and the 128-bit file id of the
+/// held handle with those of whatever is at `path` now (`FILE_ID_INFO`; the
+/// 64-bit index of `BY_HANDLE_FILE_INFORMATION` is not unique on ReFS).
+#[cfg(windows)]
+fn same_file(file: &File, path: &Path) -> io::Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let held = file_id(file)?;
+    // Attribute-only access with full sharing: the probe must neither take
+    // part in the lock nor stop another process replacing the file.
+    let at_path = match OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    Ok(held == file_id(&at_path)?)
+}
+
+/// `(volume serial, file id)` of an open handle.
+#[cfg(windows)]
+fn file_id(file: &File) -> io::Result<(u64, [u8; 16])> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx,
+    };
+    let mut info = std::mem::MaybeUninit::<FILE_ID_INFO>::zeroed();
+    // SAFETY: the handle is owned by `file` and open for the whole call; the
+    // buffer is a `FILE_ID_INFO` of exactly the size passed, which is the
+    // layout the `FileIdInfo` class writes.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            info.as_mut_ptr().cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the call succeeded, so it filled the struct.
+    let info = unsafe { info.assume_init() };
+    Ok((info.VolumeSerialNumber, info.FileId.Identifier))
+}
+
+/// Neither Unix nor Windows: no file identity to compare, so the path is
+/// reported unchanged.
+#[cfg(not(any(unix, windows)))]
 fn same_file(_file: &File, _path: &Path) -> io::Result<bool> {
     Ok(true)
 }
