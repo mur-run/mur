@@ -142,7 +142,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: WorkflowAction,
     },
-    /// Interact with a channel (HITL approval, etc.)
+    /// Interact with a channel — HITL approval, integrity check (verify), recovery (repair), and permanent removal of a conversation (delete)
     Channel {
         #[command(subcommand)]
         action: ChannelAction,
