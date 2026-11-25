@@ -524,6 +524,14 @@ pub async fn execute_dag(
                             // guard never under-counts a retried delegate.
                             overall_tokens =
                                 overall_tokens.saturating_add(retry_result.usage.total());
+                            // #2503: same rule as the first attempt — a refused
+                            // cancel leaves the member running, so the run ends
+                            // `Failed` and no further attempt is started.
+                            if retry_result.cancel_refused {
+                                overall_exit_code = retry_result.exit_code;
+                                cancel_refused = true;
+                                break;
+                            }
                             if retry_result.stopped {
                                 stopped = true;
                                 break;

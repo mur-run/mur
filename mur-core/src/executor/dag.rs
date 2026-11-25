@@ -613,6 +613,9 @@ fn delegate_result(
     }
 }
 #[cfg(test)]
+#[path = "dag/cancel_refused_retry_tests.rs"]
+mod cancel_refused_retry_tests;
+#[cfg(test)]
 #[path = "dag/late_usage_tests.rs"]
 mod late_usage_tests;
 #[cfg(test)]
