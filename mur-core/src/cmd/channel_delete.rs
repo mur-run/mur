@@ -2,9 +2,11 @@
 //!
 //! A conversation lives in five places. [`ChannelService::delete_channel`]
 //! owns four of them (store dir, index rows, signed head, dirty marker, head
-//! last); the fifth is each agent's own copy of the history,
-//! `agents/<agent>/conversations/<id>.json`, which the runtime keeps beside
-//! the channel and which nothing else removes. That copy goes first: a crash
+//! last); the fifth is each agent's own copy of the history — the channel
+//! turn cache `agents/<agent>/conversations/channels/<id>.json` with its turn
+//! lease, and the older `agents/<agent>/conversations/<id>.json` — which the
+//! runtime keeps beside the channel and which nothing else removes. Those
+//! copies go first: a crash
 //! part-way leaves a conversation the agent has forgotten, which deleting
 //! again finishes, never history for a conversation that is gone.
 //!
@@ -12,11 +14,13 @@
 //! - conversations only — fleet and workflow runs are audit records;
 //! - CLI only — `delete_channel` writes `channel-heads/`, which the agent
 //!   sandbox has no grant for, so no agent or MCP tool reaches this;
-//! - a pending HITL request refuses without `--force`, and so does activity
-//!   within [`RECENT_ACTIVITY_WINDOW`]: a turn still in flight would write
-//!   its history file back after the delete. Channel `state` is not used:
-//!   every conversation is created `working` and stays there, so it says
-//!   nothing about whether a turn is in flight;
+//! - a running turn refuses, `--force` or not: it would write its history
+//!   back after the delete. Every agent's turn lease
+//!   ([`mur_channel::turn_lease`]) is taken exclusively, without waiting,
+//!   and held until the delete is done, so a turn admitted meanwhile waits
+//!   and then finds the channel gone. Neither channel `state` (always
+//!   `working`) nor elapsed time can tell a running turn;
+//! - a pending HITL request refuses without `--force`;
 //! - an ambiguous handle deletes nothing and lists the matches.
 
 use std::io::{BufRead, IsTerminal, Write};
@@ -26,6 +30,7 @@ use anyhow::{Result, bail};
 use mur_channel::ChannelService;
 use mur_channel::handle::{WHOLE_ID_SIGIL, handle_key};
 use mur_channel::index::ChannelRow;
+use mur_channel::turn_lease::{self, DeleteLease};
 
 /// The index purpose string of a deletable channel.
 const CONVERSATION: &str = "conversation";
@@ -33,10 +38,6 @@ const CONVERSATION: &str = "conversation";
 const MIN_PREFIX: usize = 4;
 /// Rows scanned to resolve a handle; above any real machine's channel count.
 const RESOLVE_SCAN_LIMIT: usize = 100_000;
-/// A conversation updated more recently than this may still have a turn in
-/// flight, whose history write would land after the delete; refused without
-/// `--force`. Comfortably above one model round-trip plus tool calls.
-pub const RECENT_ACTIVITY_WINDOW: chrono::TimeDelta = chrono::TimeDelta::minutes(2);
 /// Exit code when the operator answered no.
 pub const EXIT_DECLINED: i32 = 2;
 
@@ -67,7 +68,7 @@ pub fn run(mur_home: &Path, handle: &str, yes: bool, force: bool) -> Result<i32>
             interactive,
         }
     };
-    match delete(mur_home, handle, force, chrono::Utc::now(), confirm)? {
+    match delete(mur_home, handle, force, confirm)? {
         Outcome::Declined => {
             println!("not deleted");
             Ok(EXIT_DECLINED)
@@ -83,13 +84,7 @@ pub fn run(mur_home: &Path, handle: &str, yes: bool, force: bool) -> Result<i32>
 }
 
 /// The body of [`run`], with confirmation injected.
-pub fn delete(
-    mur_home: &Path,
-    handle: &str,
-    force: bool,
-    now: chrono::DateTime<chrono::Utc>,
-    confirm: Confirm<'_>,
-) -> Result<Outcome> {
+pub fn delete(mur_home: &Path, handle: &str, force: bool, confirm: Confirm<'_>) -> Result<Outcome> {
     let svc = ChannelService::open(mur_home)?;
     let rows = svc.index().list(RESOLVE_SCAN_LIMIT)?;
     let row = resolve(&rows, handle)?;
@@ -107,14 +102,9 @@ pub fn delete(
             row.id
         );
     }
-    if !force && recently_active(row, now) {
-        bail!(
-            "conversation {} was active in the last {} seconds and a turn may still be \
-             running; wait for it to finish, or pass --force",
-            row.id,
-            RECENT_ACTIVITY_WINDOW.num_seconds()
-        );
-    }
+    // Held to the end of this function: no turn starts until the delete is
+    // done, and the read it starts with then finds no channel.
+    let _leases = take_turn_leases(mur_home, &row.id)?;
     if !confirmed(row, confirm)? {
         return Ok(Outcome::Declined);
     }
@@ -126,13 +116,26 @@ pub fn delete(
     })
 }
 
-/// Updated inside [`RECENT_ACTIVITY_WINDOW`] of `now`. An unreadable
-/// timestamp counts as recent: refusing is recoverable with `--force`, a
-/// history file written back after the delete is not.
-fn recently_active(row: &ChannelRow, now: chrono::DateTime<chrono::Utc>) -> bool {
-    chrono::DateTime::parse_from_rfc3339(&row.updated_at).map_or(true, |t| {
-        now.signed_duration_since(t) < RECENT_ACTIVITY_WINDOW
-    })
+/// Every agent's turn lease on `channel_id`, exclusively. A lease held by a
+/// running turn refuses the delete; `--force` does not override it, since
+/// nothing here can stop that turn writing its history back.
+fn take_turn_leases(mur_home: &Path, channel_id: &str) -> Result<Vec<DeleteLease>> {
+    let mut held = Vec::new();
+    for agent in crate::a2a_dial::agent_dir_names(mur_home) {
+        let dir = turn_lease::agent_history_dir(&agent_home(mur_home, &agent));
+        match turn_lease::try_exclusive(&dir, channel_id)? {
+            Some(l) => held.push(l),
+            None => bail!(
+                "a turn is running in conversation {channel_id} ({agent}); wait for it to \
+                 finish, then delete again"
+            ),
+        }
+    }
+    Ok(held)
+}
+
+fn agent_home(mur_home: &Path, agent: &str) -> PathBuf {
+    mur_home.join(mur_common::paths::AGENTS).join(agent)
 }
 
 /// Name one channel from what the user typed: the whole id (optionally
@@ -170,31 +173,37 @@ fn resolve<'a>(rows: &'a [ChannelRow], typed: &str) -> Result<&'a ChannelRow> {
     }
 }
 
-/// Every agent's history file for `channel_id`, removed. Every agent is
+/// Every agent's history files for `channel_id`, removed: the channel turn
+/// cache with its lease, and the older task-keyed copy. Every agent is
 /// searched, not just today's participants: one that left still holds its
-/// copy. The runtime names the file after the channel id verbatim.
+/// copy. The runtime names the files after the channel id verbatim. Returns
+/// the history files removed (not temp or lease files).
 fn remove_agent_histories(mur_home: &Path, channel_id: &str) -> Result<Vec<PathBuf>> {
     mur_channel::check_channel_id(channel_id)?;
     let mut removed = Vec::new();
     for agent in crate::a2a_dial::agent_dir_names(mur_home) {
-        let dir = mur_home
-            .join(mur_common::paths::AGENTS)
-            .join(&agent)
-            .join("conversations");
-        let json = dir.join(format!("{channel_id}.json"));
-        for path in [dir.join(format!("{channel_id}.json.tmp")), json.clone()] {
-            match std::fs::remove_file(&path) {
-                Ok(()) if path == json => removed.push(path),
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => {
-                    return Err(anyhow::Error::new(e)
-                        .context(format!("remove agent history {}", path.display())));
-                }
+        let home = agent_home(mur_home, &agent);
+        let channels = turn_lease::agent_history_dir(&home);
+        let older = home.join(turn_lease::AGENT_CHANNEL_HISTORY_DIR[0]);
+        for dir in [channels.as_path(), older.as_path()] {
+            let json = dir.join(format!("{channel_id}.json"));
+            remove_if_present(&dir.join(format!("{channel_id}.json.tmp")))?;
+            if remove_if_present(&json)? {
+                removed.push(json);
             }
         }
+        remove_if_present(&turn_lease::lease_path(&channels, channel_id)?)?;
     }
     Ok(removed)
+}
+
+/// `true` when `path` was there and is now gone.
+fn remove_if_present(path: &Path) -> Result<bool> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(anyhow::Error::new(e).context(format!("remove {}", path.display()))),
+    }
 }
 
 fn confirmed(row: &ChannelRow, confirm: Confirm<'_>) -> Result<bool> {
