@@ -395,3 +395,64 @@ fn a_conversation_just_written_is_deletable_when_no_turn_runs() {
     delete(h, &id, false, Confirm::Yes).unwrap();
     assert!(!hist.exists() && !index_has(h, &id) && !head(h, &id).exists());
 }
+
+/// Whether a turn on `dir`/`id` is admitted within `ms` (false: it waited).
+fn turn_admitted_within(dir: &Path, id: &str, ms: u64) -> bool {
+    let (d, i) = (dir.to_path_buf(), id.to_string());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _l = mur_channel::turn_lease::begin_turn(&d, &i).unwrap();
+        tx.send(()).ok();
+    });
+    rx.recv_timeout(std::time::Duration::from_millis(ms))
+        .is_ok()
+}
+
+#[test]
+fn removing_histories_keeps_every_lease_held() {
+    // Council review of #2570: the histories go before the channel does. If
+    // that step unlinks a lease file, a new turn opens a fresh inode, gets
+    // its shared lock at once, sees the channel still there, and writes its
+    // history back after the delete. Pin the window between the two steps.
+    let tmp = home();
+    let h = tmp.path();
+    let (id, _) = conversation(h);
+    let dirs = [channel_hist_dir(h, "aura"), channel_hist_dir(h, "bolt")];
+    let leases = take_turn_leases(h, &id).unwrap();
+    assert_eq!(leases.len(), 2, "one lease per agent");
+
+    remove_agent_histories(h, &id).unwrap();
+
+    for d in &dirs {
+        assert!(
+            !turn_admitted_within(d, &id, 200),
+            "turn admitted in {} between history removal and channel delete",
+            d.display()
+        );
+    }
+    drop(leases);
+}
+
+#[test]
+fn every_agent_is_checked_and_cleaned() {
+    let tmp = home();
+    let h = tmp.path();
+    let (id, aura_hist) = conversation(h);
+    let bolt = channel_hist_dir(h, "bolt");
+    let bolt_hist = bolt.join(format!("{id}.json"));
+    std::fs::write(&bolt_hist, b"{}").unwrap();
+
+    // A turn in the second agent refuses the delete and keeps everything.
+    let turn = mur_channel::turn_lease::begin_turn(&bolt, &id).unwrap();
+    let err = delete(h, &id, false, Confirm::Yes).unwrap_err();
+    assert!(err.to_string().contains("(bolt)"), "{err}");
+    assert!(aura_hist.exists() && bolt_hist.exists() && index_has(h, &id));
+    drop(turn);
+
+    // Once it ends, both agents' copies go.
+    let Outcome::Deleted { histories, .. } = delete(h, &id, false, Confirm::Yes).unwrap() else {
+        panic!("not deleted");
+    };
+    assert!(histories.contains(&aura_hist) && histories.contains(&bolt_hist));
+    assert!(!aura_hist.exists() && !bolt_hist.exists() && !index_has(h, &id));
+}
