@@ -64,6 +64,17 @@ fn head(home: &Path, id: &str) -> PathBuf {
     mur_channel::head_io::head_path(&mur_channel::anchor::heads_dir(home), id).unwrap()
 }
 
+/// A clock past the recent-activity window, so fixtures written a moment
+/// ago read as idle.
+fn idle() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() + RECENT_ACTIVITY_WINDOW + chrono::TimeDelta::seconds(1)
+}
+
+/// `delete` as an operator runs it once the conversation has gone quiet.
+fn delete_at(home: &Path, handle: &str, force: bool, confirm: Confirm<'_>) -> Result<Outcome> {
+    delete(home, handle, force, idle(), confirm)
+}
+
 fn answer(text: &str) -> std::io::Cursor<Vec<u8>> {
     std::io::Cursor::new(text.as_bytes().to_vec())
 }
@@ -76,7 +87,7 @@ fn deleting_a_conversation_removes_all_five_places() {
     assert!(head(h, &id).exists(), "fixture must anchor a head");
     assert!(index_has(h, &id));
 
-    let out = delete(h, &id, false, Confirm::Yes).unwrap();
+    let out = delete_at(h, &id, false, Confirm::Yes).unwrap();
 
     assert_eq!(
         out,
@@ -100,7 +111,7 @@ fn a_handle_prefix_names_the_conversation() {
     let h = tmp.path();
     let (id, _) = conversation(h);
     let handle = svc(h).index().handles().unwrap().of(&id).unwrap();
-    delete(h, &handle, false, Confirm::Yes).unwrap();
+    delete_at(h, &handle, false, Confirm::Yes).unwrap();
     assert!(!index_has(h, &id));
 }
 
@@ -120,7 +131,7 @@ fn an_ambiguous_prefix_deletes_nothing() {
         .collect();
     assert!(shared.len() >= MIN_PREFIX, "fixture ids too far apart");
 
-    let err = delete(h, &shared, false, Confirm::Yes).unwrap_err();
+    let err = delete_at(h, &shared, false, Confirm::Yes).unwrap_err();
 
     assert!(err.to_string().contains("matches 2 channels"), "{err}");
     assert!(index_has(h, &a) && index_has(h, &b));
@@ -130,7 +141,7 @@ fn an_ambiguous_prefix_deletes_nothing() {
 #[test]
 fn a_prefix_below_the_floor_is_refused() {
     let tmp = home();
-    let err = delete(tmp.path(), "01a", false, Confirm::Yes).unwrap_err();
+    let err = delete_at(tmp.path(), "01a", false, Confirm::Yes).unwrap_err();
     assert!(err.to_string().contains("too short"), "{err}");
 }
 
@@ -143,7 +154,7 @@ fn a_run_channel_is_refused() {
         .unwrap();
     message(h, &ch.id, "step done");
 
-    let err = delete(h, &ch.id, true, Confirm::Yes).unwrap_err();
+    let err = delete_at(h, &ch.id, true, Confirm::Yes).unwrap_err();
 
     assert!(err.to_string().contains("not a conversation"), "{err}");
     assert!(index_has(h, &ch.id));
@@ -178,11 +189,11 @@ fn a_pending_approval_refuses_without_force() {
     )
     .unwrap();
 
-    let err = delete(h, &id, false, Confirm::Yes).unwrap_err();
+    let err = delete_at(h, &id, false, Confirm::Yes).unwrap_err();
     assert!(err.to_string().contains("pending approval"), "{err}");
     assert!(hist.exists() && index_has(h, &id));
 
-    delete(h, &id, true, Confirm::Yes).unwrap();
+    delete_at(h, &id, true, Confirm::Yes).unwrap();
     assert!(!hist.exists() && !index_has(h, &id));
 }
 
@@ -192,7 +203,7 @@ fn answering_no_keeps_everything() {
     let h = tmp.path();
     let (id, hist) = conversation(h);
     let mut input = answer("n\n");
-    let out = delete(
+    let out = delete_at(
         h,
         &id,
         false,
@@ -212,7 +223,7 @@ fn no_terminal_and_no_yes_is_refused() {
     let h = tmp.path();
     let (id, hist) = conversation(h);
     let mut input = answer("y\n");
-    let err = delete(
+    let err = delete_at(
         h,
         &id,
         false,
@@ -234,7 +245,7 @@ fn a_departed_agent_copy_is_removed_too() {
     let other = agent(h, "buildy").join(format!("{id}.json"));
     std::fs::write(&other, b"[]").unwrap();
 
-    let Outcome::Deleted { histories, .. } = delete(h, &id, false, Confirm::Yes).unwrap() else {
+    let Outcome::Deleted { histories, .. } = delete_at(h, &id, false, Confirm::Yes).unwrap() else {
         panic!("not deleted");
     };
 
@@ -257,4 +268,30 @@ fn a_crash_after_the_store_is_gone_leaves_log_missing_not_no_head() {
     // Deleting again finishes the job.
     svc(h).delete_channel(&id).unwrap();
     assert!(!head(h, &id).exists());
+}
+
+#[test]
+fn a_recently_active_conversation_refuses_without_force() {
+    // A turn may still be running: its history file would be written back
+    // after the delete. Every conversation's `state` is `working`, so recent
+    // activity is the signal.
+    let tmp = home();
+    let h = tmp.path();
+    let (id, hist) = conversation(h);
+    let now = chrono::Utc::now();
+
+    let err = delete(h, &id, false, now, Confirm::Yes).unwrap_err();
+    assert!(err.to_string().contains("--force"), "{err}");
+    assert!(hist.exists() && index_has(h, &id) && head(h, &id).exists());
+}
+
+#[test]
+fn force_overrides_the_recent_activity_guard() {
+    let tmp = home();
+    let h = tmp.path();
+    let (id, hist) = conversation(h);
+    let now = chrono::Utc::now();
+
+    delete(h, &id, true, now, Confirm::Yes).unwrap();
+    assert!(!hist.exists() && !index_has(h, &id) && !head(h, &id).exists());
 }

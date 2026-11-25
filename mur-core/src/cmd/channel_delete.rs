@@ -12,8 +12,10 @@
 //! - conversations only — fleet and workflow runs are audit records;
 //! - CLI only — `delete_channel` writes `channel-heads/`, which the agent
 //!   sandbox has no grant for, so no agent or MCP tool reaches this;
-//! - a pending HITL request refuses without `--force`. Channel `state` is not
-//!   used: every conversation is created `working` and stays there, so it says
+//! - a pending HITL request refuses without `--force`, and so does activity
+//!   within [`RECENT_ACTIVITY_WINDOW`]: a turn still in flight would write
+//!   its history file back after the delete. Channel `state` is not used:
+//!   every conversation is created `working` and stays there, so it says
 //!   nothing about whether a turn is in flight;
 //! - an ambiguous handle deletes nothing and lists the matches.
 
@@ -31,6 +33,10 @@ const CONVERSATION: &str = "conversation";
 const MIN_PREFIX: usize = 4;
 /// Rows scanned to resolve a handle; above any real machine's channel count.
 const RESOLVE_SCAN_LIMIT: usize = 100_000;
+/// A conversation updated more recently than this may still have a turn in
+/// flight, whose history write would land after the delete; refused without
+/// `--force`. Comfortably above one model round-trip plus tool calls.
+pub const RECENT_ACTIVITY_WINDOW: chrono::TimeDelta = chrono::TimeDelta::minutes(2);
 /// Exit code when the operator answered no.
 pub const EXIT_DECLINED: i32 = 2;
 
@@ -61,7 +67,7 @@ pub fn run(mur_home: &Path, handle: &str, yes: bool, force: bool) -> Result<i32>
             interactive,
         }
     };
-    match delete(mur_home, handle, force, confirm)? {
+    match delete(mur_home, handle, force, chrono::Utc::now(), confirm)? {
         Outcome::Declined => {
             println!("not deleted");
             Ok(EXIT_DECLINED)
@@ -77,7 +83,13 @@ pub fn run(mur_home: &Path, handle: &str, yes: bool, force: bool) -> Result<i32>
 }
 
 /// The body of [`run`], with confirmation injected.
-pub fn delete(mur_home: &Path, handle: &str, force: bool, confirm: Confirm<'_>) -> Result<Outcome> {
+pub fn delete(
+    mur_home: &Path,
+    handle: &str,
+    force: bool,
+    now: chrono::DateTime<chrono::Utc>,
+    confirm: Confirm<'_>,
+) -> Result<Outcome> {
     let svc = ChannelService::open(mur_home)?;
     let rows = svc.index().list(RESOLVE_SCAN_LIMIT)?;
     let row = resolve(&rows, handle)?;
@@ -95,6 +107,14 @@ pub fn delete(mur_home: &Path, handle: &str, force: bool, confirm: Confirm<'_>) 
             row.id
         );
     }
+    if !force && recently_active(row, now) {
+        bail!(
+            "conversation {} was active in the last {} seconds and a turn may still be \
+             running; wait for it to finish, or pass --force",
+            row.id,
+            RECENT_ACTIVITY_WINDOW.num_seconds()
+        );
+    }
     if !confirmed(row, confirm)? {
         return Ok(Outcome::Declined);
     }
@@ -103,6 +123,15 @@ pub fn delete(mur_home: &Path, handle: &str, force: bool, confirm: Confirm<'_>) 
     Ok(Outcome::Deleted {
         id: row.id.clone(),
         histories,
+    })
+}
+
+/// Updated inside [`RECENT_ACTIVITY_WINDOW`] of `now`. An unreadable
+/// timestamp counts as recent: refusing is recoverable with `--force`, a
+/// history file written back after the delete is not.
+fn recently_active(row: &ChannelRow, now: chrono::DateTime<chrono::Utc>) -> bool {
+    chrono::DateTime::parse_from_rfc3339(&row.updated_at).map_or(true, |t| {
+        now.signed_duration_since(t) < RECENT_ACTIVITY_WINDOW
     })
 }
 

@@ -226,7 +226,9 @@ index and search rows, its signed head, and every agent's copy of its history
 `/channels` shows (at least 4 characters), or the whole id; a prefix that
 matches more than one channel deletes nothing and lists the matches. It shows
 the conversation and asks first (`--yes` without a terminal), refuses while an
-approval request is still pending (`--force` overrides), and refuses fleet and
+approval request is still pending or the conversation was active in the last
+2 minutes — a running turn would write its history back (`--force` overrides
+both), and refuses fleet and
 workflow run channels outright — those are audit records.
 
 In `--plain` mode a line starting with `/` is never sent to the agent:
