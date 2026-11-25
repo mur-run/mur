@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use crate::agent::{AgentProfile, Entitlements};
 
 mod lock;
-pub use lock::{ProfileLock, lock_path, lock_profile};
+pub use lock::{ProfileLock, lock_path, lock_profile, lock_profile_until};
 
 /// Directory under `<mur_home>` holding one pin per agent.
 pub const PINS_DIR: &str = "entitlement-pins";
@@ -64,6 +64,9 @@ pub enum PinError {
     Profile { path: PathBuf, msg: String },
     #[error("invalid agent name '{0}'")]
     Name(String),
+    /// The profile lock stayed held until the caller's deadline.
+    #[error("timed out waiting for the profile lock {path}")]
+    Timeout { path: PathBuf },
 }
 
 fn canonical(ent: &Entitlements) -> serde_json::Value {

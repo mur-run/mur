@@ -93,15 +93,13 @@ fn checked_name(agent: &str) -> Result<(), IdentityPinError> {
 
 /// `(mur_home, name)` when `agent_home` is `<mur_home>/agents/<name>`. Only an
 /// installed agent has a pin; any other directory (an embedded runtime's cache
-/// dir, a test fixture) keeps the legacy read-from-disk behavior.
+/// dir, a test fixture, a `.purged.*` leftover) keeps the legacy
+/// read-from-disk behavior. The shape rule itself is
+/// [`crate::agent_home::installed_agent`]; this only recovers `mur_home`.
 pub fn split_agent_home(agent_home: &Path) -> Option<(&Path, &str)> {
-    let parent = agent_home.parent()?;
-    if parent.file_name()? != "agents" {
-        return None;
-    }
-    let name = agent_home.file_name()?.to_str()?;
-    crate::agent_name::validate_agent_name(name).ok()?;
-    Some((parent.parent()?, name))
+    let mur_home = agent_home.parent()?.parent()?;
+    let name = crate::agent_home::installed_agent(agent_home, mur_home)?;
+    Some((mur_home, name))
 }
 
 /// Parse `rotations.jsonl` text strictly: one bad line rejects the whole file.

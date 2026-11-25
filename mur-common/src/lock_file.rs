@@ -160,6 +160,44 @@ pub fn sentinel_path(lock: &Path) -> PathBuf {
     lock.with_extension("sentinel")
 }
 
+/// Why [`open_sentinel`] could not open the sentinel.
+#[derive(Debug, thiserror::Error)]
+pub enum SentinelOpenError {
+    /// The directory that should hold the agent home does not exist (no
+    /// `agents/`), so no agent of any name is installed here.
+    #[error("no agents directory above {0}")]
+    NoAgentsDir(std::path::PathBuf),
+    /// `agents/` exists but the agent's home does not.
+    #[error("no agent home at {0}")]
+    NoHome(std::path::PathBuf),
+    #[error("cannot open the sentinel: {0}")]
+    Io(std::io::Error),
+}
+
+/// Open `<agent_dir>/running.sentinel` read-write, creating the file but
+/// never the home. The one open both [`probe_sentinel`] and the runtime's
+/// `LockHandle::acquire_existing` use, so a holder and a probe always meet on
+/// one inode. A missing home is told apart from a missing `agents/`.
+pub fn open_sentinel(agent_dir: &Path) -> Result<std::fs::File, SentinelOpenError> {
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(agent_dir.join(SENTINEL_FILE))
+    {
+        Ok(f) => Ok(f),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if agent_dir.parent().is_some_and(Path::is_dir) {
+                Err(SentinelOpenError::NoHome(agent_dir.to_path_buf()))
+            } else {
+                Err(SentinelOpenError::NoAgentsDir(agent_dir.to_path_buf()))
+            }
+        }
+        Err(e) => Err(SentinelOpenError::Io(e)),
+    }
+}
+
 /// What [`probe_sentinel`] found on an agent's `running.sentinel`.
 #[derive(Debug)]
 pub enum SentinelProbe {
@@ -193,16 +231,12 @@ pub fn probe_sentinel(agent_dir: &Path) -> SentinelProbe {
     use fs2::FileExt;
     use std::io::Read;
 
-    let mut file = match std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(agent_dir.join(SENTINEL_FILE))
-    {
+    let mut file = match open_sentinel(agent_dir) {
         Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SentinelProbe::NoAgentDir,
-        Err(_) => return SentinelProbe::Owned,
+        Err(SentinelOpenError::NoAgentsDir(_) | SentinelOpenError::NoHome(_)) => {
+            return SentinelProbe::NoAgentDir;
+        }
+        Err(SentinelOpenError::Io(_)) => return SentinelProbe::Owned,
     };
     if file.try_lock_exclusive().is_err() {
         return SentinelProbe::Owned;
@@ -217,6 +251,27 @@ pub fn probe_sentinel(agent_dir: &Path) -> SentinelProbe {
     let _ = file.set_len(0);
     SentinelProbe::Free(file)
 }
+
+/// `<mur_home>/agents/<name>/profile.yaml` is a regular file and `name` is a
+/// valid agent name. The one predicate for "this agent exists": a bare home
+/// (a half-finished create, a file removed by hand, a sentinel left by a
+/// probe) does not count.
+pub fn agent_exists(mur_home: &Path, name: &str) -> bool {
+    crate::agent_name::validate_agent_name(name).is_ok()
+        && std::fs::metadata(
+            mur_home
+                .join(crate::paths::AGENTS)
+                .join(name)
+                .join("profile.yaml"),
+        )
+        .is_ok_and(|m| m.is_file())
+}
+
+mod lifecycle;
+pub use lifecycle::{
+    FLEET_SHARED_DIR, LIFECYCLE_LOCK_FILE, LOCK_POLL, LifecycleGuard, LifecycleLockError,
+    lock_reply_dirs,
+};
 
 #[cfg(test)]
 mod tests {

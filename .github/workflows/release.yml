@@ -171,6 +171,26 @@ jobs:
         env:
           MUR_WEB_DIST: ${{ github.workspace }}/mur-web-src/dist
 
+      # A binary built with mur-common's `test-pause` feature can be stalled by
+      # a file in $MUR_TEST_PAUSE_DIR while it holds the lifecycle lock. Fail
+      # the release before signing or packaging if any shipped binary carries it.
+      - name: Refuse binaries built with test-pause
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `paths` prints the shipped binary names from release/binaries.toml
+          # (`--windows` adds .exe). Windows runners ship `python`, not `python3`.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            names="$(python scripts/release-manifest.py paths --windows)"
+          else
+            names="$(python3 scripts/release-manifest.py paths)"
+          fi
+          bins=()
+          for name in $names; do
+            bins+=("target/${{ matrix.target }}/release/${name}")
+          done
+          bash scripts/check-no-test-pause.sh "${bins[@]}"
+
       - name: Import Apple signing certs (macOS)
         if: matrix.target == 'aarch64-apple-darwin'
         uses: apple-actions/import-codesign-certs@v2
