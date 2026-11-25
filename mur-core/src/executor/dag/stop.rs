@@ -91,8 +91,13 @@ pub(super) fn watch_signal(opts: &DagExecOptions<'_>) -> Option<StopSignal> {
 pub(super) enum DelegateDial {
     /// The member answered (or the dial failed) before any stop.
     Replied(Result<Value>),
-    /// The stop signal tripped first; `tasks/cancel` has been sent.
+    /// The stop signal tripped first; `tasks/cancel` has been sent and the
+    /// member accepted it.
     Stopped,
+    /// The stop signal tripped first but the member refused the
+    /// `tasks/cancel` (or it never reached it) — its turn may still be
+    /// running and spending, so this is NOT a clean stop (#2503).
+    CancelRefused(anyhow::Error),
 }
 
 /// Dial `channel/delegate` on a blocking thread, polling `stop` while it is
@@ -134,8 +139,10 @@ pub(super) async fn dial_delegate_watched(
             r = &mut dial => return DelegateDial::Replied(joined(r)),
             _ = tick.tick() => {
                 if stop() {
-                    cancel_member_task(mur_home, member, task_id).await;
-                    return DelegateDial::Stopped;
+                    return match cancel_member_task(mur_home, member, task_id).await {
+                        Ok(()) => DelegateDial::Stopped,
+                        Err(error) => DelegateDial::CancelRefused(error),
+                    };
                 }
             }
         }
@@ -144,9 +151,10 @@ pub(super) async fn dial_delegate_watched(
 
 /// Ask the member's runtime to stop working (and spending) on `task_id`.
 /// The runtime registers a `run_sync` turn under the caller's `ct-…` id, so
-/// the id we minted for the delegation is the one it cancels by. A failure is
-/// logged, not raised: the run is stopping either way.
-async fn cancel_member_task(mur_home: &Path, member: &str, task_id: &str) {
+/// the id we minted for the delegation is the one it cancels by. A refusal is
+/// returned (and logged): the member's turn may keep running and billing, so
+/// the caller must not report the delegation as cleanly stopped (#2503).
+async fn cancel_member_task(mur_home: &Path, member: &str, task_id: &str) -> Result<()> {
     let home = mur_home.to_path_buf();
     let (m, id) = (member.to_string(), task_id.to_string());
     let res = tokio::task::spawn_blocking(move || {
@@ -160,12 +168,14 @@ async fn cancel_member_task(mur_home: &Path, member: &str, task_id: &str) {
     })
     .await;
     match res {
-        Ok(Ok(_)) => {}
+        Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => {
             tracing::warn!(member, task_id, %error, "kill-switch: tasks/cancel failed");
+            Err(error)
         }
         Err(error) => {
             tracing::warn!(member, task_id, %error, "kill-switch: tasks/cancel task failed");
+            Err(anyhow!("tasks/cancel task failed: {error}"))
         }
     }
 }

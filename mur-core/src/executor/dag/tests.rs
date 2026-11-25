@@ -9,6 +9,7 @@ fn result(success: bool, exit_code: i32, out: &str) -> StepResult {
         success,
         blocked: false,
         stopped: false,
+        cancel_refused: false,
         usage: TokenUsage::default(),
     }
 }

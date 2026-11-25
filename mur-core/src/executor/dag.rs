@@ -607,10 +607,14 @@ fn delegate_result(
         success: landed,
         blocked: false,
         stopped: false,
+        cancel_refused: false,
         // Real tokens the specialist's turn consumed, from Task.usage.
         usage: extract_usage(task),
     }
 }
+#[cfg(test)]
+#[path = "dag/cancel_refused_retry_tests.rs"]
+mod cancel_refused_retry_tests;
 #[cfg(test)]
 #[path = "dag/late_usage_tests.rs"]
 mod late_usage_tests;
