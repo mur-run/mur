@@ -64,18 +64,6 @@ pub struct Action {
     pub excerpt: Option<String>,
 }
 
-/// Strip one leading `cd <path> && ` — the one composition agents routinely
-/// prepend. Nothing else: see `is_evidence` for why deeper shell parsing is
-/// deliberately not attempted.
-pub(crate) fn after_cd_prefix(command: &str) -> &str {
-    let command = command.trim();
-    command
-        .strip_prefix("cd ")
-        .and_then(|rest| rest.split_once("&&"))
-        .map(|(_, after)| after.trim())
-        .unwrap_or(command)
-}
-
 impl Action {
     fn mutating(&self) -> bool {
         MUTATING_TOOLS.contains(&self.tool.as_str())
@@ -110,7 +98,7 @@ impl Action {
             "npm test",
             "pytest",
         ];
-        let command = after_cd_prefix(&self.target);
+        let command = gate_command(&self.target);
         RUNNERS.iter().any(|r| command.starts_with(r))
     }
 }
@@ -305,8 +293,36 @@ impl Default for TurnLedger {
 }
 
 impl TurnLedger {
-    pub fn record(&mut self, action: Action) {
+    pub fn record(&mut self, mut action: Action) {
+        self.settle_waited_job(&mut action);
         self.actions.push(action);
+    }
+
+    /// A `bash` call that yielded is recorded `Running`; the `bash_wait` that
+    /// later collects its exit is a different tool with a different target,
+    /// so without this the slowest gate runs — the ones that yield — could
+    /// never count as evidence (#2578). When a wait reports the job finished,
+    /// the outcome moves onto the original command, which is what actually
+    /// passed or failed. The wait itself is then recorded `Ok`: it did its
+    /// job, and a failure stays attributed once, to the command.
+    fn settle_waited_job(&mut self, wait: &mut Action) {
+        if wait.tool != "bash_wait" || matches!(wait.outcome, Outcome::Running(_)) {
+            return;
+        }
+        let Some(job) = waited_job(&wait.target) else {
+            return;
+        };
+        let Some(original) =
+            self.actions.iter_mut().rev().find(|a| {
+                a.tool == "bash" && matches!(&a.outcome, Outcome::Running(j) if *j == job)
+            })
+        else {
+            return;
+        };
+        if matches!(wait.outcome, Outcome::Denied(_)) {
+            return;
+        }
+        original.outcome = std::mem::replace(&mut wait.outcome, Outcome::Ok);
     }
 
     /// Commands that ran, succeeded, and are recognisable gate runs (test,
@@ -742,6 +758,10 @@ pub fn render(ledger: &TurnLedger) -> String {
     out.push_str("```");
     out
 }
+
+mod gate;
+use gate::waited_job;
+pub(crate) use gate::{after_cd_prefix, gate_command};
 
 #[cfg(test)]
 mod tests;

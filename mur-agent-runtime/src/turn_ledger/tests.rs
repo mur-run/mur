@@ -670,3 +670,73 @@ fn ephemeral_paths_are_additive_on_the_wire() {
     let l: TurnLedger = serde_json::from_str(old).unwrap();
     assert!(l.ephemeral_paths.is_empty());
 }
+
+// #2578: a gate run that yielded and was collected by `bash_wait` is evidence.
+#[test]
+fn a_yielded_gate_run_collected_by_bash_wait_is_evidence() {
+    let mut l = TurnLedger::default();
+    l.record(act(
+        "bash",
+        "cargo clippy --all",
+        Outcome::Running("j-1".into()),
+    ));
+    l.record(act("bash_wait", r#"{"job_id":"j-1"}"#, Outcome::Ok));
+    assert_eq!(l.verified().len(), 1, "{l:?}");
+    assert_eq!(l.verified()[0].target, "cargo clippy --all");
+    assert!(l.running().is_empty(), "{l:?}");
+    assert!(!render(&l).contains("no build/test passed"));
+}
+
+#[test]
+fn a_yielded_gate_run_that_exits_non_zero_is_blocked_once() {
+    let mut l = TurnLedger::default();
+    l.record(act("bash", "cargo test", Outcome::Running("j-2".into())));
+    l.record(act(
+        "bash_wait",
+        r#"{"job_id":"j-2"}"#,
+        Outcome::Failed("exit 101".into()),
+    ));
+    assert!(l.verified().is_empty());
+    assert!(l.running().is_empty());
+    let blocked = l.blocked();
+    assert_eq!(blocked.len(), 1, "{blocked:?}");
+    assert_eq!(blocked[0].target, "cargo test");
+}
+
+#[test]
+fn a_wait_that_is_still_running_or_names_another_job_changes_nothing() {
+    let mut l = TurnLedger::default();
+    l.record(act("bash", "cargo test", Outcome::Running("j-3".into())));
+    l.record(act(
+        "bash_wait",
+        r#"{"job_id":"j-3"}"#,
+        Outcome::Running("j-3".into()),
+    ));
+    l.record(act("bash_wait", r#"{"job_id":"j-other"}"#, Outcome::Ok));
+    assert!(l.verified().is_empty());
+    assert_eq!(l.running().len(), 2);
+}
+
+#[test]
+fn leading_env_assignments_do_not_hide_a_gate_run() {
+    let mut l = TurnLedger::default();
+    l.record(act(
+        "bash",
+        "MUR_TEST_SOCKETS=1 CARGO_TARGET_DIR=/t cargo test -p x",
+        Outcome::Ok,
+    ));
+    l.record(act(
+        "bash",
+        "cd /w && RUST_LOG=debug cargo nextest run",
+        Outcome::Ok,
+    ));
+    assert_eq!(l.verified().len(), 2, "{l:?}");
+}
+
+#[test]
+fn env_assignments_before_a_non_gate_command_are_still_not_evidence() {
+    let mut l = TurnLedger::default();
+    l.record(act("bash", "FOO=1 cat Cargo.toml", Outcome::Ok));
+    l.record(act("bash", "FOO=cargo test", Outcome::Ok));
+    assert!(l.verified().is_empty(), "{l:?}");
+}
