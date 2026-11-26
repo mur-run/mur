@@ -151,10 +151,12 @@ pub fn floor_note(rule: &crate::agent::ToolRule) -> Option<FloorNote> {
     })
 }
 
-/// Tool leaves that run an arbitrary command line: the built-in `bash` and
-/// the process launchers MCP servers ship (`mcp__desktop-commander__start_process`,
-/// ...). Matched on the LEAF, like [`browser_tier`], so the set does not
-/// depend on what the operator named the server.
+/// Tool leaves that run arbitrary code on the host: the built-in `bash`, the
+/// process launchers MCP servers ship (`mcp__desktop-commander__start_process`,
+/// ...), and Playwright's `browser_run_code_unsafe`, which runs arbitrary
+/// JavaScript in the Playwright server process — RCE-equivalent, so it is an
+/// exec tool, not a page action. Matched on the LEAF, like [`browser_tier`],
+/// so the set does not depend on what the operator named the server.
 const EXEC_LEAVES: &[&str] = &[
     "bash",
     "shell",
@@ -162,6 +164,7 @@ const EXEC_LEAVES: &[&str] = &[
     "run_command",
     "start_process",
     "interact_with_process",
+    "browser_run_code_unsafe",
 ];
 
 /// #2587: whether `tool_name` can run an arbitrary command. Any one of these
@@ -182,6 +185,8 @@ mod tests {
             "mcp__desktop-commander__start_process",
             "mcp__dc__interact_with_process",
             "mcp__anything__execute_command",
+            "mcp__browser__browser_run_code_unsafe",
+            "mcp__playwright__browser_run_code_unsafe",
         ] {
             assert!(is_exec_tool(t), "{t}");
         }
@@ -190,6 +195,9 @@ mod tests {
             "mcp__x__read_file",
             "mcp__x__start_search",
             "bash_wait",
+            "mcp__browser__browser_click",
+            "mcp__browser__browser_evaluate",
+            "mcp__browser__browser_snapshot",
         ] {
             assert!(!is_exec_tool(t), "{t}");
         }
