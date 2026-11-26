@@ -18,7 +18,9 @@ pub(super) struct StepResult {
     /// The kill-switch tripped mid-turn but the member refused (or never got)
     /// `tasks/cancel` (#2503): its turn may still be running and billing, so
     /// the step failed AND the run must not end as a clean `Stopped`. Set only
-    /// from `DelegateDial::CancelRefused`, never inferred from error text.
+    /// from `DelegateDial::CancelRefused`, or during a stop from a failed dial
+    /// whose late-usage recovery could not confirm the turn stopped (#2590);
+    /// never from error text.
     pub(super) cancel_refused: bool,
     /// Real LLM tokens this step consumed, input and output kept apart so a
     /// cost guard can price each side at its own rate — non-zero only for
@@ -437,14 +439,22 @@ pub(super) async fn execute_step(
                 // cancelling and waiting out a turn still running (#2090).
                 let wait =
                     super::late_usage::wait_budget(opts.deadline_at, std::time::Instant::now());
-                let usage = match super::late_usage::recover_delegate_usage(
+                let late = super::late_usage::recover_delegate_usage(
                     mur_home,
                     &canonical,
                     &child_task_id,
                     wait,
                 )
-                .await
-                {
+                .await;
+                // #2590: the dial can fail after the stop tripped but before
+                // the poll sent the kill-switch cancel. Unless recovery saw
+                // the turn end or the member accept the cancel — a refused
+                // cancel, an unreachable member — nothing shows it stopped:
+                // the dial's error stands, as for a refused kill-switch cancel.
+                if late.unconfirmed && stop_requested(opts) {
+                    cancel_refused = true;
+                }
+                let usage = match late.spend {
                     super::late_usage::Recovered::Known(u) => u,
                     super::late_usage::Recovered::Unknown(why) => {
                         let text = format!(

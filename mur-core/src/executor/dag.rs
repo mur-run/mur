@@ -627,6 +627,9 @@ mod pause_outcome_tests;
 #[cfg(test)]
 #[path = "dag/rerun_delegation_tests.rs"]
 mod rerun_delegation_tests;
+#[cfg(all(test, unix))]
+#[path = "dag/stop_gaps_tests.rs"]
+mod stop_gaps_tests;
 #[cfg(test)]
 #[path = "dag/stop_tests.rs"]
 mod stop_tests;
