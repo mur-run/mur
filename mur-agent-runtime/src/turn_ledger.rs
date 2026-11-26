@@ -587,6 +587,16 @@ pub fn classify(content: &str, is_error: bool, status: &crate::tools::ToolStatus
     if is_error {
         return Outcome::Failed(truncate(content.trim(), RUNAWAY_BACKSTOP));
     }
+    // A command that ran and exited non-zero is `Ok(ToolOutput)` at the tool
+    // boundary, so `is_error` is false and the status is the only signal.
+    // Missing it let a failing `cargo test` count as a passing gate — and,
+    // once `bash_wait` settles a yielded run, as `verified`.
+    if let crate::tools::ToolStatus::Failed { exit_code } = status {
+        return Outcome::Failed(truncate(
+            &exit_reason(content, *exit_code),
+            RUNAWAY_BACKSTOP,
+        ));
+    }
     Outcome::Ok
 }
 
@@ -772,6 +782,8 @@ pub fn render(ledger: &TurnLedger) -> String {
 mod gate;
 pub(crate) use gate::gate_command;
 use gate::waited_job;
+mod exit_reason;
+use exit_reason::exit_reason;
 
 #[cfg(test)]
 mod tests;

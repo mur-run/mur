@@ -160,6 +160,29 @@ mod tests {
         }
     }
 
+    /// The producer half of the ledger bug: a waited job that exits non-zero
+    /// reports `Failed` with its code, so `classify` has something to read.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_wait_reports_a_non_zero_exit_as_failed() {
+        let b = bash();
+        let out = b
+            .execute(
+                serde_json::json!({"command": "sleep 0.3; echo boom; exit 3", "timeout_secs": 0}),
+            )
+            .await
+            .unwrap();
+        let ToolStatus::Running { job_id, .. } = out.status else {
+            panic!("{out:?}")
+        };
+        let out = BashWaitTool { bash: b.clone() }
+            .execute(serde_json::json!({"job_id": job_id, "wait_secs": 5}))
+            .await
+            .unwrap();
+        assert_eq!(out.status, ToolStatus::Failed { exit_code: 3 }, "{out:?}");
+        assert!(out.text.contains("[exit code: 3]"), "{}", out.text);
+    }
+
     /// Test 3 at the tool boundary: kill is `Ok`, names the signal and the
     /// elapsed time, and the pid is gone.
     #[cfg(unix)]

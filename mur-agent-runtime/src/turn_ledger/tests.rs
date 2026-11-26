@@ -779,3 +779,50 @@ fn intermediate_waits_settle_when_the_job_fails() {
     assert_eq!(blocked.len(), 1, "{blocked:?}");
     assert_eq!(blocked[0].target, "cargo test");
 }
+
+/// #2588: a command that ran and exited non-zero comes back as
+/// `Ok(ToolOutput { status: Failed, .. })`, so `is_error` is `false`. The
+/// status is the only signal, and `classify` must read it — otherwise a
+/// failing `cargo test` lands as `ok` and counts as a passing gate.
+#[test]
+fn classify_reads_a_non_zero_exit_as_failed() {
+    let out = "error: failed to run custom build command for `quote v1.0.46`\n\
+               Caused by:\n  Operation not permitted (os error 1)\n\
+               warning: build failed, waiting for other jobs to finish...\n\
+               [exit code: 101]";
+    let got = classify(
+        out,
+        false,
+        &crate::tools::ToolStatus::Failed { exit_code: 101 },
+    );
+    match got {
+        Outcome::Failed(why) => {
+            assert!(why.contains("101"), "names the exit code: {why}");
+            assert!(
+                why.contains("build failed"),
+                "names the last real line, not the marker: {why}"
+            );
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}
+
+/// The same bug through the path the reviewer actually hit: a yielded
+/// `cargo test` collected by a `bash_wait` whose job exited non-zero must
+/// end up blocked, never verified.
+#[test]
+fn a_waited_job_that_exited_non_zero_is_never_verified() {
+    let mut l = TurnLedger::default();
+    l.record(act("bash", "cargo test", Outcome::Running("j-9".into())));
+    let wait = classify(
+        "test result: FAILED. 1 passed; 1 failed\n[exit code: 101]",
+        false,
+        &crate::tools::ToolStatus::Failed { exit_code: 101 },
+    );
+    l.record(act("bash_wait", r#"{"job_id":"j-9"}"#, wait));
+    assert!(l.verified().is_empty(), "a failing gate is not evidence");
+    let blocked = l.blocked();
+    assert_eq!(blocked.len(), 1, "{blocked:?}");
+    assert_eq!(blocked[0].target, "cargo test");
+    assert!(render(&l).contains("cargo test"));
+}
