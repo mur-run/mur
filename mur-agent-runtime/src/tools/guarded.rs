@@ -93,7 +93,9 @@ pub(crate) fn withheld_from_delegate(
         content: format!(
             "`{tool_name}` needs a human's approval and none can be given inside this delegated \
              turn — the call did not run and `{tool_name}` is unavailable for the rest of this \
-             turn; do not call it again. Finish your reply with what you have."
+             turn; do not call it again, and {NO_WORKAROUND}. Finish your reply with what you \
+             have.",
+            NO_WORKAROUND = crate::task_runner::NO_WORKAROUND
         ),
         is_error: true,
         status: crate::tools::ToolStatus::Denied {
@@ -349,8 +351,9 @@ impl GuardedToolCall {
                     return Ok(ToolResultEntry {
                         call_id: call.call_id.clone(),
                         content: format!(
-                            "Tool `{}` is denied by policy — it is unavailable for the rest of this turn; do not call it again",
-                            call.tool_name
+                            "Tool `{}` is denied by policy — it is unavailable for the rest of this turn; do not call it again; {}",
+                            call.tool_name,
+                            crate::task_runner::NO_WORKAROUND
                         ),
                         is_error: true,
                         status: crate::tools::ToolStatus::Denied {
@@ -391,8 +394,9 @@ impl GuardedToolCall {
                         // lands on one of them is not a fix.
                         Err(crate::tools::ToolError::NotAuthorized(msg)) => (
                             format!(
-                                "{msg} — `{}` is unavailable for the rest of this turn; do not call it again",
-                                call.tool_name
+                                "{msg} — `{}` is unavailable for the rest of this turn; do not call it again; {}",
+                                call.tool_name,
+                                crate::task_runner::NO_WORKAROUND
                             ),
                             crate::tools::ToolStatus::Denied {
                                 detail: msg,
@@ -538,8 +542,9 @@ impl GuardedToolCall {
             // so once; the loop withdraws it from the next request.
             Err(crate::tools::ToolError::NotAuthorized(msg)) => (
                 format!(
-                    "{msg} — `{}` is unavailable for the rest of this turn; do not call it again",
-                    call.tool_name
+                    "{msg} — `{}` is unavailable for the rest of this turn; do not call it again; {}",
+                    call.tool_name,
+                    crate::task_runner::NO_WORKAROUND
                 ),
                 crate::tools::ToolStatus::Denied {
                     detail: msg,

@@ -27,7 +27,7 @@ impl TaskRunner {
         let streaming = sink.is_some();
         // Tools a gate refused this turn (spec §3.8): told once, then not
         // offered again, so the model cannot spin on "not authorized" ×3.
-        let mut disabled: HashSet<String> = HashSet::new();
+        let mut disabled = Withdrawn::default();
         /// A withdrawn tool answers every call the same way without running
         /// anything, so repeated calls are pure burn. Counted across the turn,
         /// not per-fingerprint: varying the arguments is exactly what defeats
@@ -517,7 +517,11 @@ impl TaskRunner {
                     withdrawn_calls += 1;
                     durations_ms.push(0);
                     ran_step_ids.push(None);
-                    results.push(outside_allowlist_entry(call));
+                    let entry = outside_allowlist_entry(call);
+                    if withdraws(&entry) {
+                        disabled.withdraw(&call.tool_name);
+                    }
+                    results.push(entry);
                     continue;
                 }
                 // Withdrawn this turn (spec §3.8): the tool left the list
@@ -564,6 +568,12 @@ impl TaskRunner {
                     .await
                 {
                     Ok(entry) => {
+                        // #2587 review: withdraw before the next call of this
+                        // same response runs, or a sibling executor batched
+                        // with the refused one would still execute.
+                        if withdraws(&entry) {
+                            disabled.withdraw(&call.tool_name);
+                        }
                         durations_ms.push(t0.elapsed().as_millis() as u64);
                         ran_step_ids.push(Some(step_id));
                         results.push(entry);
@@ -616,9 +626,6 @@ impl TaskRunner {
             // AFTER execution, because the result is needed.
             let mut progress_calls: Vec<(String, u64)> = Vec::with_capacity(results.len());
             for (call, entry) in resp.tool_calls.iter().zip(results.iter()) {
-                if withdraws(entry) {
-                    disabled.insert(call.tool_name.clone());
-                }
                 let outcome =
                     crate::turn_ledger::classify(&entry.content, entry.is_error, &entry.status);
                 // #001 A2: a refusal is a human owed an answer. Latch it so no

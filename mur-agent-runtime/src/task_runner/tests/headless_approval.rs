@@ -302,6 +302,12 @@ fn the_delegate_refusal_tells_the_model_to_finish_not_retry() {
         entry.content
     );
     assert!(!entry.content.contains("tool-allow"), "{}", entry.content);
+    // #2581: the refusal covers the effect, not just this spelling.
+    assert!(
+        entry.content.contains("another tool, command or language"),
+        "{}",
+        entry.content
+    );
 }
 
 /// #2071: a turn that ends in a denial is still remembered — the user's
