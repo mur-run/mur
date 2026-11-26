@@ -217,3 +217,68 @@ fn the_runtime_recognises_the_written_live_argv() {
     assert!(is_live_browser(&bound));
     assert!(wants_state_key(&bound));
 }
+
+// #2551: a bound profile whose saved state is gone must not be reported as
+// "signed in"; the note names the repair instead.
+#[test]
+fn a_flagless_rerun_does_not_claim_a_profile_that_is_no_longer_saved() {
+    let mut f = Fake::default();
+    run(
+        "bob",
+        &s(&["--yes", "a.example.com", "--profile", "gitea"]),
+        true,
+        &mut f,
+    )
+    .unwrap();
+    f.unsaved = s(&["gitea"]);
+    let (text, _) = run("bob", &s(&["--yes", "b.example.com"]), true, &mut f).unwrap();
+    assert!(!text.contains("signed in as"), "{text}");
+    assert!(text.contains("mur browser auth gitea"), "{text}");
+    assert!(text.contains("`gitea` is bound but not saved"), "{text}");
+}
+
+#[test]
+fn profile_flag_naming_an_unsaved_profile_warns_instead_of_claiming() {
+    let mut f = Fake {
+        unsaved: s(&["gitea"]),
+        ..Default::default()
+    };
+    let (text, _) = run(
+        "bob",
+        &s(&["--yes", "a.example.com", "--profile", "gitea"]),
+        true,
+        &mut f,
+    )
+    .unwrap();
+    assert!(!text.contains("signed in as"), "{text}");
+    assert!(text.contains("mur browser auth gitea"), "{text}");
+}
+
+#[test]
+fn with_two_bound_only_the_missing_one_is_named_as_unsaved() {
+    let mut f = Fake {
+        unsaved: s(&["two"]),
+        ..Default::default()
+    };
+    let (text, _) = run(
+        "bob",
+        &s(&[
+            "--yes",
+            "a.example.com",
+            "--profile",
+            "one",
+            "--profile",
+            "two",
+        ]),
+        true,
+        &mut f,
+    )
+    .unwrap();
+    assert!(
+        text.contains("signed in as the saved profile `one`"),
+        "{text}"
+    );
+    assert!(!text.contains("`one`, `two`"), "{text}");
+    assert!(text.contains("`two` is bound but not saved"), "{text}");
+    assert!(!text.contains("mur browser auth one"), "{text}");
+}

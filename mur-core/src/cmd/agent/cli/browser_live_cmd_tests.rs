@@ -261,9 +261,14 @@ struct Fake {
     save_effect: Option<super::super::browser_live_effect::Effect>,
     repairs: Vec<String>,
     research_events: usize,
+    /// Profiles with no saved state on disk (#2551); every other one is saved.
+    unsaved: Vec<String>,
 }
 
 impl LiveOps for Fake {
+    fn profile_saved(&mut self, site: &str) -> bool {
+        !self.unsaved.iter().any(|u| u == site)
+    }
     fn servers(&mut self) -> anyhow::Result<Vec<McpServerEntry>> {
         Ok(self.servers.clone())
     }
