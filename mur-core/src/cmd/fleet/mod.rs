@@ -19,6 +19,7 @@ pub mod oneshot_budget;
 pub mod partition_cmd;
 pub mod pause;
 pub mod plan;
+mod plan_halt;
 pub mod progress;
 pub mod review;
 pub mod roster;

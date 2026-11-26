@@ -478,14 +478,20 @@ pub async fn cmd_fleet_run(
         let p = match super::plan::static_procedure(&routed_fleet, &routed_goal)? {
             Some(p) => p,
             None => {
-                let (plan, usage) = super::plan::plan_via_router_metered(
+                let turn = super::plan::plan_via_router_metered(
                     mur_home,
                     &routed_fleet,
                     &routed_goal,
                     &events,
+                    Some(&super::control::stop_signal(mur_home, name)),
                 );
-                router_usage = usage;
-                plan.unwrap_or_else(|| {
+                router_usage = turn.usage;
+                // #2502: a stop during planning ends the run here; it must
+                // not fall back to broadcasting the goal to every member.
+                if let Some(halt) = turn.halt {
+                    return super::plan_halt::end_one_shot(mur_home, name, halt, active_job);
+                }
+                turn.plan.unwrap_or_else(|| {
                     build_fleet_procedure(&routed_goal, &fleet.members, fleet.parallel.as_ref())
                         .expect("members validated by caller guard")
                 })
