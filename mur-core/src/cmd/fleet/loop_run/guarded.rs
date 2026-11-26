@@ -402,16 +402,26 @@ async fn run_guarded_inner(
         };
         let proc = match static_plan {
             Some(p) => p,
-            None => super::super::plan::plan_via_router(
+            None => match super::super::plan::plan_via_router(
                 mur_home,
                 &planning_fleet,
                 &dispatch_goal,
                 &pre_events,
-            )
-            .unwrap_or_else(|| {
-                build_fleet_procedure(&dispatch_goal, &fleet.members, fleet.parallel.as_ref())
-                    .expect("members validated by caller guard")
-            }),
+                Some(&super::super::control::stop_signal(mur_home, name)),
+            ) {
+                Ok(plan) => plan.unwrap_or_else(|| {
+                    build_fleet_procedure(&dispatch_goal, &fleet.members, fleet.parallel.as_ref())
+                        .expect("members validated by caller guard")
+                }),
+                // #2502: a stop during planning is a stop, never a broadcast.
+                Err(halt) => {
+                    let stop = super::super::plan_halt::settle(halt, active_job.as_mut(), &run_id);
+                    if let Some(job) = active_job.as_ref() {
+                        let _ = super::super::jobs::save_job(mur_home, name, job);
+                    }
+                    break stop;
+                }
+            },
         };
         // Record this iteration's planned steps as Pending (makes "N pending"
         // real) — replacing the prior iteration's so counts reflect the run now.

@@ -15,7 +15,8 @@ use mur_common::skill::manifest::{Procedure, ProcedureStep};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::executor::dag::TokenUsage;
+use crate::a2a_dial::{DialMode, DialPoll, PollState};
+use crate::executor::dag::{STOP_POLL_INTERVAL, StopSignal, TokenUsage};
 
 /// Upper bound on plan size — a runaway plan falls back to broadcast.
 const MAX_PLAN_STEPS: usize = 32;
@@ -187,46 +188,123 @@ pub fn static_procedure(fleet: &Fleet, goal: &str) -> anyhow::Result<Option<Proc
 /// narrowest capable fleet, usually a one-member one); an adapter that doubles
 /// the cost of every mechanical command pushes people toward the ungoverned
 /// `mur agent send` path instead.
+///
+/// `Err` only when `stop` tripped while the router was still planning
+/// (#2502): there is no plan, and the caller must not fall back to broadcast.
 pub fn plan_via_router(
     mur_home: &Path,
     fleet: &Fleet,
     goal: &str,
     events: &[ChannelEvent],
-) -> Option<Procedure> {
-    plan_via_router_metered(mur_home, fleet, goal, events).0
+    stop: Option<&StopSignal>,
+) -> Result<Option<Procedure>, PlanHalt> {
+    let turn = plan_via_router_metered(mur_home, fleet, goal, events, stop);
+    match turn.halt {
+        Some(halt) => Err(halt),
+        None => Ok(turn.plan),
+    }
 }
 
-/// [`plan_via_router`], plus the tokens the router's turn consumed. The usage
-/// is returned even when the plan is not — a turn whose reply did not parse
-/// was still paid for — so a cost guard can bill it (#2083).
+/// Why the router's planning turn ended before it answered (#2502).
+#[derive(Debug)]
+pub enum PlanHalt {
+    /// The kill-switch tripped; `tasks/cancel` reached the router and it
+    /// accepted, so its turn has stopped spending.
+    Stopped,
+    /// The kill-switch tripped but the router refused the `tasks/cancel` (or
+    /// it never arrived): its turn may still be running and billing, so this
+    /// is not a clean stop (same verdict as a member's, #2503).
+    CancelRefused(anyhow::Error),
+}
+
+/// One router planning turn: the plan (if it parsed), what the turn cost,
+/// and whether a stop cut it short.
+pub struct RouterTurn {
+    pub plan: Option<Procedure>,
+    /// Returned even when the plan is not — a turn whose reply did not parse
+    /// was still paid for — so a cost guard can bill it (#2083).
+    pub usage: TokenUsage,
+    pub halt: Option<PlanHalt>,
+}
+
+/// [`plan_via_router`], plus the tokens the router's turn consumed.
+///
+/// With `stop`, the dial re-reads it every [`STOP_POLL_INTERVAL`] while the
+/// router is thinking, as a delegated member turn does (#2502). The turn's id
+/// is minted here and sent with the request, so a stop that lands before the
+/// router's first frame can still cancel it by id.
 pub fn plan_via_router_metered(
     mur_home: &Path,
     fleet: &Fleet,
     goal: &str,
     events: &[ChannelEvent],
-) -> (Option<Procedure>, TokenUsage) {
+    stop: Option<&StopSignal>,
+) -> RouterTurn {
+    let mut turn = RouterTurn {
+        plan: None,
+        usage: TokenUsage::default(),
+        halt: None,
+    };
     if fleet.members.len() <= 1 {
-        return (None, TokenUsage::default());
+        return turn;
     }
+    let router = fleet.router_or_concierge();
+    let task_id = format!("plan-{}", uuid::Uuid::now_v7());
     let prompt = build_plan_prompt(mur_home, fleet, events);
     let params = json!({
-        "message": { "role": "user", "parts": [{ "kind": "text", "text": prompt }] }
+        "message": { "role": "user", "parts": [{ "kind": "text", "text": prompt }] },
+        "task_id": task_id,
     });
     let mut out = String::new();
-    let Ok(task) = crate::a2a_dial::dial_message_streaming(
+    let mut halt: Option<PlanHalt> = None;
+    let mut check = |_: &PollState<'_>| -> Option<anyhow::Error> {
+        if !stop.is_some_and(|s| s()) {
+            return None;
+        }
+        halt = Some(match cancel_router_turn(mur_home, router, &task_id) {
+            Ok(()) => PlanHalt::Stopped,
+            Err(e) => PlanHalt::CancelRefused(e),
+        });
+        Some(anyhow::anyhow!("router planning halted by the kill-switch"))
+    };
+    let check: &mut dyn FnMut(&PollState<'_>) -> Option<anyhow::Error> = &mut check;
+    let poll = stop.map(move |_| DialPoll {
+        every: STOP_POLL_INTERVAL,
+        check,
+    });
+    let reply = crate::a2a_dial::dial_message_streaming_polled(
         mur_home,
-        fleet.router_or_concierge(),
+        router,
         params,
         |delta, _thinking, _id| out.push_str(delta),
         |_hitl| {},
         |_step| {},
-    ) else {
-        return (None, TokenUsage::default());
-    };
-    (
-        parse_router_plan(&out, &fleet.members, goal),
-        crate::executor::dag::extract_usage(&task),
+        poll,
+    );
+    turn.halt = halt;
+    if let Ok(task) = reply
+        && turn.halt.is_none()
+    {
+        turn.plan = parse_router_plan(&out, &fleet.members, goal);
+        turn.usage = crate::executor::dag::extract_usage(&task);
+    }
+    turn
+}
+
+/// Ask the router's runtime to stop its planning turn `task_id`. The error is
+/// returned, not swallowed: a refused cancel leaves the turn spending.
+fn cancel_router_turn(mur_home: &Path, router: &str, task_id: &str) -> anyhow::Result<()> {
+    crate::a2a_dial::dial_method(
+        mur_home,
+        router,
+        "tasks/cancel",
+        json!({ "id": task_id }),
+        DialMode::RequireRunning,
     )
+    .map(|_| ())
+    .inspect_err(|e| {
+        tracing::warn!(router, task_id, error = %e, "kill-switch: router tasks/cancel failed");
+    })
 }
 
 /// How many of a member's skills to name before truncating. A router prompt

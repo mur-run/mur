@@ -21,6 +21,7 @@ pub(crate) use graph::validate_steps;
 use graph::*;
 pub use run::*;
 use step::*;
+pub(crate) use stop::STOP_POLL_INTERVAL;
 use stop::*;
 pub use stop::{HaltReason, HaltSignal, PAUSED_REASON, StopSignal};
 
