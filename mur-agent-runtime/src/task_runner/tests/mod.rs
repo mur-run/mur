@@ -228,6 +228,7 @@ mod conversation;
 mod doom_loop;
 mod drain_and_retry;
 mod egress_routing;
+mod exec_withdrawal;
 mod headless_approval;
 mod intent_gate;
 mod limits;

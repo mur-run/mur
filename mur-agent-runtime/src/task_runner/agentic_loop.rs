@@ -27,7 +27,7 @@ impl TaskRunner {
         let streaming = sink.is_some();
         // Tools a gate refused this turn (spec §3.8): told once, then not
         // offered again, so the model cannot spin on "not authorized" ×3.
-        let mut disabled: HashSet<String> = HashSet::new();
+        let mut disabled = Withdrawn::default();
         /// A withdrawn tool answers every call the same way without running
         /// anything, so repeated calls are pure burn. Counted across the turn,
         /// not per-fingerprint: varying the arguments is exactly what defeats
@@ -617,7 +617,7 @@ impl TaskRunner {
             let mut progress_calls: Vec<(String, u64)> = Vec::with_capacity(results.len());
             for (call, entry) in resp.tool_calls.iter().zip(results.iter()) {
                 if withdraws(entry) {
-                    disabled.insert(call.tool_name.clone());
+                    disabled.withdraw(&call.tool_name);
                 }
                 let outcome =
                     crate::turn_ledger::classify(&entry.content, entry.is_error, &entry.status);

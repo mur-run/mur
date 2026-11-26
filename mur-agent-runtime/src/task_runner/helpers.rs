@@ -263,6 +263,28 @@ pub(super) fn withdraws(entry: &crate::llm::ToolResultEntry) -> bool {
     )
 }
 
+/// Tools withdrawn for the rest of a turn (spec §3.8). #2587: withdrawing one
+/// exec tool withdraws every exec tool — `bash` refused and
+/// `mcp__…__start_process` still callable is the same command one name over.
+/// Non-exec tools still go one at a time.
+#[derive(Default)]
+pub(super) struct Withdrawn {
+    tools: HashSet<String>,
+    exec: bool,
+}
+
+impl Withdrawn {
+    pub(super) fn withdraw(&mut self, tool: &str) {
+        self.exec |= mur_common::hitl::builtin_tier::is_exec_tool(tool);
+        self.tools.insert(tool.to_string());
+    }
+
+    pub(super) fn contains(&self, tool: &str) -> bool {
+        self.tools.contains(tool)
+            || (self.exec && mur_common::hitl::builtin_tier::is_exec_tool(tool))
+    }
+}
+
 /// Whether `tool` may run under a turn's tool allowlist. `None` = no
 /// allowlist, every tool the runner holds.
 pub(super) fn allowed_by(allowlist: Option<&[String]>, tool: &str) -> bool {

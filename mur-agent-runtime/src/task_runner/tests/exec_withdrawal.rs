@@ -1,0 +1,104 @@
+//! #2587: a delegated turn that has an exec tool refused loses every exec
+//! tool for the rest of the turn, not just the one name it called.
+use super::*;
+
+/// A non-bash tool that counts how often it actually ran.
+struct Counting {
+    name: &'static str,
+    calls: Arc<AtomicU64>,
+}
+
+#[async_trait::async_trait]
+impl crate::tools::ToolExecutor for Counting {
+    fn name(&self) -> &str {
+        self.name
+    }
+    fn def(&self) -> crate::llm::ToolDef {
+        crate::llm::ToolDef {
+            name: self.name.into(),
+            description: "test tool".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }
+    }
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+    ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Ok("ran".to_string().into())
+    }
+}
+
+fn call(call_id: &str, tool: &str) -> crate::llm::LlmResponse {
+    let mut r = tool_call_response(call_id, "rm -rf scratch");
+    r.tool_calls[0].tool_name = tool.into();
+    r
+}
+
+/// Runs a delegated turn: `bash` (refused: Ask, nobody to answer), then
+/// `second`, which policy would otherwise `Allow`. Returns how often
+/// `second` ran.
+async fn second_ran_after_bash_refused(second: &'static str) -> u64 {
+    use crate::llm::stub::SequenceLlm;
+    let responses = vec![
+        call("c-1", "bash"),
+        call("c-2", second),
+        end_turn_response("done"),
+    ];
+    let bash_calls = Arc::new(AtomicU64::new(0));
+    let second_calls = Arc::new(AtomicU64::new(0));
+    let runner = TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+        .with_tools(vec![
+            Arc::new(CountingBashTool {
+                calls: bash_calls.clone(),
+                seen_task: Default::default(),
+            }),
+            Arc::new(Counting {
+                name: second,
+                calls: second_calls.clone(),
+            }),
+        ])
+        .with_tools_policy(vec![mur_common::agent::ToolRule {
+            pattern: second.into(),
+            policy: mur_common::agent::ToolPolicy::Allow,
+            risk: None,
+            bypass_builtin_tier_floor: Default::default(),
+        }])
+        .with_pending_approvals(empty_pending_approvals())
+        .with_sandbox_enforcing(true)
+        .with_notifier(tokio::sync::mpsc::channel(16).0)
+        .with_hitl_timeout_secs(30)
+        .with_iteration_ceiling(4);
+    runner.mark_unattended("t-exec").await;
+    runner.mark_delegated("t-exec").await;
+    let mut spec = loop_spec("exec-withdrawal");
+    spec.task_id = Some("t-exec".into());
+    spec.attended = false;
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        Arc::new(runner).run_sync(spec),
+    )
+    .await
+    .expect("a delegated turn must never wait on the HITL timeout");
+    assert!(matches!(outcome, TaskOutcome::Completed(_)), "{outcome:?}");
+    assert_eq!(bash_calls.load(Ordering::Relaxed), 0, "bash was refused");
+    second_calls.load(Ordering::Relaxed)
+}
+
+#[tokio::test]
+async fn a_refused_bash_also_withdraws_start_process() {
+    assert_eq!(
+        second_ran_after_bash_refused("mcp__dc__start_process").await,
+        0,
+        "a sibling exec tool must not run after bash was refused"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_bash_leaves_non_exec_tools_alone() {
+    assert_eq!(
+        second_ran_after_bash_refused("mcp__dc__read_file").await,
+        1,
+        "only exec tools are withdrawn as a class"
+    );
+}

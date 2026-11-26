@@ -151,9 +151,49 @@ pub fn floor_note(rule: &crate::agent::ToolRule) -> Option<FloorNote> {
     })
 }
 
+/// Tool leaves that run an arbitrary command line: the built-in `bash` and
+/// the process launchers MCP servers ship (`mcp__desktop-commander__start_process`,
+/// ...). Matched on the LEAF, like [`browser_tier`], so the set does not
+/// depend on what the operator named the server.
+const EXEC_LEAVES: &[&str] = &[
+    "bash",
+    "shell",
+    "execute_command",
+    "run_command",
+    "start_process",
+    "interact_with_process",
+];
+
+/// #2587: whether `tool_name` can run an arbitrary command. Any one of these
+/// reaches what any other does, so refusing one and leaving its siblings
+/// callable only moves the call — the runtime withdraws them as a class.
+pub fn is_exec_tool(tool_name: &str) -> bool {
+    EXEC_LEAVES.contains(&tool_name.rsplit("__").next().unwrap_or(tool_name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exec_tools_match_on_the_leaf_whatever_the_server_is_called() {
+        for t in [
+            "bash",
+            "mcp__desktop-commander__start_process",
+            "mcp__dc__interact_with_process",
+            "mcp__anything__execute_command",
+        ] {
+            assert!(is_exec_tool(t), "{t}");
+        }
+        for t in [
+            "write_file",
+            "mcp__x__read_file",
+            "mcp__x__start_search",
+            "bash_wait",
+        ] {
+            assert!(!is_exec_tool(t), "{t}");
+        }
+    }
 
     #[test]
     fn tiers_by_leaf() {
