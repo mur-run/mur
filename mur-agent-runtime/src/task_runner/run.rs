@@ -170,6 +170,9 @@ impl TaskRunner {
         };
         let channel = channel.as_ref();
         self.adopt_cwd(&id, spec.context_task_id.as_deref(), spec.cwd.as_deref());
+        // #2581: carry the conversation's open refusals into this turn.
+        self.denial_ledger
+            .begin_turn(&id, spec.context_task_id.as_deref());
         // Eager, before the prompt names the working directory: the model
         // must be handed the track path, never the project (spec §4.1).
         self.begin_turn_track(&id).await;

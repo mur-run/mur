@@ -266,6 +266,7 @@ impl TaskRunner {
             approval_sinks: self.approval_sinks.clone(),
             one_shot_approvals: self.one_shot_approvals.clone(),
             delegated_turns: self.delegated_turns.clone(),
+            denial_ledger: self.denial_ledger.clone(),
             agent_name: self.agent_name.clone(),
             decision_store: self.decision_store.clone(),
             hitl_timeout_secs: self.hitl_timeout_secs,
