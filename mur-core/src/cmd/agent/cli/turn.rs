@@ -82,7 +82,13 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         // over a live handle, which would drop its sender and silently
         // cancel the command already running.
         if app.shell.is_running() {
-            app.push_system("a `!command` is already running — Ctrl-C to stop it");
+            let msg = match app.running_shell_command() {
+                Some(running) => {
+                    format!("a `!command` is already running (`{running}`) — Ctrl-C to stop it")
+                }
+                None => "a `!command` is already running — Ctrl-C to stop it".to_string(),
+            };
+            app.push_system(&msg);
             return;
         }
         // A command that waits on the user's own keystrokes cannot run on

@@ -20,6 +20,15 @@ use crate::secrets::{SecretVault, StreamMasker};
 /// D12: a constant, not a profile key. A doom-looping model must not
 /// fork-bomb the host.
 pub const MAX_JOBS: usize = 8;
+
+/// Read-only `mur ...` status queries (`mur fleet status`) are one-shot and
+/// exit in moments, so they do not draw on `MAX_JOBS` — a turn that has filled
+/// the cap must still be able to look at what is running. They get a small cap
+/// of their own so the exemption cannot become a way around D12.
+pub const MAX_STATUS_JOBS: usize = 4;
+
+/// How much of a job's command the `TooMany` refusal quotes back.
+const CMD_PREVIEW_CHARS: usize = 80;
 /// Per-stream in-memory retention; the reply never carries more than this.
 pub const TAIL_BYTES: usize = 16 * 1024;
 /// The spool stops growing here; the tail stays live.
@@ -77,6 +86,9 @@ struct Output {
 struct Job {
     owner: Option<String>,
     command: String,
+    /// A read-only `mur` status query: counted against `MAX_STATUS_JOBS`,
+    /// not `MAX_JOBS`.
+    status_query: bool,
     pid: u32,
     started_at: Instant,
     spool: Option<PathBuf>,
@@ -118,7 +130,9 @@ pub struct SpawnSpec<'a> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum JobError {
-    #[error("{MAX_JOBS} jobs running — bash_wait or bash_kill one first: {0}")]
+    #[error(
+        "job cap reached ({MAX_JOBS} commands, {MAX_STATUS_JOBS} `mur` status queries) — bash_wait or bash_kill one first:\n{0}"
+    )]
     TooMany(String),
     #[error("spawn failed: {0}")]
     Spawn(#[source] std::io::Error),
@@ -178,8 +192,21 @@ impl JobTable {
         self.reap_expired();
         let mut jobs = self.lock();
         let running = self.running_ids_locked(&jobs);
-        if running.len() >= MAX_JOBS {
-            return Err(JobError::TooMany(running.join(", ")));
+        let status_query = mur_common::hitl::bash_class::is_mur_status_query(spec.command);
+        let in_lane = running
+            .iter()
+            .filter(|id| {
+                jobs.get(*id)
+                    .is_some_and(|j| j.status_query == status_query)
+            })
+            .count();
+        let cap = if status_query {
+            MAX_STATUS_JOBS
+        } else {
+            MAX_JOBS
+        };
+        if in_lane >= cap {
+            return Err(JobError::TooMany(Self::describe_running(&jobs, &running)));
         }
         let mut cmd = Command::new("bash");
         cmd.arg("-c")
@@ -234,6 +261,7 @@ impl JobTable {
             Job {
                 owner: current_task_id(),
                 command: spec.command.to_string(),
+                status_query,
                 pid,
                 started_at: Instant::now(),
                 spool: spool_path,
@@ -245,6 +273,23 @@ impl JobTable {
             },
         );
         Ok(id)
+    }
+
+    /// One line per live job — id, age, command — so the caller can pick one
+    /// to `bash_kill` instead of guessing from bare ids.
+    fn describe_running(jobs: &HashMap<String, Job>, ids: &[String]) -> String {
+        ids.iter()
+            .filter_map(|id| jobs.get(id).map(|j| (id, j)))
+            .map(|(id, j)| {
+                let mut cmd: String = j.command.chars().take(CMD_PREVIEW_CHARS).collect();
+                if j.command.chars().count() > CMD_PREVIEW_CHARS {
+                    cmd.push('…');
+                }
+                let cmd = cmd.replace('\n', " ");
+                format!("  {id} ({}s): {cmd}", j.started_at.elapsed().as_secs())
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn running_ids_locked(&self, jobs: &HashMap<String, Job>) -> Vec<String> {
