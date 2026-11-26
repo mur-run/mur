@@ -134,3 +134,55 @@ fn a_parent_dir_component_is_refused_at_launch() {
     let e = p.check_no_delete_enforceable().unwrap_err().to_string();
     assert!(e.contains(".."), "{e}");
 }
+
+/// Review P1 on #2595 (second round): a DANGLING symlink ancestor must be
+/// followed to its target, not appended as text — otherwise the entry never
+/// overlaps the write grant, the grant keeps removal rights, and the target
+/// is deletable once created after the seal.
+#[cfg(unix)]
+#[test]
+fn a_dangling_symlink_ancestor_resolves_to_its_future_target() {
+    let (_t, r) = tree();
+    let alias = r.join("alias");
+    std::os::unix::fs::symlink(r.join("work/new-root"), &alias).unwrap();
+    assert!(!alias.exists(), "precondition: the link dangles");
+    let entry = alias.join("keep");
+    let nd = resolve_no_delete(vec![entry.clone()]);
+    assert!(nd.contains(&entry), "the name as written is kept");
+    assert!(
+        nd.contains(&r.join("work/new-root/keep")),
+        "the link target is followed: {nd:?}"
+    );
+    let s = split_no_delete_grants(&[r.join("work")], &nd);
+    assert!(s.no_remove.contains(&r.join("work")));
+    assert!(!s.full.contains(&r.join("work")));
+}
+
+/// A relative dangling target resolves against the link's own directory,
+/// and chained links are followed hop by hop.
+#[cfg(unix)]
+#[test]
+fn chained_and_relative_dangling_links_are_followed() {
+    let (_t, r) = tree();
+    std::os::unix::fs::symlink("work/next", r.join("a")).unwrap();
+    std::os::unix::fs::symlink("../later", r.join("work/next")).unwrap();
+    let nd = resolve_no_delete(vec![r.join("a/keep")]);
+    assert!(nd.contains(&r.join("later/keep")), "{nd:?}");
+}
+
+/// A symlink loop has no answer; launch refuses instead of emitting a rule
+/// on a name the kernel will never resolve.
+#[cfg(unix)]
+#[test]
+fn a_symlink_loop_is_refused_at_launch() {
+    let (_t, r) = tree();
+    std::os::unix::fs::symlink(r.join("loop2"), r.join("loop1")).unwrap();
+    std::os::unix::fs::symlink(r.join("loop1"), r.join("loop2")).unwrap();
+    let entry = r.join("loop1/keep");
+    let p = SandboxPolicy {
+        fs_no_delete: resolve_no_delete(vec![entry]),
+        ..Default::default()
+    };
+    let e = p.check_no_delete_enforceable().unwrap_err().to_string();
+    assert!(e.contains("cannot be resolved"), "{e}");
+}

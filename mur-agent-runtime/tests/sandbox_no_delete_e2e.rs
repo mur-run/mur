@@ -82,6 +82,11 @@ fn sandbox_no_delete_subprocess_main() {
     std::os::unix::fs::symlink(&work, &alias).unwrap();
     fs.no_delete
         .push(alias.join("future").to_string_lossy().into_owned());
+    // Second round: a DANGLING alias whose target is created after the seal.
+    let dangling = root.join("dangling");
+    std::os::unix::fs::symlink(work.join("new-root"), &dangling).unwrap();
+    fs.no_delete
+        .push(dangling.join("keep").to_string_lossy().into_owned());
     profile.entitlements.processes.spawn.mode = SpawnMode::Any;
     match sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]) {
         Ok(s) if s.enforcing => {}
@@ -195,6 +200,33 @@ fn sandbox_no_delete_subprocess_main() {
     expect(
         "future file still present",
         future.join("sub/f.txt").exists(),
+        true,
+    );
+    // Dangling alias at seal time; its target appears afterwards.
+    let nr = work.join("new-root/keep");
+    expect(
+        "mkdir dangling target (after seal)",
+        std::fs::create_dir_all(&nr).is_ok(),
+        true,
+    );
+    expect(
+        "write in dangling target",
+        std::fs::write(nr.join("g.txt"), b"g").is_ok(),
+        true,
+    );
+    expect(
+        "delete in dangling target",
+        std::fs::remove_file(nr.join("g.txt")).is_ok(),
+        false,
+    );
+    expect(
+        "delete in dangling target via alias",
+        std::fs::remove_file(dangling.join("keep/g.txt")).is_ok(),
+        false,
+    );
+    expect(
+        "dangling-target file still present",
+        nr.join("g.txt").exists(),
         true,
     );
     // Nothing above may have taken a file with it.
