@@ -166,13 +166,6 @@ impl SandboxPolicy {
         if self.fs_no_delete.is_empty() {
             return Ok(());
         }
-        if !NO_DELETE_SUPPORTED {
-            anyhow::bail!(
-                "filesystem.no_delete is set but this platform's sandbox cannot \
-                 enforce it (supported: macOS, Linux). Remove the entries with \
-                 `mur agent perm remove-path <agent> no_delete <path>` to start."
-            );
-        }
         // A `..` after a symlink names a different directory than the text
         // suggests; refuse rather than guess which tree the user meant.
         if let Some(n) = self
@@ -184,6 +177,13 @@ impl SandboxPolicy {
                 "filesystem.no_delete entry {} contains `..`; write the path \
                  without it so the protected tree is unambiguous.",
                 n.display()
+            );
+        }
+        if !NO_DELETE_SUPPORTED {
+            anyhow::bail!(
+                "filesystem.no_delete is set but this platform's sandbox cannot \
+                 enforce it (supported: macOS, Linux). Remove the entries with \
+                 `mur agent perm remove-path <agent> no_delete <path>` to start."
             );
         }
         // Linux only: splitting the agent's own home would strip removal from
