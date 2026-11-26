@@ -1034,6 +1034,21 @@ Agent** wizard offers the same catalog as a source.
   from inside an agent. On macOS one thing opens: a fleet-enabled agent's
   fleet runs can now write `~/.mur/conversations` (reads stay denied, and an
   `fs_deny` under it still wins).
+- **Writable, but nothing can be deleted** — a delete-confirm rule matches
+  text, and an interpreter can always spell a delete it doesn't recognise
+  (`python3 -c 'import os; os.remove(…)'`). `mur agent perm no-delete-path
+  <agent> <path>` puts the refusal in the kernel instead: the path stays
+  writable, but `rm`, `os.remove`, `shutil.rmtree` and renaming a file out all
+  fail, however they're spelled. macOS denies `file-write-unlink` on the
+  subtree; Linux splits the covering Landlock write grant so the path and the
+  directories leading to it lose removal rights, so files sitting directly
+  in those intermediate directories can't be deleted either. Other platforms refuse
+  to start the agent rather than run it unenforced. Two limits are deliberate
+  and printed by `mur agent perm show`: truncating a file is a write and still
+  works, and writers that save via temp file + rename break inside the path.
+  The entry only means something inside a `write` grant; `no-delete-path` and
+  `mur agent doctor` both warn when it isn't. Remove it with `mur agent perm
+  remove-path <agent> no_delete <path>`.
 - **Delegation checks the write grant before it sends anyone** — `mur fleet
   run`, `parallel_jobs`, and a workflow's `delegate_to` steps tell each member
   which directory to work in (the git root of the target), and first check
@@ -1540,7 +1555,7 @@ mur
 ├── init / doctor / update / stats / verify
 ├── agent        create · start · stop · restart (--no-hitl · --net · --full-perms) · remove · cli · send ('@agent#N' continues conversation N) · card · dial · who · limits ·
 │                export · install · install-service · addon · companion · voice · pair ·
-│                schedule (add · list · prune · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal · intent-check) · ssh (allow · revoke · list) · secret · hitl (list · forget · pending · approve · deny) ·
+│                schedule (add · list · prune · proposals · accept) · perm (incl. list-paths · no-delete-path · remove-path · set-mode proxy_only · reseal · intent-check) · ssh (allow · revoke · list) · secret · hitl (list · forget · pending · approve · deny) ·
 │                fallback · smart · routing · effort · trash · rollback · turn (list · undo) … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run [--run-id] · review · review-setup · review-resume · prune-reviews · set-loop · limits · send · jobs [--since] · stop · start · pause · resume [--detach]   (squads of agents over a shared channel)

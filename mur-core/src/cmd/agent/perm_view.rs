@@ -53,6 +53,9 @@ pub struct PathsView {
     pub read: Vec<PathGrantView>,
     pub write: Vec<PathGrantView>,
     pub deny: Vec<PathGrantView>,
+    /// Writable but not deletable (#2582). Absent from older payloads.
+    #[serde(default)]
+    pub no_delete: Vec<PathGrantView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -338,6 +341,7 @@ pub fn permissions_view(
             read: grants("read", &ent.filesystem.read),
             write: grants("write", &ent.filesystem.write),
             deny: grants("deny", &ent.filesystem.deny),
+            no_delete: grants("no_delete", &ent.filesystem.no_delete),
         },
         processes: ProcessesView {
             spawn_mode: ent.processes.spawn.mode,
@@ -502,11 +506,23 @@ pub(super) fn paths_picture(
     }
 
     let fs = &v.filesystem;
-    for (label, list) in [("read", &fs.read), ("write", &fs.write), ("deny", &fs.deny)] {
+    for (label, list) in [
+        ("read", &fs.read),
+        ("write", &fs.write),
+        ("deny", &fs.deny),
+        ("no_delete", &fs.no_delete),
+    ] {
         if list.is_empty() && !(label == "deny" && chain.is_some()) {
             continue;
         }
         let _ = writeln!(o, "\n{}", label.to_uppercase());
+        if label == "no_delete" {
+            let _ = writeln!(
+                o,
+                "  writable, but files cannot be removed — truncation is still possible, \
+                 and temp+rename writers break here"
+            );
+        }
         for g in list {
             match &g.status {
                 GrantStatus::Dropped { reason } => {

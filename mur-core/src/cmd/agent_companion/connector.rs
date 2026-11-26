@@ -577,6 +577,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
                 read: vec![],
                 write: vec![],
                 deny: vec!["~/.ssh".into(), "~/.aws".into()],
+                no_delete: vec![],
             },
             processes: ProcessesEntitlement {
                 spawn: SpawnEntitlement {

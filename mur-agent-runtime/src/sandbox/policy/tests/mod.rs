@@ -20,6 +20,7 @@ fn minimal_entitlements() -> Entitlements {
             read: vec!["~/Documents".to_string()],
             write: vec!["~/Downloads".to_string()],
             deny: vec!["~/.ssh".to_string()],
+            no_delete: vec![],
         },
         processes: ProcessesEntitlement {
             spawn: SpawnEntitlement {

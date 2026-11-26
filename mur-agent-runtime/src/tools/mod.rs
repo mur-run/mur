@@ -195,6 +195,7 @@ mod tests {
             read: vec![],
             write: vec![],
             deny: vec![],
+            no_delete: vec![],
         }
     }
 

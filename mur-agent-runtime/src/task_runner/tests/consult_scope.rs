@@ -99,6 +99,7 @@ impl World {
                 .collect(),
             write: vec![],
             deny: vec![],
+            no_delete: vec![],
         }
     }
 

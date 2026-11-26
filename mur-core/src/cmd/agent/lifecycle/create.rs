@@ -432,6 +432,7 @@ fn default_entitlements_custom() -> Entitlements {
             read: vec![],
             write: vec![],
             deny: vec!["~/.ssh".into(), "~/.aws".into()],
+            no_delete: vec![],
         },
         processes: ProcessesEntitlement {
             spawn: SpawnEntitlement {

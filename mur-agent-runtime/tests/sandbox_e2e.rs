@@ -119,6 +119,7 @@ fn spawn_sandboxed_runs_true() {
             read: vec![],
             write: vec![],
             deny: vec![],
+            no_delete: vec![],
         },
         processes: ProcessesEntitlement {
             spawn: SpawnEntitlement {
@@ -294,6 +295,7 @@ fn linux_ruleset_paths_are_absolute() {
             read: vec![],
             write: vec![],
             deny: vec![],
+            no_delete: vec![],
         },
         processes: ProcessesEntitlement {
             spawn: SpawnEntitlement {
