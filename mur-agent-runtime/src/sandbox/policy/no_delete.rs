@@ -34,30 +34,73 @@ fn forms(p: &Path) -> Vec<PathBuf> {
     v
 }
 
-/// Resolve `p` through its longest existing ancestor: `/data/alias/future`
-/// with `alias -> real` and `future` not yet created becomes
-/// `/data/real/future`. `canonicalize` alone fails on the whole entry, which
-/// left the rule on a name the kernel never sees once the path appears
-/// (review P1 on #2595). `None` when nothing resolves or a `..` component makes
-/// the suffix ambiguous — the launch check refuses those.
+/// Symlink hops followed before resolution gives up, matching the kernel's
+/// own `ELOOP` bound (Linux `MAXSYMLINKS`).
+const MAX_SYMLINK_HOPS: usize = 40;
+
+/// Resolve `p` the way the kernel will once every component exists, walking
+/// it one component at a time. A symlink is followed even when its target
+/// does not exist yet: `/data/alias/keep` with `alias -> /data/work/new-root`
+/// (dangling) becomes `/data/work/new-root/keep`, because that is the
+/// directory a later `mkdir` behind the alias creates. Treating a dangling
+/// link as a missing name kept the rule on text the kernel never sees and
+/// left the real tree deletable (review P1 on #2595, twice). A component that
+/// is genuinely absent is appended as written.
+///
+/// `None` when the entry has a `..`, a link loop exceeds
+/// [`MAX_SYMLINK_HOPS`], or a component cannot be inspected (e.g. a file
+/// used as a directory): the launch check refuses those instead of guessing.
 fn resolve_through_ancestor(p: &Path) -> Option<PathBuf> {
     if p.components().any(|c| c == Component::ParentDir) {
         return None;
     }
-    let mut suffix = Vec::new();
-    let mut cur = p;
-    loop {
-        if let Ok(real) = std::fs::canonicalize(cur) {
-            return Some(
-                suffix
-                    .iter()
-                    .rev()
-                    .fold(real, |acc: PathBuf, s| acc.join(s)),
-            );
+    let p = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(p)
+    };
+    let mut todo: std::collections::VecDeque<PathBuf> = p
+        .components()
+        .map(|c| PathBuf::from(c.as_os_str()))
+        .collect();
+    let mut out = PathBuf::new();
+    let mut hops = 0;
+    while let Some(c) = todo.pop_front() {
+        let Some(comp) = c.components().next() else {
+            continue;
+        };
+        match comp {
+            Component::Prefix(_) | Component::RootDir => out.push(&c),
+            Component::CurDir => {}
+            // From a symlink target: `out` is already physical, so `..` is
+            // its real parent.
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(name) => {
+                let next = out.join(name);
+                match std::fs::symlink_metadata(&next) {
+                    Ok(m) if m.file_type().is_symlink() => {
+                        hops += 1;
+                        if hops > MAX_SYMLINK_HOPS {
+                            return None;
+                        }
+                        let target = std::fs::read_link(&next).ok()?;
+                        if target.is_absolute() {
+                            out = PathBuf::new();
+                        }
+                        for t in target.components().rev() {
+                            todo.push_front(PathBuf::from(t.as_os_str()));
+                        }
+                    }
+                    Ok(_) => out = next,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => out = next,
+                    Err(_) => return None,
+                }
+            }
         }
-        suffix.push(cur.file_name()?.to_os_string());
-        cur = cur.parent()?;
     }
+    Some(out)
 }
 
 /// Each `no_delete` entry as written plus its resolved form, resolving a
@@ -176,6 +219,21 @@ impl SandboxPolicy {
             anyhow::bail!(
                 "filesystem.no_delete entry {} contains `..`; write the path \
                  without it so the protected tree is unambiguous.",
+                n.display()
+            );
+        }
+        // A link loop or an uninspectable component: the kernel will resolve
+        // the name somewhere, and we cannot say where, so no rule we emit is
+        // guaranteed to cover it.
+        if let Some(n) = self
+            .fs_no_delete
+            .iter()
+            .find(|n| resolve_through_ancestor(n).is_none())
+        {
+            anyhow::bail!(
+                "filesystem.no_delete entry {} cannot be resolved (symlink loop \
+                 or a non-directory on the way); point it at the real directory \
+                 so the protected tree is unambiguous.",
                 n.display()
             );
         }
