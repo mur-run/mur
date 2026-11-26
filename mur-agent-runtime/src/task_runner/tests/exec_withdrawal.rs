@@ -39,12 +39,21 @@ fn call(call_id: &str, tool: &str) -> crate::llm::LlmResponse {
 /// `second`, which policy would otherwise `Allow`. Returns how often
 /// `second` ran.
 async fn second_ran_after_bash_refused(second: &'static str) -> u64 {
+    second_ran(second, vec![call("c-1", "bash"), call("c-2", second)]).await
+}
+
+/// Like `second_ran_after_bash_refused`, but `bash` and `second` arrive in
+/// ONE response, so the withdrawal must land before the next call of the
+/// same batch runs.
+async fn second_ran_in_same_batch_as_refused_bash(second: &'static str) -> u64 {
+    let mut batch = call("c-1", "bash");
+    batch.tool_calls.extend(call("c-2", second).tool_calls);
+    second_ran(second, vec![batch]).await
+}
+
+async fn second_ran(second: &'static str, mut responses: Vec<crate::llm::LlmResponse>) -> u64 {
     use crate::llm::stub::SequenceLlm;
-    let responses = vec![
-        call("c-1", "bash"),
-        call("c-2", second),
-        end_turn_response("done"),
-    ];
+    responses.push(end_turn_response("done"));
     let bash_calls = Arc::new(AtomicU64::new(0));
     let second_calls = Arc::new(AtomicU64::new(0));
     let runner = TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
@@ -98,6 +107,24 @@ async fn a_refused_bash_also_withdraws_start_process() {
 async fn a_refused_bash_leaves_non_exec_tools_alone() {
     assert_eq!(
         second_ran_after_bash_refused("mcp__dc__read_file").await,
+        1,
+        "only exec tools are withdrawn as a class"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_bash_withdraws_start_process_in_the_same_response() {
+    assert_eq!(
+        second_ran_in_same_batch_as_refused_bash("mcp__dc__start_process").await,
+        0,
+        "a sibling exec tool in the same batch must not run after bash was refused"
+    );
+}
+
+#[tokio::test]
+async fn same_response_withdrawal_leaves_non_exec_tools_alone() {
+    assert_eq!(
+        second_ran_in_same_batch_as_refused_bash("mcp__dc__read_file").await,
         1,
         "only exec tools are withdrawn as a class"
     );
