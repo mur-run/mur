@@ -459,3 +459,54 @@ fn quoting_a_benign_word_does_not_raise_the_tier() {
         );
     }
 }
+
+/// #2581 part 2: after a refusal, these are the spellings that could reach
+/// the refused effect — every one of them hands text to an interpreter.
+#[test]
+fn interpreter_calls_escalate_after_a_denial() {
+    for cmd in [
+        "python3 -c 'print(1)'",
+        "python3 - <<'PY'\nimport shutil\nshutil.rmtree(p)\nPY",
+        "python3.12 script.py",
+        "/usr/bin/python3 -u x.py",
+        "node -e 'fs.rmSync(\"x\")'",
+        "perl -e 'unlink q(x)'",
+        "ruby -e 'File.delete(\"x\")'",
+        "bash -c 'rm -rf x'",
+        "sh x.sh",
+        "env FOO=1 python3 x.py",
+        "nohup node x.js",
+        "cd /tmp && python3 x.py",
+        "FOO=1 python3 x.py",
+    ] {
+        assert!(
+            escalates_after_denial("bash", Some(&bash(cmd))),
+            "{cmd} must escalate after a denial"
+        );
+    }
+}
+
+/// Plain commands keep their tier after a refusal: escalation is for the
+/// interpreter route, not a blanket lock on the turn.
+#[test]
+fn plain_commands_do_not_escalate_after_a_denial() {
+    for cmd in [
+        "ls -la",
+        "cargo test",
+        "git status",
+        "cat x.py",
+        "grep python3 notes.md",
+        "echo 'python3 -c x'",
+        "cat > x.py <<'PY'\nprint(1)\nPY",
+    ] {
+        assert!(
+            !escalates_after_denial("bash", Some(&bash(cmd))),
+            "{cmd} must not escalate"
+        );
+    }
+    assert!(!escalates_after_denial(
+        "write_file",
+        Some(&bash("python3 x.py"))
+    ));
+    assert!(!escalates_after_denial("bash", None));
+}

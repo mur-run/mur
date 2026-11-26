@@ -27,6 +27,7 @@ pub(crate) mod channel_gate;
 pub use builder::DrainOutcome;
 pub mod consult_scope;
 mod conversation;
+pub(crate) mod denial_ledger;
 pub(crate) mod deny_hint;
 mod helpers;
 mod mcp_reload;
@@ -302,6 +303,9 @@ pub struct TaskRunner {
     turn_flags: TurnFlags,
     /// #2150: see [`DelegatedTurns`].
     delegated_turns: DelegatedTurns,
+    /// #2581: refused `Destructive` calls per turn, inherited along the
+    /// conversation. Outlives the turn on purpose.
+    denial_ledger: denial_ledger::DenialLedger,
     /// #2175: see [`PendingWrappers`].
     pending_wrappers: PendingWrappers,
     /// Per-turn steering channels keyed by task id. A running agentic loop

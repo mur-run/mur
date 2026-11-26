@@ -225,6 +225,7 @@ mod channel_retract;
 mod consult_scope;
 mod continuation;
 mod conversation;
+mod denial_escalation;
 mod doom_loop;
 mod drain_and_retry;
 mod egress_routing;

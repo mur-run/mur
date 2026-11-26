@@ -84,6 +84,7 @@ impl TaskRunner {
             one_shot_approvals: Default::default(),
             turn_flags: Default::default(),
             delegated_turns: Default::default(),
+            denial_ledger: Default::default(),
             pending_wrappers: Default::default(),
             steering: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             hitl_timeout_secs: 300,
