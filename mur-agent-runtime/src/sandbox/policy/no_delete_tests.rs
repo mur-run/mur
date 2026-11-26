@@ -60,6 +60,7 @@ fn a_grant_inside_a_no_delete_path_loses_removal_whole() {
     assert!(s.full.is_empty());
 }
 
+#[cfg(unix)]
 #[test]
 fn a_symlinked_grant_is_judged_by_its_target() {
     let (_t, r) = tree();
