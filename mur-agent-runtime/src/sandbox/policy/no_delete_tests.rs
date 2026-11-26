@@ -103,3 +103,34 @@ fn the_entitlement_round_trips_and_defaults_empty() {
         serde_yaml_ng::from_str("{write: [/w], no_delete: [/w/keep]}").unwrap();
     assert_eq!(fs.no_delete, vec!["/w/keep".to_string()]);
 }
+
+/// Review P1 on #2595: a missing entry named through a symlinked parent must
+/// still reach the real tree, or the kernel rule lands on a name nothing
+/// resolves to and the directory is deletable once it appears.
+#[cfg(unix)]
+#[test]
+fn a_missing_entry_behind_a_symlinked_parent_resolves_to_the_real_tree() {
+    let (_t, r) = tree();
+    let alias = r.join("alias");
+    std::os::unix::fs::symlink(r.join("work"), &alias).unwrap();
+    let entry = alias.join("future/deeper");
+    let nd = resolve_no_delete(vec![entry.clone()]);
+    assert!(nd.contains(&entry), "the name as written is kept");
+    assert!(
+        nd.contains(&r.join("work/future/deeper")),
+        "the real path is added: {nd:?}"
+    );
+    let s = split_no_delete_grants(&[r.join("work")], &nd);
+    assert!(s.no_remove.contains(&r.join("work")));
+    assert!(!s.full.contains(&r.join("work")));
+}
+
+#[test]
+fn a_parent_dir_component_is_refused_at_launch() {
+    let p = SandboxPolicy {
+        fs_no_delete: vec![PathBuf::from("/w/missing/../keep")],
+        ..Default::default()
+    };
+    let e = p.check_no_delete_enforceable().unwrap_err().to_string();
+    assert!(e.contains(".."), "{e}");
+}

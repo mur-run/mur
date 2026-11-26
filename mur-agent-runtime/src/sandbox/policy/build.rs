@@ -150,9 +150,11 @@ impl SandboxPolicy {
         let user_denies = fs_deny.clone();
         // #2582: kept verbatim even when missing, like `fs_deny` — dropping a
         // dead entry is fail-open once the path appears. Resolved alias too,
-        // so a symlinked name cannot reach the protected tree unprotected.
+        // so a symlinked name cannot reach the protected tree unprotected —
+        // resolved through the longest existing ancestor, so an entry that
+        // does not exist yet still lands on the real tree.
         let fs_no_delete: Vec<PathBuf> =
-            with_resolved_aliases(ent.filesystem.no_delete.iter().map(|s| expand(s)).collect());
+            super::resolve_no_delete(ent.filesystem.no_delete.iter().map(|s| expand(s)).collect());
 
         // #2160: Landlock cannot carve a deny out of a grant, so on Linux a
         // user-declared grant overlapping a user deny is dropped whole,

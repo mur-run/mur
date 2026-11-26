@@ -10,7 +10,7 @@ mod exec_deny;
 mod no_delete;
 pub use no_delete::NO_DELETE_SUPPORTED;
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
-pub(crate) use no_delete::split_no_delete_grants;
+pub(crate) use no_delete::{resolve_no_delete, split_no_delete_grants};
 pub mod exec_reach;
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 pub(crate) use exec_deny::split_exec_grants;

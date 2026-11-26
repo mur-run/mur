@@ -76,6 +76,12 @@ fn sandbox_no_delete_subprocess_main() {
     let fs = &mut profile.entitlements.filesystem;
     fs.write.push(work.to_string_lossy().into_owned());
     fs.no_delete.push(keep.to_string_lossy().into_owned());
+    // Review P1 on #2595: an entry that does not exist yet, named through a
+    // symlinked parent, must protect the real directory once it appears.
+    let alias = root.join("alias");
+    std::os::unix::fs::symlink(&work, &alias).unwrap();
+    fs.no_delete
+        .push(alias.join("future").to_string_lossy().into_owned());
     profile.entitlements.processes.spawn.mode = SpawnMode::Any;
     match sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]) {
         Ok(s) if s.enforcing => {}
@@ -163,6 +169,33 @@ fn sandbox_no_delete_subprocess_main() {
         "rmdir empty",
         std::fs::remove_dir(keep.join("d2")).is_ok(),
         false,
+    );
+    // Created after the seal, reached through the real path.
+    let future = work.join("future");
+    expect(
+        "mkdir future (after seal)",
+        std::fs::create_dir_all(future.join("sub")).is_ok(),
+        true,
+    );
+    expect(
+        "write in future",
+        std::fs::write(future.join("sub/f.txt"), b"f").is_ok(),
+        true,
+    );
+    expect(
+        "delete in future via real path",
+        std::fs::remove_file(future.join("sub/f.txt")).is_ok(),
+        false,
+    );
+    expect(
+        "rm -rf future via real path",
+        run("rm", &["-rf", &future.to_string_lossy()]),
+        false,
+    );
+    expect(
+        "future file still present",
+        future.join("sub/f.txt").exists(),
+        true,
     );
     // Nothing above may have taken a file with it.
     for f in ["a.txt", "b.txt", "c.txt", "d.txt", "tree/sub/x"] {

@@ -19,7 +19,7 @@
 //! What this does NOT prevent: truncation (`: > f` is a write) and anything
 //! that replaces a file by renaming over it, which needs removal rights.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use super::SandboxPolicy;
 
@@ -32,6 +32,47 @@ fn forms(p: &Path) -> Vec<PathBuf> {
         v.push(real);
     }
     v
+}
+
+/// Resolve `p` through its longest existing ancestor: `/data/alias/future`
+/// with `alias -> real` and `future` not yet created becomes
+/// `/data/real/future`. `canonicalize` alone fails on the whole entry, which
+/// left the rule on a name the kernel never sees once the path appears
+/// (review P1 on #2595). `None` when nothing resolves or a `..` component makes
+/// the suffix ambiguous — the launch check refuses those.
+fn resolve_through_ancestor(p: &Path) -> Option<PathBuf> {
+    if p.components().any(|c| c == Component::ParentDir) {
+        return None;
+    }
+    let mut suffix = Vec::new();
+    let mut cur = p;
+    loop {
+        if let Ok(real) = std::fs::canonicalize(cur) {
+            return Some(
+                suffix
+                    .iter()
+                    .rev()
+                    .fold(real, |acc: PathBuf, s| acc.join(s)),
+            );
+        }
+        suffix.push(cur.file_name()?.to_os_string());
+        cur = cur.parent()?;
+    }
+}
+
+/// Each `no_delete` entry as written plus its resolved form, resolving a
+/// missing entry through its longest existing ancestor.
+pub(crate) fn resolve_no_delete(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut out = paths.clone();
+    for p in &paths {
+        if let Some(real) = resolve_through_ancestor(p)
+            && real != *p
+            && !out.contains(&real)
+        {
+            out.push(real);
+        }
+    }
+    out
 }
 
 /// `true` when `p` is a no-delete path or an ancestor of one.
@@ -130,6 +171,19 @@ impl SandboxPolicy {
                 "filesystem.no_delete is set but this platform's sandbox cannot \
                  enforce it (supported: macOS, Linux). Remove the entries with \
                  `mur agent perm remove-path <agent> no_delete <path>` to start."
+            );
+        }
+        // A `..` after a symlink names a different directory than the text
+        // suggests; refuse rather than guess which tree the user meant.
+        if let Some(n) = self
+            .fs_no_delete
+            .iter()
+            .find(|n| n.components().any(|c| c == Component::ParentDir))
+        {
+            anyhow::bail!(
+                "filesystem.no_delete entry {} contains `..`; write the path \
+                 without it so the protected tree is unambiguous.",
+                n.display()
             );
         }
         // Linux only: splitting the agent's own home would strip removal from
