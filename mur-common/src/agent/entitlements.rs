@@ -239,6 +239,16 @@ pub struct FilesystemEntitlement {
     pub write: Vec<String>,
     #[serde(default)]
     pub deny: Vec<String>,
+    /// Paths that stay writable but whose contents cannot be unlinked or
+    /// removed (#2582). Enforced by the kernel sandbox, so no tool,
+    /// interpreter or command spelling gets around it. Only meaningful inside
+    /// a `write` grant. Empty by default; MUR ships no no-delete paths.
+    ///
+    /// Limits: truncating a file (`: > f`, `open(p, "w")`) is a write, not a
+    /// removal, and is NOT prevented. Writers that replace a file by renaming
+    /// over it (temp file + rename) need removal rights and break here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub no_delete: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

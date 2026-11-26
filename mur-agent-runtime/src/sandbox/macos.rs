@@ -396,6 +396,15 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
         lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
     }
 
+    // No-delete paths (#2582): writable, but unlink/rmdir is refused whatever
+    // spelling the agent uses. Last-match-wins, so this must follow every
+    // `allow file-write*` above — including the own-home re-allow — or that
+    // allow would hand the unlink right back.
+    for p in &policy.fs_no_delete {
+        let p = sbpl_escape(&p.to_string_lossy());
+        lines.push(format!("(deny file-write-unlink (subpath \"{p}\"))"));
+    }
+
     // Process-exec restrictions. Under `(allow default)` any binary is
     // spawnable unless explicitly denied. When spawn_mode is not `Any`
     // (i.e. Allowlist, None, or Strict), deny all exec by default and
@@ -569,6 +578,8 @@ unsafe extern "C" {
 mod exec_deny_tests;
 #[cfg(test)]
 mod loopback_family_tests;
+#[cfg(test)]
+mod no_delete_tests;
 #[cfg(test)]
 mod own_home_deny_tests;
 #[cfg(test)]

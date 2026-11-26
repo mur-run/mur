@@ -130,7 +130,7 @@ export type GrantStatus =
 export type McpScope = "unbounded" | "own_hosts" | "all_audited" | "off";
 export type ToolPolicy = "allow" | "ask" | "deny";
 export interface PathGrantView { raw: string; expanded: string; status: GrantStatus }
-export interface PathsView { read: PathGrantView[]; write: PathGrantView[]; deny: PathGrantView[] }
+export interface PathsView { read: PathGrantView[]; write: PathGrantView[]; deny: PathGrantView[]; no_delete?: PathGrantView[] }
 export interface OutboundView {
   mode: "unrestricted" | "restricted" | "proxyonly" | "off";
   allow_hosts: string[];

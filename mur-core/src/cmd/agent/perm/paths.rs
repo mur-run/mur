@@ -157,6 +157,35 @@ pub fn cmd_perm_deny_path(name: &str, path_arg: &str) -> Result<()> {
     Ok(())
 }
 
+/// `mur agent perm no-delete-path` (#2582): keep `path` writable but have the
+/// kernel refuse removing anything under it. Warns when no write grant covers
+/// it, since the entry then changes nothing.
+pub fn cmd_perm_no_delete_path(name: &str, path_arg: &str) -> Result<()> {
+    if !mur_agent_runtime::sandbox::policy::NO_DELETE_SUPPORTED {
+        bail!("no-delete-path: this platform's sandbox cannot enforce it (macOS and Linux only)");
+    }
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    let fs = &mut profile.entitlements.filesystem;
+    if !fs.no_delete.iter().any(|p| p == path_arg) {
+        fs.no_delete.push(path_arg.to_string());
+    }
+    let target = mur_agent_runtime::sandbox::policy::expand_entitlement_path(path_arg);
+    let covered = fs.write.iter().any(|w| {
+        target.starts_with(mur_agent_runtime::sandbox::policy::expand_entitlement_path(
+            w,
+        ))
+    });
+    save_profile(&path, &mut profile)?;
+    if !covered {
+        eprintln!(
+            "warning: {path_arg} is not inside any write grant, so it is not writable \
+             at all and this entry changes nothing"
+        );
+    }
+    warn_if_running(name);
+    Ok(())
+}
+
 /// Drop one path from one grant list. `deny_path` ADDS to the deny list; this
 /// is the only way to take a grant back short of editing profile.yaml.
 pub fn remove_path(
@@ -168,7 +197,8 @@ pub fn remove_path(
         "read" => &mut fs.read,
         "write" => &mut fs.write,
         "deny" => &mut fs.deny,
-        other => bail!("remove-path: unknown list '{other}' (read, write, deny)"),
+        "no_delete" | "no-delete" => &mut fs.no_delete,
+        other => bail!("remove-path: unknown list '{other}' (read, write, deny, no_delete)"),
     };
     let before = list.len();
     list.retain(|p| p != path_arg);
@@ -195,6 +225,7 @@ mod tests {
             read: vec!["/a".into()],
             write: vec!["/b".into(), "/c".into()],
             deny: vec![],
+            no_delete: vec![],
         };
         assert!(remove_path(&mut fs, "write", "/b").unwrap());
         assert_eq!(fs.write, vec!["/c"]);

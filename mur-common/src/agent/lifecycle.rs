@@ -345,7 +345,14 @@ pub struct DroppedGrant {
 pub fn filesystem_grants_digest(fs: &FilesystemEntitlement) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
-    for (label, list) in [("r", &fs.read), ("w", &fs.write), ("d", &fs.deny)] {
+    // `n` (#2582) adds no bytes while empty, so agents without no_delete
+    // entries keep the digest they sealed with.
+    for (label, list) in [
+        ("r", &fs.read),
+        ("w", &fs.write),
+        ("d", &fs.deny),
+        ("n", &fs.no_delete),
+    ] {
         let mut sorted = list.clone();
         sorted.sort();
         for p in sorted {
@@ -467,6 +474,7 @@ mod tests {
             read: vec!["/a".into(), "/b".into()],
             write: vec!["/w".into()],
             deny: vec![],
+            no_delete: vec![],
         };
         let reordered = FilesystemEntitlement {
             read: vec!["/b".into(), "/a".into()],
@@ -493,11 +501,13 @@ mod tests {
             read: vec!["/p".into()],
             write: vec![],
             deny: vec![],
+            no_delete: vec![],
         };
         let w = FilesystemEntitlement {
             read: vec![],
             write: vec!["/p".into()],
             deny: vec![],
+            no_delete: vec![],
         };
         assert_ne!(filesystem_grants_digest(&r), filesystem_grants_digest(&w));
     }

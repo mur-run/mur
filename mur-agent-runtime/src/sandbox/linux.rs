@@ -69,7 +69,17 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     // (e.g. the media-state extra grants) and keeps the kernel and the report
     // reading from the same code path.
     let (writable, _dropped) = partition_write_grants(&policy.fs_write, &policy.launch_chain);
-    created = add_exec_split_rules(created, &writable, rw_mask, &deny, "fs_write")?;
+    // #2582: a grant reaching a no-delete path is split, because Landlock
+    // cannot subtract `Remove*` from a subtree of a rule that carries it.
+    let nd = super::policy::split_no_delete_grants(&writable, &policy.fs_no_delete);
+    created = add_exec_split_rules(created, &nd.full, rw_mask, &deny, "fs_write")?;
+    created = add_exec_split_rules(
+        created,
+        &nd.no_remove,
+        rw_mask & !(AccessFs::RemoveFile | AccessFs::RemoveDir),
+        &deny,
+        "fs_write (no_delete)",
+    )?;
 
     // FS exec paths (execute + read file + read dir). Under Strict this is
     // the resolved literals and prefixes, not the system exec dirs (#2343).

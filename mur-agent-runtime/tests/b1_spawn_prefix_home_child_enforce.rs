@@ -49,6 +49,7 @@ fn allowlist_entitlements(allowed: &Path) -> Entitlements {
             read: vec![],
             write: vec![],
             deny: vec![],
+            no_delete: vec![],
         },
         processes: ProcessesEntitlement {
             spawn: SpawnEntitlement {

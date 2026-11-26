@@ -8,6 +8,7 @@ fn tool(td: &tempfile::TempDir) -> EditFileTool {
             read: vec![],
             write: vec![root.to_string()],
             deny: vec![],
+            no_delete: vec![],
         },
     )
 }

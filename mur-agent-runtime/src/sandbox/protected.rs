@@ -170,6 +170,7 @@ mod tests {
                 read: vec![],
                 write,
                 deny,
+                no_delete: vec![],
             },
             processes: ProcessesEntitlement {
                 spawn: SpawnEntitlement {

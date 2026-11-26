@@ -257,6 +257,7 @@ fn self_protected_denies_own_profile_despite_write_grant() {
             read: vec![],
             write: vec![agent_home.to_string_lossy().into_owned()],
             deny: vec![],
+            no_delete: vec![],
         },
         &agent_home,
     );
@@ -358,6 +359,7 @@ fn a_worktree_of_a_granted_checkout_is_writable() {
         // ONLY the main checkout is granted — exactly what the user typed.
         write: vec![main.to_string_lossy().into_owned()],
         deny: vec![],
+        no_delete: vec![],
     };
     let target = std::fs::canonicalize(&wt).unwrap().join("src/new.rs");
     assert!(
@@ -380,6 +382,7 @@ fn worktree_derivation_does_not_widen_to_unrelated_paths() {
         read: vec![],
         write: vec![main.to_string_lossy().into_owned()],
         deny: vec![],
+        no_delete: vec![],
     };
     let elsewhere = tempfile::tempdir().unwrap();
     let outside = std::fs::canonicalize(elsewhere.path())
@@ -410,6 +413,7 @@ fn deny_still_wins_inside_a_derived_worktree_grant() {
         read: vec![],
         write: vec![main.to_string_lossy().into_owned()],
         deny: vec![secrets.to_string_lossy().into_owned()],
+        no_delete: vec![],
     };
     assert!(
         check_write_entitlement(TEST_AGENT, &fs, &secrets.join("key.pem"), &chain).is_err(),
@@ -454,6 +458,7 @@ fn read_refusal_launch_chain_wins_over_deny_and_grant() {
         read: vec![root(&home)],
         write: vec![root(&home)],
         deny: vec![root(&home.join("agents"))],
+        no_delete: vec![],
     };
     assert_eq!(
         check_read_refusal(&fs, &key, &chain),

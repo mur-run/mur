@@ -422,6 +422,7 @@ pub(super) fn live_fs(mur_home: &Path, registry: Option<&Path>) -> FilesystemEnt
         read: vec![s(&mur_browser::server::install_dir(mur_home))],
         write,
         deny: Vec::new(),
+        no_delete: vec![],
     }
 }
 

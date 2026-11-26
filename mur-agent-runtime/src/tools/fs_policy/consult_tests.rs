@@ -40,6 +40,7 @@ fn ent(read: &[&Path], deny: &[&Path]) -> FilesystemEntitlement {
         read: roots(read),
         write: vec![],
         deny: roots(deny),
+        no_delete: vec![],
     }
 }
 

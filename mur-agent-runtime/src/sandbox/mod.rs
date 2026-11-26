@@ -100,6 +100,7 @@ pub fn apply(
         .map(Path::to_path_buf)
         .unwrap_or_else(mur_common::home::mur_home);
     protected::check_protected_writes(&policy, &mur_home)?;
+    policy.check_no_delete_enforceable()?;
     let dropped = policy.dropped.clone();
     let mut status = apply_policy(&policy)?;
     status.dropped = dropped;

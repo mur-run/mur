@@ -22,6 +22,7 @@ fn grant_with_chain(read: &[&Path], deny: &[&Path], chain: LaunchChain) -> Proje
             read: s(read),
             write: vec![],
             deny: s(deny),
+            no_delete: vec![],
         },
         chain,
     )
@@ -432,6 +433,7 @@ fn a_consult_omits_a_file_neither_side_can_read() {
             read: vec![found.root.join("granted").to_string_lossy().into_owned()],
             write: vec![],
             deny: vec![],
+            no_delete: vec![],
         },
         LaunchChain::new(&asker_home),
     ));

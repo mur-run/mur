@@ -384,6 +384,12 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
             for line in super::doctor_bash_ceiling::lines(&r.name, &over) {
                 println!("{line}");
             }
+            // #2582: no_delete entries the kernel will not (or cannot) hold.
+            if let Ok((_p, prof)) = super::load_profile_for_edit(&r.name) {
+                for line in super::doctor_no_delete::lines(&r.name, &prof.entitlements.filesystem) {
+                    println!("{line}");
+                }
+            }
             for (p, reason) in neutralised(&r.name) {
                 println!("  {}: grant has NO EFFECT: {}", r.name, p.display());
                 println!("    {reason}");
@@ -461,6 +467,7 @@ mod tests {
                 gone.to_string_lossy().into_owned(),
             ],
             deny: vec![],
+            no_delete: vec![],
         };
 
         // Negative control: without the missing entry nothing is reported, so a

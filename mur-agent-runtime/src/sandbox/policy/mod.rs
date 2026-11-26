@@ -7,6 +7,10 @@ mod build;
 mod deny_carve;
 mod elf_interp;
 mod exec_deny;
+mod no_delete;
+pub use no_delete::NO_DELETE_SUPPORTED;
+#[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
+pub(crate) use no_delete::split_no_delete_grants;
 pub mod exec_reach;
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 pub(crate) use exec_deny::split_exec_grants;
@@ -135,6 +139,11 @@ pub struct SandboxPolicy {
     /// a deny inside a runtime-owned grant (own home, system paths) is
     /// recorded in `dropped` as not kernel-enforced (#2160).
     pub fs_deny: Vec<PathBuf>,
+    /// Paths whose contents may be written but not unlinked or removed
+    /// (#2582), from `entitlements.filesystem.no_delete`. macOS emits a
+    /// `deny file-write-unlink` after every allow; Linux splits the write
+    /// grants that reach one (see `no_delete.rs`). Empty by default.
+    pub fs_no_delete: Vec<PathBuf>,
     /// Directories containing executable binaries the process may exec.
     pub fs_exec: Vec<PathBuf>,
     /// The agent's process-spawn policy (allowlist / any / none), from
@@ -217,6 +226,7 @@ impl Default for SandboxPolicy {
             fs_write: Vec::new(),
             scratch_dir: None,
             fs_deny: Vec::new(),
+            fs_no_delete: Vec::new(),
             fs_exec: Vec::new(),
             spawn_mode: SpawnMode::Allowlist,
             spawn_allowed_paths: Vec::new(),

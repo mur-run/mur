@@ -109,6 +109,7 @@ mod tests {
             read: vec![],
             write: write.iter().map(|s| s.to_string()).collect(),
             deny: deny.iter().map(|s| s.to_string()).collect(),
+            no_delete: vec![],
         }
     }
 

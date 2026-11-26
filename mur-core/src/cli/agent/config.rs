@@ -42,11 +42,14 @@ pub enum AgentPermAction {
     AllowWrite { name: String, path: String },
     /// Deny filesystem access on a path
     DenyPath { name: String, path: String },
+    /// Keep a path writable but refuse deleting files under it (kernel-enforced;
+    /// truncation is not prevented, temp+rename writers break)
+    NoDeletePath { name: String, path: String },
     /// Take a grant back: drop a path from the read, write, or deny list
     /// (deny-path ADDS to the deny list; this is the only way to undo one)
     RemovePath {
         name: String,
-        /// Which list: read, write, or deny
+        /// Which list: read, write, deny, or no_delete
         list: String,
         path: String,
     },

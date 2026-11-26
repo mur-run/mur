@@ -100,6 +100,7 @@ fn a_grant_that_swallows_the_launch_chain_is_reported() {
         // Contains <mur_home>/agents, which is launch-chain protected.
         write: vec![mur_home.display().to_string()],
         deny: vec![],
+        no_delete: vec![],
     };
     let c = check_dropped_launch_chain_grants(&fs, &agent_home);
     // Named on every platform — the user has to know the grant is not doing
@@ -139,6 +140,7 @@ fn a_read_grant_that_reaches_the_credential_store_is_reported() {
         read: vec![mur_home.display().to_string()],
         write: vec![],
         deny: vec![],
+        no_delete: vec![],
     };
     let c = check_dropped_launch_chain_grants(&fs, &agent_home);
     assert!(!c.ok, "an overbroad read grant must fail: {}", c.detail);
@@ -161,6 +163,7 @@ fn an_ordinary_project_grant_is_not_reported() {
         read: vec![],
         write: vec![proj.display().to_string()],
         deny: vec![],
+        no_delete: vec![],
     };
     let c = check_dropped_launch_chain_grants(&fs, &agent_home);
     assert!(c.ok, "an ordinary grant was reported: {}", c.detail);
@@ -181,6 +184,7 @@ fn entitlements_check_names_a_grant_the_kernel_will_drop() {
         read: vec![present.display().to_string()],
         write: vec![absent.display().to_string()],
         deny: vec![],
+        no_delete: vec![],
     };
     let c = check_filesystem_entitlements(&fs);
 
@@ -213,6 +217,7 @@ fn entitlements_check_passes_when_every_granted_path_exists() {
         write: vec![b.display().to_string()],
         // A deny for a path that does not exist is fine and must be ignored.
         deny: vec![tmp.path().join("never").display().to_string()],
+        no_delete: vec![],
     };
     let c = check_filesystem_entitlements(&fs);
 
@@ -239,6 +244,7 @@ fn entitlements_check_catches_a_dangling_symlink() {
         read: vec![link.display().to_string()],
         write: vec![],
         deny: vec![],
+        no_delete: vec![],
     };
     let c = check_filesystem_entitlements(&fs);
     assert!(!c.ok, "a dangling symlink grant must fail: {}", c.detail);

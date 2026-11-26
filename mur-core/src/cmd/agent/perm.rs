@@ -23,7 +23,7 @@ pub use network::{
 pub(crate) use paths::reject_ungrantable_path;
 pub use paths::{
     cmd_perm_allow_read, cmd_perm_allow_write, cmd_perm_deny_path, cmd_perm_list_paths,
-    cmd_perm_remove_path, grant_read,
+    cmd_perm_no_delete_path, cmd_perm_remove_path, grant_read,
 };
 pub use spawn::{
     cmd_perm_allow_spawn, cmd_perm_allow_spawn_dir, cmd_perm_deny_spawn, cmd_perm_deny_spawn_dir,
