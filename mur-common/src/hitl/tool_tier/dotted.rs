@@ -1,4 +1,5 @@
 //! #2312: module-qualified privileged calls (`os.chmod(...)`).
+//! #2581: the same for destructive calls (`shutil.rmtree(...)`).
 //!
 //! `tokens()` does not split on `.`, so `os.chmod` is one token and never
 //! equals the deny-list's `chmod` — a Python heredoc or `python3 -c` body
@@ -15,7 +16,7 @@
 //! `chmodsync` is not a deny-list head) are not seen. A bare `chmod(...)`
 //! after `from os import *` is already caught by the plain head scan.
 
-use super::PRIVILEGED_HEADS;
+use super::{DESTRUCTIVE_HEADS, PRIVILEGED_HEADS};
 
 /// Standard-library modules whose functions act on the real system:
 /// Python `os` / `posix` / `shutil`, Node `fs` (incl. `fs.promises.*`).
@@ -37,9 +38,42 @@ const PRIVILEGED_FUNCTIONS: &[&str] = &[
     "lchownsync",
 ];
 
+/// Module-function spellings of a delete that differ from the destructive
+/// heads (`rm`, `rmdir`, `truncate` already match as the bare function name).
+/// Python `os.remove` / `os.unlink` / `os.removedirs` / `shutil.rmtree`,
+/// Node `fs.unlink` / `fs.rmSync` / `fs.promises.rm` and friends. Compared
+/// lowercase.
+const DESTRUCTIVE_FUNCTIONS: &[&str] = &[
+    "rmtree",
+    "remove",
+    "removedirs",
+    "unlink",
+    "rmsync",
+    "rmdirsync",
+    "unlinksync",
+];
+
 /// The first privileged function `cmd` (already lowercased) calls through a
 /// system module, e.g. `os.chmod` or `fs.promises.chown`.
 pub(super) fn privileged_call(cmd: &str) -> Option<&str> {
+    module_call(cmd, |f| {
+        PRIVILEGED_HEADS.contains(&f) || PRIVILEGED_FUNCTIONS.contains(&f)
+    })
+}
+
+/// #2581: the first deleting function `cmd` (already lowercased) calls
+/// through a system module, e.g. `shutil.rmtree` or `fs.rmSync`. An agent
+/// refused `rm -rf` retried the same delete as a Python heredoc and it tiered
+/// `Write`.
+pub(super) fn destructive_call(cmd: &str) -> Option<&str> {
+    module_call(cmd, |f| {
+        DESTRUCTIVE_HEADS.contains(&f) || DESTRUCTIVE_FUNCTIONS.contains(&f)
+    })
+}
+
+/// The first dotted name in `cmd` whose first segment is a system module and
+/// whose last segment satisfies `is_func`.
+fn module_call(cmd: &str, is_func: impl Fn(&str) -> bool) -> Option<&str> {
     // Split on anything that cannot be part of a dotted name, not just on
     // `tokens()`'s separators: `map(os.chmod,`, `f=os.chmod`, `{os.chmod(`
     // and `[os.chmod]` would otherwise glue punctuation to the module or the
@@ -51,8 +85,7 @@ pub(super) fn privileged_call(cmd: &str) -> Option<&str> {
             return false;
         };
         let func = t.rsplit('.').next().unwrap_or(t);
-        SYSTEM_MODULES.contains(&module)
-            && (PRIVILEGED_HEADS.contains(&func) || PRIVILEGED_FUNCTIONS.contains(&func))
+        SYSTEM_MODULES.contains(&module) && is_func(func)
     })
 }
 
@@ -99,6 +132,42 @@ mod tests {
         ] {
             let got = tier(cmd);
             assert!(got < RiskTier::Privileged, "cmd: {cmd}\ngot {got:?}");
+        }
+    }
+
+    /// #2581: a delete through a system module is the delete it performs.
+    #[test]
+    fn module_qualified_deletes_are_destructive() {
+        for cmd in [
+            "python3 - <<'PY'\nimport shutil\nfor p in ['a','b']:\n    shutil.rmtree(p)\nPY",
+            "python3 -c 'import shutil; shutil.rmtree(\"x\")'",
+            "python3 -c 'import os; os.remove(\"x\")'",
+            "python3 -c 'import os; os.unlink(\"x\")'",
+            "python3 -c 'import os; os.rmdir(\"x\")'",
+            "python3 -c 'import os; os.removedirs(\"a/b\")'",
+            "node -e 'fs.rmSync(\"x\", {recursive: true})'",
+            "node -e 'fs.unlinkSync(\"x\")'",
+            "node -e 'fs.promises.rm(\"x\")'",
+            "python3 -c 'import shutil; list(map(shutil.rmtree, [\"x\"]))'",
+        ] {
+            assert_eq!(tier(cmd), RiskTier::Destructive, "cmd: {cmd}");
+        }
+    }
+
+    /// Ordinary scripts, look-alike methods, and a script merely WRITTEN to a
+    /// file (heredoc body is data) keep their tier: no prompt storm.
+    #[test]
+    fn ordinary_scripts_and_lookalikes_are_not_destructive() {
+        for cmd in [
+            "python3 -c 'print(1)'",
+            "python3 - <<'PY'\nimport os\nprint(os.listdir('.'))\nPY",
+            "python3 -c 'xs=[1]; xs.remove(1)'",
+            "python3 -c 'import os; os.path.exists(\"x\")'",
+            "node -e 'cache.unlink(k)'",
+            "cat > clean.py <<'PY'\nimport shutil\nshutil.rmtree('x')\nPY",
+        ] {
+            let got = tier(cmd);
+            assert!(got < RiskTier::Destructive, "cmd: {cmd}\ngot {got:?}");
         }
     }
 }

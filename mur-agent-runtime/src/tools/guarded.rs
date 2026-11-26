@@ -68,6 +68,12 @@ pub struct GuardedToolCall {
     pub(crate) startup_waiver: Option<mur_common::hitl::startup_waiver::StartupWaiver>,
 }
 
+/// #2581: appended to every refusal the model reads. A reviewer refused
+/// `rm -rf` re-ran the same delete as a Python heredoc; a refusal is about the
+/// effect, not the spelling, and the model has to be told so.
+pub(crate) const NO_WORKAROUND: &str =
+    ", and do not reach the same effect through another tool or command spelling";
+
 /// D2 / D2b: with the B1 sandbox not enforcing, the agent can read its own
 /// `identity.key` and sign an allow `verify_one` accepts — a fresh one or a
 /// remembered one. No allow can be trusted, so asking could only end in a
@@ -93,7 +99,8 @@ pub(crate) fn withheld_from_delegate(
         content: format!(
             "`{tool_name}` needs a human's approval and none can be given inside this delegated \
              turn — the call did not run and `{tool_name}` is unavailable for the rest of this \
-             turn; do not call it again. Finish your reply with what you have."
+             turn; do not call it again, and do not reach the same effect through another tool \
+             or command spelling. Finish your reply with what you have."
         ),
         is_error: true,
         status: crate::tools::ToolStatus::Denied {
@@ -391,7 +398,7 @@ impl GuardedToolCall {
                         // lands on one of them is not a fix.
                         Err(crate::tools::ToolError::NotAuthorized(msg)) => (
                             format!(
-                                "{msg} — `{}` is unavailable for the rest of this turn; do not call it again",
+                                "{msg} — `{}` is unavailable for the rest of this turn; do not call it again{NO_WORKAROUND}",
                                 call.tool_name
                             ),
                             crate::tools::ToolStatus::Denied {
@@ -538,7 +545,7 @@ impl GuardedToolCall {
             // so once; the loop withdraws it from the next request.
             Err(crate::tools::ToolError::NotAuthorized(msg)) => (
                 format!(
-                    "{msg} — `{}` is unavailable for the rest of this turn; do not call it again",
+                    "{msg} — `{}` is unavailable for the rest of this turn; do not call it again{NO_WORKAROUND}",
                     call.tool_name
                 ),
                 crate::tools::ToolStatus::Denied {

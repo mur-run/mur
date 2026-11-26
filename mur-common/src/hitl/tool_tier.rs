@@ -283,12 +283,14 @@ fn classify_bash_trigger(cmd: &str) -> (RiskTier, Option<String>) {
     raise(RiskTier::Spend, first_word_in(&lower, SPEND_HEADS));
     raise(
         RiskTier::Destructive,
-        first_word_in(&lower, DESTRUCTIVE_HEADS).or_else(|| {
-            DESTRUCTIVE_ARGS
-                .iter()
-                .find(|a| lower.contains(*a))
-                .map(|a| (*a).to_string())
-        }),
+        first_word_in(&lower, DESTRUCTIVE_HEADS)
+            .or_else(|| {
+                DESTRUCTIVE_ARGS
+                    .iter()
+                    .find(|a| lower.contains(*a))
+                    .map(|a| (*a).to_string())
+            })
+            .or_else(|| dotted::destructive_call(&lower).map(str::to_string)),
     );
     // #1832: a body that cannot be read (`eval $X`, `sh -c "$X"`, `… | sh`) is
     // arbitrary code execution. A policy choice, narrow by design — see

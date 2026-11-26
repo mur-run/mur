@@ -526,32 +526,8 @@ mod step_tests {
     }
 }
 
-/// #940: the deny path stuttered — `tool call denied: denied`.
 #[cfg(test)]
-mod deny_message_tests {
-    use super::deny_message;
-
-    #[test]
-    fn a_bare_denial_is_not_repeated() {
-        // What the CLI sends for a plain `n` press.
-        assert_eq!(deny_message(Some("denied")), "tool call denied");
-        assert_eq!(deny_message(Some("  denied  ")), "tool call denied");
-        assert_eq!(deny_message(Some("")), "tool call denied");
-        assert_eq!(deny_message(None), "tool call denied");
-    }
-
-    #[test]
-    fn a_reason_that_says_something_survives() {
-        assert_eq!(
-            deny_message(Some("timed out")),
-            "tool call denied: timed out"
-        );
-        assert_eq!(
-            deny_message(Some("no approval channel available")),
-            "tool call denied: no approval channel available"
-        );
-    }
-}
+mod deny_message_tests;
 
 #[cfg(test)]
 mod tool_policy_tests {

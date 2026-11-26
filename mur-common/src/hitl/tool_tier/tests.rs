@@ -208,10 +208,12 @@ fn dispatch_tools_are_spend_under_any_prefix() {
 /// payload piped to a shell — is opaque to a static classifier. It must
 /// never land on `Read`: Read is the lane that skips the gate entirely,
 /// so an opaque call tiered as Read would run with no check at all.
-/// This pins a FLOOR, not the right answer: `Write` is the current
-/// tier, a known limitation — under the default bash ceiling these run
-/// unasked, even when the wrapped command is `sudo`. Raising them is
-/// #1841; lowering any to `Read` is a bug.
+/// This pins a FLOOR only. A literal interpreter body is tiered by what
+/// it visibly calls (`dotted`: #2312 privileged, #2581 destructive), so
+/// some of these land above `Write`; a body that hides its call (alias,
+/// expression, decoded payload) is still `Write` by design — the sandbox,
+/// not this classifier, is the boundary (#2582). Lowering any to `Read` is
+/// a bug.
 #[test]
 fn opaque_commands_never_tier_as_read() {
     for cmd in [

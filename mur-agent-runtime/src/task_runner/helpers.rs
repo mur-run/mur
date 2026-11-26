@@ -346,15 +346,25 @@ pub(crate) fn approval_required_message(reason: Option<&str>) -> String {
     let resend = "approve it once there (the answer is remembered for this exact call), \
                   then resend the same request";
     match why {
-        Some(r) => format!("tool call needs approval: {r}; {resend}"),
-        None => format!("tool call needs approval; {resend}"),
+        Some(r) => format!("tool call needs approval: {r}; {resend}. {NO_WORKAROUND}"),
+        None => format!("tool call needs approval; {resend}. {NO_WORKAROUND}"),
     }
 }
 
+/// #2581: appended to every refusal the model reads. An agent refused
+/// `rm -rf` retried the same delete as a Python heredoc, which the tier
+/// classifier could not see as a delete; the old text only said approval was
+/// needed, so nothing told the model that a different spelling of the same
+/// effect is the same refusal.
+pub(crate) const NO_WORKAROUND: &str = "Do not try to get the same effect through \
+     another tool, command or language; wait for approval or report back to the user.";
+
 pub(crate) fn deny_message(reason: Option<&str>) -> String {
     match reason.map(str::trim) {
-        Some(r) if !r.is_empty() && r != "denied" => format!("tool call denied: {r}"),
-        _ => "tool call denied".to_string(),
+        Some(r) if !r.is_empty() && r != "denied" => {
+            format!("tool call denied: {r}. {NO_WORKAROUND}")
+        }
+        _ => format!("tool call denied. {NO_WORKAROUND}"),
     }
 }
 
