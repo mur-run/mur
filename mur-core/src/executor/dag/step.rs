@@ -18,8 +18,9 @@ pub(super) struct StepResult {
     /// The kill-switch tripped mid-turn but the member refused (or never got)
     /// `tasks/cancel` (#2503): its turn may still be running and billing, so
     /// the step failed AND the run must not end as a clean `Stopped`. Set only
-    /// from `DelegateDial::CancelRefused`, or from a refused late-usage cancel
-    /// of a still-running turn during a stop (#2590); never from error text.
+    /// from `DelegateDial::CancelRefused`, or during a stop from a failed dial
+    /// whose late-usage recovery could not confirm the turn stopped (#2590);
+    /// never from error text.
     pub(super) cancel_refused: bool,
     /// Real LLM tokens this step consumed, input and output kept apart so a
     /// cost guard can price each side at its own rate — non-zero only for
@@ -446,10 +447,11 @@ pub(super) async fn execute_step(
                 )
                 .await;
                 // #2590: the dial can fail after the stop tripped but before
-                // the poll sent the kill-switch cancel. If the cancel sent
-                // here was refused and the turn never ended, nothing stopped
-                // it: same verdict as a refused kill-switch cancel.
-                if late.cancel_refused && stop_requested(opts) {
+                // the poll sent the kill-switch cancel. Unless recovery saw
+                // the turn end or the member accept the cancel — a refused
+                // cancel, an unreachable member — nothing shows it stopped:
+                // the dial's error stands, as for a refused kill-switch cancel.
+                if late.unconfirmed && stop_requested(opts) {
                     cancel_refused = true;
                 }
                 let usage = match late.spend {

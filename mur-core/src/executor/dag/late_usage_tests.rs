@@ -283,10 +283,7 @@ async fn a_turn_that_never_ends_is_unknown_after_the_wait_not_zero() {
         matches!(got.spend, late_usage::Recovered::Unknown(_)),
         "got {got:?}"
     );
-    assert!(
-        !got.cancel_refused,
-        "the member accepted the cancel: {got:?}"
-    );
+    assert!(!got.unconfirmed, "the member accepted the cancel: {got:?}");
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "the wait is bounded: {:?}",
@@ -319,11 +316,34 @@ async fn a_refused_cancel_of_a_running_turn_is_reported() {
     )
     .await;
 
-    assert!(got.cancel_refused, "got {got:?}");
+    assert!(got.unconfirmed, "got {got:?}");
     assert!(
         matches!(got.spend, late_usage::Recovered::Unknown(_)),
         "got {got:?}"
     );
+}
+
+/// #2590: a member that cannot be asked proves nothing stopped. A failed
+/// `tasks/get` leaves the turn unconfirmed, never a quiet "not refused".
+#[tokio::test]
+async fn an_unreachable_member_leaves_the_turn_unconfirmed() {
+    if !sockets_enabled("an_unreachable_member_leaves_the_turn_unconfirmed") {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let rx = fake_member(tmp.path(), Box::new(|_, _| lost_reply()));
+
+    let got =
+        late_usage::recover_delegate_usage(tmp.path(), "member", "ct-1", Duration::from_secs(5))
+            .await;
+
+    assert!(got.unconfirmed, "got {got:?}");
+    assert!(
+        matches!(got.spend, late_usage::Recovered::Unknown(_)),
+        "got {got:?}"
+    );
+    let asked: Vec<String> = rx.try_iter().map(|(m, _)| m).collect();
+    assert_eq!(asked, ["tasks/get"], "no cancel was reached");
 }
 
 /// A refused cancel does not count once the turn is seen to end: nothing is
@@ -355,7 +375,7 @@ async fn a_refused_cancel_of_a_turn_that_then_ends_is_not_reported() {
         late_usage::recover_delegate_usage(tmp.path(), "member", "ct-1", Duration::from_secs(10))
             .await;
 
-    assert!(!got.cancel_refused, "got {got:?}");
+    assert!(!got.unconfirmed, "got {got:?}");
     assert!(
         matches!(got.spend, late_usage::Recovered::Known(_)),
         "got {got:?}"

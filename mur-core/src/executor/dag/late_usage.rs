@@ -47,13 +47,16 @@ pub(super) enum Recovered {
     Unknown(String),
 }
 
-/// What recovery learned: the spend, and whether the member refused (or
-/// never got) the cancel of a turn that was still running when the wait
-/// ended — that turn may still be billing, so a stop is not clean (#2590).
+/// What recovery learned: the spend, and whether the turn may still be
+/// running. `unconfirmed` is false only on evidence that it stopped — a probe
+/// saw it end, the member has no record of it, or the member accepted the
+/// cancel. A refused cancel, a failed probe, or a wait that ran out before
+/// either all leave it true: that turn may still be billing, so a stop is not
+/// clean (#2590).
 #[derive(Debug)]
 pub(super) struct LateUsage {
     pub(super) spend: Recovered,
-    pub(super) cancel_refused: bool,
+    pub(super) unconfirmed: bool,
 }
 
 /// One `tasks/get` answer, reduced to what accounting needs.
@@ -75,12 +78,10 @@ pub(super) async fn recover_delegate_usage(
 ) -> LateUsage {
     let until = Instant::now() + wait;
     let mut cancelled = false;
-    // The cancel failed and no later probe saw the turn end.
-    let mut cancel_failed = false;
-    let done = |spend, cancel_refused| LateUsage {
-        spend,
-        cancel_refused,
-    };
+    // The member accepted the cancel: as good as seeing the turn end, the
+    // same trust the kill-switch's own cancel gets.
+    let mut cancel_accepted = false;
+    let done = |spend, unconfirmed| LateUsage { spend, unconfirmed };
     let mut ended_without_usage: Option<Instant> = None;
     loop {
         if Instant::now() >= until {
@@ -91,17 +92,18 @@ pub(super) async fn recover_delegate_usage(
                         "the turn was still running after {}s",
                         wait.as_secs()
                     )),
-                    cancel_failed,
+                    !cancel_accepted,
                 ),
             };
         }
         match probe(mur_home, member, task_id, until).await {
             Err(error) => {
                 tracing::warn!(member, task_id, %error, "delegate usage: tasks/get failed");
-                // The turn's state is unknown: a refused cancel still counts.
+                // The turn's state is unknown: only an accepted cancel says
+                // it stopped (an unreachable member proves nothing).
                 return done(
                     Recovered::Unknown(format!("tasks/get failed: {error:#}")),
-                    cancel_failed,
+                    !cancel_accepted,
                 );
             }
             // The member's task registry is in memory and capped: a restart
@@ -127,10 +129,11 @@ pub(super) async fn recover_delegate_usage(
             Ok(Probe::Running) => {
                 if !cancelled {
                     cancelled = true;
-                    if let Err(error) = call(mur_home, member, "tasks/cancel", task_id, until).await
-                    {
-                        tracing::warn!(member, task_id, %error, "delegate usage: tasks/cancel failed");
-                        cancel_failed = true;
+                    match call(mur_home, member, "tasks/cancel", task_id, until).await {
+                        Ok(_) => cancel_accepted = true,
+                        Err(error) => {
+                            tracing::warn!(member, task_id, %error, "delegate usage: tasks/cancel failed");
+                        }
                     }
                 }
             }

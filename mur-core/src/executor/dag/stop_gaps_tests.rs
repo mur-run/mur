@@ -347,3 +347,63 @@ async fn a_dial_failure_during_a_stop_with_the_turn_still_running_is_not_stopped
         "{events:?}"
     );
 }
+
+/// #2590 path 2, unreachable variant: the dial fails after the stop tripped
+/// and the member then answers nothing at all — late-usage recovery's
+/// `tasks/get` fails before any cancel is sent. Nothing shows the turn
+/// stopped, so the dial's error stands: the step fails and so does the run.
+#[tokio::test]
+async fn a_dial_failure_during_a_stop_with_the_member_unreachable_fails_the_run() {
+    if !sockets_enabled("a_dial_failure_during_a_stop_with_the_member_unreachable") {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path();
+    let (f, stop) = stop_flag();
+    fake_member(home, "member", move |method, _| {
+        if method == "channel/delegate" {
+            f.store(true, Ordering::SeqCst);
+        }
+        // Every connection drops unanswered: the dial and the probe both fail.
+        None
+    });
+
+    let (status, events) = run_stoppable(home, vec![delegate("s1", "member")], stop).await;
+
+    assert_eq!(status, PipelineStatus::Failed, "events: {events:?}");
+    assert!(
+        events
+            .iter()
+            .any(|(id, k, _)| id == "s1" && *k == StepEventKind::Failed),
+        "the step must fail: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|(_, k, _)| *k == StepEventKind::Stopped),
+        "{events:?}"
+    );
+}
+
+/// The counterpart: the dial fails after the stop tripped, but the member
+/// reports the turn ended. Nothing is left running, so the failure is the
+/// stop's doing and the run still ends `Stopped`.
+#[tokio::test]
+async fn a_dial_failure_during_a_stop_with_the_turn_ended_stays_stopped() {
+    if !sockets_enabled("a_dial_failure_during_a_stop_with_the_turn_ended") {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path();
+    let (f, stop) = stop_flag();
+    fake_member(home, "member", move |method, req| match method {
+        "channel/delegate" => {
+            f.store(true, Ordering::SeqCst);
+            None
+        }
+        "tasks/get" => ended_with_usage(req),
+        _ => ok(req, serde_json::json!({})),
+    });
+
+    let (status, events) = run_stoppable(home, vec![delegate("s1", "member")], stop).await;
+
+    assert_eq!(status, PipelineStatus::Stopped, "events: {events:?}");
+}
