@@ -210,6 +210,11 @@ pub(crate) type OneShotApprovals = Arc<tokio::sync::Mutex<std::collections::Hash
 /// that turn's `pre_tool_use` gate (B0 rule 4). Cleared with the turn's sinks.
 pub(crate) type TurnFlags = Arc<std::sync::Mutex<HashMap<String, Vec<String>>>>;
 
+/// #2581: turns in which a `Destructive`-or-higher call was refused. Every
+/// later interpreter call of that turn tiers `Destructive` (see
+/// `tools/guarded/denial_escalation.rs`). Cleared with the turn's sinks.
+pub(crate) type DeniedTurns = Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
+
 /// #2150: task ids of `channel/delegate` turns — one step of a fleet run.
 /// An `Ask` call nobody can approve is refused to the model as a withdrawn
 /// tool instead of ending the turn, so the step keeps the deliverable the
@@ -300,6 +305,8 @@ pub struct TaskRunner {
     one_shot_approvals: OneShotApprovals,
     /// #2175: see [`TurnFlags`].
     turn_flags: TurnFlags,
+    /// #2581: see [`DeniedTurns`].
+    denied_turns: DeniedTurns,
     /// #2150: see [`DelegatedTurns`].
     delegated_turns: DelegatedTurns,
     /// #2175: see [`PendingWrappers`].

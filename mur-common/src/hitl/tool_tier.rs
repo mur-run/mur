@@ -243,6 +243,19 @@ pub fn classify_with_trigger(
     }
 }
 
+/// #2581 part 2: should this call tier `Destructive` in a turn where a
+/// `Destructive` call was already refused? True for a `bash` command that
+/// runs an interpreter or a shell — the spelling an agent refused `rm -rf`
+/// reached for. Adds no prompt in a turn nobody has said no in; the gate
+/// decides when the turn is marked, this only says which calls it lifts.
+pub fn escalates_after_denial(tool_name: &str, tool_input: Option<&Value>) -> bool {
+    tool_name == "bash"
+        && tool_input
+            .and_then(|v| v.get("command"))
+            .and_then(Value::as_str)
+            .is_some_and(super::opaque_shell::runs_interpreter)
+}
+
 /// `mcp__server__tool` → `tool`. An MCP server must not lower a tool's tier by
 /// prefixing it.
 fn leaf(name: &str) -> &str {

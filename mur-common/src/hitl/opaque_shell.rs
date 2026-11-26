@@ -322,6 +322,28 @@ fn strip_launchers<'a>(mut words: &'a [&'a str]) -> Option<(&'a [&'a str], Optio
     }
 }
 
+/// #2581: does any command in `cmd` hand text to an interpreter or a shell
+/// (`python3 -`, `python3 -c '…'`, `node x.js`, `bash -c '…'`)? Its body is
+/// whatever the interpreter makes of it, so after a refusal it is the obvious
+/// way to reach the refused effect in another spelling. Launchers
+/// (`env`, `nohup`, …) are seen through, as in [`is_opaque_shell`].
+pub(super) fn runs_interpreter(cmd: &str) -> bool {
+    segments(cmd).iter().any(|(seg, _)| {
+        let words: Vec<&str> = seg
+            .split_whitespace()
+            .map(|w| w.trim_start_matches(['(', '{']))
+            .filter(|w| !w.is_empty() && !is_env_assignment(w))
+            .collect();
+        let Some((words, _)) = strip_launchers(&words) else {
+            return false;
+        };
+        words.first().is_some_and(|w| {
+            let head = basename(w).to_ascii_lowercase();
+            interpreter_eval_flag(&head).is_some() || SHELLS.contains(&head.as_str())
+        })
+    })
+}
+
 /// Is the eval body of an interpreter / `-c` invocation unreadable? A body
 /// that is absent under `xargs`, or is exactly the `-I` placeholder, comes
 /// from xargs' input.

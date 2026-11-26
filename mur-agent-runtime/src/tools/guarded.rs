@@ -12,6 +12,7 @@
 //! See `docs/superpowers/specs/2026-09-16-mur-tool-mcp-server-design.md`.
 
 mod bash_ceiling;
+mod denial_escalation;
 mod headless;
 pub(crate) mod hook_gate;
 mod intent_raise;
@@ -43,6 +44,8 @@ pub struct GuardedToolCall {
     pub(crate) one_shot_approvals: crate::task_runner::OneShotApprovals,
     /// #2150: see [`crate::task_runner::DelegatedTurns`].
     pub(crate) delegated_turns: crate::task_runner::DelegatedTurns,
+    /// #2581: see [`crate::task_runner::DeniedTurns`].
+    pub(crate) denied_turns: crate::task_runner::DeniedTurns,
     pub(crate) agent_name: String,
     pub(crate) decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
     pub(crate) hitl_timeout_secs: u32,
@@ -153,10 +156,28 @@ impl GuardedToolCall {
         }
     }
 
+    /// Gate B for one response. #2581: every exit of the decision below
+    /// passes through here, so a refusal of a `Destructive` call always arms
+    /// the turn's escalation — one call site, no return path that forgets.
     pub(crate) async fn gate_response(
         &self,
         task_id: &str,
         calls: &[crate::llm::ToolCallResult],
+    ) -> (
+        HashMap<String, crate::hitl::HitlDecision>,
+        HashMap<String, String>,
+    ) {
+        let raised = self.raises(task_id, calls).await;
+        let (out, step_ids) = self.gate_response_inner(task_id, calls, &raised).await;
+        self.arm_denial_escalation(task_id, calls, &raised, &out);
+        (out, step_ids)
+    }
+
+    async fn gate_response_inner(
+        &self,
+        task_id: &str,
+        calls: &[crate::llm::ToolCallResult],
+        raised: &HashMap<String, mur_common::hitl::RiskTier>,
     ) -> (
         HashMap<String, crate::hitl::HitlDecision>,
         HashMap<String, String>,
@@ -168,7 +189,6 @@ impl GuardedToolCall {
         let mut out = HashMap::new();
         let mut step_ids = HashMap::new();
         let entry = self.approval_sinks.lock().await.get(task_id).cloned();
-        let raised = self.intent_raises(task_id, calls).await;
         let mut hooked = self.pre_tool_use(task_id, calls).await;
         for call in calls {
             let lift = raised.get(&call.call_id).copied();
