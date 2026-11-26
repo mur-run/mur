@@ -114,7 +114,7 @@ async fn a_turn_still_running_is_cancelled_and_its_usage_waited_for() {
         late_usage::recover_delegate_usage(tmp.path(), "member", "ct-1", Duration::from_secs(10))
             .await;
 
-    match got {
+    match got.spend {
         late_usage::Recovered::Known(u) => assert_eq!(u.total(), 4_200),
         other => panic!("expected the late usage, got {other:?}"),
     }
@@ -154,7 +154,7 @@ async fn a_turn_the_member_has_no_record_of_is_unknown_not_zero() {
             .await;
 
     assert!(
-        matches!(got, late_usage::Recovered::Unknown(_)),
+        matches!(got.spend, late_usage::Recovered::Unknown(_)),
         "got {got:?}"
     );
 }
@@ -188,7 +188,7 @@ async fn an_ended_turn_whose_usage_lands_late_is_still_counted() {
         late_usage::recover_delegate_usage(tmp.path(), "member", "ct-1", Duration::from_secs(10))
             .await;
 
-    match got {
+    match got.spend {
         late_usage::Recovered::Known(u) => assert_eq!(u.total(), 4_200),
         other => panic!("expected the late usage, got {other:?}"),
     }
@@ -208,7 +208,7 @@ async fn assert_bounded_against(reply: Reply, test: &str) {
     let got = late_usage::recover_delegate_usage(tmp.path(), "member", "ct-1", wait).await;
 
     assert!(
-        matches!(got, late_usage::Recovered::Unknown(_)),
+        matches!(got.spend, late_usage::Recovered::Unknown(_)),
         "got {got:?}"
     );
     assert!(
@@ -248,7 +248,7 @@ async fn an_expired_deadline_makes_no_call() {
         late_usage::recover_delegate_usage(tmp.path(), "member", "ct-1", Duration::ZERO).await;
 
     assert!(
-        matches!(got, late_usage::Recovered::Unknown(_)),
+        matches!(got.spend, late_usage::Recovered::Unknown(_)),
         "got {got:?}"
     );
     std::thread::sleep(Duration::from_millis(200));
@@ -280,13 +280,85 @@ async fn a_turn_that_never_ends_is_unknown_after_the_wait_not_zero() {
     .await;
 
     assert!(
-        matches!(got, late_usage::Recovered::Unknown(_)),
+        matches!(got.spend, late_usage::Recovered::Unknown(_)),
         "got {got:?}"
+    );
+    assert!(
+        !got.cancel_refused,
+        "the member accepted the cancel: {got:?}"
     );
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "the wait is bounded: {:?}",
         started.elapsed()
+    );
+}
+
+/// #2590: a refused cancel of a turn that never ends is reported, so a stop
+/// cannot read as clean while the member is still billing.
+#[tokio::test]
+async fn a_refused_cancel_of_a_running_turn_is_reported() {
+    if !sockets_enabled("a_refused_cancel_of_a_running_turn") {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let _rx = fake_member(
+        tmp.path(),
+        Box::new(|method, params| match method {
+            "tasks/get" => serde_json::json!({"id": params["id"], "state": "working"}),
+            "tasks/cancel" => serde_json::json!({"error": {"code": -32603, "message": "refused"}}),
+            _ => lost_reply(),
+        }),
+    );
+
+    let got = late_usage::recover_delegate_usage(
+        tmp.path(),
+        "member",
+        "ct-1",
+        Duration::from_millis(1_500),
+    )
+    .await;
+
+    assert!(got.cancel_refused, "got {got:?}");
+    assert!(
+        matches!(got.spend, late_usage::Recovered::Unknown(_)),
+        "got {got:?}"
+    );
+}
+
+/// A refused cancel does not count once the turn is seen to end: nothing is
+/// left running.
+#[tokio::test]
+async fn a_refused_cancel_of_a_turn_that_then_ends_is_not_reported() {
+    if !sockets_enabled("a_refused_cancel_of_a_turn_that_then_ends") {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let gets = std::sync::atomic::AtomicUsize::new(0);
+    let _rx = fake_member(
+        tmp.path(),
+        Box::new(move |method, params| match method {
+            "tasks/get" if gets.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 => {
+                serde_json::json!({"id": params["id"], "state": "working"})
+            }
+            "tasks/get" => serde_json::json!({
+                "id": params["id"],
+                "state": "completed",
+                "usage": spent()
+            }),
+            "tasks/cancel" => serde_json::json!({"error": {"code": -32603, "message": "refused"}}),
+            _ => lost_reply(),
+        }),
+    );
+
+    let got =
+        late_usage::recover_delegate_usage(tmp.path(), "member", "ct-1", Duration::from_secs(10))
+            .await;
+
+    assert!(!got.cancel_refused, "got {got:?}");
+    assert!(
+        matches!(got.spend, late_usage::Recovered::Known(_)),
+        "got {got:?}"
     );
 }
 

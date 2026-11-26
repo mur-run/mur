@@ -47,6 +47,15 @@ pub(super) enum Recovered {
     Unknown(String),
 }
 
+/// What recovery learned: the spend, and whether the member refused (or
+/// never got) the cancel of a turn that was still running when the wait
+/// ended — that turn may still be billing, so a stop is not clean (#2590).
+#[derive(Debug)]
+pub(super) struct LateUsage {
+    pub(super) spend: Recovered,
+    pub(super) cancel_refused: bool,
+}
+
 /// One `tasks/get` answer, reduced to what accounting needs.
 enum Probe {
     NotFound,
@@ -63,37 +72,56 @@ pub(super) async fn recover_delegate_usage(
     member: &str,
     task_id: &str,
     wait: Duration,
-) -> Recovered {
+) -> LateUsage {
     let until = Instant::now() + wait;
     let mut cancelled = false;
+    // The cancel failed and no later probe saw the turn end.
+    let mut cancel_failed = false;
+    let done = |spend, cancel_refused| LateUsage {
+        spend,
+        cancel_refused,
+    };
     let mut ended_without_usage: Option<Instant> = None;
     loop {
         if Instant::now() >= until {
-            return Recovered::Unknown(match ended_without_usage {
-                Some(_) => no_usage_reported(),
-                None => format!("the turn was still running after {}s", wait.as_secs()),
-            });
+            return match ended_without_usage {
+                Some(_) => done(Recovered::Unknown(no_usage_reported()), false),
+                None => done(
+                    Recovered::Unknown(format!(
+                        "the turn was still running after {}s",
+                        wait.as_secs()
+                    )),
+                    cancel_failed,
+                ),
+            };
         }
         match probe(mur_home, member, task_id, until).await {
             Err(error) => {
                 tracing::warn!(member, task_id, %error, "delegate usage: tasks/get failed");
-                return Recovered::Unknown(format!("tasks/get failed: {error:#}"));
+                // The turn's state is unknown: a refused cancel still counts.
+                return done(
+                    Recovered::Unknown(format!("tasks/get failed: {error:#}")),
+                    cancel_failed,
+                );
             }
             // The member's task registry is in memory and capped: a restart
             // or an eviction loses a turn that ran and billed. Only a record
             // proves what was spent.
             Ok(Probe::NotFound) => {
-                return Recovered::Unknown(
-                    "the member has no record of the turn (it restarted, evicted it, or \
-                     never received it)"
-                        .into(),
+                return done(
+                    Recovered::Unknown(
+                        "the member has no record of the turn (it restarted, evicted it, or \
+                         never received it)"
+                            .into(),
+                    ),
+                    false,
                 );
             }
-            Ok(Probe::Ended(Some(usage))) => return Recovered::Known(usage),
+            Ok(Probe::Ended(Some(usage))) => return done(Recovered::Known(usage), false),
             Ok(Probe::Ended(None)) => {
                 let since = *ended_without_usage.get_or_insert_with(Instant::now);
                 if since.elapsed() >= ENDED_USAGE_GRACE {
-                    return Recovered::Unknown(no_usage_reported());
+                    return done(Recovered::Unknown(no_usage_reported()), false);
                 }
             }
             Ok(Probe::Running) => {
@@ -102,6 +130,7 @@ pub(super) async fn recover_delegate_usage(
                     if let Err(error) = call(mur_home, member, "tasks/cancel", task_id, until).await
                     {
                         tracing::warn!(member, task_id, %error, "delegate usage: tasks/cancel failed");
+                        cancel_failed = true;
                     }
                 }
             }
