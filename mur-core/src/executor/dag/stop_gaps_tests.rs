@@ -266,7 +266,7 @@ async fn a_refusal_beside_an_accepted_cancel_fails_the_run_and_keeps_each_outcom
             .iter()
             .filter(|(i, k, _)| i == id && *k != StepEventKind::Started)
             .map(|(_, k, e)| (*k, e.clone()))
-            .last()
+            .next_back()
             .unwrap_or_else(|| panic!("no final event for step {id}: {events:?}"))
     };
     let (a, why) = final_kind("a");
