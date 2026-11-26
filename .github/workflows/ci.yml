@@ -323,7 +323,7 @@ jobs:
         if: runner.os != 'Windows'
         run: >-
           cargo nextest run --workspace --locked --profile ci
-          -E 'package(mur-core) & kind(lib) & test(/cmd::fleet::loop_run::pause_tests::|cmd::fleet::loop_run::synth_head_tests::|a2a_dial::timeout_tests::|executor::dag::late_usage_tests::|executor::dag::cancel_refused_retry_tests::|executor::dag::stop_tests::/)'
+          -E 'package(mur-core) & kind(lib) & test(/cmd::fleet::loop_run::pause_tests::|cmd::fleet::loop_run::synth_head_tests::|a2a_dial::timeout_tests::|executor::dag::late_usage_tests::|executor::dag::cancel_refused_retry_tests::|executor::dag::stop_tests::|executor::dag::stop_gaps_tests::/)'
         env:
           RUST_MIN_STACK: "16777216"
           MUR_TEST_SOCKETS: "1"

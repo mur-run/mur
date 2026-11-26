@@ -204,12 +204,16 @@ async fn a_stop_mid_turn_cancels_the_member_task_and_returns_promptly() {
     )
     .unwrap();
     let (tx, rx) = std::sync::mpsc::channel::<(String, serde_json::Value)>();
+    // The member trips the stop itself once the delegation is in flight, so
+    // the stop always lands mid-turn however slow the runner (#2590).
+    let (f, stop) = flag();
     let cancelled = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
     std::thread::spawn(move || {
         for conn in listener.incoming() {
             let Ok(conn) = conn else { break };
             let tx = tx.clone();
             let cancelled = cancelled.clone();
+            let f = f.clone();
             std::thread::spawn(move || {
                 let mut w = conn.try_clone().unwrap();
                 let mut line = String::new();
@@ -228,6 +232,7 @@ async fn a_stop_mid_turn_cancels_the_member_task_and_returns_promptly() {
                 } else {
                     // A long member turn, ended only by the cancel (or a
                     // generous ceiling so a broken test cannot hang CI).
+                    f.store(true, Ordering::SeqCst);
                     let g = lock.lock().unwrap();
                     let _ = cv
                         .wait_timeout_while(g, Duration::from_secs(20), |c| !*c)
@@ -243,7 +248,6 @@ async fn a_stop_mid_turn_cancels_the_member_task_and_returns_promptly() {
         }
     });
 
-    let (f, stop) = flag();
     let proc = Procedure {
         variables: vec![],
         steps: vec![ProcedureStep {
@@ -252,13 +256,6 @@ async fn a_stop_mid_turn_cancels_the_member_task_and_returns_promptly() {
             delegate_to: Some("member".into()),
             ..Default::default()
         }],
-    };
-    let flip = {
-        let f = f.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            f.store(true, Ordering::SeqCst);
-        })
     };
     let started = std::time::Instant::now();
     let out = execute_dag(
@@ -274,7 +271,6 @@ async fn a_stop_mid_turn_cancels_the_member_task_and_returns_promptly() {
     )
     .await
     .unwrap();
-    flip.await.unwrap();
     assert_eq!(out.status, PipelineStatus::Stopped);
     assert!(
         started.elapsed() < Duration::from_secs(10),
@@ -335,11 +331,15 @@ async fn a_refused_cancel_is_not_reported_as_stopped() {
         .to_string(),
     )
     .unwrap();
+    // The member trips the stop itself once the delegation is in flight, so
+    // the stop always lands mid-turn however slow the runner (#2590).
+    let (f, stop) = flag();
     let cancelled = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
     std::thread::spawn(move || {
         for conn in listener.incoming() {
             let Ok(conn) = conn else { break };
             let cancelled = cancelled.clone();
+            let f = f.clone();
             std::thread::spawn(move || {
                 let mut w = conn.try_clone().unwrap();
                 let mut line = String::new();
@@ -357,6 +357,7 @@ async fn a_refused_cancel_is_not_reported_as_stopped() {
                             "error":{"code":-32000,"message":"cancel refused"}})
                     }
                     "channel/delegate" => {
+                        f.store(true, Ordering::SeqCst);
                         let g = lock.lock().unwrap();
                         let _ = cv
                             .wait_timeout_while(g, Duration::from_secs(20), |c| !*c)
@@ -373,7 +374,6 @@ async fn a_refused_cancel_is_not_reported_as_stopped() {
         }
     });
 
-    let (f, stop) = flag();
     let events = Arc::new(std::sync::Mutex::new(
         Vec::<(StepEventKind, Option<String>)>::new(),
     ));
@@ -390,10 +390,6 @@ async fn a_refused_cancel_is_not_reported_as_stopped() {
             ..Default::default()
         }],
     };
-    let flip = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        f.store(true, Ordering::SeqCst);
-    });
     let out = execute_dag(
         home,
         "t",
@@ -408,7 +404,6 @@ async fn a_refused_cancel_is_not_reported_as_stopped() {
     )
     .await
     .unwrap();
-    flip.await.unwrap();
     assert_eq!(
         out.status,
         PipelineStatus::Failed,
@@ -471,11 +466,15 @@ async fn an_error_after_an_accepted_cancel_still_ends_stopped() {
         .to_string(),
     )
     .unwrap();
+    // The member trips the stop itself once the delegation is in flight, so
+    // the stop always lands mid-turn however slow the runner (#2590).
+    let (f, stop) = flag();
     let cancelled = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
     std::thread::spawn(move || {
         for conn in listener.incoming() {
             let Ok(conn) = conn else { break };
             let cancelled = cancelled.clone();
+            let f = f.clone();
             std::thread::spawn(move || {
                 let mut w = conn.try_clone().unwrap();
                 let mut line = String::new();
@@ -492,6 +491,7 @@ async fn an_error_after_an_accepted_cancel_still_ends_stopped() {
                         serde_json::json!({"jsonrpc":"2.0","id":req["id"],"result":{}})
                     }
                     "channel/delegate" => {
+                        f.store(true, Ordering::SeqCst);
                         let g = lock.lock().unwrap();
                         let _ = cv
                             .wait_timeout_while(g, Duration::from_secs(20), |c| !*c)
@@ -506,7 +506,6 @@ async fn an_error_after_an_accepted_cancel_still_ends_stopped() {
         }
     });
 
-    let (f, stop) = flag();
     let proc = Procedure {
         variables: vec![],
         steps: vec![ProcedureStep {
@@ -516,10 +515,6 @@ async fn an_error_after_an_accepted_cancel_still_ends_stopped() {
             ..Default::default()
         }],
     };
-    let flip = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        f.store(true, Ordering::SeqCst);
-    });
     let out = execute_dag(
         home,
         "t",
@@ -533,7 +528,6 @@ async fn an_error_after_an_accepted_cancel_still_ends_stopped() {
     )
     .await
     .unwrap();
-    flip.await.unwrap();
     assert_eq!(
         out.status,
         PipelineStatus::Stopped,
