@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::complete::{Candidate, MAX_MENU_ROWS};
+use super::complete::Candidate;
 
 pub struct ShellCompleteCtx<'a> {
     /// Directory relative paths resolve against (murmur's shell cwd).
@@ -44,7 +44,8 @@ pub fn candidates(line: &str, ctx: &ShellCompleteCtx<'_>) -> Vec<Candidate> {
     } else {
         path_candidates(word, ctx)
     };
-    out.truncate(MAX_MENU_ROWS);
+    // No cap here: the popup shows at most `MAX_MENU_ROWS` and scrolls to the
+    // selection, so truncating the data would make the rest unreachable.
     for c in &mut out {
         c.insert = format!("!{head}{}", c.insert);
     }
@@ -277,13 +278,18 @@ mod tests {
     }
 
     #[test]
-    fn the_list_is_capped_and_multiline_input_has_none() {
+    fn every_match_is_offered_and_multiline_input_has_none() {
         let t = tree();
         let b = bins();
         for i in 0..12 {
             std::fs::write(t.path().join(format!("f{i:02}")), "").unwrap();
         }
-        assert_eq!(candidates("!ls f", &ctx(&t, &b)).len(), MAX_MENU_ROWS);
+        let out = candidates("!ls f", &ctx(&t, &b));
+        assert_eq!(out.len(), 12, "past the popup height stays reachable");
+        assert!(
+            out.iter().any(|c| c.insert == "!ls f11 "),
+            "last file offered"
+        );
         assert!(candidates("!ls\nf", &ctx(&t, &b)).is_empty());
         assert!(candidates("ls f", &ctx(&t, &b)).is_empty(), "no leading !");
     }
