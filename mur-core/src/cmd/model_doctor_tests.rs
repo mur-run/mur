@@ -462,3 +462,37 @@ fn the_warning_names_the_fleet_guard_and_the_zero_fix() {
     assert!(d.contains("stop a fleet early"), "{d}");
     assert!(d.contains("set them to 0"), "{d}");
 }
+
+/// A rate the fleet guards cannot see must not be blamed for stopping a fleet
+/// (qa re-review on #2616): both guards drop anything not `> 0.0` and never
+/// read the cache rates. A positive input or output rate keeps the claim.
+#[test]
+fn fleet_guard_claim_only_for_a_positive_input_or_output_rate() {
+    let mut reg = reg_with(&[
+        ("negative", "ollama", "qwen3", None),
+        ("nan", "ollama", "qwen3", None),
+        ("cache_only", "ollama", "qwen3", None),
+        ("legacy_positive", "ollama", "qwen3", None),
+        ("input_positive", "ollama", "qwen3", None),
+    ]);
+    let m = &mut reg.models;
+    m.get_mut("negative").unwrap().output_cost_per_1k = Some(-0.01);
+    m.get_mut("nan").unwrap().input_cost_per_1k = Some(f64::NAN);
+    m.get_mut("cache_only").unwrap().cache_read_cost_per_1k = Some(0.001);
+    m.get_mut("legacy_positive").unwrap().cost_per_1k_tokens = Some(0.01);
+    m.get_mut("input_positive").unwrap().input_cost_per_1k = Some(0.01);
+    for f in rate_findings(&reg) {
+        let d = &f.detail;
+        let positive = matches!(f.subject.as_str(), "legacy_positive" | "input_positive");
+        assert_eq!(
+            d.contains("stop a fleet early"),
+            positive,
+            "{}: {d}",
+            f.subject
+        );
+        assert!(d.contains("set them to 0"), "{d}");
+        if !positive {
+            assert!(d.contains("fleet budget guards ignore it"), "{d}");
+        }
+    }
+}

@@ -229,6 +229,12 @@ pub fn audit(
     //    names both edits. Only an exact zero is consistent — it is what
     //    `mur model add` writes for a local tier; a negative or NaN rate is
     //    just as contradictory and is flagged.
+    //
+    //    The fleet-guard sentence is only claimed when it is true: both
+    //    guards read the effective input/output pair and drop any rate that
+    //    is not `> 0.0`, and neither reads the cache rates. A negative, NaN
+    //    or cache-only rate is still a contradiction, but it cannot trip a
+    //    fleet, so the warning does not say it can.
     for (key, e) in &reg.models {
         let label = match e.billing_or_inferred() {
             BillingMode::Subscription => "subscription",
@@ -257,14 +263,23 @@ pub fn audit(
         } else {
             format!("{label}, inferred from `provider: {}`", e.provider)
         };
+        let (input, output) = e.effective_costs();
+        let trips_fleet_guard = [input, output].into_iter().flatten().any(|r| r > 0.0);
+        let reach = if trips_fleet_guard {
+            "The murmur footer skips it, but the fleet budget guards take the dearest rate \
+             in the registry whatever its billing, so it can stop a fleet early; the `/model` \
+             list and cost reports price it too."
+        } else {
+            "The murmur footer and the fleet budget guards ignore it (they only count a \
+             positive input or output rate), but the `/model` list and cost reports still \
+             read it."
+        };
         out.push(Finding::warn(
             key.clone(),
             format!(
-                "billing is {source}, yet the entry carries a per-1k rate ({}). The murmur \
-                 footer skips it, but the fleet budget guards take the dearest rate in the \
-                 registry whatever its billing, so it can stop a fleet early; the `/model` list \
-                 and cost reports price it too. If this model really is metered, set \
-                 `billing: usage_billed`; otherwise delete those fields or set them to 0.",
+                "billing is {source}, yet the entry carries a per-1k rate ({}). {reach} If this \
+                 model really is metered, set `billing: usage_billed`; otherwise delete those \
+                 fields or set them to 0.",
                 priced.join(", ")
             ),
         ));
