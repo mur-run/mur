@@ -109,6 +109,9 @@ struct Job {
     last_polled: Instant,
     /// Reclaimed as idle: already signalled, no longer counts against its lane.
     reclaimed: bool,
+    /// Ended by a turn cancel / shutdown, not by `bash_kill` (#2613). The
+    /// exit then stays in the table for whoever is still waiting on it.
+    cancelled: bool,
 }
 
 /// What one `bash` / `bash_wait` / `bash_kill` reply gets.
@@ -126,6 +129,8 @@ pub struct Poll {
     pub spool: Option<PathBuf>,
     pub spool_note: Option<String>,
     pub exit: Option<Exit>,
+    /// The job was ended by a cancel of its turn (#2613), not by the model.
+    pub cancelled: bool,
 }
 
 pub struct SpawnSpec<'a> {
@@ -335,6 +340,7 @@ impl JobTable {
                 cursor_stderr: 0,
                 last_polled: Instant::now(),
                 reclaimed: false,
+                cancelled: false,
             },
         );
         Ok(id)
@@ -395,11 +401,28 @@ impl JobTable {
     /// `kill` with a caller-chosen grace: SIGTERM, wait `grace`, SIGKILL,
     /// wait `grace` for the reap. Worst case is `2 x grace`.
     async fn kill_within(&self, job_id: &str, grace: Duration) -> Result<Poll, JobError> {
+        self.signal_and_wait(job_id, grace, false).await?;
+        self.take_snapshot(job_id)
+    }
+
+    /// SIGTERM, wait `grace`, SIGKILL, wait `grace` for the reap. Reports
+    /// nothing and removes nothing: the exit stays for the next poll.
+    /// `cancel` marks the job as ended by its turn's cancel (#2613).
+    async fn signal_and_wait(
+        &self,
+        job_id: &str,
+        grace: Duration,
+        cancel: bool,
+    ) -> Result<(), JobError> {
         let (pid, mut done, killed_by) = {
-            let jobs = self.lock();
+            let mut jobs = self.lock();
+            let known = Self::known(&jobs);
             let j = jobs
-                .get(job_id)
-                .ok_or_else(|| JobError::Unknown(job_id.to_string(), Self::known(&jobs)))?;
+                .get_mut(job_id)
+                .ok_or_else(|| JobError::Unknown(job_id.to_string(), known))?;
+            if cancel && j.done.borrow().is_none() {
+                j.cancelled = true;
+            }
             (j.pid, j.done.clone(), j.killed_by.clone())
         };
         if done.borrow().is_none() {
@@ -414,7 +437,7 @@ impl JobTable {
                 let _ = tokio::time::timeout(grace, done.wait_for(|e| e.is_some())).await;
             }
         }
-        self.take_snapshot(job_id)
+        Ok(())
     }
 
     /// D3/D8: end every running job the given task started.
@@ -444,8 +467,12 @@ impl JobTable {
     /// Kill the jobs concurrently: each kill may sit out its full grace on
     /// a SIGTERM-ignoring group, and serial waits would stack those past a
     /// shutdown's stop budget (#1909).
+    ///
+    /// The exits are NOT taken (#2613): a foreground `bash` may still be
+    /// waiting on one of these jobs, and the report is its to collect. An
+    /// exit nobody collects is dropped by `reap_expired` after the TTL.
     async fn kill_each(&self, ids: Vec<String>, grace: Duration) -> usize {
-        futures::future::join_all(ids.iter().map(|id| self.kill_within(id, grace)))
+        futures::future::join_all(ids.iter().map(|id| self.signal_and_wait(id, grace, true)))
             .await
             .into_iter()
             .filter(|r| r.is_ok())
@@ -491,6 +518,7 @@ impl JobTable {
             spool: j.spool.clone(),
             spool_note,
             exit,
+            cancelled: j.cancelled,
         };
         if poll.exit.is_some() {
             // Reported once; a second wait on it is "no such job" (§4).

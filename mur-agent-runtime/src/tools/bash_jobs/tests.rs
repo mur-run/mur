@@ -411,3 +411,30 @@ async fn a_full_lane_reclaims_an_idle_job_but_not_an_attended_one() {
     t.kill_all().await;
     let _ = fresh;
 }
+
+/// #2613: a cancel that kills a job a foreground `bash` is still waiting on
+/// must leave the exit for that waiter. `kill_owned_by` used to consume the
+/// one-shot report, so the waiter woke to "no such job …; jobs known: none".
+#[cfg(unix)]
+#[tokio::test]
+async fn a_cancel_leaves_the_exit_for_the_foreground_waiter() {
+    for _ in 0..5 {
+        let dir = tempfile::tempdir().unwrap();
+        let t = JobTable::new();
+        let id = CURRENT_TASK_ID
+            .scope("task-A".to_string(), async {
+                t.spawn(spec("sleep 30", dir.path(), None))
+            })
+            .await
+            .unwrap();
+        let waiter = t.poll(&id, Duration::from_secs(30));
+        let cancel = async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            t.kill_owned_by("task-A").await
+        };
+        let (p, n) = tokio::join!(waiter, cancel);
+        assert_eq!(n, 1);
+        let p = p.expect("the waiter must get the exit, not `no such job`");
+        assert!(p.exit.as_ref().and_then(|e| e.killed_by).is_some(), "{p:?}");
+    }
+}

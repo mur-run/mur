@@ -430,6 +430,24 @@ impl BashTool {
 
         let code = exit.code.unwrap_or(-1);
         let mut status = ToolStatus::Ok;
+        if poll.cancelled && !killed {
+            if !combined.is_empty() && !combined.ends_with('\n') {
+                combined.push('\n');
+            }
+            let how = exit
+                .killed_by
+                .map(|sig| format!(" by {sig}"))
+                .unwrap_or_default();
+            combined.push_str(&format!(
+                "[cancelled: the turn was stopped; {} ended{how} after {elapsed}]{note}",
+                poll.job_id
+            ));
+            return ToolOutput {
+                text: combined,
+                status: ToolStatus::Cancelled,
+                images: Vec::new(),
+            };
+        }
         if killed {
             if !combined.is_empty() && !combined.ends_with('\n') {
                 combined.push('\n');
