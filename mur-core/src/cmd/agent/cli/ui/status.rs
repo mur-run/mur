@@ -193,6 +193,7 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         app.session_in,
         app.session_out,
         app.ctx_tokens,
+        app.session_cost(),
         &app.pricing,
         app.budget_usd,
         usize::from(area.width).saturating_sub(reserved + FOOTER_SEP.chars().count()),
@@ -333,7 +334,8 @@ pub(super) fn fmt_tok(n: u64) -> String {
 /// the whole time a reply is streaming, so the bar read `$0.000 est` next to a
 /// six-figure session token count — which parses as "this was free". When a cap
 /// is set the same figure renders as `spent / cap` instead of printing two
-/// different costs side by side. `no price` when the model is unpriced, and
+/// different costs side by side. `spent` is the session's accrued metered
+/// spend (`App::session_cost`). `no price` when the model is unpriced, and
 /// `subscription` / `local` when it is never charged per token; the ctx part
 /// is omitted when no window is known.
 ///
@@ -347,13 +349,12 @@ pub(super) fn footer_segments(
     sess_in: u64,
     sess_out: u64,
     ctx_tokens: u64,
+    spent: Option<f64>,
     pricing: &crate::cmd::agent::cli::footer::Pricing,
     budget_usd: Option<f64>,
     budget: usize,
 ) -> String {
-    use crate::cmd::agent::cli::footer::{
-        CTX_BAR_WIDTH, UsageCounts, context_pct, ctx_bar, turn_cost, unbilled_label,
-    };
+    use crate::cmd::agent::cli::footer::{CTX_BAR_WIDTH, context_pct, ctx_bar, unbilled_label};
 
     let toks = format!(
         "{}/{} tok",
@@ -361,17 +362,14 @@ pub(super) fn footer_segments(
         fmt_tok(sess_in + sess_out)
     );
 
-    let spent = turn_cost(
-        pricing,
-        &UsageCounts {
-            input: sess_in,
-            output: sess_out,
-        },
-    );
     let cost = match (unbilled_label(pricing), spent, budget_usd) {
-        // Not charged per token: name who pays rather than pricing it, and
-        // drop the cap — it never applies to these turns.
-        (Some(label), _, _) => label.to_string(),
+        // Not charged per token and nothing metered yet: name who pays rather
+        // than pricing it, and drop the cap — it has nothing to count.
+        (Some(label), None, _) => label.to_string(),
+        // Metered spend from earlier turns still counts against the cap; the
+        // label says the current model adds nothing to it.
+        (Some(label), Some(c), Some(cap)) => format!("${c:.2} / ${cap:.2} · {label}"),
+        (Some(label), Some(c), None) => format!("${c:.3} est · {label}"),
         (None, spent, budget_usd) => match (spent, budget_usd) {
             (Some(c), Some(cap)) => format!("${c:.2} / ${cap:.2}"),
             (Some(c), None) => format!("${c:.3} est"),
@@ -422,7 +420,7 @@ mod footer_fmt_tests {
 
     #[test]
     fn shows_tokens_and_names_the_reason_when_unpriced() {
-        let s = footer_segments(1240, 0, 1240, 0, 0, &Pricing::default(), None, WIDE);
+        let s = footer_segments(1240, 0, 1240, 0, 0, None, &Pricing::default(), None, WIDE);
         assert!(s.contains("1,240 tok") || s.contains("1240 tok"));
         // Was an em dash, which sat in the same slot as "$0.125 est" and so
         // read as a cost of zero rather than an absent price (#940).
@@ -437,7 +435,7 @@ mod footer_fmt_tests {
             window: Some(100_000),
             billing: None,
         };
-        let s = footer_segments(1000, 1000, 1000, 1000, 32_000, &p, None, WIDE);
+        let s = footer_segments(1000, 1000, 1000, 1000, 32_000, Some(0.018), &p, None, WIDE);
         assert!(s.contains("$0.018"));
         assert!(s.contains("32%"));
         assert!(!s.contains(" / $")); // no budget suffix when budget is None
@@ -452,7 +450,7 @@ mod footer_fmt_tests {
             billing: None,
         };
         // session 1000/1000 → $18.00 spent, cap $20.00
-        let s = footer_segments(1000, 1000, 1000, 1000, 0, &p, Some(20.0), WIDE);
+        let s = footer_segments(1000, 1000, 1000, 1000, 0, Some(18.0), &p, Some(20.0), WIDE);
         assert!(s.contains("$18.00 / $20.00"), "got: {s}");
         // unpriced model → spent omitted, cap still shown
         let s2 = footer_segments(
@@ -461,6 +459,7 @@ mod footer_fmt_tests {
             1000,
             1000,
             0,
+            None,
             &Pricing::default(),
             Some(20.0),
             WIDE,
@@ -479,7 +478,7 @@ mod footer_fmt_tests {
         };
         // Mid-stream: the turn's usage hasn't been reported yet. The bar used
         // to price the turn, so it read "$0.000 est" beside a session total.
-        let s = footer_segments(0, 0, 1000, 1000, 0, &p, None, WIDE);
+        let s = footer_segments(0, 0, 1000, 1000, 0, Some(18.0), &p, None, WIDE);
         assert!(s.contains("$18.000 est"), "got: {s}");
     }
 
@@ -491,8 +490,8 @@ mod footer_fmt_tests {
             window: Some(100_000),
             billing: None,
         };
-        let full = footer_segments(1000, 1000, 1000, 1000, 91_000, &p, None, WIDE);
-        let tight = footer_segments(1000, 1000, 1000, 1000, 91_000, &p, None, 20);
+        let full = footer_segments(1000, 1000, 1000, 1000, 91_000, Some(0.018), &p, None, WIDE);
+        let tight = footer_segments(1000, 1000, 1000, 1000, 91_000, Some(0.018), &p, None, 20);
         assert!(full.len() > tight.len());
         assert!(tight.contains("91%"), "got: {tight}");
         assert!(!tight.contains("tok"), "got: {tight}");
@@ -519,7 +518,7 @@ mod footer_cost_tests {
             window: Some(32_000),
             billing: None,
         };
-        let out = footer_segments(10, 20, 100, 200, 3_762, &unpriced, None, 200);
+        let out = footer_segments(10, 20, 100, 200, 3_762, None, &unpriced, None, 200);
         assert!(
             out.contains("no price"),
             "an unpriced model must name the reason, got: {out}"
@@ -540,7 +539,7 @@ mod footer_cost_tests {
             window: Some(32_000),
             billing: None,
         };
-        let out = footer_segments(10, 20, 1_000, 1_000, 3_762, &priced, None, 200);
+        let out = footer_segments(10, 20, 1_000, 1_000, 3_762, Some(18.0), &priced, None, 200);
         assert!(out.contains('$'), "priced model must show a cost: {out}");
         assert!(!out.contains("no price"), "got: {out}");
     }
@@ -562,12 +561,32 @@ mod footer_cost_tests {
                 billing: Some(mode),
             };
             for cap in [None, Some(20.0)] {
-                let out = footer_segments(10, 20, 1_000, 1_000, 3_762, &p, cap, 200);
+                let out = footer_segments(10, 20, 1_000, 1_000, 3_762, None, &p, cap, 200);
                 assert!(out.contains(label), "{mode:?} cap={cap:?}: {out}");
                 assert!(!out.contains('$'), "{mode:?} cap={cap:?} priced: {out}");
                 assert!(!out.contains("no price"), "{mode:?}: {out}");
             }
         }
+    }
+
+    /// #2609 review: a fallback onto a subscription model must not hide the
+    /// metered spend earlier turns already made — the figure and the cap stay,
+    /// and the label says the current model adds nothing.
+    #[test]
+    fn metered_spend_stays_visible_on_an_unbilled_turn() {
+        use mur_common::model::BillingMode;
+        let p = Pricing {
+            in_per_1k: Some(3.0),
+            out_per_1k: Some(15.0),
+            window: None,
+            billing: Some(BillingMode::Subscription),
+        };
+        let capped = footer_segments(0, 0, 2_000, 2_000, 0, Some(18.0), &p, Some(20.0), 200);
+        assert!(capped.contains("$18.00 / $20.00"), "{capped}");
+        assert!(capped.contains("subscription"), "{capped}");
+        let open = footer_segments(0, 0, 2_000, 2_000, 0, Some(18.0), &p, None, 200);
+        assert!(open.contains("$18.000 est"), "{open}");
+        assert!(open.contains("subscription"), "{open}");
     }
 }
 

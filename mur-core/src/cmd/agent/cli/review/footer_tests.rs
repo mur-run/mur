@@ -215,6 +215,8 @@ fn crowded_footer(app: &mut App, width: u16) -> String {
         window: Some(200_000),
         billing: None,
     };
+    // 1,204,118 in × $0.003/1k + 88,431 out × $0.015/1k.
+    app.session_spent_usd = Some(4.938_819);
     let mut term = Terminal::new(TestBackend::new(width, 1)).unwrap();
     term.draw(|f| crate::cmd::agent::cli::ui::render_status_for_test(f, app, f.area()))
         .unwrap();

@@ -4,17 +4,16 @@
 use super::*;
 
 impl App {
-    /// Estimated cumulative session cost in USD, or `None` if the model's
-    /// pricing is unknown. Used by Task 2 to gate new turns against
-    /// `budget_usd`. Fail-open: `None` means "can't price it, allow the turn".
+    /// Estimated metered spend this session in USD, or `None` when no turn so
+    /// far was both billed per token and priced. Gates new turns against
+    /// `budget_usd`. Fail-open: `None` means "nothing to count, allow the turn".
+    ///
+    /// Accrued per turn rather than derived from the session's token totals:
+    /// the answering model can change turn to turn (fallback), and pricing the
+    /// whole session at the latest model's rates let one subscription turn
+    /// erase every metered dollar already spent from the cap (#2609 review).
     pub fn session_cost(&self) -> Option<f64> {
-        super::super::footer::turn_cost(
-            &self.pricing,
-            &super::super::footer::UsageCounts {
-                input: self.session_in,
-                output: self.session_out,
-            },
-        )
+        self.session_spent_usd
     }
 
     /// True when a USD cap is set and the estimated session spend has reached
@@ -151,6 +150,12 @@ impl App {
         // `$x est` figure was computed at the wrong rates and nothing said so.
         if let Some(answered) = usage.get("model_ref").and_then(|v| v.as_str()) {
             self.apply_answering_model(answered);
+        }
+        // Priced at THIS turn's answering model, now that `pricing` is
+        // re-resolved: an unbilled or unpriced turn adds nothing and erases
+        // nothing.
+        if let Some(c) = super::super::footer::turn_cost(&self.pricing, &u) {
+            *self.session_spent_usd.get_or_insert(0.0) += c;
         }
     }
 

@@ -329,6 +329,9 @@ pub struct App {
     /// substitutes another when a candidate is unreachable, out of credit, or
     /// serving a retired model id. Re-resolved per turn from `usage.model_ref`.
     pub pricing: super::footer::Pricing,
+    /// Metered spend accrued turn by turn, each at the rates of the model that
+    /// answered it. `None` until a billed, priced turn lands.
+    pub session_spent_usd: Option<f64>,
     /// Every registry entry's pricing, so a substitution can be re-priced
     /// without touching disk mid-turn. `None` in tests and in plain mode.
     pub pricing_book: Option<super::PricingBook>,
@@ -545,6 +548,7 @@ impl App {
             session_effort: None,
             ctx_tokens: 0,
             pricing: super::footer::Pricing::default(),
+            session_spent_usd: None,
             pricing_book: None,
             answered_key: None,
             saw_step_this_turn: false,
