@@ -370,17 +370,15 @@ pub(super) fn footer_segments(
         // label says the current model adds nothing to it.
         (Some(label), Some(c), Some(cap)) => format!("${c:.2} / ${cap:.2} · {label}"),
         (Some(label), Some(c), None) => format!("${c:.3} est · {label}"),
-        (None, spent, budget_usd) => match (spent, budget_usd) {
-            (Some(c), Some(cap)) => format!("${c:.2} / ${cap:.2}"),
-            (Some(c), None) => format!("${c:.3} est"),
-            (None, Some(cap)) => format!("/ ${cap:.2}"),
-            // No per-token price for this model (local runtimes, and any registry
-            // entry added without `--input-cost`). An em dash in the same slot as
-            // "$0.125 est" read as "this turn was free" rather than "we cannot
-            // price it" — same field, two meanings, no way to tell them apart
-            // (#940).
-            (None, None) => "no price".to_string(),
-        },
+        (None, Some(c), Some(cap)) => format!("${c:.2} / ${cap:.2}"),
+        (None, Some(c), None) => format!("${c:.3} est"),
+        (None, None, Some(cap)) => format!("/ ${cap:.2}"),
+        // No per-token price for this model (local runtimes, and any registry
+        // entry added without `--input-cost`). An em dash in the same slot as
+        // "$0.125 est" read as "this turn was free" rather than "we cannot
+        // price it" — same field, two meanings, no way to tell them apart
+        // (#940).
+        (None, None, None) => "no price".to_string(),
     };
 
     let ctx = match pricing.window {
@@ -721,3 +719,7 @@ mod monitor_badge_tests {
         assert!(dump.contains("1 issue"), "expected issue suffix: {dump}");
     }
 }
+
+#[cfg(test)]
+#[path = "status_cost_table_tests.rs"]
+mod status_cost_table_tests;

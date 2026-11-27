@@ -213,13 +213,26 @@ impl PricingBook {
 /// Build the pricing book and resolve the agent's configured key. Falls back to
 /// an empty book (every lookup → unknown pricing) on any read error.
 fn load_pricing(home: &std::path::Path, agent: &str) -> (footer::Pricing, PricingBook) {
+    let reg =
+        mur_common::model::ModelRegistry::load_from(&home.join("models.yaml")).unwrap_or_default();
+    let configured = crate::cmd::agent::load_profile_for_edit(agent)
+        .ok()
+        .and_then(|(_, p)| p.model_ref);
+    pricing_book_from(&reg, configured)
+}
+
+/// The pricing book for `reg`, and the configured key's pricing. Split from
+/// [`load_pricing`] so a test can drive the registry → book path from YAML:
+/// every test used to hand-build `Pricing`, so dropping `billing` here would
+/// have left them all green.
+pub(crate) fn pricing_book_from(
+    reg: &mur_common::model::ModelRegistry,
+    configured_key: Option<String>,
+) -> (footer::Pricing, PricingBook) {
     let mut book = PricingBook {
         by_key: Default::default(),
         key_of_model: Default::default(),
-        configured_key: None,
-    };
-    let Ok(reg) = mur_common::model::ModelRegistry::load_from(&home.join("models.yaml")) else {
-        return (footer::Pricing::default(), book);
+        configured_key,
     };
     for (key, entry) in &reg.models {
         let (input, output) = entry.effective_costs();
@@ -234,9 +247,6 @@ fn load_pricing(home: &std::path::Path, agent: &str) -> (footer::Pricing, Pricin
         );
         book.key_of_model.insert(entry.model.clone(), key.clone());
     }
-    book.configured_key = crate::cmd::agent::load_profile_for_edit(agent)
-        .ok()
-        .and_then(|(_, p)| p.model_ref);
     let current = book
         .configured_key
         .as_deref()

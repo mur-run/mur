@@ -71,9 +71,8 @@ pub fn context_tokens(usage: &Value) -> Option<u64> {
 /// billing mode, not the presence of a price, decides whether to show `$`.
 pub fn unbilled_label(p: &Pricing) -> Option<&'static str> {
     match p.billing? {
-        BillingMode::Subscription => Some("subscription"),
-        BillingMode::Local => Some("local"),
         BillingMode::UsageBilled => None,
+        mode => Some(mode.label()),
     }
 }
 

@@ -209,3 +209,42 @@ fn a_share_without_registry_key_resolves_by_model_name() {
     ));
     assert_eq!(a.session_cost(), Some(3.0));
 }
+
+/// An older runtime sends no `by_model`. An answering model the registry
+/// cannot resolve used to add $0 to the session — "unknown" read as "free",
+/// the one thing the cap must not do. It is now counted at the book's dearest
+/// rates, the same as an unresolvable share above.
+#[test]
+fn a_legacy_turn_from_an_unregistered_model_is_counted_conservatively() {
+    let mut a = mixed_book_app();
+    a.budget_usd = Some(10.0);
+    a.apply_usage(&serde_json::json!({
+        "input_tokens": 1000, "output_tokens": 1000, "model_ref": "mystery-model",
+    }));
+    assert_eq!(a.session_cost(), Some(18.0));
+    assert!(a.over_budget());
+}
+
+/// The fallback notice must not claim the cost is "now priced for" a model
+/// that is never charged per token.
+#[test]
+fn the_fallback_notice_says_what_the_switch_does_to_cost() {
+    use super::super::usage::fallback_notice;
+    let a = mixed_book_app();
+    let book = a.pricing_book.as_ref().unwrap();
+    assert_eq!(
+        fallback_notice("sub", "sub-model", "metered", &book.pricing_for_key("sub")),
+        "⇄ answered by 'sub' (sub-model), not 'metered' — the runtime fell back. \
+         'sub' is subscription: it adds nothing per token."
+    );
+    assert_eq!(
+        fallback_notice(
+            "metered",
+            "metered-model",
+            "sub",
+            &book.pricing_for_key("metered")
+        ),
+        "⇄ answered by 'metered' (metered-model), not 'sub' — the runtime fell back. \
+         Cost below is now priced for 'metered'."
+    );
+}

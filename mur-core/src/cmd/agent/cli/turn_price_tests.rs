@@ -77,14 +77,31 @@ fn a_mixed_turn_shows_only_its_metered_share() {
     );
 }
 
+/// An older runtime sends no `by_model`; an answering model the registry
+/// cannot resolve is then counted at the book's DEAREST rates, the same
+/// fail-closed rule as an unresolvable share — never at the configured
+/// model's rates, and never as free.
 #[test]
-fn an_unknown_answering_model_is_not_priced_at_the_configured_rates() {
-    let b = book();
+fn an_unknown_answering_model_without_shares_is_counted_at_the_dearest_rates() {
+    let mut b = book();
+    b.by_key.insert(
+        "premium".to_string(),
+        Pricing {
+            in_per_1k: Some(10.0),
+            out_per_1k: Some(50.0),
+            window: None,
+            billing: Some(BillingMode::UsageBilled),
+        },
+    );
     let configured = b.pricing_for_key("metered");
     let usage = serde_json::json!({
         "input_tokens": 1000, "output_tokens": 1000, "model_ref": "mystery-model",
     });
-    assert_eq!(plain_footer(&configured, Some(&b), &usage), "  2000 tok");
+    // Before: "  2000 tok" — the turn silently added nothing to the cap.
+    assert_eq!(
+        plain_footer(&configured, Some(&b), &usage),
+        "  2000 tok · $60.000"
+    );
 }
 
 #[test]

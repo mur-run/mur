@@ -386,3 +386,17 @@ fn effective_costs_fallback_matrix() {
     e = ModelEntry::default();
     assert_eq!(e.effective_costs(), (None, None));
 }
+
+/// `BillingMode::label` is the footer's word for a mode; it must stay the
+/// same string serde writes to `models.yaml`, or the two drift apart.
+#[test]
+fn billing_label_matches_its_yaml_spelling() {
+    for mode in [
+        BillingMode::Subscription,
+        BillingMode::UsageBilled,
+        BillingMode::Local,
+    ] {
+        let yaml = serde_yaml_ng::to_string(&mode).unwrap();
+        assert_eq!(yaml.trim(), mode.label(), "{mode:?}");
+    }
+}

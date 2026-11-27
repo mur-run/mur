@@ -25,8 +25,11 @@ pub(super) fn answered_pricing(
 
 /// USD for one turn. A turn is many calls and fallback can answer each with a
 /// different model, so each `by_model` share is priced at its own model (qa
-/// review C1); older runtimes without the split are priced at `pricing`, the
-/// answering model's rates. `None` = nothing in the turn is billed per token.
+/// review C1). Older runtimes without the split are priced at `pricing`, the
+/// answering model's rates — unless the registry cannot resolve the answering
+/// model, which is counted at the book's dearest rates exactly like an
+/// unresolvable share, so a legacy runtime cannot reopen the "unknown reads as
+/// free" hole. `None` = nothing in the turn is billed per token.
 pub(super) fn turn_cost(
     pricing: &Pricing,
     book: Option<&PricingBook>,
@@ -35,8 +38,23 @@ pub(super) fn turn_cost(
 ) -> Option<f64> {
     match (book, usage.get("by_model").and_then(|v| v.as_array())) {
         (Some(book), Some(shares)) if !shares.is_empty() => cost_by_share(book, shares),
+        (Some(book), _) if answered_is_unresolved(book, usage) => at_rates(book.dearest_rates(), u),
         _ => footer::turn_cost(pricing, u),
     }
+}
+
+/// `model_ref` is present but names nothing in the registry.
+fn answered_is_unresolved(book: &PricingBook, usage: &serde_json::Value) -> bool {
+    usage
+        .get("model_ref")
+        .and_then(|v| v.as_str())
+        .is_some_and(|m| book.key_for_model(m).is_none())
+}
+
+/// USD for `u` at `(input, output)` per-1k rates; `None` without rates.
+fn at_rates(rates: Option<(f64, f64)>, u: &UsageCounts) -> Option<f64> {
+    let (i, o) = rates?;
+    Some(u.input as f64 / 1000.0 * i + u.output as f64 / 1000.0 * o)
 }
 
 /// The `--plain` footer line for one turn: tokens, then the cost, or the
@@ -79,8 +97,10 @@ fn cost_by_share(book: &PricingBook, shares: &[serde_json::Value]) -> Option<f64
             None => book.dearest_rates(),
         };
         // Nothing in the registry carries a rate: there is no figure to give.
-        let Some((i, o)) = rates else { continue };
-        *total.get_or_insert(0.0) += u.input as f64 / 1000.0 * i + u.output as f64 / 1000.0 * o;
+        let Some(c) = at_rates(rates, &u) else {
+            continue;
+        };
+        *total.get_or_insert(0.0) += c;
     }
     total
 }

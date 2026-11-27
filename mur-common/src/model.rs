@@ -35,6 +35,18 @@ pub enum BillingMode {
     Local,
 }
 
+impl BillingMode {
+    /// The user-facing word, identical to the `billing:` value in
+    /// `models.yaml` so a footer label can be pasted back into the registry.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Subscription => "subscription",
+            Self::UsageBilled => "usage_billed",
+            Self::Local => "local",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ModelEntry {
     #[serde(default)]
