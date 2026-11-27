@@ -383,3 +383,54 @@ fn the_card_takes_the_panel_slot_and_a_gate_outranks_it() {
     assert!(panel > 3, "card gets rows");
     assert_eq!((chooser, chip, gated), (0, 0, false));
 }
+
+/// #2344: a narrow window must not drop the fingerprints while Approve
+/// stays available; the lines above them go first.
+#[test]
+fn narrow_summary_drops_lines_above_the_fingerprints_first() {
+    use ratatui::text::Line;
+    let body = vec![
+        Line::from("x".repeat(40)),
+        Line::from("Approving writes:"),
+        Line::from("  key       SHA256:abc"),
+        Line::from("  host key  SHA256:def"),
+        Line::from("  one restart"),
+        Line::from("[x] consent"),
+    ];
+    let pin = Some((1, 3));
+    let (fitted, hidden) = render::fit_pinned(body.clone(), 40, 6, pin);
+    assert!(!hidden);
+    assert!(fitted.iter().any(|l| l.to_string().contains("SHA256:abc")));
+    let (_, hidden) = render::fit_pinned(body, 40, 2, pin);
+    assert!(hidden, "too small even for the pinned block");
+}
+
+/// The pin comes from where the Summary block is built, not from matching
+/// its wording: it covers exactly the header and fingerprint rows, and no
+/// other step pins anything.
+#[test]
+fn summary_pin_covers_exactly_the_fingerprint_block() {
+    let theme = App::test_fixture().theme;
+    let mut c = CardState::new(
+        plan(Verdict::Trusted, Some(SpawnChange::AddSsh)),
+        Origin::Pending(pending("rotate logs")),
+    );
+    assert_eq!(render::lines_with_pin(&c, theme).1, None);
+    c.step = Step::Summary;
+    let (body, pin) = render::lines_with_pin(&c, theme);
+    let (start, len) = pin.expect("Summary pins its fingerprint block");
+    let text: Vec<String> = body.iter().map(|l| l.to_string()).collect();
+    assert_eq!(text[start], "Approving writes:");
+    assert!(len >= 2, "header plus at least one key or not-ready row");
+    assert!(
+        text[start + 1..start + len]
+            .iter()
+            .all(|l| l.contains("SHA256") || l.contains("not ready")),
+        "{:?}",
+        &text[start..start + len]
+    );
+    assert!(
+        text[start + len].contains("spawn"),
+        "spawn row is not pinned"
+    );
+}
