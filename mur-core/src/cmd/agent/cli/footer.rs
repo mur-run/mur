@@ -1,6 +1,7 @@
 //! Pure footer math: tokens, cost, and context-window fill from `Task.usage`
 //! plus the agent's `models.yaml` pricing. No ratatui, no I/O — unit-tested.
 
+use mur_common::model::BillingMode;
 use mur_monitor::backoff::UNHEALTHY_AFTER_UNKNOWN;
 use mur_monitor::state::MonitorState;
 use mur_monitor::store::MonitorRow;
@@ -28,6 +29,10 @@ pub struct Pricing {
     pub in_per_1k: Option<f64>,
     pub out_per_1k: Option<f64>,
     pub window: Option<u64>,
+    /// Who pays when this model answers, from the registry entry
+    /// (`billing_or_inferred`). `None` = no registry entry, read as unknown:
+    /// priced from the per-1k rates when there are any.
+    pub billing: Option<BillingMode>,
 }
 
 // P1 footer is monochrome; threshold color wires this in P2.
@@ -58,7 +63,27 @@ pub fn context_tokens(usage: &Value) -> Option<u64> {
     usage.get("context_tokens").and_then(Value::as_u64)
 }
 
+/// What a model that is never charged per token shows in place of a cost:
+/// `subscription` or `local`. `None` for a metered or unknown model.
+///
+/// A registry entry can carry a per-1k price and still ride a subscription
+/// (the price is what the same model would cost on the metered API), so the
+/// billing mode, not the presence of a price, decides whether to show `$`.
+pub fn unbilled_label(p: &Pricing) -> Option<&'static str> {
+    match p.billing? {
+        BillingMode::Subscription => Some("subscription"),
+        BillingMode::Local => Some("local"),
+        BillingMode::UsageBilled => None,
+    }
+}
+
+/// USD for `u` at `p`'s rates. `None` when the model is unpriced, or is not
+/// charged per token at all ([`unbilled_label`]) — so an unbilled model never
+/// counts against a `budget_usd` cap.
 pub fn turn_cost(p: &Pricing, u: &UsageCounts) -> Option<f64> {
+    if unbilled_label(p).is_some() {
+        return None;
+    }
     match (p.in_per_1k, p.out_per_1k) {
         (Some(i), Some(o)) => Some(u.input as f64 / 1000.0 * i + u.output as f64 / 1000.0 * o),
         _ => None,
@@ -260,12 +285,14 @@ mod tests {
             in_per_1k: None,
             out_per_1k: None,
             window: None,
+            billing: None,
         };
         assert!(turn_cost(&unpriced, &u).is_none());
         let priced = Pricing {
             in_per_1k: Some(0.003),
             out_per_1k: Some(0.015),
             window: Some(200_000),
+            billing: None,
         };
         let c = turn_cost(&priced, &u).unwrap();
         assert!((c - 0.018).abs() < 1e-9);

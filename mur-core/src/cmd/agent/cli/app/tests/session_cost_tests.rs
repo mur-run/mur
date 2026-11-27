@@ -10,6 +10,7 @@ fn session_cost_uses_pricing_over_session_tokens_or_none() {
         in_per_1k: Some(3.0),
         out_per_1k: Some(15.0),
         window: None,
+        billing: None,
     };
     a.session_in = 1000;
     a.session_out = 1000;

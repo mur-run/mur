@@ -296,9 +296,19 @@ pub(super) fn run_plain(
                                     u.input + u.output
                                 );
                             }
-                            None => {
-                                let _ = writeln!(out2.borrow_mut(), "  {} tok", u.input + u.output);
-                            }
+                            None => match footer::unbilled_label(&pricing) {
+                                Some(label) => {
+                                    let _ = writeln!(
+                                        out2.borrow_mut(),
+                                        "  {} tok · {label}",
+                                        u.input + u.output
+                                    );
+                                }
+                                None => {
+                                    let _ =
+                                        writeln!(out2.borrow_mut(), "  {} tok", u.input + u.output);
+                                }
+                            },
                         }
                     }
                     out2.borrow_mut().flush()?;

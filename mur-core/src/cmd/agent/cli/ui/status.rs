@@ -333,7 +333,8 @@ pub(super) fn fmt_tok(n: u64) -> String {
 /// the whole time a reply is streaming, so the bar read `$0.000 est` next to a
 /// six-figure session token count — which parses as "this was free". When a cap
 /// is set the same figure renders as `spent / cap` instead of printing two
-/// different costs side by side. `—` when the model is unpriced; the ctx part
+/// different costs side by side. `no price` when the model is unpriced, and
+/// `subscription` / `local` when it is never charged per token; the ctx part
 /// is omitted when no window is known.
 ///
 /// Segments drop right-to-left as `budget` shrinks — token pair first, then
@@ -351,7 +352,7 @@ pub(super) fn footer_segments(
     budget: usize,
 ) -> String {
     use crate::cmd::agent::cli::footer::{
-        CTX_BAR_WIDTH, UsageCounts, context_pct, ctx_bar, turn_cost,
+        CTX_BAR_WIDTH, UsageCounts, context_pct, ctx_bar, turn_cost, unbilled_label,
     };
 
     let toks = format!(
@@ -367,16 +368,21 @@ pub(super) fn footer_segments(
             output: sess_out,
         },
     );
-    let cost = match (spent, budget_usd) {
-        (Some(c), Some(cap)) => format!("${c:.2} / ${cap:.2}"),
-        (Some(c), None) => format!("${c:.3} est"),
-        (None, Some(cap)) => format!("/ ${cap:.2}"),
-        // No per-token price for this model (local runtimes, and any registry
-        // entry added without `--input-cost`). An em dash in the same slot as
-        // "$0.125 est" read as "this turn was free" rather than "we cannot
-        // price it" — same field, two meanings, no way to tell them apart
-        // (#940).
-        (None, None) => "no price".to_string(),
+    let cost = match (unbilled_label(pricing), spent, budget_usd) {
+        // Not charged per token: name who pays rather than pricing it, and
+        // drop the cap — it never applies to these turns.
+        (Some(label), _, _) => label.to_string(),
+        (None, spent, budget_usd) => match (spent, budget_usd) {
+            (Some(c), Some(cap)) => format!("${c:.2} / ${cap:.2}"),
+            (Some(c), None) => format!("${c:.3} est"),
+            (None, Some(cap)) => format!("/ ${cap:.2}"),
+            // No per-token price for this model (local runtimes, and any registry
+            // entry added without `--input-cost`). An em dash in the same slot as
+            // "$0.125 est" read as "this turn was free" rather than "we cannot
+            // price it" — same field, two meanings, no way to tell them apart
+            // (#940).
+            (None, None) => "no price".to_string(),
+        },
     };
 
     let ctx = match pricing.window {
@@ -429,6 +435,7 @@ mod footer_fmt_tests {
             in_per_1k: Some(0.003),
             out_per_1k: Some(0.015),
             window: Some(100_000),
+            billing: None,
         };
         let s = footer_segments(1000, 1000, 1000, 1000, 32_000, &p, None, WIDE);
         assert!(s.contains("$0.018"));
@@ -442,6 +449,7 @@ mod footer_fmt_tests {
             in_per_1k: Some(3.0),
             out_per_1k: Some(15.0),
             window: None,
+            billing: None,
         };
         // session 1000/1000 → $18.00 spent, cap $20.00
         let s = footer_segments(1000, 1000, 1000, 1000, 0, &p, Some(20.0), WIDE);
@@ -467,6 +475,7 @@ mod footer_fmt_tests {
             in_per_1k: Some(3.0),
             out_per_1k: Some(15.0),
             window: None,
+            billing: None,
         };
         // Mid-stream: the turn's usage hasn't been reported yet. The bar used
         // to price the turn, so it read "$0.000 est" beside a session total.
@@ -480,6 +489,7 @@ mod footer_fmt_tests {
             in_per_1k: Some(0.003),
             out_per_1k: Some(0.015),
             window: Some(100_000),
+            billing: None,
         };
         let full = footer_segments(1000, 1000, 1000, 1000, 91_000, &p, None, WIDE);
         let tight = footer_segments(1000, 1000, 1000, 1000, 91_000, &p, None, 20);
@@ -507,6 +517,7 @@ mod footer_cost_tests {
             in_per_1k: None,
             out_per_1k: None,
             window: Some(32_000),
+            billing: None,
         };
         let out = footer_segments(10, 20, 100, 200, 3_762, &unpriced, None, 200);
         assert!(
@@ -527,10 +538,36 @@ mod footer_cost_tests {
             in_per_1k: Some(3.0),
             out_per_1k: Some(15.0),
             window: Some(32_000),
+            billing: None,
         };
         let out = footer_segments(10, 20, 1_000, 1_000, 3_762, &priced, None, 200);
         assert!(out.contains('$'), "priced model must show a cost: {out}");
         assert!(!out.contains("no price"), "got: {out}");
+    }
+
+    /// A subscription or local model is never charged per token, even when its
+    /// registry entry still carries a per-1k price. The footer used to multiply
+    /// that price out and show `$x est` for turns that cost nothing.
+    #[test]
+    fn an_unbilled_model_names_its_billing_instead_of_a_price() {
+        use mur_common::model::BillingMode;
+        for (mode, label) in [
+            (BillingMode::Subscription, "subscription"),
+            (BillingMode::Local, "local"),
+        ] {
+            let p = Pricing {
+                in_per_1k: Some(3.0),
+                out_per_1k: Some(15.0),
+                window: Some(32_000),
+                billing: Some(mode),
+            };
+            for cap in [None, Some(20.0)] {
+                let out = footer_segments(10, 20, 1_000, 1_000, 3_762, &p, cap, 200);
+                assert!(out.contains(label), "{mode:?} cap={cap:?}: {out}");
+                assert!(!out.contains('$'), "{mode:?} cap={cap:?} priced: {out}");
+                assert!(!out.contains("no price"), "{mode:?}: {out}");
+            }
+        }
     }
 }
 

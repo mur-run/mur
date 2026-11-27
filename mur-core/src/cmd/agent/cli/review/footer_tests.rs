@@ -213,6 +213,7 @@ fn crowded_footer(app: &mut App, width: u16) -> String {
         in_per_1k: Some(0.003),
         out_per_1k: Some(0.015),
         window: Some(200_000),
+        billing: None,
     };
     let mut term = Terminal::new(TestBackend::new(width, 1)).unwrap();
     term.draw(|f| crate::cmd::agent::cli::ui::render_status_for_test(f, app, f.area()))

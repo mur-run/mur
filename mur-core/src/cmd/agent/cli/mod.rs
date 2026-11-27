@@ -203,6 +203,7 @@ fn load_pricing(home: &std::path::Path, agent: &str) -> (footer::Pricing, Pricin
                 in_per_1k: input,
                 out_per_1k: output,
                 window: entry.context_window,
+                billing: Some(entry.billing_or_inferred()),
             },
         );
         book.key_of_model.insert(entry.model.clone(), key.clone());
