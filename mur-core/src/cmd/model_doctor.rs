@@ -29,7 +29,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use mur_common::model::ModelRegistry;
+use mur_common::model::{BillingMode, ModelRegistry};
 
 /// How stale the cached catalog may be and still be worth consulting. Generous
 /// on purpose: this command must work offline, and a month-old catalog still
@@ -214,6 +214,52 @@ pub fn audit(
             }
             _ => {}
         }
+    }
+
+    // 0c. A per-token rate on an entry that is not billed per token.
+    //
+    //    The budget gates and the murmur footer go by `billing`, so a
+    //    subscription or local entry is never priced there — but the rate
+    //    still reaches everything that reads it directly (the `/model` list,
+    //    `mur conversations` cost reports, router estimates). One of the two
+    //    fields is wrong and doctor cannot tell which, so it names both
+    //    edits. A zero rate is what `mur model add` writes for a local tier:
+    //    consistent, not flagged.
+    for (key, e) in &reg.models {
+        let label = match e.billing_or_inferred() {
+            BillingMode::Subscription => "subscription",
+            BillingMode::Local => "local",
+            BillingMode::UsageBilled => continue,
+        };
+        let (input, output) = e.effective_costs();
+        let rates = [
+            ("in", input),
+            ("out", output),
+            ("cache read", e.cache_read_cost_per_1k),
+            ("cache write", e.cache_write_cost_per_1k),
+        ];
+        let priced: Vec<String> = rates
+            .iter()
+            .filter_map(|(name, r)| r.filter(|r| *r > 0.0).map(|r| format!("{name} ${r}/1k")))
+            .collect();
+        if priced.is_empty() {
+            continue;
+        }
+        let source = if e.billing.is_some() {
+            format!("`billing: {label}`")
+        } else {
+            format!("{label}, inferred from `provider: {}`", e.provider)
+        };
+        out.push(Finding::warn(
+            key.clone(),
+            format!(
+                "billing is {source}, yet the entry carries a per-1k rate ({}). Cost gates \
+                 and the murmur footer skip it; the `/model` list and cost reports still price \
+                 it. If this model really is metered, set `billing: usage_billed`; otherwise \
+                 delete the rate fields.",
+                priced.join(", ")
+            ),
+        ));
     }
 
     // 1. Registry entries whose model id the catalog has never carried under
@@ -651,6 +697,90 @@ mod tests {
             !findings
                 .iter()
                 .any(|f| f.subject == "good_claude" || f.subject == "api_anthropic")
+        );
+    }
+
+    /// A rate on a subscription or local entry is a contradiction: the
+    /// budget gates and the murmur footer skip it (the bill is flat or
+    /// nil), while anything that reads the rate directly still prices it.
+    /// A zero rate is what `mur model add` writes for local tiers, so it is
+    /// not flagged; an explicit `billing:` wins over the provider default.
+    #[test]
+    fn a_nonzero_rate_on_an_unbilled_entry_is_reported() {
+        let mut reg = reg_with(&[
+            ("codex_priced", "codex", "gpt-5.5", None),
+            ("ollama_priced", "ollama", "qwen3", None),
+            ("ollama_zero", "ollama", "qwen3", None),
+            ("codex_unpriced", "codex", "gpt-5.5", None),
+            ("codex_legacy", "codex", "gpt-5.5", None),
+            ("api_priced", "openai", "gpt-5.5", None),
+            (
+                "labelled_local",
+                "openai",
+                "qwen3",
+                Some("http://127.0.0.1:11434/v1"),
+            ),
+            ("metered_codex", "codex", "gpt-5.5", None),
+        ]);
+        let mut rate = |key: &str, i: f64, o: f64| {
+            let e = reg.models.get_mut(key).unwrap();
+            e.input_cost_per_1k = Some(i);
+            e.output_cost_per_1k = Some(o);
+        };
+        rate("codex_priced", 0.00125, 0.01);
+        rate("ollama_priced", 0.0, 0.002);
+        rate("ollama_zero", 0.0, 0.0);
+        rate("api_priced", 0.00125, 0.01);
+        rate("labelled_local", 0.001, 0.002);
+        rate("metered_codex", 0.00125, 0.01);
+        reg.models.get_mut("labelled_local").unwrap().billing = Some(BillingMode::Local);
+        reg.models.get_mut("metered_codex").unwrap().billing = Some(BillingMode::UsageBilled);
+        // A legacy single-rate entry is still a rate.
+        reg.models
+            .get_mut("codex_legacy")
+            .unwrap()
+            .cost_per_1k_tokens = Some(0.01);
+
+        let findings = audit(&reg, &[], None);
+        let mut flagged: Vec<&str> = findings
+            .iter()
+            .filter(|f| f.level == Level::Warn && f.detail.contains("per-1k rate"))
+            .map(|f| f.subject.as_str())
+            .collect();
+        flagged.sort();
+        assert_eq!(
+            flagged,
+            vec![
+                "codex_legacy",
+                "codex_priced",
+                "labelled_local",
+                "ollama_priced"
+            ]
+        );
+
+        let codex = findings
+            .iter()
+            .find(|f| f.subject == "codex_priced")
+            .unwrap();
+        assert!(codex.detail.contains("subscription"), "{}", codex.detail);
+        assert!(
+            codex.detail.contains("inferred from `provider: codex`"),
+            "{}",
+            codex.detail
+        );
+        assert!(
+            codex.detail.contains("billing: usage_billed"),
+            "{}",
+            codex.detail
+        );
+        let labelled = findings
+            .iter()
+            .find(|f| f.subject == "labelled_local")
+            .unwrap();
+        assert!(
+            labelled.detail.contains("`billing: local`"),
+            "{}",
+            labelled.detail
         );
     }
 }
