@@ -298,6 +298,47 @@ pub fn fit(mut body: Vec<Line<'static>>, width: u16, body_h: u16) -> Vec<Line<'s
     body
 }
 
+/// `(start, len)` of the Summary's "Approving writes" block inside `body`:
+/// the fingerprints the user must be able to read before Approve.
+fn pinned(body: &[Line<'static>]) -> Option<(usize, usize)> {
+    let start = body
+        .iter()
+        .position(|l| l.to_string() == "Approving writes:")?;
+    let len = body[start..]
+        .iter()
+        .take_while(|l| {
+            let s = l.to_string();
+            s == "Approving writes:" || s.starts_with("  key ") || s.starts_with("  host key")
+                || s.starts_with("  not ready")
+        })
+        .count();
+    Some((start, len))
+}
+
+/// Like [`fit`], but the lines at `pin` (start, len) are dropped last: the
+/// lines above them go first. Returns the lines and whether any pinned line
+/// still had to be dropped.
+pub fn fit_pinned(
+    mut body: Vec<Line<'static>>,
+    width: u16,
+    body_h: u16,
+    pin: Option<(usize, usize)>,
+) -> (Vec<Line<'static>>, bool) {
+    let Some((start, len)) = pin else {
+        return (fit(body, width, body_h), false);
+    };
+    let mut used: u32 = body.iter().map(|l| u32::from(rows(l, width))).sum();
+    let mut drop = 0;
+    while used > u32::from(body_h) && drop < start {
+        used -= u32::from(rows(&body[drop], width));
+        drop += 1;
+    }
+    body.drain(..drop);
+    let start = start - drop;
+    let hidden = used > u32::from(body_h) && len > 0 && start == 0;
+    (fit(body, width, body_h), hidden)
+}
+
 /// Rows the card takes: its wrapped lines at `width` screen columns, two
 /// borders, one hint row, capped at the approval panel's share of the screen
 /// and at what is available.
@@ -334,7 +375,10 @@ pub fn draw(
     let inner = block.inner(area);
     f.render_widget(block, area);
     let body_h = inner.height.saturating_sub(1);
-    let body = fit(lines(c, theme), inner.width, body_h);
+    let all = lines(c, theme);
+    let pin = if c.step == Step::Summary { pinned(&all) } else { None };
+    let (body, hidden) = fit_pinned(all, inner.width, body_h, pin);
+    c.fp_hidden.set(c.step == Step::Summary && hidden);
     f.render_widget(
         Paragraph::new(body).wrap(Wrap { trim: false }),
         ratatui::layout::Rect {
