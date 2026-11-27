@@ -78,7 +78,9 @@ fn process_one(mur_dir: &Path, path: &Path, cfg: &Config) -> anyhow::Result<()> 
         "signature verification failed"
     );
     let snap = mur_core::federation::assemble_skill_snapshot(mur_dir, &req.agent)?;
-    tracing::info!(agent = %req.agent, skills = snap.skill_count, "snapshot assembled");
+    // Debug, not info: every agent requests a snapshot every few minutes, so at
+    // info this line was most of murmurd.log. Rejections above stay at warn.
+    tracing::debug!(agent = %req.agent, skills = snap.skill_count, "snapshot assembled");
     Ok(())
 }
 
