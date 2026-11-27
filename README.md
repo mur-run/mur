@@ -258,8 +258,8 @@ mur model show gpt5                           # provider, model, effective in/ou
 mur model prices refresh                      # refresh the cached models.dev price catalog
 mur model doctor                              # offline check: dangling model_refs, ids the catalog
                                               #   never carried, profiles disagreeing with their ref,
-                                              #   secrets sitting in plaintext on disk, and per-token
-                                              #   rates on subscription or local entries
+                                              #   secrets sitting in plaintext on disk, and non-zero
+                                              #   per-token rates on subscription or local entries
 mur model import ~/from-laptop/models.yaml    # merge another machine's registry (never deletes;
                                               #   reports which secret refs need a key here)
 ```

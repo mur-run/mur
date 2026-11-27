@@ -218,29 +218,36 @@ pub fn audit(
 
     // 0c. A per-token rate on an entry that is not billed per token.
     //
-    //    The budget gates and the murmur footer go by `billing`, so a
-    //    subscription or local entry is never priced there — but the rate
-    //    still reaches everything that reads it directly (the `/model` list,
-    //    `mur conversations` cost reports, router estimates). One of the two
-    //    fields is wrong and doctor cannot tell which, so it names both
-    //    edits. A zero rate is what `mur model add` writes for a local tier:
-    //    consistent, not flagged.
+    //    The murmur footer and the per-turn session cap go by `billing`, so a
+    //    subscription or local entry is never priced there. Everything else
+    //    still reads the rate: the fleet budget guards take the dearest rate
+    //    in the whole registry regardless of `billing`
+    //    (`fleet::loop_run::dearest_output_rate`,
+    //    `fleet::oneshot_budget::dearest_rates`), so a stray rate here can
+    //    stop a fleet early; the `/model` list and cost reports price it too.
+    //    One of the two settings is wrong and doctor cannot tell which, so it
+    //    names both edits. Only an exact zero is consistent — it is what
+    //    `mur model add` writes for a local tier; a negative or NaN rate is
+    //    just as contradictory and is flagged.
     for (key, e) in &reg.models {
         let label = match e.billing_or_inferred() {
             BillingMode::Subscription => "subscription",
             BillingMode::Local => "local",
             BillingMode::UsageBilled => continue,
         };
-        let (input, output) = e.effective_costs();
-        let rates = [
-            ("in", input),
-            ("out", output),
-            ("cache read", e.cache_read_cost_per_1k),
-            ("cache write", e.cache_write_cost_per_1k),
+        // The raw fields, not `effective_costs()`: the fix is an edit to
+        // `models.yaml`, so name the field the user has to touch — including
+        // the legacy single rate.
+        let fields = [
+            ("input_cost_per_1k", e.input_cost_per_1k),
+            ("output_cost_per_1k", e.output_cost_per_1k),
+            ("cost_per_1k_tokens", e.cost_per_1k_tokens),
+            ("cache_read_cost_per_1k", e.cache_read_cost_per_1k),
+            ("cache_write_cost_per_1k", e.cache_write_cost_per_1k),
         ];
-        let priced: Vec<String> = rates
+        let priced: Vec<String> = fields
             .iter()
-            .filter_map(|(name, r)| r.filter(|r| *r > 0.0).map(|r| format!("{name} ${r}/1k")))
+            .filter_map(|(name, r)| r.filter(|r| *r != 0.0).map(|r| format!("`{name}: {r}`")))
             .collect();
         if priced.is_empty() {
             continue;
@@ -253,10 +260,11 @@ pub fn audit(
         out.push(Finding::warn(
             key.clone(),
             format!(
-                "billing is {source}, yet the entry carries a per-1k rate ({}). Cost gates \
-                 and the murmur footer skip it; the `/model` list and cost reports still price \
-                 it. If this model really is metered, set `billing: usage_billed`; otherwise \
-                 delete the rate fields.",
+                "billing is {source}, yet the entry carries a per-1k rate ({}). The murmur \
+                 footer skips it, but the fleet budget guards take the dearest rate in the \
+                 registry whatever its billing, so it can stop a fleet early; the `/model` list \
+                 and cost reports price it too. If this model really is metered, set \
+                 `billing: usage_billed`; otherwise delete those fields or set them to 0.",
                 priced.join(", ")
             ),
         ));

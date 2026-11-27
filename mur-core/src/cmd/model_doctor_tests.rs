@@ -295,8 +295,8 @@ fn subscription_entries_are_checked_against_the_loopback_contract() {
 }
 
 /// A rate on a subscription or local entry is a contradiction: the
-/// budget gates and the murmur footer skip it (the bill is flat or
-/// nil), while anything that reads the rate directly still prices it.
+/// murmur footer skips it (the bill is flat or nil), while the fleet
+/// budget guards and anything else that reads the rate still price it.
 /// A zero rate is what `mur model add` writes for local tiers, so it is
 /// not flagged; an explicit `billing:` wins over the provider default.
 #[test]
@@ -376,4 +376,89 @@ fn a_nonzero_rate_on_an_unbilled_entry_is_reported() {
         "{}",
         labelled.detail
     );
+}
+
+fn rate_findings(reg: &ModelRegistry) -> Vec<Finding> {
+    audit(reg, &[], None)
+        .into_iter()
+        .filter(|f| f.level == Level::Warn && f.detail.contains("per-1k rate"))
+        .collect()
+}
+
+/// One side priced is enough to be a contradiction, and the finding names
+/// the exact `models.yaml` field to edit (qa review I2 on #2616).
+#[test]
+fn a_single_priced_side_is_reported_by_its_field_name() {
+    let mut reg = reg_with(&[
+        ("input_only", "codex", "gpt-5.5", None),
+        ("output_only", "codex", "gpt-5.5", None),
+    ]);
+    reg.models.get_mut("input_only").unwrap().input_cost_per_1k = Some(0.00125);
+    reg.models
+        .get_mut("output_only")
+        .unwrap()
+        .output_cost_per_1k = Some(0.01);
+
+    let findings = rate_findings(&reg);
+    let detail = |key: &str| {
+        findings
+            .iter()
+            .find(|f| f.subject == key)
+            .unwrap_or_else(|| panic!("{key} not flagged"))
+            .detail
+            .clone()
+    };
+    let input = detail("input_only");
+    assert!(input.contains("`input_cost_per_1k: 0.00125`"), "{input}");
+    assert!(!input.contains("output_cost_per_1k"), "{input}");
+    let output = detail("output_only");
+    assert!(output.contains("`output_cost_per_1k: 0.01`"), "{output}");
+    assert!(!output.contains("input_cost_per_1k"), "{output}");
+}
+
+/// The legacy single rate is named as itself, not as the in/out pair
+/// `effective_costs()` expands it into — that is the field the user deletes.
+#[test]
+fn the_legacy_single_rate_is_named_as_its_own_field() {
+    let mut reg = reg_with(&[("legacy", "codex", "gpt-5.5", None)]);
+    reg.models.get_mut("legacy").unwrap().cost_per_1k_tokens = Some(0.01);
+    let findings = rate_findings(&reg);
+    assert_eq!(findings.len(), 1);
+    let d = &findings[0].detail;
+    assert!(d.contains("`cost_per_1k_tokens: 0.01`"), "{d}");
+    assert!(!d.contains("input_cost_per_1k"), "{d}");
+}
+
+/// Only an exact zero is consistent; a negative or NaN rate is as wrong as a
+/// positive one (the PR says "non-zero", so the check must mean it).
+#[test]
+fn negative_and_nan_rates_are_reported_zero_is_not() {
+    let mut reg = reg_with(&[
+        ("negative", "ollama", "qwen3", None),
+        ("nan", "ollama", "qwen3", None),
+        ("zero", "ollama", "qwen3", None),
+    ]);
+    reg.models.get_mut("negative").unwrap().output_cost_per_1k = Some(-0.01);
+    reg.models.get_mut("nan").unwrap().input_cost_per_1k = Some(f64::NAN);
+    reg.models.get_mut("zero").unwrap().input_cost_per_1k = Some(0.0);
+    let mut flagged: Vec<String> = rate_findings(&reg).into_iter().map(|f| f.subject).collect();
+    flagged.sort();
+    assert_eq!(flagged, vec!["nan", "negative"]);
+}
+
+/// The warning must tell the truth about the fleet guard (qa review I1 on
+/// #2616): it does not skip the rate, it can stop a fleet early on it. And
+/// the fix names "set them to 0", the usual shape of a local entry.
+#[test]
+fn the_warning_names_the_fleet_guard_and_the_zero_fix() {
+    let mut reg = reg_with(&[("codex_priced", "codex", "gpt-5.5", None)]);
+    reg.models
+        .get_mut("codex_priced")
+        .unwrap()
+        .output_cost_per_1k = Some(0.01);
+    let d = rate_findings(&reg).remove(0).detail;
+    assert!(!d.contains("Cost gates"), "{d}");
+    assert!(d.contains("fleet budget guards"), "{d}");
+    assert!(d.contains("stop a fleet early"), "{d}");
+    assert!(d.contains("set them to 0"), "{d}");
 }
