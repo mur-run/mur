@@ -35,6 +35,11 @@ mod tests;
 /// so one `.gitignore` line covers both.
 pub const WORKTREES_DIR: &str = ".worktrees";
 
+/// Name prefix of every runtime-created turn track. Reclaim relies on it to
+/// tell a half-created turn track (no base file yet) from a hand-made
+/// worktree that merely lives under `.worktrees/` (#2618).
+pub const TRACK_PREFIX: &str = "turn-";
+
 /// Written into the track's private git dir (`.git/worktrees/<name>/`), never
 /// into the working tree, so it can't show up as a changed file.
 const BASE_FILE: &str = "mur-turn-base.json";
@@ -146,28 +151,43 @@ impl TurnTrack {
             Some(&path),
         )
         .context("git worktree add")?;
-        let git_dir = absolute_git_dir(&path)?;
-        let project_git_dir = absolute_git_dir(&project)?;
-        // The index is what makes `git status` in the track agree with the
-        // project: without it every tracked file reads as deleted-and-new.
-        let project_index = project_git_dir.join("index");
-        if project_index.exists() {
-            std::fs::copy(&project_index, git_dir.join("index")).context("copy index")?;
+        // From here on the worktree is registered. Any failure must take it
+        // back out, or it is left with no base and no owner file — invisible
+        // to reclaim and piling up forever (#2618, e.g. ENOSPC mid-clone).
+        let populated = (|| -> Result<()> {
+            let git_dir = absolute_git_dir(&path)?;
+            let project_git_dir = absolute_git_dir(&project)?;
+            // The index is what makes `git status` in the track agree with
+            // the project: without it every tracked file reads as
+            // deleted-and-new.
+            let project_index = project_git_dir.join("index");
+            if project_index.exists() {
+                std::fs::copy(&project_index, git_dir.join("index")).context("copy index")?;
+            }
+            clone_tree(&project, &path, clone)?;
+            let sentinel = Sentinel {
+                project: project.clone(),
+                base: base.clone(),
+            };
+            std::fs::write(git_dir.join(BASE_FILE), serde_json::to_vec(&sentinel)?)
+                .context("write turn base")?;
+            reclaim::write_owner(
+                &git_dir,
+                &reclaim::Owner {
+                    pid: std::process::id(),
+                    released: false,
+                },
+            )
+        })();
+        if let Err(e) = populated {
+            return Err(match remove_worktree(&project, &path) {
+                Ok(()) => e,
+                Err(cleanup) => e.context(format!(
+                    "and removing the half-created track {} failed too: {cleanup:#}",
+                    path.display()
+                )),
+            });
         }
-        clone_tree(&project, &path, clone)?;
-        let sentinel = Sentinel {
-            project: project.clone(),
-            base: base.clone(),
-        };
-        std::fs::write(git_dir.join(BASE_FILE), serde_json::to_vec(&sentinel)?)
-            .context("write turn base")?;
-        reclaim::write_owner(
-            &git_dir,
-            &reclaim::Owner {
-                pid: std::process::id(),
-                released: false,
-            },
-        )?;
         Ok(Self {
             project,
             path,
@@ -334,21 +354,22 @@ impl TurnTrack {
     /// in the track survive; a detached-HEAD commit without a branch does not
     /// (its reflog lives in the worktree's git dir).
     pub fn destroy(self) -> Result<()> {
-        let removed = run_git(
-            &self.project,
-            &["worktree", "remove", "--force"],
-            Some(&self.path),
-        );
-        if removed.is_err() {
-            // The dir may already be gone (user deleted it); drop the stale
-            // registration so the name can be reused.
-            if self.path.exists() {
-                std::fs::remove_dir_all(&self.path)?;
-            }
-            run_git(&self.project, &["worktree", "prune"], None).context("git worktree prune")?;
-        }
-        Ok(())
+        remove_worktree(&self.project, &self.path)
     }
+}
+
+/// Remove the worktree at `path` and its registration. If git refuses (the
+/// dir may already be gone, or be half-populated), delete the dir and prune
+/// so the name can be reused.
+fn remove_worktree(project: &Path, path: &Path) -> Result<()> {
+    let removed = run_git(project, &["worktree", "remove", "--force"], Some(path));
+    if removed.is_err() {
+        if path.exists() {
+            std::fs::remove_dir_all(path)?;
+        }
+        run_git(project, &["worktree", "prune"], None).context("git worktree prune")?;
+    }
+    Ok(())
 }
 
 /// Make git ignore `.worktrees/` for this repository without touching the

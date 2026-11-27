@@ -110,6 +110,7 @@ fn reason_label(r: StaleReason) -> &'static str {
         StaleReason::Released => "released",
         StaleReason::OwnerDead => "owner_dead",
         StaleReason::Legacy => "legacy",
+        StaleReason::Incomplete => "incomplete",
     }
 }
 
