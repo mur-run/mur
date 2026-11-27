@@ -260,6 +260,57 @@ mod tests {
     const MUR: &str = "/opt/mur/bin/mur";
     const SHELL: &str = "/browsers/chromium_headless_shell-1246";
 
+    /// #2551, real filesystem: `profile_saved` resolves MUR's home from
+    /// `MUR_HOME` and looks for `<home>/browser/profiles/<site>/state.json.age`.
+    /// No `Fake`, so a wrong home or a wrong path fails here: the saved file
+    /// is created at the documented location in a tempdir, and an identically
+    /// named file under a decoy home or another site must not count.
+    #[test]
+    fn profile_saved_reads_the_real_state_file_under_mur_home() {
+        let home = tempfile::tempdir().unwrap();
+        let decoy = tempfile::tempdir().unwrap();
+        let _env = mur_common::test_env::EnvGuard::set([(
+            mur_common::home::MUR_HOME_ENV,
+            home.path().as_os_str(),
+        )]);
+        let mut ops = ProfileOps("bob");
+
+        // Absent: nothing on disk under the home.
+        assert!(!ops.profile_saved("site"), "no state file yet");
+
+        // A state file under a different home, and one for a different site
+        // under this home, must not make `site` look saved.
+        let write = |root: &std::path::Path, site: &str| {
+            let state = mur_browser::paths::profile_state(root, site);
+            std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+            std::fs::write(&state, b"x").unwrap();
+            state
+        };
+        write(decoy.path(), "site");
+        write(home.path(), "other");
+        assert!(!ops.profile_saved("site"), "decoy home / other site");
+
+        // Present: the file at the real location under `MUR_HOME`.
+        let state = write(home.path(), "site");
+        assert_eq!(
+            state,
+            home.path().join("browser/profiles/site/state.json.age")
+        );
+        assert!(ops.profile_saved("site"), "state file exists");
+
+        // A directory in place of the file is not a saved profile.
+        std::fs::remove_file(&state).unwrap();
+        std::fs::create_dir(&state).unwrap();
+        assert!(
+            !ops.profile_saved("site"),
+            "a directory is not a state file"
+        );
+
+        // Deleted again: back to unsaved.
+        std::fs::remove_dir(&state).unwrap();
+        assert!(!ops.profile_saved("site"), "state file removed");
+    }
+
     /// #2400: the sealed live server execs `node`; without the grant the exec
     /// fails with EPERM and the browser tools never list. The backfill adds
     /// it with the server's own command and build dir, exactly once.
