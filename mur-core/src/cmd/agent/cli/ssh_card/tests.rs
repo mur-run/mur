@@ -404,3 +404,33 @@ fn narrow_summary_drops_lines_above_the_fingerprints_first() {
     let (_, hidden) = render::fit_pinned(body, 40, 2, pin);
     assert!(hidden, "too small even for the pinned block");
 }
+
+/// The pin comes from where the Summary block is built, not from matching
+/// its wording: it covers exactly the header and fingerprint rows, and no
+/// other step pins anything.
+#[test]
+fn summary_pin_covers_exactly_the_fingerprint_block() {
+    let theme = App::test_fixture().theme;
+    let mut c = CardState::new(
+        plan(Verdict::Trusted, Some(SpawnChange::AddSsh)),
+        Origin::Pending(pending("rotate logs")),
+    );
+    assert_eq!(render::lines_with_pin(&c, theme).1, None);
+    c.step = Step::Summary;
+    let (body, pin) = render::lines_with_pin(&c, theme);
+    let (start, len) = pin.expect("Summary pins its fingerprint block");
+    let text: Vec<String> = body.iter().map(|l| l.to_string()).collect();
+    assert_eq!(text[start], "Approving writes:");
+    assert!(len >= 2, "header plus at least one key or not-ready row");
+    assert!(
+        text[start + 1..start + len]
+            .iter()
+            .all(|l| l.contains("SHA256") || l.contains("not ready")),
+        "{:?}",
+        &text[start..start + len]
+    );
+    assert!(
+        text[start + len].contains("spawn"),
+        "spawn row is not pinned"
+    );
+}

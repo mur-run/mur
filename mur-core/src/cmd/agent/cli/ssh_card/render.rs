@@ -49,7 +49,19 @@ fn sel<'a>(on: bool, t: &'static Theme) -> (Span<'a>, ratatui::style::Style) {
 }
 
 pub fn lines(c: &CardState, t: &'static Theme) -> Vec<Line<'static>> {
+    lines_with_pin(c, t).0
+}
+
+/// The card's lines plus, on the Summary step, the `(start, len)` of the
+/// "Approving writes" block: the fingerprints the user must be able to read
+/// before Approve. The range is recorded where the block is built, so a
+/// wording change cannot silently unpin it.
+pub fn lines_with_pin(
+    c: &CardState,
+    t: &'static Theme,
+) -> (Vec<Line<'static>>, Option<(usize, usize)>) {
     let mut out = Vec::new();
+    let mut pin = None;
     if let Some(r) = c.origin.request() {
         out.push(Line::styled("The agent asked, in its own words:", t.muted));
         out.push(Line::styled(format!("  │ {}", r.reason), t.text));
@@ -64,13 +76,13 @@ pub fn lines(c: &CardState, t: &'static Theme) -> Vec<Line<'static>> {
     match c.step {
         Step::Key => key_lines(c, t, &mut out),
         Step::Host => host_lines(c, t, &mut out),
-        Step::Summary => summary_lines(c, t, &mut out),
+        Step::Summary => pin = Some(summary_lines(c, t, &mut out)),
         Step::Held | Step::Done => result_lines(c, t, &mut out),
     }
     if let Some(n) = &c.note {
         out.push(Line::styled(n.clone(), t.warn));
     }
-    out
+    (out, pin)
 }
 
 fn key_lines(c: &CardState, t: &'static Theme, out: &mut Vec<Line<'static>>) {
@@ -209,7 +221,10 @@ fn host_lines(c: &CardState, t: &'static Theme, out: &mut Vec<Line<'static>>) {
     }
 }
 
-fn summary_lines(c: &CardState, t: &'static Theme, out: &mut Vec<Line<'static>>) {
+/// Pushes the Summary lines; returns the `(start, len)` of the pinned
+/// "Approving writes" block.
+fn summary_lines(c: &CardState, t: &'static Theme, out: &mut Vec<Line<'static>>) -> (usize, usize) {
+    let start = out.len();
     out.push(Line::styled("Approving writes:", t.emphasis));
     match c.approval() {
         Ok(a) => {
@@ -223,6 +238,7 @@ fn summary_lines(c: &CardState, t: &'static Theme, out: &mut Vec<Line<'static>>)
         }
         Err(e) => out.push(Line::styled(format!("  not ready: {e}"), t.warn)),
     }
+    let pin = (start, out.len() - start);
     if c.plan.spawn == Some(SpawnChange::AddSsh) {
         out.push(Line::styled(
             "  spawn     add `ssh` to the spawn allowlist",
@@ -267,6 +283,7 @@ fn summary_lines(c: &CardState, t: &'static Theme, out: &mut Vec<Line<'static>>)
             t.muted,
         ));
     }
+    pin
 }
 
 /// Columns inside the card's borders on a `width`-column screen.
@@ -296,25 +313,6 @@ pub fn fit(mut body: Vec<Line<'static>>, width: u16, body_h: u16) -> Vec<Line<'s
     }
     body.drain(..drop);
     body
-}
-
-/// `(start, len)` of the Summary's "Approving writes" block inside `body`:
-/// the fingerprints the user must be able to read before Approve.
-fn pinned(body: &[Line<'static>]) -> Option<(usize, usize)> {
-    let start = body
-        .iter()
-        .position(|l| l.to_string() == "Approving writes:")?;
-    let len = body[start..]
-        .iter()
-        .take_while(|l| {
-            let s = l.to_string();
-            s == "Approving writes:"
-                || s.starts_with("  key ")
-                || s.starts_with("  host key")
-                || s.starts_with("  not ready")
-        })
-        .count();
-    Some((start, len))
 }
 
 /// Like [`fit`], but the lines at `pin` (start, len) are dropped last: the
@@ -377,12 +375,7 @@ pub fn draw(
     let inner = block.inner(area);
     f.render_widget(block, area);
     let body_h = inner.height.saturating_sub(1);
-    let all = lines(c, theme);
-    let pin = if c.step == Step::Summary {
-        pinned(&all)
-    } else {
-        None
-    };
+    let (all, pin) = lines_with_pin(c, theme);
     let (body, hidden) = fit_pinned(all, inner.width, body_h, pin);
     c.fp_hidden.set(c.step == Step::Summary && hidden);
     f.render_widget(
