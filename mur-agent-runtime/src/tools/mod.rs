@@ -88,6 +88,9 @@ pub enum ToolStatus {
         job_id: String,
         bytes_seen: u64,
     },
+    /// The turn was cancelled while this call ran, and the cancel ended it
+    /// (#2613). Neither a failure nor a result: nobody asked it to stop.
+    Cancelled,
 }
 
 /// What a [`ToolStatus::Denied`] denies: the tool, or just this action.

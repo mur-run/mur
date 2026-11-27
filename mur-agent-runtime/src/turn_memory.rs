@@ -91,6 +91,7 @@ pub enum ToolMemoryStatus {
     Failed,
     Denied,
     Running,
+    Cancelled,
 }
 
 impl ToolMemoryStatus {
@@ -100,6 +101,7 @@ impl ToolMemoryStatus {
             Self::Failed => "failed",
             Self::Denied => "denied",
             Self::Running => "running",
+            Self::Cancelled => "cancelled",
         }
     }
 }
@@ -162,6 +164,7 @@ impl TurnMemory {
                     Outcome::Failed(d) => (ToolMemoryStatus::Failed, Some(d.clone())),
                     Outcome::Denied(d) => (ToolMemoryStatus::Denied, Some(d.clone())),
                     Outcome::Running(_) => (ToolMemoryStatus::Running, None),
+                    Outcome::Cancelled => (ToolMemoryStatus::Cancelled, None),
                 };
                 ToolMemory {
                     tool: a.tool.clone(),

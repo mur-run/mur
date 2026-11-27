@@ -379,3 +379,25 @@ async fn bash_tool_can_find_binary_only_on_augmented_path() {
         out.text
     );
 }
+
+/// #2613 at the tool boundary: a foreground `bash` whose turn is cancelled
+/// reports `Cancelled`, not a failure, and never "no such job".
+#[cfg(unix)]
+#[tokio::test]
+async fn a_cancelled_foreground_bash_reports_cancelled_not_no_such_job() {
+    let t = make_tool();
+    let run = crate::tools::bash_jobs::CURRENT_TASK_ID.scope(
+        "task-cancel".to_string(),
+        t.execute(serde_json::json!({"command": "sleep 30", "timeout_secs": 60})),
+    );
+    let cancel = async {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        t.jobs.kill_owned_by("task-cancel").await
+    };
+    let (out, n) = tokio::join!(run, cancel);
+    assert_eq!(n, 1);
+    let out = out.expect("a cancelled call is not a tool error");
+    assert_eq!(out.status, ToolStatus::Cancelled, "{out:?}");
+    assert!(!out.text.contains("no such job"), "{}", out.text);
+    assert!(out.text.contains("cancelled"), "{}", out.text);
+}

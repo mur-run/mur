@@ -826,3 +826,30 @@ fn a_waited_job_that_exited_non_zero_is_never_verified() {
     assert_eq!(blocked[0].target, "cargo test");
     assert!(render(&l).contains("cargo test"));
 }
+
+/// #2613: a command the turn's cancel ended is not a failure. It must not
+/// be the "last failure" a resumer starts from, nor a ✘ on the card, and
+/// `classify` must map the tool's `Cancelled` status to it.
+#[test]
+fn a_cancelled_command_is_not_the_last_failure() {
+    assert_eq!(
+        classify(
+            "[cancelled: the turn was stopped; j-1 ended by SIGTERM after 1m]",
+            false,
+            &crate::tools::ToolStatus::Cancelled,
+        ),
+        Outcome::Cancelled
+    );
+    let mut l = TurnLedger {
+        stop: StopKind::Cancelled,
+        iterations: 2,
+        agent: "pm".into(),
+        ..Default::default()
+    };
+    l.record(act("bash", "sleep 120", Outcome::Cancelled));
+    assert!(l.blocked().is_empty());
+    let h = l.handoff().unwrap_or_default();
+    assert!(!h.contains("last failure"), "{h}");
+    let card = render(&l);
+    assert!(!card.contains('✘'), "{card}");
+}

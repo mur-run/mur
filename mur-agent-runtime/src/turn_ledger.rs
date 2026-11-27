@@ -47,6 +47,9 @@ pub enum Outcome {
     /// The call yielded and the command is still running (the detail is the
     /// job id). Neither evidence nor a failure: the outcome does not exist yet.
     Running(String),
+    /// The turn's cancel ended the call (#2613). Not a failure: it is not
+    /// where a resumer starts, and it is not evidence either.
+    Cancelled,
 }
 
 /// One tool call, reduced to what a reader needs.
@@ -358,7 +361,12 @@ impl TurnLedger {
     pub fn blocked(&self) -> Vec<&Action> {
         self.actions
             .iter()
-            .filter(|a| !matches!(a.outcome, Outcome::Ok | Outcome::Running(_)))
+            .filter(|a| {
+                !matches!(
+                    a.outcome,
+                    Outcome::Ok | Outcome::Running(_) | Outcome::Cancelled
+                )
+            })
             .collect()
     }
 
@@ -425,7 +433,7 @@ impl TurnLedger {
             let why = match &a.outcome {
                 Outcome::Denied(d) => format!("sandbox: {d}"),
                 Outcome::Failed(f) => clean_reason(f),
-                Outcome::Ok | Outcome::Running(_) => String::new(),
+                Outcome::Ok | Outcome::Running(_) | Outcome::Cancelled => String::new(),
             };
             out.push_str(&format!("  - last failure: {} · {why}\n", a.target));
         }
@@ -584,6 +592,9 @@ pub fn classify(content: &str, is_error: bool, status: &crate::tools::ToolStatus
     if let crate::tools::ToolStatus::Running { job_id, .. } = status {
         return Outcome::Running(job_id.clone());
     }
+    if *status == crate::tools::ToolStatus::Cancelled {
+        return Outcome::Cancelled;
+    }
     if is_error {
         return Outcome::Failed(truncate(content.trim(), RUNAWAY_BACKSTOP));
     }
@@ -730,7 +741,7 @@ pub fn render(ledger: &TurnLedger) -> String {
             let why = match &a.outcome {
                 Outcome::Denied(d) => format!("sandbox: {d}"),
                 Outcome::Failed(f) => clean_reason(f),
-                Outcome::Ok | Outcome::Running(_) => String::new(),
+                Outcome::Ok | Outcome::Running(_) | Outcome::Cancelled => String::new(),
             };
             let tool = short_tool(&a.tool);
             out.push_str(&format!("  ✘ {tool} · {why}\n"));
