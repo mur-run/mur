@@ -368,3 +368,46 @@ async fn child_env_is_exactly_the_spec_env() {
     );
     assert!(p.new_stdout.lines().any(|l| l == sock), "{}", p.new_stdout);
 }
+
+/// #2597 — a full lane reclaims the longest-idle job instead of refusing, and
+/// leaves jobs that are polled or recent alone.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_full_lane_reclaims_an_idle_job_but_not_an_attended_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = JobTable::with_idle_after(Duration::from_millis(300));
+    let ids: Vec<String> = (0..MAX_JOBS)
+        .map(|_| t.spawn(spec("sleep 60", dir.path(), None)).unwrap())
+        .collect();
+    // Not idle yet: refused.
+    assert!(matches!(
+        t.spawn(spec("sleep 60", dir.path(), None)),
+        Err(JobError::TooMany(_))
+    ));
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    // Keep all but the first attended.
+    for id in &ids[1..] {
+        t.poll(id, Duration::ZERO).await.unwrap();
+    }
+    let fresh = t.spawn(spec("sleep 60", dir.path(), None)).unwrap();
+    // Only the unattended one was reclaimed, and its exit names the signal.
+    let p = t.poll(&ids[0], Duration::from_secs(5)).await.unwrap();
+    assert_eq!(
+        p.exit.as_ref().and_then(|e| e.killed_by),
+        Some(FIRST_SIGNAL),
+        "{p:?}"
+    );
+    for id in &ids[1..] {
+        assert!(
+            pid_alive(t.pid(id).unwrap()),
+            "attended job {id} was killed"
+        );
+    }
+    // Everything else is attended or fresh: the lane is full again.
+    assert!(matches!(
+        t.spawn(spec("sleep 60", dir.path(), None)),
+        Err(JobError::TooMany(_))
+    ));
+    t.kill_all().await;
+    let _ = fresh;
+}
