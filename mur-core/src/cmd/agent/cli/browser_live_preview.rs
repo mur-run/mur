@@ -121,13 +121,22 @@ pub(super) fn signed_in_as(sites: &[String]) -> String {
 /// profiles that still have saved state; each missing one gets the repair
 /// instead, since the next browser start would fail to load it. `keep` is a
 /// flagless rerun, which also tells the user how to unbind (#2545).
+/// A site whose state is unknown (`None`) gets no note at all: neither
+/// "signed in" nor the repair would be grounded in anything.
 pub(super) fn session_notes(
     sites: &[String],
     keep: bool,
-    mut is_saved: impl FnMut(&str) -> bool,
+    mut is_saved: impl FnMut(&str) -> Option<bool>,
 ) -> Vec<String> {
-    let (saved, missing): (Vec<String>, Vec<String>) =
-        sites.iter().cloned().partition(|s| is_saved(s));
+    let mut saved = Vec::new();
+    let mut missing = Vec::new();
+    for site in sites {
+        match is_saved(site) {
+            Some(true) => saved.push(site.clone()),
+            Some(false) => missing.push(site.clone()),
+            None => {}
+        }
+    }
     let mut notes = Vec::new();
     if !saved.is_empty() {
         let line = signed_in_as(&saved);
@@ -273,5 +282,30 @@ mod tests {
                 && p.contains("loopback and private (LAN) addresses are NOT blocked"),
             "{p}"
         );
+    }
+
+    /// An unknown save state (MUR's home does not resolve) yields no session
+    /// note for that site: neither "signed in" nor the `mur browser auth`
+    /// repair, which would blame a profile that may be fine. Known sites in
+    /// the same run keep their notes.
+    #[test]
+    fn session_notes_skip_sites_whose_state_is_unknown() {
+        let sites = |s: &[&str]| s.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
+
+        assert!(session_notes(&sites(&["a"]), false, |_| None).is_empty());
+        assert!(session_notes(&sites(&["a"]), true, |_| None).is_empty());
+
+        let notes = session_notes(&sites(&["a", "b", "c"]), false, |s| match s {
+            "a" => Some(true),
+            "b" => Some(false),
+            _ => None,
+        });
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert_eq!(notes[0], signed_in_as(&sites(&["a"])));
+        assert!(
+            notes[1].contains("profile `b` is bound but not saved"),
+            "{notes:?}"
+        );
+        assert!(!notes.iter().any(|n| n.contains("`c`")), "{notes:?}");
     }
 }

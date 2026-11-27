@@ -9,16 +9,21 @@ use super::browser_live_cmd::*;
 use super::browser_live_effect::Effect;
 use super::manage;
 
+/// Whether `site`'s saved login state exists under `home`. Best-effort: if
+/// the home cannot be resolved the answer is unknown (`None`), not "saved"
+/// and not "missing" — a hint must neither fail the command nor send the user
+/// to re-run `mur browser auth` for the wrong reason.
+fn saved_in(home: anyhow::Result<std::path::PathBuf>, site: &str) -> Option<bool> {
+    home.ok()
+        .map(|home| mur_browser::paths::profile_state(&home, site).is_file())
+}
+
 /// Real profile-backed [`LiveOps`].
 pub(crate) struct ProfileOps<'a>(pub &'a str);
 
 impl LiveOps for ProfileOps<'_> {
-    fn profile_saved(&mut self, site: &str) -> bool {
-        // Best-effort: if the home cannot be resolved, do not contradict the
-        // binding the entry carries (a hint must not fail the command).
-        crate::cmd::agent::resolve_mur_home()
-            .map(|home| mur_browser::paths::profile_state(&home, site).is_file())
-            .unwrap_or(true)
+    fn profile_saved(&mut self, site: &str) -> Option<bool> {
+        saved_in(crate::cmd::agent::resolve_mur_home(), site)
     }
     fn record_research(&mut self, _agent: &str) -> anyhow::Result<()> {
         self.record_research_event()
@@ -276,7 +281,7 @@ mod tests {
         let mut ops = ProfileOps("bob");
 
         // Absent: nothing on disk under the home.
-        assert!(!ops.profile_saved("site"), "no state file yet");
+        assert_eq!(ops.profile_saved("site"), Some(false), "no state file yet");
 
         // A state file under a different home, and one for a different site
         // under this home, must not make `site` look saved.
@@ -288,7 +293,11 @@ mod tests {
         };
         write(decoy.path(), "site");
         write(home.path(), "other");
-        assert!(!ops.profile_saved("site"), "decoy home / other site");
+        assert_eq!(
+            ops.profile_saved("site"),
+            Some(false),
+            "decoy home / other site"
+        );
 
         // Present: the file at the real location under `MUR_HOME`.
         let state = write(home.path(), "site");
@@ -296,19 +305,34 @@ mod tests {
             state,
             home.path().join("browser/profiles/site/state.json.age")
         );
-        assert!(ops.profile_saved("site"), "state file exists");
+        assert_eq!(ops.profile_saved("site"), Some(true), "state file exists");
 
         // A directory in place of the file is not a saved profile.
         std::fs::remove_file(&state).unwrap();
         std::fs::create_dir(&state).unwrap();
-        assert!(
-            !ops.profile_saved("site"),
+        assert_eq!(
+            ops.profile_saved("site"),
+            Some(false),
             "a directory is not a state file"
         );
 
         // Deleted again: back to unsaved.
         std::fs::remove_dir(&state).unwrap();
-        assert!(!ops.profile_saved("site"), "state file removed");
+        assert_eq!(ops.profile_saved("site"), Some(false), "state file removed");
+    }
+
+    /// An unresolvable home is unknown, never "saved" or "missing"; a
+    /// resolved one reports what is on disk.
+    #[test]
+    fn saved_in_is_unknown_when_the_home_does_not_resolve() {
+        assert_eq!(saved_in(Err(anyhow::anyhow!("no home")), "site"), None);
+
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(saved_in(Ok(home.path().to_path_buf()), "site"), Some(false));
+        let state = mur_browser::paths::profile_state(home.path(), "site");
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        std::fs::write(&state, b"x").unwrap();
+        assert_eq!(saved_in(Ok(home.path().to_path_buf()), "site"), Some(true));
     }
 
     /// #2400: the sealed live server execs `node`; without the grant the exec

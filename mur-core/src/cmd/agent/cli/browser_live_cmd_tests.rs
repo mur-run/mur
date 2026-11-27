@@ -266,8 +266,8 @@ struct Fake {
 }
 
 impl LiveOps for Fake {
-    fn profile_saved(&mut self, site: &str) -> bool {
-        !self.unsaved.iter().any(|u| u == site)
+    fn profile_saved(&mut self, site: &str) -> Option<bool> {
+        Some(!self.unsaved.iter().any(|u| u == site))
     }
     fn servers(&mut self) -> anyhow::Result<Vec<McpServerEntry>> {
         Ok(self.servers.clone())
