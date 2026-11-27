@@ -120,9 +120,10 @@ pub(super) fn signed_in_as(sites: &[String]) -> String {
 /// The session note(s) for bound profiles (#2551): `signed in as` only for
 /// profiles that still have saved state; each missing one gets the repair
 /// instead, since the next browser start would fail to load it. `keep` is a
-/// flagless rerun, which also tells the user how to unbind (#2545).
-/// A site whose state is unknown (`None`) gets no note at all: neither
-/// "signed in" nor the repair would be grounded in anything.
+/// flagless rerun, which also tells the user how to unbind (#2545) — once,
+/// on the last note. A site whose state is unknown (`None`) gets a neutral
+/// "could not check" note: neither "signed in" nor the repair would be
+/// grounded in anything.
 pub(super) fn session_notes(
     sites: &[String],
     keep: bool,
@@ -135,17 +136,13 @@ pub(super) fn session_notes(
         match is_saved(site) {
             Some(true) => saved.push(site.clone()),
             Some(false) => missing.push(site.clone()),
-            None => unknown.push(format!("`{site}`")),
+            None => unknown.push(site.clone()),
         }
     }
     let mut notes = Vec::new();
     if !saved.is_empty() {
         let line = signed_in_as(&saved);
-        notes.push(if keep {
-            format!("still {line}; rerun with `--no-profile` to unbind")
-        } else {
-            line
-        });
+        notes.push(if keep { format!("still {line}") } else { line });
     }
     notes.extend(missing.iter().map(|site| {
         format!(
@@ -157,15 +154,27 @@ pub(super) fn session_notes(
     // nor "not saved", but do not go silent either — the unbind hint for a
     // kept binding would otherwise vanish with it.
     if !unknown.is_empty() {
-        let line = format!(
-            "could not check profile {}: MUR's home did not resolve",
-            unknown.join(", ")
-        );
-        notes.push(if keep {
-            format!("{line}; rerun with `--no-profile` to unbind")
+        let noun = if unknown.len() == 1 {
+            "profile"
         } else {
-            line
-        });
+            "profiles"
+        };
+        let names = unknown
+            .iter()
+            .map(|s| format!("`{s}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        notes.push(format!(
+            "could not check {noun} {names}: MUR's home did not resolve"
+        ));
+    }
+    // One unbind hint per kept binding, on the last note — unless that note
+    // is a repair line, which already offers `--no-profile`.
+    if keep
+        && let Some(last) = notes.last_mut()
+        && !last.contains("`--no-profile`")
+    {
+        last.push_str("; rerun with `--no-profile` to unbind");
     }
     notes
 }
@@ -299,10 +308,11 @@ mod tests {
         );
     }
 
-    /// An unknown save state (MUR's home does not resolve) yields no session
-    /// note for that site: neither "signed in" nor the `mur browser auth`
+    /// An unknown save state (MUR's home does not resolve) yields one neutral
+    /// "could not check" note: neither "signed in" nor the `mur browser auth`
     /// repair, which would blame a profile that may be fine. Known sites in
-    /// the same run keep their notes.
+    /// the same run keep their notes, and a kept binding gets the unbind hint
+    /// exactly once.
     #[test]
     fn session_notes_say_unknown_state_neutrally() {
         let sites = |s: &[&str]| s.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
@@ -310,13 +320,23 @@ mod tests {
         let fresh = session_notes(&sites(&["a", "b"]), false, |_| None);
         assert_eq!(
             fresh,
-            ["could not check profile `a`, `b`: MUR's home did not resolve"],
+            ["could not check profiles `a`, `b`: MUR's home did not resolve"],
         );
         let kept = session_notes(&sites(&["a"]), true, |_| None);
-        assert_eq!(kept.len(), 1, "{kept:?}");
-        assert!(kept[0].contains("could not check profile `a`"), "{kept:?}");
-        assert!(kept[0].contains("`--no-profile` to unbind"), "{kept:?}");
-        for n in fresh.iter().chain(&kept) {
+        assert_eq!(
+            kept,
+            ["could not check profile `a`: MUR's home did not resolve; \
+              rerun with `--no-profile` to unbind"],
+        );
+        let kept_many = session_notes(&sites(&["a", "b"]), true, |_| None);
+        assert_eq!(
+            kept_many,
+            [
+                "could not check profiles `a`, `b`: MUR's home did not resolve; \
+              rerun with `--no-profile` to unbind"
+            ],
+        );
+        for n in fresh.iter().chain(&kept).chain(&kept_many) {
             assert!(!n.contains("signed in"), "{n}");
             assert!(!n.contains("mur browser auth"), "{n}");
         }
@@ -337,5 +357,28 @@ mod tests {
             "{notes:?}"
         );
         assert!(!notes[..2].iter().any(|n| n.contains("`c`")), "{notes:?}");
+
+        // Flagless rerun, saved + unknown: the unbind hint appears once, on
+        // the last line, not on every line.
+        let mixed = session_notes(&sites(&["a", "c"]), true, |s| (s == "a").then_some(true));
+        assert_eq!(
+            mixed,
+            [
+                "still signed in as the saved profile `a`".to_owned(),
+                "could not check profile `c`: MUR's home did not resolve; \
+                 rerun with `--no-profile` to unbind"
+                    .to_owned(),
+            ],
+        );
+        let hint = |ns: &[String]| {
+            ns.iter()
+                .map(|n| n.matches("`--no-profile`").count())
+                .sum::<usize>()
+        };
+        assert_eq!(hint(&mixed), 1, "{mixed:?}");
+        // Saved + missing: the repair line already offers `--no-profile`.
+        let repair = session_notes(&sites(&["a", "b"]), true, |s| Some(s == "a"));
+        assert_eq!(hint(&repair), 1, "{repair:?}");
+        assert_eq!(repair[0], "still signed in as the saved profile `a`");
     }
 }
