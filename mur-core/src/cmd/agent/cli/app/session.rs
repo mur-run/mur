@@ -217,6 +217,18 @@ impl App {
         self.scroll_back = 0;
     }
 
+    /// The command of the live `!command` card (without its `$ ` prefix).
+    pub fn running_shell_command(&self) -> Option<&str> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::Shell && m.streaming)
+            .map(|m| {
+                let first = m.text.lines().next().unwrap_or("");
+                first.strip_prefix("$ ").unwrap_or(first)
+            })
+    }
+
     /// The live shell card, if one is open.
     fn streaming_shell_mut(&mut self) -> Option<&mut ChatMsg> {
         self.messages

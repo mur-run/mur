@@ -52,7 +52,10 @@ const DATE_READONLY_FLAGS: &[&str] = &[
 ];
 
 mod git;
+mod mur_status;
 mod print_only;
+
+pub use mur_status::is_mur_status_query;
 
 /// ripgrep flags that RUN a program: `--pre` per searched file,
 /// `--hostname-bin` for hyperlinks. `--pre-glob` only scopes `--pre`.

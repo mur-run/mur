@@ -117,6 +117,35 @@ pub(super) fn signed_in_as(sites: &[String]) -> String {
     }
 }
 
+/// The session note(s) for bound profiles (#2551): `signed in as` only for
+/// profiles that still have saved state; each missing one gets the repair
+/// instead, since the next browser start would fail to load it. `keep` is a
+/// flagless rerun, which also tells the user how to unbind (#2545).
+pub(super) fn session_notes(
+    sites: &[String],
+    keep: bool,
+    mut is_saved: impl FnMut(&str) -> bool,
+) -> Vec<String> {
+    let (saved, missing): (Vec<String>, Vec<String>) =
+        sites.iter().cloned().partition(|s| is_saved(s));
+    let mut notes = Vec::new();
+    if !saved.is_empty() {
+        let line = signed_in_as(&saved);
+        notes.push(if keep {
+            format!("still {line}; rerun with `--no-profile` to unbind")
+        } else {
+            line
+        });
+    }
+    notes.extend(missing.iter().map(|site| {
+        format!(
+            "profile `{site}` is bound but not saved; run `mur browser auth {site} --url <login url>` \
+             or rerun with `--no-profile`"
+        )
+    }));
+    notes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

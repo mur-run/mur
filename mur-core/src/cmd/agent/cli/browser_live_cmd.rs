@@ -21,7 +21,7 @@ use mur_common::proposal::Proposal;
 
 use super::browser_live_effect::Effect;
 pub(crate) use super::browser_live_ops::ProfileOps;
-use super::browser_live_preview::{render_preview, saved_line, signed_in_as, will_save_line};
+use super::browser_live_preview::{render_preview, saved_line, session_notes, will_save_line};
 #[cfg(test)]
 use super::manage;
 use super::manage::Managed;
@@ -724,7 +724,9 @@ pub(super) fn run(
         notes.push(format!("browser live mode may reach: {}", reach.join(", ")));
     }
     match &profile {
-        ProfileArg::Set(sites) => notes.push(signed_in_as(sites)),
+        ProfileArg::Set(sites) => {
+            notes.extend(session_notes(sites, false, |s| ops.profile_saved(s)));
+        }
         ProfileArg::Clear => notes.push(
             "profile unbound: the browser now carries no session; the saved profile itself \
              is kept, so `--profile <site>` binds it again."
@@ -732,10 +734,9 @@ pub(super) fn run(
         ),
         // With neither flag, the invocation says nothing about the session:
         // report what the entry has, not what this run named (#2545).
-        ProfileArg::Keep if !bound.is_empty() => notes.push(format!(
-            "still {}; rerun with `--no-profile` to unbind",
-            signed_in_as(&bound)
-        )),
+        ProfileArg::Keep if !bound.is_empty() => {
+            notes.extend(session_notes(&bound, true, |s| ops.profile_saved(s)));
+        }
         ProfileArg::Keep => notes.push(
             "no profile: the browser carries no session, so pages behind a login will \
              redirect there. Add one with `mur browser auth <site> --url <login url>`, \

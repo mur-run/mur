@@ -126,10 +126,63 @@ async fn the_ninth_job_is_refused_and_names_the_others() {
         t.spawn(spec("sleep 30", dir.path(), None)).unwrap();
     }
     match t.spawn(spec("true", dir.path(), None)) {
-        Err(JobError::TooMany(list)) => assert_eq!(list.matches("j-").count(), MAX_JOBS),
+        Err(JobError::TooMany(list)) => {
+            assert_eq!(list.matches("j-").count(), MAX_JOBS);
+            // Each line names the command and its age, not just the id.
+            assert_eq!(list.matches("sleep 30").count(), MAX_JOBS);
+            assert!(list.contains("s):"), "age missing: {list}");
+        }
         other => panic!("expected TooMany, got {other:?}"),
     }
     assert_eq!(t.kill_all().await, MAX_JOBS);
+}
+
+/// A full table still answers `mur ... status`: the query is a separate lane,
+/// and that lane has a cap of its own.
+#[cfg(unix)]
+#[tokio::test]
+async fn status_queries_do_not_use_the_command_cap() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    // A stand-in `mur` that stays alive, so lane occupancy is observable.
+    let fake = dir.path().join("mur");
+    std::fs::write(&fake, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let with_path = |cmd| {
+        let mut s = spec(cmd, dir.path(), None);
+        s.env = vec![("PATH".into(), path.clone())];
+        s
+    };
+    let t = JobTable::new();
+    for _ in 0..MAX_JOBS {
+        t.spawn(spec("sleep 30", dir.path(), None)).unwrap();
+    }
+    assert!(matches!(
+        t.spawn(spec("sleep 30", dir.path(), None)),
+        Err(JobError::TooMany(_))
+    ));
+    for _ in 0..MAX_STATUS_JOBS {
+        t.spawn(with_path("mur fleet status"))
+            .expect("status lane has room");
+    }
+    assert!(
+        matches!(
+            t.spawn(with_path("mur fleet status")),
+            Err(JobError::TooMany(_))
+        ),
+        "the status lane is capped too"
+    );
+    // A write is not a status query and never rides the exempt lane.
+    assert!(matches!(
+        t.spawn(with_path("mur fleet stop x")),
+        Err(JobError::TooMany(_))
+    ));
+    assert_eq!(t.kill_all().await, MAX_JOBS + MAX_STATUS_JOBS);
 }
 
 /// Test 10 — D10 end to end: the secret reaches the child, comes back in

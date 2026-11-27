@@ -109,6 +109,12 @@ pub(crate) trait LiveOps {
     /// The notes [`LiveOps::save`] would report for `servers`, computed
     /// without writing — so a preview can tell "unchanged" from "needs repair".
     fn pending_repairs(&mut self, servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>>;
+    /// Whether `site` still has a saved `mur browser auth` profile on disk
+    /// (#2551): the "signed in as" note must not claim a session that the
+    /// next browser start cannot load.
+    fn profile_saved(&mut self, _site: &str) -> bool {
+        true
+    }
     /// Append the `broad_audited_enabled` trace event after a `--research` write.
     fn record_research(&mut self, agent: &str) -> anyhow::Result<()>;
     /// Append the `profile_bound` trace event after a binder write (#2199).

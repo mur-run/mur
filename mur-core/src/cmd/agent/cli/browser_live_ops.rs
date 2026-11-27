@@ -13,6 +13,13 @@ use super::manage;
 pub(crate) struct ProfileOps<'a>(pub &'a str);
 
 impl LiveOps for ProfileOps<'_> {
+    fn profile_saved(&mut self, site: &str) -> bool {
+        // Best-effort: if the home cannot be resolved, do not contradict the
+        // binding the entry carries (a hint must not fail the command).
+        crate::cmd::agent::resolve_mur_home()
+            .map(|home| mur_browser::paths::profile_state(&home, site).is_file())
+            .unwrap_or(true)
+    }
     fn record_research(&mut self, _agent: &str) -> anyhow::Result<()> {
         self.record_research_event()
     }
