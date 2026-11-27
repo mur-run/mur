@@ -5,6 +5,7 @@
 
 use super::PricingBook;
 use super::footer::{self, Pricing, UsageCounts, own_rates, unbilled_label};
+use mur_common::model::BillingMode;
 
 /// Pricing of the model that answered this turn (`usage.model_ref`, the LAST
 /// call's provider model name). `None` when the runtime did not say, or there
@@ -29,7 +30,10 @@ pub(super) fn answered_pricing(
 /// answering model's rates — unless the registry cannot resolve the answering
 /// model, which is counted at the book's dearest rates exactly like an
 /// unresolvable share, so a legacy runtime cannot reopen the "unknown reads as
-/// free" hole. `None` = nothing in the turn is billed per token.
+/// free" hole. A metered answering model the registry knows but carries no
+/// unit price for is counted at the dearest rates too, as an unpriced share
+/// is — so a turn costs the same on either runtime. `None` = nothing in the
+/// turn is billed per token.
 pub(super) fn turn_cost(
     pricing: &Pricing,
     book: Option<&PricingBook>,
@@ -39,6 +43,9 @@ pub(super) fn turn_cost(
     match (book, usage.get("by_model").and_then(|v| v.as_array())) {
         (Some(book), Some(shares)) if !shares.is_empty() => cost_by_share(book, shares),
         (Some(book), _) if answered_is_unresolved(book, usage) => at_rates(book.dearest_rates(), u),
+        (Some(book), _) if pricing.billing == Some(BillingMode::UsageBilled) => {
+            at_rates(own_rates(pricing).or_else(|| book.dearest_rates()), u)
+        }
         _ => footer::turn_cost(pricing, u),
     }
 }
@@ -58,16 +65,18 @@ fn at_rates(rates: Option<(f64, f64)>, u: &UsageCounts) -> Option<f64> {
 }
 
 /// The `--plain` footer line for one turn: tokens, then the cost, or the
-/// answering model's billing mode when nothing was billed per token.
+/// answering model's billing mode when nothing was billed per token. The book
+/// is required, not optional: without it the turn is priced at the configured
+/// model, which is exactly the plain-mode drift this module exists to close.
 pub(super) fn plain_footer(
     configured: &Pricing,
-    book: Option<&PricingBook>,
+    book: &PricingBook,
     usage: &serde_json::Value,
 ) -> String {
     let u = footer::parse_usage(usage);
-    let pricing = answered_pricing(book, usage).unwrap_or(*configured);
+    let pricing = answered_pricing(Some(book), usage).unwrap_or(*configured);
     let tok = u.input + u.output;
-    match turn_cost(&pricing, book, usage, &u) {
+    match turn_cost(&pricing, Some(book), usage, &u) {
         Some(c) => format!("  {tok} tok · ${c:.3}"),
         None => match unbilled_label(&pricing) {
             Some(label) => format!("  {tok} tok · {label}"),

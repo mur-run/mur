@@ -39,7 +39,7 @@ fn a_subscription_fallback_turn_is_labelled_subscription() {
     });
     // Before: priced at the configured metered model → "$18.000".
     assert_eq!(
-        plain_footer(&configured, Some(&b), &usage),
+        plain_footer(&configured, &b, &usage),
         "  2000 tok · subscription"
     );
 }
@@ -53,7 +53,7 @@ fn a_metered_fallback_from_a_subscription_config_shows_its_cost() {
     });
     // Before: labelled "subscription" while the turn was billed.
     assert_eq!(
-        plain_footer(&configured, Some(&b), &usage),
+        plain_footer(&configured, &b, &usage),
         "  2000 tok · $18.000"
     );
 }
@@ -72,7 +72,7 @@ fn a_mixed_turn_shows_only_its_metered_share() {
         ],
     });
     assert_eq!(
-        plain_footer(&configured, Some(&b), &usage),
+        plain_footer(&configured, &b, &usage),
         "  4000 tok · $18.000"
     );
 }
@@ -99,7 +99,7 @@ fn an_unknown_answering_model_without_shares_is_counted_at_the_dearest_rates() {
     });
     // Before: "  2000 tok" — the turn silently added nothing to the cap.
     assert_eq!(
-        plain_footer(&configured, Some(&b), &usage),
+        plain_footer(&configured, &b, &usage),
         "  2000 tok · $60.000"
     );
 }
@@ -110,7 +110,41 @@ fn without_model_ref_the_configured_model_prices_the_turn() {
     let configured = b.pricing_for_key("metered");
     let usage = serde_json::json!({ "input_tokens": 1000, "output_tokens": 1000 });
     assert_eq!(
-        plain_footer(&configured, Some(&b), &usage),
+        plain_footer(&configured, &b, &usage),
+        "  2000 tok · $18.000"
+    );
+}
+
+#[test]
+fn a_metered_answering_model_without_rates_is_counted_at_the_dearest_rates() {
+    let mut b = book();
+    b.by_key.insert(
+        "norate".to_string(),
+        Pricing {
+            in_per_1k: None,
+            out_per_1k: None,
+            window: None,
+            billing: Some(BillingMode::UsageBilled),
+        },
+    );
+    b.key_of_model
+        .insert("norate-model".to_string(), "norate".to_string());
+    let configured = b.pricing_for_key("metered");
+    let legacy = serde_json::json!({
+        "input_tokens": 1000, "output_tokens": 1000, "model_ref": "norate-model",
+    });
+    // Before: "  2000 tok" — a legacy runtime's turn added nothing to the cap.
+    assert_eq!(
+        plain_footer(&configured, &b, &legacy),
+        "  2000 tok · $18.000"
+    );
+    // The same turn from a runtime that reports `by_model` costs the same.
+    let split = serde_json::json!({
+        "input_tokens": 1000, "output_tokens": 1000, "model_ref": "norate-model",
+        "by_model": [{ "model": "norate-model", "input_tokens": 1000, "output_tokens": 1000 }],
+    });
+    assert_eq!(
+        plain_footer(&configured, &b, &split),
         "  2000 tok · $18.000"
     );
 }

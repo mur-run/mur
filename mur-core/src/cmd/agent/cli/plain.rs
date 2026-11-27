@@ -287,7 +287,7 @@ pub(super) fn run_plain(
                     writeln!(out2.borrow_mut())?;
                     // Usage footer: total tokens + cost (reuse footer helpers).
                     if let Some(usage) = task.get("usage") {
-                        let line = super::turn_price::plain_footer(&pricing, Some(&book), usage);
+                        let line = super::turn_price::plain_footer(&pricing, &book, usage);
                         let _ = writeln!(out2.borrow_mut(), "{line}");
                     }
                     out2.borrow_mut().flush()?;
