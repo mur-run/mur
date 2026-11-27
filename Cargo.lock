@@ -6815,6 +6815,7 @@ dependencies = [
  "tokio-tungstenite 0.29.0",
  "tower 0.5.3",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

@@ -122,8 +122,26 @@ fn main() -> Result<()> {
     daemon_main()
 }
 
+/// Default log filter when `RUST_LOG` is unset: warnings from everything, plus the daemon's own
+/// `info` lines (`fleet_tick: auto-running loop`). The bin's tracing target is `murmurd`.
+const DEFAULT_LOG_FILTER: &str = "warn,murmurd=info,lance=warn,lancedb=warn";
+
+/// Route `tracing` output to stderr, which the launcher points at `murmurd.log`. Without a
+/// subscriber every `tracing::*` call in the daemon is a silent no-op, so a failed `fleet_tick`
+/// left no trace. `try_init` so a second install is a no-op rather than a panic.
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_ansi(false) // the sink is a file, not a terminal
+        .try_init();
+}
+
 #[tokio::main]
 async fn daemon_main() -> Result<()> {
+    init_tracing();
     let lock_file = lock_path();
 
     // Exclude a second daemon with an flock, BEFORE touching anything else.
