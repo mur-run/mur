@@ -135,3 +135,77 @@ fn an_all_subscription_session_has_no_cost() {
     assert_eq!(a.session_cost(), None);
     assert!(!a.over_budget());
 }
+
+fn turn_with_shares(last: &str, shares: serde_json::Value) -> serde_json::Value {
+    let (i, o) = shares.as_array().unwrap().iter().fold((0, 0), |(i, o), s| {
+        (
+            i + s["input_tokens"].as_u64().unwrap(),
+            o + s["output_tokens"].as_u64().unwrap(),
+        )
+    });
+    serde_json::json!({
+        "input_tokens": i, "output_tokens": o, "model_ref": last, "by_model": shares,
+    })
+}
+
+/// qa review C1: a turn that ran metered calls and then fell back to a
+/// subscription model reports the subscription model as `model_ref`. Pricing
+/// the turn's totals at that last model counted the metered share as $0.
+#[test]
+fn a_turn_ending_on_subscription_still_counts_its_metered_share() {
+    let mut a = mixed_book_app();
+    a.budget_usd = Some(20.0);
+    a.apply_usage(&turn_with_shares(
+        "sub-model",
+        serde_json::json!([
+            { "registry_key": "metered", "model": "metered-model", "input_tokens": 1000, "output_tokens": 1000 },
+            { "registry_key": "sub", "model": "sub-model", "input_tokens": 5000, "output_tokens": 5000 },
+        ]),
+    ));
+    assert_eq!(a.session_cost(), Some(18.0));
+}
+
+/// qa review I1, the mirror case: a turn ending on a metered model must not
+/// bill its subscription share at metered rates.
+#[test]
+fn a_turn_ending_on_metered_does_not_bill_its_subscription_share() {
+    let mut a = mixed_book_app();
+    a.apply_usage(&turn_with_shares(
+        "metered-model",
+        serde_json::json!([
+            { "registry_key": "sub", "model": "sub-model", "input_tokens": 5000, "output_tokens": 5000 },
+            { "registry_key": "metered", "model": "metered-model", "input_tokens": 1000, "output_tokens": 0 },
+        ]),
+    ));
+    assert_eq!(a.session_cost(), Some(3.0));
+}
+
+/// qa review I2: a share answered by a model the registry does not know is
+/// counted at the registry's dearest metered rates, not dropped — the cap
+/// fails closed on what it cannot price, like the fleet guard.
+#[test]
+fn an_unregistered_share_is_counted_conservatively() {
+    let mut a = mixed_book_app();
+    a.apply_usage(&turn_with_shares(
+        "mystery-model",
+        serde_json::json!([
+            { "registry_key": null, "model": "mystery-model", "input_tokens": 1000, "output_tokens": 1000 },
+        ]),
+    ));
+    assert_eq!(a.session_cost(), Some(18.0));
+}
+
+/// A share naming only a provider model (no registry key) resolves through
+/// the same longest-prefix lookup `model_ref` uses.
+#[test]
+fn a_share_without_registry_key_resolves_by_model_name() {
+    let mut a = mixed_book_app();
+    a.apply_usage(&turn_with_shares(
+        "sub-model-20260101",
+        serde_json::json!([
+            { "registry_key": null, "model": "metered-model-20260101", "input_tokens": 1000, "output_tokens": 0 },
+            { "registry_key": null, "model": "sub-model-20260101", "input_tokens": 1000, "output_tokens": 1000 },
+        ]),
+    ));
+    assert_eq!(a.session_cost(), Some(3.0));
+}

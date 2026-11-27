@@ -90,6 +90,16 @@ pub fn turn_cost(p: &Pricing, u: &UsageCounts) -> Option<f64> {
     }
 }
 
+/// `p`'s own (input, output) rates, a missing side priced at the side it has.
+/// `None` when neither side is recorded.
+pub fn own_rates(p: &Pricing) -> Option<(f64, f64)> {
+    let fallback = p.in_per_1k.or(p.out_per_1k)?;
+    Some((
+        p.in_per_1k.unwrap_or(fallback),
+        p.out_per_1k.unwrap_or(fallback),
+    ))
+}
+
 pub fn context_pct(used: u64, window: u64) -> u8 {
     if window == 0 {
         return 0;

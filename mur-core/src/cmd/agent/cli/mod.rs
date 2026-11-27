@@ -182,6 +182,31 @@ impl PricingBook {
             .max_by_key(|(name, _)| name.len())
             .map(|(_, k)| k.as_str())
     }
+
+    /// Registry key for one `Task.usage.by_model` share: its own registry key
+    /// when the book knows it, else its provider model name.
+    pub fn key_for_share(&self, share: &serde_json::Value) -> Option<String> {
+        if let Some(k) = share.get("registry_key").and_then(|v| v.as_str())
+            && self.by_key.contains_key(k)
+        {
+            return Some(k.to_string());
+        }
+        let model = share.get("model").and_then(|v| v.as_str())?;
+        self.key_for_model(model).map(str::to_string)
+    }
+
+    /// The dearest (input, output) per-1k rates any entry would charge, each
+    /// entry's missing side priced at the side it has. What a share from a
+    /// model the registry cannot price is counted at, so the cap never treats
+    /// an unknown model as cheaper than anything it could stand in for — the
+    /// same rule as the fleet guard's `dearest_rates`.
+    pub fn dearest_rates(&self) -> Option<(f64, f64)> {
+        let pairs = self.by_key.values().filter_map(footer::own_rates);
+        let (i, o) = pairs.fold((0.0_f64, 0.0_f64), |(i, o), (pi, po)| {
+            (i.max(pi), o.max(po))
+        });
+        (i > 0.0 || o > 0.0).then_some((i, o))
+    }
 }
 
 /// Build the pricing book and resolve the agent's configured key. Falls back to
