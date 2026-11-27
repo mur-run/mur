@@ -744,3 +744,29 @@ fn dearest_rates_resolve_one_sided_entries_before_maximising() {
     assert_eq!(r.output_cost_per_1k, Some(0.02));
     assert_eq!(r.cache_read_cost_per_1k, Some(0.02), "and caches at it");
 }
+
+/// The unpriced-model fallback is a ceiling over what a metered model could
+/// charge; a subscription or local entry's recorded rate charges nobody.
+#[test]
+fn dearest_rates_ignore_models_that_cannot_bill() {
+    let models = BTreeMap::from([
+        (
+            "opus_sub".to_string(),
+            model(BillingMode::Subscription, Some(0.005), Some(0.025)),
+        ),
+        (
+            "local".to_string(),
+            model(BillingMode::Local, Some(0.01), Some(0.02)),
+        ),
+        (
+            "flash".to_string(),
+            model(BillingMode::UsageBilled, Some(0.00015), Some(0.0006)),
+        ),
+    ]);
+    let r = dearest_rates(&models).unwrap();
+    assert_eq!(r.effective_costs(), (Some(0.00015), Some(0.0006)));
+    assert_eq!(r.cache_read_cost_per_1k, Some(0.00015));
+
+    let free_only: BTreeMap<_, _> = models.into_iter().filter(|(k, _)| k != "flash").collect();
+    assert!(dearest_rates(&free_only).is_none());
+}

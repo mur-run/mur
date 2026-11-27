@@ -320,3 +320,37 @@ fn member_projection_reads_models_yaml_per_member() {
     let want = 2.0 * estimate_iteration_cost_usd(1, 0.5);
     assert!((pinned - want).abs() < 1e-9, "got {pinned}, want {want}");
 }
+
+/// A subscription or local model's rate is not on anyone's bill, so it must
+/// not set the guard's ceiling. Observed: a stale Opus rate on a
+/// subscription entry billed every token of a fleet at $0.025/1k while its
+/// only metered member cost $0.0006/1k.
+#[test]
+fn dearest_output_rate_ignores_models_that_cannot_bill() {
+    use mur_common::model::{BillingMode, ModelEntry, ModelRegistry};
+    let priced = |provider: &str, billing: Option<BillingMode>, out: f64| ModelEntry {
+        provider: provider.into(),
+        billing,
+        input_cost_per_1k: Some(out / 5.0),
+        output_cost_per_1k: Some(out),
+        ..Default::default()
+    };
+    let mut reg = ModelRegistry::default();
+    // Inferred subscription (provider: claude, no `billing:`).
+    reg.models
+        .insert("opus".into(), priced("claude", None, 0.025));
+    reg.models.insert(
+        "self_hosted".into(),
+        priced("openai", Some(BillingMode::Local), 0.02),
+    );
+    reg.models
+        .insert("deepseek".into(), priced("openai", None, 0.0006));
+    assert_eq!(dearest_output_rate(&reg), Some(0.0006));
+
+    reg.models.remove("deepseek");
+    assert_eq!(
+        dearest_output_rate(&reg),
+        None,
+        "free models' rates are no evidence of what a metered one costs"
+    );
+}

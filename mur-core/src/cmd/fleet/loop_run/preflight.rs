@@ -69,8 +69,8 @@ pub(super) fn spend_plan(
         // enforcing on one turns "stopped on budget" into a number the user
         // has no way to reconcile against a real bill.
         println!(
-            "  ⚠ budget enforced at the default ${rate}/1k — no model in models.yaml \
-             carries a rate, so spend is a guess. `mur model add` records a real one."
+            "  ⚠ budget enforced at the default ${rate}/1k — no metered model in \
+             models.yaml carries a rate, so spend is a guess. `mur model add` records a real one."
         );
     }
     let price_per_1k = price_per_1k.0;

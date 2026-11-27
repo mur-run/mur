@@ -375,10 +375,13 @@ fn flat_rate(per_1k: f64) -> ModelEntry {
 /// at an output rate. Every rate counts at what its entry would actually
 /// charge (`cost_with_cache`): a one-sided entry prices its missing side at
 /// the side it has, and a missing cache rate falls back to its input rate.
+/// Only a model that can bill counts: a subscription or local entry's rate
+/// charges nobody, so it is no ceiling for one that does.
 fn dearest_rates(models: &BTreeMap<String, ModelEntry>) -> Option<ModelEntry> {
     let dearest = |side: fn(&ModelEntry) -> Option<f64>| {
         models
             .values()
+            .filter(|m| super::billing::agent_bills(Some(m.billing_or_inferred())))
             .filter_map(side)
             .filter(|r| *r > 0.0)
             .reduce(f64::max)
