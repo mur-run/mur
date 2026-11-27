@@ -9,17 +9,21 @@ use super::browser_live_cmd::*;
 use super::browser_live_effect::Effect;
 use super::manage;
 
+/// Whether `site`'s saved login state exists under `home`. Best-effort: if
+/// the home cannot be resolved the answer is unknown (`None`), not "saved"
+/// and not "missing" — a hint must neither fail the command nor send the user
+/// to re-run `mur browser auth` for the wrong reason.
+fn saved_in(home: anyhow::Result<std::path::PathBuf>, site: &str) -> Option<bool> {
+    home.ok()
+        .map(|home| mur_browser::paths::profile_state(&home, site).is_file())
+}
+
 /// Real profile-backed [`LiveOps`].
 pub(crate) struct ProfileOps<'a>(pub &'a str);
 
 impl LiveOps for ProfileOps<'_> {
     fn profile_saved(&mut self, site: &str) -> Option<bool> {
-        // Best-effort: if the home cannot be resolved the answer is unknown,
-        // not "saved" and not "missing" — a hint must neither fail the command
-        // nor send the user to re-run `mur browser auth` for the wrong reason.
-        crate::cmd::agent::resolve_mur_home()
-            .ok()
-            .map(|home| mur_browser::paths::profile_state(&home, site).is_file())
+        saved_in(crate::cmd::agent::resolve_mur_home(), site)
     }
     fn record_research(&mut self, _agent: &str) -> anyhow::Result<()> {
         self.record_research_event()
@@ -315,6 +319,20 @@ mod tests {
         // Deleted again: back to unsaved.
         std::fs::remove_dir(&state).unwrap();
         assert_eq!(ops.profile_saved("site"), Some(false), "state file removed");
+    }
+
+    /// An unresolvable home is unknown, never "saved" or "missing"; a
+    /// resolved one reports what is on disk.
+    #[test]
+    fn saved_in_is_unknown_when_the_home_does_not_resolve() {
+        assert_eq!(saved_in(Err(anyhow::anyhow!("no home")), "site"), None);
+
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(saved_in(Ok(home.path().to_path_buf()), "site"), Some(false));
+        let state = mur_browser::paths::profile_state(home.path(), "site");
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        std::fs::write(&state, b"x").unwrap();
+        assert_eq!(saved_in(Ok(home.path().to_path_buf()), "site"), Some(true));
     }
 
     /// #2400: the sealed live server execs `node`; without the grant the exec
