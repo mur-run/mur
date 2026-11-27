@@ -383,3 +383,24 @@ fn the_card_takes_the_panel_slot_and_a_gate_outranks_it() {
     assert!(panel > 3, "card gets rows");
     assert_eq!((chooser, chip, gated), (0, 0, false));
 }
+
+/// #2344: a narrow window must not drop the fingerprints while Approve
+/// stays available; the lines above them go first.
+#[test]
+fn narrow_summary_drops_lines_above_the_fingerprints_first() {
+    use ratatui::text::Line;
+    let body = vec![
+        Line::from("x".repeat(40)),
+        Line::from("Approving writes:"),
+        Line::from("  key       SHA256:abc"),
+        Line::from("  host key  SHA256:def"),
+        Line::from("  one restart"),
+        Line::from("[x] consent"),
+    ];
+    let pin = Some((1, 3));
+    let (fitted, hidden) = render::fit_pinned(body.clone(), 40, 6, pin);
+    assert!(!hidden);
+    assert!(fitted.iter().any(|l| l.to_string().contains("SHA256:abc")));
+    let (_, hidden) = render::fit_pinned(body, 40, 2, pin);
+    assert!(hidden, "too small even for the pinned block");
+}

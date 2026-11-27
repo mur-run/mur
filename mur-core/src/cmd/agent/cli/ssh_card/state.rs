@@ -103,6 +103,9 @@ pub struct CardState {
     pub install: bool,
     /// What Approve wrote, kept for the held and done steps.
     pub applied: Option<Approval>,
+    /// Set by `draw`: the Summary could not show the fingerprints at this
+    /// size, so Approve refuses until the window is larger.
+    pub fp_hidden: std::cell::Cell<bool>,
 }
 
 pub enum KeyAction {
@@ -152,6 +155,7 @@ impl CardState {
             note: None,
             install: false,
             applied: None,
+            fp_hidden: std::cell::Cell::new(false),
         }
     }
 
@@ -432,6 +436,9 @@ impl CardState {
                 return KeyAction::LoadKey(p);
             }
             Step::Host => self.step = Step::Summary,
+            Step::Summary if enter && self.fp_hidden.get() => {
+                self.note = Some("window too small to show the fingerprints — enlarge it".into());
+            }
             Step::Summary if enter => match self.approval() {
                 Ok(a) => return KeyAction::Approve(a),
                 Err(e) => self.note = Some(e),
