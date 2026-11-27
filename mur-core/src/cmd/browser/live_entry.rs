@@ -111,9 +111,11 @@ pub(crate) trait LiveOps {
     fn pending_repairs(&mut self, servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>>;
     /// Whether `site` still has a saved `mur browser auth` profile on disk
     /// (#2551): the "signed in as" note must not claim a session that the
-    /// next browser start cannot load.
-    fn profile_saved(&mut self, _site: &str) -> bool {
-        true
+    /// next browser start cannot load. `None` means "cannot tell" (e.g. MUR's
+    /// home does not resolve): the caller then says nothing about the session
+    /// rather than guessing either way.
+    fn profile_saved(&mut self, _site: &str) -> Option<bool> {
+        None
     }
     /// Append the `broad_audited_enabled` trace event after a `--research` write.
     fn record_research(&mut self, agent: &str) -> anyhow::Result<()>;
