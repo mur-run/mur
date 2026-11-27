@@ -25,6 +25,7 @@ pub(crate) mod checkpoint;
 mod clock;
 mod guarded;
 mod guarded_steps;
+mod meter;
 mod observer;
 mod pause;
 pub(crate) mod pause_events;

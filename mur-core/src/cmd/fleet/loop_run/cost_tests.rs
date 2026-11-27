@@ -262,7 +262,7 @@ fn estimate_sums_per_member_rates_not_the_fleet_maximum() {
 /// Plant a profile whose `model_ref` names a `models.yaml` entry. Uses the
 /// shipped template so the profile parses (a trimmed one would read as
 /// "unknown", i.e. metered, passing for the wrong reason).
-fn plant_member(home: &Path, name: &str, model_ref: &str) {
+pub(super) fn plant_member(home: &Path, name: &str, model_ref: &str) {
     let tmpl = std::fs::read_to_string(
         env!("CARGO_MANIFEST_DIR").to_string()
             + "/../mur-hub-gui/src-tauri/resources/mur-agent-template/profile.yaml",

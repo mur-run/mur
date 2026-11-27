@@ -17,7 +17,6 @@ pub(super) struct SpendPlan {
     /// The cap the budget guard enforces (`None` = the fleet cannot spend, or
     /// has no cap).
     pub budget: Option<f64>,
-    pub price_per_1k: f64,
     /// Forward estimate of one iteration's cost before any real data, and the
     /// fail-safe fallback when an iteration reports no token usage, so spend
     /// can never silently under-count.
@@ -81,7 +80,6 @@ pub(super) fn spend_plan(
     SpendPlan {
         billing,
         budget,
-        price_per_1k,
         projection,
     }
 }

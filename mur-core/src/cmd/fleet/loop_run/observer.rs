@@ -4,6 +4,7 @@
 //! and never affects execution. Moved out of `guarded.rs` unchanged to keep
 //! that file under the 800-line limit.
 
+use super::super::oneshot_budget::OneShotBudget;
 use super::*;
 use crate::executor::dag::{StepEvent, StepEventKind};
 
@@ -11,10 +12,13 @@ pub(super) fn step_observer(
     progress: Arc<Mutex<RunProgress>>,
     step_home: std::path::PathBuf,
     step_fleet: String,
-    price_per_1k: f64,
+    meter: Arc<OneShotBudget>,
 ) -> Arc<dyn Fn(StepEvent) + Send + Sync> {
     let step_progress = progress;
     Arc::new(move |e: StepEvent| {
+        // Priced before the display lookup, so a step the progress record
+        // does not list is still billed.
+        let cost = meter.record(&e);
         let mut g = step_progress.lock().unwrap_or_else(|x| x.into_inner());
         let Some(sp) = g.steps.iter_mut().find(|s| s.id == e.id) else {
             return;
@@ -59,7 +63,7 @@ pub(super) fn step_observer(
                     StepState::Failed
                 };
                 if !e.usage.is_zero() {
-                    sp.cost_usd = Some(iteration_cost_usd(e.usage.total(), price_per_1k));
+                    sp.cost_usd = Some(cost);
                 }
                 // `✓ s2 research dr_worker_2 $0.08 42s`
                 let mark = if done { '✓' } else { '✗' };

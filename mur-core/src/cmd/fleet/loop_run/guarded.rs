@@ -1,6 +1,7 @@
 use std::ops::ControlFlow;
 
 use super::guarded_steps::{commander_gate, finish_run};
+use super::meter::iteration_cost;
 use super::pause::refuse_pause;
 use super::preflight::{SpendPlan, spend_plan};
 use super::*;
@@ -134,9 +135,12 @@ async fn run_guarded_inner(
     let SpendPlan {
         billing,
         budget,
-        price_per_1k,
         projection,
     } = spend_plan(mur_home, &fleet, name, &bounds);
+    // Each turn priced at its own model's rate and billing (one-shot's pricer).
+    let meter = super::meter::loop_meter(mur_home, &fleet, budget.is_some());
+    // The meter's running total at the last iteration boundary.
+    let mut metered = 0.0;
     // Real cumulative spend, accumulated from each iteration's actual token usage.
     let mut spent = resume.as_ref().map_or(0.0, |r| r.spent_usd);
     // Resolve and gate before the clock starts, so an approval wait does not
@@ -408,6 +412,7 @@ async fn run_guarded_inner(
                 &dispatch_goal,
                 &pre_events,
                 Some(&super::super::control::stop_signal(mur_home, name)),
+                &meter,
             ) {
                 Ok(plan) => plan.unwrap_or_else(|| {
                     build_fleet_procedure(&dispatch_goal, &fleet.members, fleet.parallel.as_ref())
@@ -449,7 +454,7 @@ async fn run_guarded_inner(
             progress.clone(),
             mur_home.to_path_buf(),
             name.to_string(),
-            price_per_1k,
+            meter.clone(),
         );
         let pausable = checkpoint::procedure_fits(&proc.steps);
         if !pausable {
@@ -532,7 +537,7 @@ async fn run_guarded_inner(
                 job.run_id = Some(opts.run_id.clone());
                 let _ = super::super::jobs::save_job(mur_home, name, job);
             }
-            spent += iteration_cost_usd(out.tokens_used, price_per_1k);
+            spent += iteration_cost(&meter, &mut metered);
             {
                 let mut g = lock_progress(&progress);
                 g.spend_usd = spent;
@@ -576,7 +581,7 @@ async fn run_guarded_inner(
             }
             // Real usage only: a stopped iteration may have spent nothing,
             // and charging it the full projection would overstate the bill.
-            spent += iteration_cost_usd(out.tokens_used, price_per_1k);
+            spent += iteration_cost(&meter, &mut metered);
             {
                 let mut g = lock_progress(&progress);
                 g.spend_usd = spent;
@@ -601,8 +606,9 @@ async fn run_guarded_inner(
             }
             // Account what the failed iteration actually burned — a failure
             // that spent tokens must still show up against the budget.
+            let cost = iteration_cost(&meter, &mut metered);
             spent += if out.tokens_used > 0 {
-                iteration_cost_usd(out.tokens_used, price_per_1k)
+                cost
             } else {
                 projection
             };
@@ -623,7 +629,7 @@ async fn run_guarded_inner(
             .as_ref()
             .map(|l| l.done_when.as_str())
             .unwrap_or("");
-        let synthesis_tokens = match done_policy(done_when) {
+        let synthesis_usage = match done_policy(done_when) {
             DonePolicy::Marker(marker) => synthesize_via_router(
                 mur_home,
                 &fleet,
@@ -634,10 +640,11 @@ async fn run_guarded_inner(
             .unwrap_or_else(|error| {
                 // No reply came back, so there is no usage to bill.
                 tracing::warn!(fleet = %name, %error, "fleet loop: the synthesis turn failed");
-                0
+                Default::default()
             }),
-            _ => 0,
+            _ => Default::default(),
         };
+        meter.record_router(&synthesis_usage);
         iteration += 1;
         // A blocked iteration reached an action that needs a human and stopped
         // there. Mark the job blocked (not Done — nothing finished) and leave
@@ -666,9 +673,10 @@ async fn run_guarded_inner(
         // Account REAL cost from this iteration's token usage. A 0-token result
         // (older runtime, stub, or a reply that carried no usage) falls back to
         // the projection so the budget guard never silently under-counts.
-        let iteration_tokens = out.tokens_used.saturating_add(synthesis_tokens);
+        let iteration_tokens = out.tokens_used.saturating_add(synthesis_usage.total());
+        let cost = iteration_cost(&meter, &mut metered);
         spent += if iteration_tokens > 0 {
-            iteration_cost_usd(iteration_tokens, price_per_1k)
+            cost
         } else {
             projection
         };
