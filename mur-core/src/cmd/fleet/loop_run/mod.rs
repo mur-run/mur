@@ -617,7 +617,15 @@ pub async fn cmd_fleet_run_loop(
 }
 
 #[cfg(test)]
+mod bounds_tests;
+#[cfg(test)]
+mod commander_queue_tests;
+#[cfg(test)]
 mod consult_tests;
+#[cfg(test)]
+mod cost_tests;
+#[cfg(test)]
+mod outcome_tests;
 #[cfg(test)]
 mod pause_tests;
 #[cfg(test)]
@@ -625,4 +633,4 @@ mod stop_tests;
 #[cfg(test)]
 mod synth_head_tests;
 #[cfg(test)]
-mod tests;
+mod synthesis_marker_tests;
