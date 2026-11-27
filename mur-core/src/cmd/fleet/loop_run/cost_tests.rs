@@ -315,6 +315,14 @@ fn member_projection_reads_models_yaml_per_member() {
     let want = estimate_iteration_cost_usd(1, 0.0006) + estimate_iteration_cost_usd(1, fallback);
     assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
 
+    // An override the loop meter rejects (zero, empty, not a number) pins
+    // nothing here either, so preflight and the meter price alike.
+    for bad in ["0", "", "abc"] {
+        envg.set_var("MUR_FLEET_COST_PER_1K", bad);
+        let got = preflight::member_projection(home, &fleet, fallback);
+        assert!((got - want).abs() < 1e-9, "{bad:?}: got {got}, want {want}");
+    }
+
     envg.set_var("MUR_FLEET_COST_PER_1K", "0.5");
     let pinned = preflight::member_projection(home, &fleet, 0.5);
     let want = 2.0 * estimate_iteration_cost_usd(1, 0.5);

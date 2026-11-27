@@ -104,7 +104,8 @@ pub(super) fn member_projection(mur_home: &Path, fleet: &Fleet, fallback_per_1k:
             .1
     };
     // An explicit override pins one rate for everyone, as it does elsewhere.
-    let pinned = std::env::var("MUR_FLEET_COST_PER_1K").is_ok();
+    // Same test as the loop meter's, so a value it rejects pins nothing here.
+    let pinned = fleet_price_per_1k(mur_home).1 == GuardRate::Env;
     fleet
         .members
         .iter()
