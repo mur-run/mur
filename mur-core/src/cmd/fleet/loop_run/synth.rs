@@ -42,25 +42,9 @@ pub(crate) fn extract_task_reply(task: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
-pub(super) fn task_tokens(task: &serde_json::Value) -> u64 {
-    let Some(usage) = task.get("usage") else {
-        return 0;
-    };
-    usage
-        .get("input_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0)
-        .saturating_add(
-            usage
-                .get("output_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-        )
-}
-
 /// Run the router's synthesis turn and record its reply on the fleet channel.
 ///
-/// Returns the tokens the turn used. `Err` means the turn itself did not run
+/// Returns the turn's usage, by answering model. `Err` means the turn itself did not run
 /// to a reply; a reply that could not be recorded is logged and still counted.
 pub(super) fn synthesize_via_router(
     mur_home: &Path,
@@ -68,7 +52,7 @@ pub(super) fn synthesize_via_router(
     goal: &str,
     marker: &str,
     evidence: &str,
-) -> Result<u64> {
+) -> Result<crate::executor::dag::TokenUsage> {
     let prompt = build_synthesis_prompt(goal, marker, evidence);
     let params = serde_json::json!({
         "message": { "role": "user", "parts": [{ "kind": "text", "text": prompt }] },
@@ -100,17 +84,17 @@ pub(super) fn synthesize_via_router(
     );
     // The turn is paid for once it returns: a synthesis that cannot be
     // written is a lost line, not a free turn (#2520).
-    let tokens = task_tokens(&task);
+    let usage = crate::executor::dag::extract_usage(&task);
     if let Err(error) = record_synthesis(mur_home, fleet, &reply) {
         tracing::warn!(
             fleet = %fleet.name,
             channel_id = %fleet.channel_id,
-            tokens,
+            tokens = usage.total(),
             %error,
             "fleet loop: the synthesis could not be written; its turn is still billed"
         );
     }
-    Ok(tokens)
+    Ok(usage)
 }
 
 /// Write the router's synthesis to the fleet channel, as the router.

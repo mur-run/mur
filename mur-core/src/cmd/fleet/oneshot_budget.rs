@@ -92,6 +92,12 @@ pub struct OneShotBudget {
     router: String,
     spend: Mutex<Spend>,
     tripped: AtomicBool,
+    /// Price every metered token at the fallback rate, whatever its model
+    /// records: `MUR_FLEET_COST_PER_1K` pinning one rate for the loop.
+    pinned: bool,
+    /// Say when a turn is priced as a guess. Off for a loop with no cap,
+    /// where the figure is shown but binds nothing.
+    warn: bool,
 }
 
 impl OneShotBudget {
@@ -101,6 +107,19 @@ impl OneShotBudget {
     /// uncounted (#2083 re-review).
     pub fn for_fleet(mur_home: &Path, fleet: &Fleet, cost_usd: Option<f64>) -> Option<Arc<Self>> {
         let cap = cost_usd.filter(|&c| c > 0.0)?;
+        let mut budget = Self::meter(mur_home, fleet);
+        budget.cap = cap;
+        println!(
+            "  bounds: cost_usd ${cap:.2} — enforced on actual spend, each billable turn \
+             at its model's input/output rates"
+        );
+        budget.warn_unpriced();
+        Some(Arc::new(budget))
+    }
+
+    /// The same per-turn pricing with no cap of its own: it counts, it never
+    /// trips. The fleet loop runs its own guard on top and reads the spend.
+    pub fn meter(mur_home: &Path, fleet: &Fleet) -> Self {
         let lookup = super::billing::billing_lookup(mur_home);
         let router = fleet.router_or_concierge().to_string();
         let agents = std::iter::once(&router)
@@ -125,13 +144,7 @@ impl OneShotBudget {
             _ => None,
         }
         .unwrap_or_else(|| flat_rate(flat_per_1k));
-        println!(
-            "  bounds: cost_usd ${cap:.2} — enforced on actual spend, each billable turn \
-             at its model's input/output rates"
-        );
-        let budget = Self::new(cap, 0.0, router, agents, models).with_fallback(fallback);
-        budget.warn_unpriced();
-        Some(Arc::new(budget))
+        Self::new(f64::INFINITY, 0.0, router, agents, models).with_fallback(fallback)
     }
 
     /// A guard pricing an unpriced model at one flat `fallback_per_1k` rate
@@ -151,6 +164,8 @@ impl OneShotBudget {
             router,
             spend: Mutex::new(Spend::default()),
             tripped: AtomicBool::new(false),
+            pinned: false,
+            warn: true,
         }
     }
 
@@ -160,9 +175,22 @@ impl OneShotBudget {
         self
     }
 
+    /// Price every metered token at the fallback rates. Free models stay
+    /// free: a pinned rate says what a token costs, not who pays for it.
+    pub fn with_pinned_rate(mut self, pinned: bool) -> Self {
+        self.pinned = pinned;
+        self
+    }
+
+    /// Whether to warn about guessed rates (on by default).
+    pub fn with_warnings(mut self, warn: bool) -> Self {
+        self.warn = warn;
+        self
+    }
+
     /// Say before the run starts which metered agents' models have no rate,
     /// rather than only once their first turn is priced as a guess (#2130).
-    fn warn_unpriced(&self) {
+    pub fn warn_unpriced(&self) {
         let mut unpriced: Vec<(&str, &str)> = self
             .agents
             .iter()
@@ -211,27 +239,30 @@ impl OneShotBudget {
         self.tripped.load(Ordering::SeqCst)
     }
 
-    /// Account one step event. Only terminal events carry usage.
-    pub fn record(&self, e: &StepEvent) {
+    /// Account one step event, returning what it cost. Only terminal events
+    /// carry usage.
+    pub fn record(&self, e: &StepEvent) -> f64 {
         if matches!(
             e.kind,
             StepEventKind::Done | StepEventKind::Failed | StepEventKind::Stopped
         ) {
-            self.record_turn(e.agent.as_deref(), &e.usage);
+            self.record_turn(e.agent.as_deref(), &e.usage)
+        } else {
+            0.0
         }
     }
 
     /// Account the router's planning turn, which runs before any step and so
     /// never reaches the DAG observer.
-    pub fn record_router(&self, usage: &TokenUsage) {
+    pub fn record_router(&self, usage: &TokenUsage) -> f64 {
         let router = self.router.clone();
-        self.record_turn(Some(&router), usage);
+        self.record_turn(Some(&router), usage)
     }
 
-    /// Price one agent turn and add it to the run's spend.
-    pub fn record_turn(&self, agent: Option<&str>, usage: &TokenUsage) {
+    /// Price one agent turn, add it to the run's spend, and return its cost.
+    pub fn record_turn(&self, agent: Option<&str>, usage: &TokenUsage) -> f64 {
         if usage.is_zero() {
-            return;
+            return 0.0;
         }
         let info = agent.and_then(|a| self.agents.get(a));
         let cost: f64 = usage
@@ -247,6 +278,7 @@ impl OneShotBudget {
                 s.usd, self.cap
             );
         }
+        cost
     }
 
     /// What one answering model's share of a turn cost.
@@ -269,6 +301,9 @@ impl OneShotBudget {
         };
         if !super::billing::agent_bills(Some(entry.billing_or_inferred())) {
             return 0.0;
+        }
+        if self.pinned {
+            return self.at_fallback(share);
         }
         match entry.cost_with_cache(
             share.input,
@@ -318,7 +353,7 @@ impl OneShotBudget {
     /// model. The cached part of the prompt is split out exactly as for a
     /// priced model, so a cache read is never billed at an output rate.
     fn flat(&self, label: &str, share: &ModelShare, why: &str) -> f64 {
-        if self.spend().guessed.insert(label.to_string()) {
+        if self.warn && self.spend().guessed.insert(label.to_string()) {
             eprintln!(
                 "  ⚠ cost_usd: {label} {why} models.yaml — its tokens are counted as metered at \
                  the guard's conservative {}, so spend is an upper estimate. \
@@ -326,6 +361,11 @@ impl OneShotBudget {
                 self.fallback_text()
             );
         }
+        self.at_fallback(share)
+    }
+
+    /// `share` at the fallback rates, the cached prompt split out.
+    fn at_fallback(&self, share: &ModelShare) -> f64 {
         self.fallback
             .cost_with_cache(
                 share.input,
@@ -339,7 +379,9 @@ impl OneShotBudget {
     /// The step observer to hand the DAG executor.
     pub fn observer(self: &Arc<Self>) -> Arc<dyn Fn(StepEvent) + Send + Sync> {
         let me = Arc::clone(self);
-        Arc::new(move |e: StepEvent| me.record(&e))
+        Arc::new(move |e: StepEvent| {
+            me.record(&e);
+        })
     }
 
     /// This budget as a halt the DAG polls. It halts with the budget's own
@@ -375,10 +417,13 @@ fn flat_rate(per_1k: f64) -> ModelEntry {
 /// at an output rate. Every rate counts at what its entry would actually
 /// charge (`cost_with_cache`): a one-sided entry prices its missing side at
 /// the side it has, and a missing cache rate falls back to its input rate.
+/// Only a model that can bill counts: a subscription or local entry's rate
+/// charges nobody, so it is no ceiling for one that does.
 fn dearest_rates(models: &BTreeMap<String, ModelEntry>) -> Option<ModelEntry> {
     let dearest = |side: fn(&ModelEntry) -> Option<f64>| {
         models
             .values()
+            .filter(|m| super::billing::agent_bills(Some(m.billing_or_inferred())))
             .filter_map(side)
             .filter(|r| *r > 0.0)
             .reduce(f64::max)

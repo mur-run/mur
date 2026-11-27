@@ -457,7 +457,69 @@ fn a_synthesis_that_cannot_be_written_still_reports_its_tokens() {
 
     assert!(fixture.is_err(), "fixture: the synthesis write must fail");
     assert_eq!(
-        tokens.expect("the turn ran, so its usage is reported"),
+        tokens
+            .expect("the turn ran, so its usage is reported")
+            .total(),
         2 * TURN_TOKENS
+    );
+}
+
+/// A loop iteration is priced turn by turn at each answering model's own
+/// rate and billing, as a one-shot run is. Before, every token of the
+/// iteration — the subscription member's included — was billed at the
+/// registry's dearest metered rate.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_loop_iteration_bills_only_metered_turns_at_their_own_rates() {
+    if std::env::var("MUR_TEST_SOCKETS").as_deref() != Ok("1") {
+        eprintln!("skipping a_loop_iteration_bills_only_metered_turns: set MUR_TEST_SOCKETS=1");
+        return;
+    }
+    let h = Home::new();
+    let home = h.path().to_path_buf();
+    std::fs::write(
+        home.join("models.yaml"),
+        "schema_version: 1\nmodels:\n  \
+         sub:\n    provider: claude\n    model: opus\n    billing: subscription\n    \
+         input_cost_per_1k: 0.005\n    output_cost_per_1k: 0.025\n  \
+         api:\n    provider: openai\n    model: gpt-x\n    billing: usage_billed\n    \
+         input_cost_per_1k: 0.001\n    output_cost_per_1k: 0.002\n",
+    )
+    .unwrap();
+    super::cost_tests::plant_member(&home, MEMBER, "sub");
+    super::cost_tests::plant_member(&home, FLEET_ROUTER, "api");
+    let member = plant_identity_for(&home, MEMBER);
+    let member_home = home.clone();
+    serve(home.join("m.sock"), "findings", move || {
+        ChannelService::open(&member_home)
+            .unwrap()
+            .append_signed(
+                CHANNEL,
+                &member,
+                0,
+                ChannelActor::Agent { id: MEMBER.into() },
+                EventKind::Message,
+                serde_json::json!({ "text": "findings" }),
+                None,
+            )
+            .unwrap();
+    });
+    running_lock(&home, MEMBER, &home.join("m.sock"));
+    serve(home.join("r.sock"), "the report", || {});
+    running_lock(&home, FLEET_ROUTER, &home.join("r.sock"));
+
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.unset_var("MUR_FLEET_COST_PER_1K");
+    let (stop, _, spent) = run_guarded(&home, "dev", None, None, None, None, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(stop, LoopStop::Converged);
+    // The member's subscription turn is free; the router's synthesis is
+    // `TURN_TOKENS` in at $0.001/1k and `TURN_TOKENS` out at $0.002/1k.
+    let synthesis = (TURN_TOKENS as f64 / 1000.0) * (0.001 + 0.002);
+    assert!(
+        (spent - synthesis).abs() < 1e-9,
+        "only the metered router turn is billed: spent {spent}, expected {synthesis}"
     );
 }

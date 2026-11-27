@@ -191,14 +191,19 @@ pub fn static_procedure(fleet: &Fleet, goal: &str) -> anyhow::Result<Option<Proc
 ///
 /// `Err` only when `stop` tripped while the router was still planning
 /// (#2502): there is no plan, and the caller must not fall back to broadcast.
+///
+/// The turn is billed to `meter` either way: a reply that did not parse, or
+/// a turn the kill-switch cut short, was still paid for.
 pub fn plan_via_router(
     mur_home: &Path,
     fleet: &Fleet,
     goal: &str,
     events: &[ChannelEvent],
     stop: Option<&StopSignal>,
+    meter: &super::oneshot_budget::OneShotBudget,
 ) -> Result<Option<Procedure>, PlanHalt> {
     let turn = plan_via_router_metered(mur_home, fleet, goal, events, stop);
+    meter.record_router(&turn.usage);
     match turn.halt {
         Some(halt) => Err(halt),
         None => Ok(turn.plan),

@@ -25,6 +25,7 @@ pub(crate) mod checkpoint;
 mod clock;
 mod guarded;
 mod guarded_steps;
+mod meter;
 mod observer;
 mod pause;
 pub(crate) mod pause_events;
@@ -278,13 +279,17 @@ pub fn budget_exceeded(spent: f64, next_cost: f64, budget: Option<f64>) -> bool 
 ///
 /// A ceiling rather than a per-model lookup: the guard bills a flat rate
 /// against an iteration's whole token count, so it has to be at least as
-/// expensive as anything the fleet could have used. Split out from
+/// expensive as anything the fleet could have used. Only a model that can
+/// bill sets it: a rate recorded on a subscription or local entry charges
+/// nobody, and letting it in billed a whole fleet at a stale Opus rate while
+/// its one metered member cost a fortieth of that. Split out from
 /// `fleet_price_per_1k` so the ceiling property is testable without touching
 /// the filesystem or the process environment.
 fn dearest_output_rate(reg: &mur_common::model::ModelRegistry) -> Option<f64> {
     let max = reg
         .models
         .values()
+        .filter(|m| super::billing::agent_bills(Some(m.billing_or_inferred())))
         .filter_map(|m| m.effective_costs().1)
         .fold(0.0_f64, f64::max);
     (max > 0.0).then_some(max)
@@ -297,9 +302,9 @@ fn dearest_output_rate(reg: &mur_common::model::ModelRegistry) -> Option<f64> {
 pub enum GuardRate {
     /// `MUR_FLEET_COST_PER_1K`.
     Env,
-    /// Dearest output rate in `models.yaml`.
+    /// Dearest output rate of a metered model in `models.yaml`.
     Registry,
-    /// `DEFAULT_PRICE_PER_1K` — nothing in the registry carries a rate.
+    /// `DEFAULT_PRICE_PER_1K` — no metered model in the registry carries a rate.
     Default,
 }
 

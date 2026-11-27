@@ -17,7 +17,6 @@ pub(super) struct SpendPlan {
     /// The cap the budget guard enforces (`None` = the fleet cannot spend, or
     /// has no cap).
     pub budget: Option<f64>,
-    pub price_per_1k: f64,
     /// Forward estimate of one iteration's cost before any real data, and the
     /// fail-safe fallback when an iteration reports no token usage, so spend
     /// can never silently under-count.
@@ -69,19 +68,51 @@ pub(super) fn spend_plan(
         // enforcing on one turns "stopped on budget" into a number the user
         // has no way to reconcile against a real bill.
         println!(
-            "  ⚠ budget enforced at the default ${rate}/1k — no model in models.yaml \
-             carries a rate, so spend is a guess. `mur model add` records a real one."
+            "  ⚠ budget enforced at the default ${rate}/1k — no metered model in \
+             models.yaml carries a rate, so spend is a guess. `mur model add` records a real one."
         );
     }
     let price_per_1k = price_per_1k.0;
     if let Some(line) = no_cap_notice(&billing, budget, deadline, price_per_1k) {
         println!("  {line}");
     }
-    let projection = estimate_iteration_cost_usd(fleet.members.len(), price_per_1k);
+    let projection = member_projection(mur_home, fleet, price_per_1k);
     SpendPlan {
         billing,
         budget,
-        price_per_1k,
         projection,
     }
+}
+
+/// Iteration-1 forward estimate, member by member. A subscription or local
+/// member cannot spend, so it adds nothing; a metered member is priced at its
+/// own model's output rate, falling back to the fleet-wide `fallback_per_1k`
+/// when that model carries no rate or cannot be resolved (never cheaper than
+/// the conservative reading for an unknown).
+pub(super) fn member_projection(mur_home: &Path, fleet: &Fleet, fallback_per_1k: f64) -> f64 {
+    let lookup = super::super::billing::billing_lookup(mur_home);
+    let registry = mur_common::model::ModelRegistry::load_from(&mur_home.join("models.yaml")).ok();
+    let own_rate = |agent: &str| -> Option<f64> {
+        let model_ref = mur_common::agent::AgentProfile::load(mur_home, agent)
+            .ok()?
+            .model_ref?;
+        registry
+            .as_ref()?
+            .models
+            .get(&model_ref)?
+            .effective_costs()
+            .1
+    };
+    // An explicit override pins one rate for everyone, as it does elsewhere.
+    // Same test as the loop meter's, so a value it rejects pins nothing here.
+    let pinned = fleet_price_per_1k(mur_home).1 == GuardRate::Env;
+    fleet
+        .members
+        .iter()
+        .filter(|m| super::super::billing::agent_bills(lookup(m)))
+        .map(|m| {
+            let rate = if pinned { None } else { own_rate(m) };
+            estimate_iteration_cost_usd(1, rate.unwrap_or(fallback_per_1k))
+        })
+        .sum()
 }
