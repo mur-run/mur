@@ -1,0 +1,90 @@
+//! Pricing one finished turn from its `Task.usage`. Shared by the TUI
+//! (`App::apply_usage`) and the `--plain` path so the two cannot drift: plain
+//! mode used to price every turn at the configured model and ignore both
+//! `model_ref` and `by_model` (qa review I3 on #2609).
+
+use super::PricingBook;
+use super::footer::{self, Pricing, UsageCounts, own_rates, unbilled_label};
+
+/// Pricing of the model that answered this turn (`usage.model_ref`, the LAST
+/// call's provider model name). `None` when the runtime did not say, or there
+/// is no book to look it up in; an answering model the registry does not know
+/// is unpriced (`Pricing::default()`) rather than guessed at.
+pub(super) fn answered_pricing(
+    book: Option<&PricingBook>,
+    usage: &serde_json::Value,
+) -> Option<Pricing> {
+    let book = book?;
+    let answered = usage.get("model_ref").and_then(|v| v.as_str())?;
+    Some(
+        book.key_for_model(answered)
+            .map(|k| book.pricing_for_key(k))
+            .unwrap_or_default(),
+    )
+}
+
+/// USD for one turn. A turn is many calls and fallback can answer each with a
+/// different model, so each `by_model` share is priced at its own model (qa
+/// review C1); older runtimes without the split are priced at `pricing`, the
+/// answering model's rates. `None` = nothing in the turn is billed per token.
+pub(super) fn turn_cost(
+    pricing: &Pricing,
+    book: Option<&PricingBook>,
+    usage: &serde_json::Value,
+    u: &UsageCounts,
+) -> Option<f64> {
+    match (book, usage.get("by_model").and_then(|v| v.as_array())) {
+        (Some(book), Some(shares)) if !shares.is_empty() => cost_by_share(book, shares),
+        _ => footer::turn_cost(pricing, u),
+    }
+}
+
+/// The `--plain` footer line for one turn: tokens, then the cost, or the
+/// answering model's billing mode when nothing was billed per token.
+pub(super) fn plain_footer(
+    configured: &Pricing,
+    book: Option<&PricingBook>,
+    usage: &serde_json::Value,
+) -> String {
+    let u = footer::parse_usage(usage);
+    let pricing = answered_pricing(book, usage).unwrap_or(*configured);
+    let tok = u.input + u.output;
+    match turn_cost(&pricing, book, usage, &u) {
+        Some(c) => format!("  {tok} tok · ${c:.3}"),
+        None => match unbilled_label(&pricing) {
+            Some(label) => format!("  {tok} tok · {label}"),
+            None => format!("  {tok} tok"),
+        },
+    }
+}
+
+/// USD for one turn priced share by share. `None` when no share is billed per
+/// token (an all-subscription or all-local turn has no money figure). A share
+/// whose model the registry cannot resolve or price is counted at the book's
+/// dearest rates — the cap fails closed on what it cannot price.
+fn cost_by_share(book: &PricingBook, shares: &[serde_json::Value]) -> Option<f64> {
+    let mut total: Option<f64> = None;
+    for share in shares {
+        let tokens = |k: &str| share.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+        let u = UsageCounts {
+            input: tokens("input_tokens"),
+            output: tokens("output_tokens"),
+        };
+        if u.input == 0 && u.output == 0 {
+            continue;
+        }
+        let rates = match book.key_for_share(share).map(|k| book.pricing_for_key(&k)) {
+            Some(p) if unbilled_label(&p).is_some() => continue,
+            Some(p) => own_rates(&p).or_else(|| book.dearest_rates()),
+            None => book.dearest_rates(),
+        };
+        // Nothing in the registry carries a rate: there is no figure to give.
+        let Some((i, o)) = rates else { continue };
+        *total.get_or_insert(0.0) += u.input as f64 / 1000.0 * i + u.output as f64 / 1000.0 * o;
+    }
+    total
+}
+
+#[cfg(test)]
+#[path = "turn_price_tests.rs"]
+mod tests;

@@ -83,6 +83,7 @@ mod stream_handler;
 mod suggest;
 mod term;
 mod theme;
+mod turn_price;
 use mur_common::hitl::tool_tier;
 mod turn;
 mod ui;

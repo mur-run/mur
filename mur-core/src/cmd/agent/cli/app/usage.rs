@@ -157,13 +157,12 @@ impl App {
         // would count as $0 (qa review C1). Price each `by_model` share at its
         // own model; older runtimes without the split fall back to `model_ref`.
         // An unbilled turn adds nothing and erases nothing.
-        let cost = match (
-            &self.pricing_book,
-            usage.get("by_model").and_then(|v| v.as_array()),
-        ) {
-            (Some(book), Some(shares)) if !shares.is_empty() => turn_cost_by_share(book, shares),
-            _ => super::super::footer::turn_cost(&self.pricing, &u),
-        };
+        let cost = super::super::turn_price::turn_cost(
+            &self.pricing,
+            self.pricing_book.as_ref(),
+            usage,
+            &u,
+        );
         if let Some(c) = cost {
             *self.session_spent_usd.get_or_insert(0.0) += c;
         }
@@ -343,35 +342,4 @@ impl App {
             self.cwd.as_deref(),
         )
     }
-}
-
-/// USD for one turn priced share by share. `None` when no share is billed per
-/// token (an all-subscription or all-local turn has no money figure). A share
-/// whose model the registry cannot resolve or price is counted at the book's
-/// dearest rates — the cap fails closed on what it cannot price.
-fn turn_cost_by_share(
-    book: &super::super::PricingBook,
-    shares: &[serde_json::Value],
-) -> Option<f64> {
-    use super::super::footer::{UsageCounts, own_rates, unbilled_label};
-    let mut total: Option<f64> = None;
-    for share in shares {
-        let tokens = |k: &str| share.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
-        let u = UsageCounts {
-            input: tokens("input_tokens"),
-            output: tokens("output_tokens"),
-        };
-        if u.input == 0 && u.output == 0 {
-            continue;
-        }
-        let rates = match book.key_for_share(share).map(|k| book.pricing_for_key(&k)) {
-            Some(p) if unbilled_label(&p).is_some() => continue,
-            Some(p) => own_rates(&p).or_else(|| book.dearest_rates()),
-            None => book.dearest_rates(),
-        };
-        // Nothing in the registry carries a rate: there is no figure to give.
-        let Some((i, o)) = rates else { continue };
-        *total.get_or_insert(0.0) += u.input as f64 / 1000.0 * i + u.output as f64 / 1000.0 * o;
-    }
-    total
 }
