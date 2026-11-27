@@ -77,11 +77,43 @@ pub(super) fn spend_plan(
     if let Some(line) = no_cap_notice(&billing, budget, deadline, price_per_1k) {
         println!("  {line}");
     }
-    let projection = estimate_iteration_cost_usd(fleet.members.len(), price_per_1k);
+    let projection = member_projection(mur_home, fleet, price_per_1k);
     SpendPlan {
         billing,
         budget,
         price_per_1k,
         projection,
     }
+}
+
+/// Iteration-1 forward estimate, member by member. A subscription or local
+/// member cannot spend, so it adds nothing; a metered member is priced at its
+/// own model's output rate, falling back to the fleet-wide `fallback_per_1k`
+/// when that model carries no rate or cannot be resolved (never cheaper than
+/// the conservative reading for an unknown).
+pub(super) fn member_projection(mur_home: &Path, fleet: &Fleet, fallback_per_1k: f64) -> f64 {
+    let lookup = super::super::billing::billing_lookup(mur_home);
+    let registry = mur_common::model::ModelRegistry::load_from(&mur_home.join("models.yaml")).ok();
+    let own_rate = |agent: &str| -> Option<f64> {
+        let model_ref = mur_common::agent::AgentProfile::load(mur_home, agent)
+            .ok()?
+            .model_ref?;
+        registry
+            .as_ref()?
+            .models
+            .get(&model_ref)?
+            .effective_costs()
+            .1
+    };
+    // An explicit override pins one rate for everyone, as it does elsewhere.
+    let pinned = std::env::var("MUR_FLEET_COST_PER_1K").is_ok();
+    fleet
+        .members
+        .iter()
+        .filter(|m| super::super::billing::agent_bills(lookup(m)))
+        .map(|m| {
+            let rate = if pinned { None } else { own_rate(m) };
+            estimate_iteration_cost_usd(1, rate.unwrap_or(fallback_per_1k))
+        })
+        .sum()
 }
