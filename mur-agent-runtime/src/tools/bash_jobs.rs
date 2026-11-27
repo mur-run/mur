@@ -38,6 +38,11 @@ pub const SPOOL_DIR: &str = "jobs";
 /// An exited job nobody collected is dropped after this.
 pub const JOB_RESULT_TTL: Duration = Duration::from_secs(60 * 60);
 /// SIGTERM → this → SIGKILL, on the whole group.
+/// A running job nobody has polled and that has printed nothing for this long
+/// is presumed abandoned. It is only ever reclaimed when its lane is full and a
+/// new command needs the slot — never on a timer.
+pub const IDLE_RECLAIM: Duration = Duration::from_secs(30 * 60);
+
 pub const KILL_GRACE: Duration = Duration::from_secs(2);
 /// After the shell exits, how long the pump waits for the pipes to drain
 /// before recording the exit. A grandchild holding the pipe (`sleep 60 &`)
@@ -81,6 +86,8 @@ struct Output {
     spool_written: u64,
     spool_capped: bool,
     spool_error: Option<String>,
+    /// Last time the child wrote anything.
+    last_output: Option<Instant>,
 }
 
 struct Job {
@@ -98,6 +105,10 @@ struct Job {
     killed_by: Arc<Mutex<Option<&'static str>>>,
     cursor_stdout: u64,
     cursor_stderr: u64,
+    /// Last `bash_wait` / `bash_kill` that named this job.
+    last_polled: Instant,
+    /// Reclaimed as idle: already signalled, no longer counts against its lane.
+    reclaimed: bool,
 }
 
 /// What one `bash` / `bash_wait` / `bash_kill` reply gets.
@@ -140,14 +151,66 @@ pub enum JobError {
     Unknown(String, String),
 }
 
-#[derive(Default)]
 pub struct JobTable {
     jobs: Mutex<HashMap<String, Job>>,
+    idle_after: Duration,
+}
+
+impl Default for JobTable {
+    fn default() -> Self {
+        Self {
+            jobs: Mutex::default(),
+            idle_after: IDLE_RECLAIM,
+        }
+    }
 }
 
 impl JobTable {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    #[cfg(test)]
+    fn with_idle_after(idle_after: Duration) -> Arc<Self> {
+        Arc::new(Self {
+            jobs: Mutex::default(),
+            idle_after,
+        })
+    }
+
+    /// Free one slot in a full lane: the running job in it that has gone
+    /// longest without a poll or any output, if that exceeds `idle_after`.
+    /// SIGTERMs it now and escalates to SIGKILL after `KILL_GRACE`; the exit
+    /// stays collectable by `bash_wait` and names the signal.
+    fn reclaim_idle(&self, jobs: &mut HashMap<String, Job>, status_query: bool) -> Option<String> {
+        let now = Instant::now();
+        let idle_of = |j: &Job| {
+            let seen = j.out.lock().unwrap_or_else(|e| e.into_inner()).last_output;
+            now.duration_since(seen.map_or(j.last_polled, |o| o.max(j.last_polled)))
+        };
+        let (id, idle) = jobs
+            .iter()
+            .filter(|(_, j)| {
+                j.status_query == status_query && !j.reclaimed && j.done.borrow().is_none()
+            })
+            .map(|(id, j)| (id.clone(), idle_of(j)))
+            .filter(|(_, idle)| *idle >= self.idle_after)
+            .max_by_key(|(_, idle)| *idle)?;
+        let j = jobs.get_mut(&id)?;
+        j.reclaimed = true;
+        *j.killed_by.lock().unwrap_or_else(|e| e.into_inner()) = Some(FIRST_SIGNAL);
+        signal_group(j.pid, Signal::Term);
+        let (pid, mut done, killed_by) = (j.pid, j.done.clone(), j.killed_by.clone());
+        tokio::spawn(async move {
+            if tokio::time::timeout(KILL_GRACE, done.wait_for(|e| e.is_some()))
+                .await
+                .is_err()
+            {
+                *killed_by.lock().unwrap_or_else(|e| e.into_inner()) = Some(SECOND_SIGNAL);
+                signal_group(pid, Signal::Kill);
+            }
+        });
+        Some(format!("{id} (idle {}s)", idle.as_secs()))
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Job>> {
@@ -197,7 +260,7 @@ impl JobTable {
             .iter()
             .filter(|id| {
                 jobs.get(*id)
-                    .is_some_and(|j| j.status_query == status_query)
+                    .is_some_and(|j| j.status_query == status_query && !j.reclaimed)
             })
             .count();
         let cap = if status_query {
@@ -205,7 +268,7 @@ impl JobTable {
         } else {
             MAX_JOBS
         };
-        if in_lane >= cap {
+        if in_lane >= cap && self.reclaim_idle(&mut jobs, status_query).is_none() {
             return Err(JobError::TooMany(Self::describe_running(&jobs, &running)));
         }
         let mut cmd = Command::new("bash");
@@ -270,6 +333,8 @@ impl JobTable {
                 killed_by,
                 cursor_stdout: 0,
                 cursor_stderr: 0,
+                last_polled: Instant::now(),
+                reclaimed: false,
             },
         );
         Ok(id)
@@ -303,7 +368,10 @@ impl JobTable {
     }
 
     fn done_of(&self, job_id: &str) -> Result<watch::Receiver<Option<Exit>>, JobError> {
-        let jobs = self.lock();
+        let mut jobs = self.lock();
+        if let Some(j) = jobs.get_mut(job_id) {
+            j.last_polled = Instant::now();
+        }
         jobs.get(job_id)
             .map(|j| j.done.clone())
             .ok_or_else(|| JobError::Unknown(job_id.to_string(), Self::known(&jobs)))
@@ -601,6 +669,7 @@ fn append(
         return;
     }
     let mut o = out.lock().unwrap_or_else(|e| e.into_inner());
+    o.last_output = Some(Instant::now());
     match which {
         Which::Stdout => o.stdout.append(bytes),
         Which::Stderr => o.stderr.append(bytes),
