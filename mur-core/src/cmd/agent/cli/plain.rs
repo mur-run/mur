@@ -2,6 +2,7 @@
 //! 800-line rule. Pure movement: verbatim.
 
 use super::*;
+use mur_common::hitl::surface::{AUTO_SURFACE, CLI_SURFACE};
 
 /// Pipe-safe fallback: read a line from stdin, stream the reply as plain text to
 /// stdout, repeat. No ANSI, no TUI. Threads conversation context across turns.
@@ -108,7 +109,7 @@ pub(super) fn run_plain(
                     eprintln!(
                         "[non-interactive: auto-approving tool-approval request (default; --ask to deny)]"
                     );
-                    (true, "auto")
+                    (true, AUTO_SURFACE)
                 } else if within_ceiling
                     && auto_reads
                     && bash_class::is_readonly_call(tool, hitl.get("tool_input"))
@@ -121,13 +122,13 @@ pub(super) fn run_plain(
                         "  [auto-approved read-only {} (read lane)]",
                         super::scrub::scrub_str(tool)
                     );
-                    (true, "auto")
+                    (true, AUTO_SURFACE)
                 } else if within_ceiling && session_allow.borrow().contains(tool) {
                     eprintln!(
                         "  [auto-approved {} (session allow)]",
                         super::scrub::scrub_str(tool)
                     );
-                    (true, "auto")
+                    (true, AUTO_SURFACE)
                 } else if let Some(k) = dest::grant_for(tool, hitl.get("tool_input"), tier)
                     .key()
                     .filter(|k| session_allow.borrow().contains(k))
@@ -139,7 +140,7 @@ pub(super) fn run_plain(
                         super::scrub::scrub_str(tool),
                         super::scrub::scrub_str(&k)
                     );
-                    (true, "auto")
+                    (true, AUTO_SURFACE)
                 } else if interactive {
                     // Outer loop releases stdin lock between reads (Task 2), so
                     // we can safely acquire a fresh lock here to prompt the user.
@@ -196,17 +197,17 @@ pub(super) fn run_plain(
                         Some('y' | 'Y') => true,
                         _ => false,
                     };
-                    (allowed, "cli")
+                    (allowed, CLI_SURFACE)
                 } else if !within_ceiling {
                     eprintln!(
                         "[non-interactive: denying {tier:?} tool call — above the auto ceiling, which no session grant raises]"
                     );
-                    (false, "auto")
+                    (false, AUTO_SURFACE)
                 } else {
                     eprintln!(
                         "[non-interactive: auto-denying tool-approval request (--ask; drop it to allow)]"
                     );
-                    (false, "auto")
+                    (false, AUTO_SURFACE)
                 };
                 let _ = dial_method(
                     home,

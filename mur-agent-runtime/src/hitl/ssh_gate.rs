@@ -166,7 +166,10 @@ impl SshSignGate {
                         action_hash: hash.clone(),
                         allow: d.allow,
                         reason: d.reason.clone().unwrap_or_default(),
-                        surface: d.surface.clone().unwrap_or_else(|| "unknown".into()),
+                        surface: d
+                            .surface
+                            .clone()
+                            .unwrap_or_else(|| mur_common::hitl::surface::UNKNOWN_SURFACE.into()),
                         issued_at: Some(chrono::Utc::now()),
                         label: Some(label),
                     })

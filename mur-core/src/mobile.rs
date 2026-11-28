@@ -659,7 +659,7 @@ pub fn respond_hitl(
             action_hash: request.action_hash,
             allow,
             reason: reason.to_string(),
-            surface: "ios".into(),
+            surface: mur_common::hitl::surface::IOS_SURFACE.into(),
             issued_at: Some(chrono::Utc::now()),
             label: None,
         };

@@ -7,7 +7,7 @@
 
 /// Surfaces where a person pressed the key. `mcp` = an MCP client's
 /// elicitation answer relayed by the shim.
-pub const HUMAN_SURFACES: &[&str] = &[CLI_SURFACE, HUB_SURFACE, "ios", MCP_SURFACE];
+pub const HUMAN_SURFACES: &[&str] = &[CLI_SURFACE, HUB_SURFACE, IOS_SURFACE, MCP_SURFACE];
 
 /// The surface tests write. Accepted only where the caller opts in under
 /// its own `#[cfg(test)]`: `cfg(test)` here would apply to this crate's
@@ -27,6 +27,15 @@ pub const CLI_SURFACE: &str = "cli";
 
 /// An MCP client's elicitation answer, relayed by the runtime's shim.
 pub const MCP_SURFACE: &str = "mcp";
+
+/// The iOS companion app, when a person approved or rejected on the phone.
+pub const IOS_SURFACE: &str = "ios";
+
+/// A standing policy grant settling a call without asking. Never human.
+pub const POLICY_SURFACE: &str = "policy";
+
+/// The responder named no surface. Recorded, never guessed, never human.
+pub const UNKNOWN_SURFACE: &str = "unknown";
 
 pub fn is_human_surface(surface: &str) -> bool {
     HUMAN_SURFACES.contains(&surface)
@@ -50,5 +59,8 @@ mod tests {
         assert!(is_human_surface(HUB_SURFACE));
         assert!(is_human_surface(CLI_SURFACE));
         assert!(is_human_surface(MCP_SURFACE));
+        assert!(is_human_surface(IOS_SURFACE));
+        assert!(!is_human_surface(POLICY_SURFACE));
+        assert!(!is_human_surface(UNKNOWN_SURFACE));
     }
 }

@@ -25,8 +25,8 @@ mod surface_gate_tests;
 pub struct HitlDecision {
     pub allow: bool,
     pub reason: Option<String>,
-    /// Which surface answered ("hub", "cli", "ios"); `None` when the responder
-    /// did not say, recorded as "unknown" — never guessed.
+    /// Which surface answered (see [`mur_common::hitl::surface`]); `None` when
+    /// the responder did not say, recorded as `UNKNOWN_SURFACE` — never guessed.
     pub surface: Option<String>,
     /// #2085: refused only because nobody who can answer is attached and
     /// nothing is remembered — "needs a human", not "a human said no". Always

@@ -102,7 +102,9 @@ pub fn live_decisions(
 /// freshness and revocations: the history a signing mark can be matched
 /// against after its approval stopped being live (SSH setup spec, "Expired
 /// marks are history, not state"). Never a decision source: the gate reads
-/// [`live_decisions`] only.
+/// [`live_decisions`] only. It deliberately ignores `surface` (spec §7): this
+/// is history to match a mark against, not a decision, so do not "fix" it to
+/// filter non-human rows.
 pub fn signed_allows(
     channel_id: &str,
     events: &[ChannelEvent],
