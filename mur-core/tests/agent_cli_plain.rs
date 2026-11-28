@@ -313,7 +313,7 @@ fn plain_announces_each_fallback_once_and_prices_the_answering_model() {
         // Unknown model: fail-closed upper estimate at the configured rates (#2620).
         (
             "reply 4",
-            &["  2000 tok · ≤$0.018 upper estimate, no rate for mystery-model"],
+            &["  2000 tok · <=$0.018 upper estimate, no rate for mystery-model"],
         ),
         // Back to the fallback after the unknown model: announced again.
         ("reply 5", &[notice, "  2000 tok · subscription"]),
