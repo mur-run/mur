@@ -60,7 +60,7 @@ pub(super) fn sweep(
     let stale = match stale_tracks(project, grace) {
         Ok(s) => s,
         Err(e) => {
-            tracing::warn!(turn, project = %project.display(), error = %e, "stale turn track scan failed");
+            tracing::warn!(turn, project = %project.display(), error = %format_args!("{e:#}"), "stale turn track scan failed");
             return Vec::new();
         }
     };
@@ -82,7 +82,7 @@ pub(super) fn sweep(
                 saved.push(patch);
             }
             Err(e) => {
-                tracing::warn!(turn, track_name = %t.name, error = %e, "stale turn track not reclaimed")
+                tracing::warn!(turn, track_name = %t.name, error = %format_args!("{e:#}"), "stale turn track not reclaimed")
             }
         }
     }

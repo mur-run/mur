@@ -70,7 +70,7 @@ impl TaskRunner {
                 Some(t)
             }
             Err(e) => {
-                tracing::warn!(turn, cwd = %origin.display(), error = %e, "no turn track; working on the project directly");
+                tracing::warn!(turn, cwd = %origin.display(), error = %format_args!("{e:#}"), "no turn track; working on the project directly");
                 None
             }
         }

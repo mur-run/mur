@@ -179,9 +179,14 @@ impl TurnTrack {
                 },
             )
         })();
+        // A panic inside the closure skips this cleanup on purpose: unwinding
+        // through git calls is not worth guarding, and the track it leaves is
+        // still found by reclaim as `Incomplete`.
         if let Err(e) = populated {
             return Err(match remove_worktree(&project, &path) {
                 Ok(()) => e,
+                // Callers log with `{e:#}`, so the whole chain — the original
+                // failure (ENOSPC, …) included — reaches the log either way.
                 Err(cleanup) => e.context(format!(
                     "and removing the half-created track {} failed too: {cleanup:#}",
                     path.display()
