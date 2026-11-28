@@ -160,6 +160,10 @@ mod tests {
             "python3 -c 'import os; os.removexattr'",
             "node -e 'fs.readFileSync(\"x\")'",
             "node -e 'el.remove()'",
+            // A delete-shaped method on a non-system object.
+            "node -e 'cache.unlink(k)'",
+            // A heredoc that only writes a script to disk never runs it.
+            "cat > clean.py <<'PY'\nimport shutil\nshutil.rmtree('x')\nPY",
         ] {
             assert_eq!(tier(cmd), RiskTier::Write, "cmd: {cmd}");
         }
