@@ -427,7 +427,7 @@ mod footer_fmt_tests {
     /// These cases predate the upper-bound mark (#2620): nothing in them was
     /// priced at the fallback rates.
     #[allow(clippy::too_many_arguments)]
-    fn footer_segments(
+    fn footer_segments_unguessed(
         turn_in: u64,
         turn_out: u64,
         sess_in: u64,
@@ -449,7 +449,8 @@ mod footer_fmt_tests {
 
     #[test]
     fn shows_tokens_and_names_the_reason_when_unpriced() {
-        let s = footer_segments(1240, 0, 1240, 0, 0, None, &Pricing::default(), None, WIDE);
+        let s =
+            footer_segments_unguessed(1240, 0, 1240, 0, 0, None, &Pricing::default(), None, WIDE);
         assert!(s.contains("1,240 tok") || s.contains("1240 tok"));
         // Was an em dash, which sat in the same slot as "$0.125 est" and so
         // read as a cost of zero rather than an absent price (#940).
@@ -464,7 +465,8 @@ mod footer_fmt_tests {
             window: Some(100_000),
             billing: None,
         };
-        let s = footer_segments(1000, 1000, 1000, 1000, 32_000, Some(0.018), &p, None, WIDE);
+        let s =
+            footer_segments_unguessed(1000, 1000, 1000, 1000, 32_000, Some(0.018), &p, None, WIDE);
         assert!(s.contains("$0.018"));
         assert!(s.contains("32%"));
         assert!(!s.contains(" / $")); // no budget suffix when budget is None
@@ -479,10 +481,11 @@ mod footer_fmt_tests {
             billing: None,
         };
         // session 1000/1000 → $18.00 spent, cap $20.00
-        let s = footer_segments(1000, 1000, 1000, 1000, 0, Some(18.0), &p, Some(20.0), WIDE);
+        let s =
+            footer_segments_unguessed(1000, 1000, 1000, 1000, 0, Some(18.0), &p, Some(20.0), WIDE);
         assert!(s.contains("$18.00 / $20.00"), "got: {s}");
         // unpriced model → spent omitted, cap still shown
-        let s2 = footer_segments(
+        let s2 = footer_segments_unguessed(
             1000,
             1000,
             1000,
@@ -507,7 +510,7 @@ mod footer_fmt_tests {
         };
         // Mid-stream: the turn's usage hasn't been reported yet. The bar used
         // to price the turn, so it read "$0.000 est" beside a session total.
-        let s = footer_segments(0, 0, 1000, 1000, 0, Some(18.0), &p, None, WIDE);
+        let s = footer_segments_unguessed(0, 0, 1000, 1000, 0, Some(18.0), &p, None, WIDE);
         assert!(s.contains("$18.000 est"), "got: {s}");
     }
 
@@ -519,139 +522,14 @@ mod footer_fmt_tests {
             window: Some(100_000),
             billing: None,
         };
-        let full = footer_segments(1000, 1000, 1000, 1000, 91_000, Some(0.018), &p, None, WIDE);
-        let tight = footer_segments(1000, 1000, 1000, 1000, 91_000, Some(0.018), &p, None, 20);
+        let full =
+            footer_segments_unguessed(1000, 1000, 1000, 1000, 91_000, Some(0.018), &p, None, WIDE);
+        let tight =
+            footer_segments_unguessed(1000, 1000, 1000, 1000, 91_000, Some(0.018), &p, None, 20);
         assert!(full.len() > tight.len());
         assert!(tight.contains("91%"), "got: {tight}");
         assert!(!tight.contains("tok"), "got: {tight}");
         assert!(tight.chars().count() <= 20, "got: {tight}");
-    }
-}
-
-/// #940: the observability footer must never render a figure whose blank case
-/// is indistinguishable from a real one.
-#[cfg(test)]
-mod footer_cost_tests {
-    use super::footer_segments;
-    use crate::cmd::agent::cli::footer::Pricing;
-
-    /// A model with no per-token price used to render an em dash in the exact
-    /// slot where a priced model renders `$0.125 est` — so "we cannot price
-    /// this" and "this cost nothing" were the same pixel. Two agents side by
-    /// side in a multiplexer is where it bit.
-    #[test]
-    fn an_unpriced_model_says_so_rather_than_going_blank() {
-        let unpriced = Pricing {
-            in_per_1k: None,
-            out_per_1k: None,
-            window: Some(32_000),
-            billing: None,
-        };
-        let out = footer_segments(10, 20, 100, 200, 3_762, None, &unpriced, None, 200, false);
-        assert!(
-            out.contains("no price"),
-            "an unpriced model must name the reason, got: {out}"
-        );
-        assert!(
-            !out.contains('\u{2014}'),
-            "the bare em dash reads as a cost of zero, got: {out}"
-        );
-    }
-
-    /// Control: pricing present still produces a number, so the fix above did
-    /// not simply replace the cost segment.
-    #[test]
-    fn a_priced_model_still_shows_the_estimate() {
-        let priced = Pricing {
-            in_per_1k: Some(3.0),
-            out_per_1k: Some(15.0),
-            window: Some(32_000),
-            billing: None,
-        };
-        let out = footer_segments(
-            10,
-            20,
-            1_000,
-            1_000,
-            3_762,
-            Some(18.0),
-            &priced,
-            None,
-            200,
-            false,
-        );
-        assert!(out.contains('$'), "priced model must show a cost: {out}");
-        assert!(!out.contains("no price"), "got: {out}");
-    }
-
-    /// A subscription or local model is never charged per token, even when its
-    /// registry entry still carries a per-1k price. The footer used to multiply
-    /// that price out and show `$x est` for turns that cost nothing.
-    #[test]
-    fn an_unbilled_model_names_its_billing_instead_of_a_price() {
-        use mur_common::model::BillingMode;
-        for (mode, label) in [
-            (BillingMode::Subscription, "subscription"),
-            (BillingMode::Local, "local"),
-        ] {
-            let p = Pricing {
-                in_per_1k: Some(3.0),
-                out_per_1k: Some(15.0),
-                window: Some(32_000),
-                billing: Some(mode),
-            };
-            let open = footer_segments(10, 20, 1_000, 1_000, 3_762, None, &p, None, 200, false);
-            assert!(open.contains(label), "{mode:?}: {open}");
-            assert!(!open.contains('$'), "{mode:?} priced: {open}");
-            assert!(!open.contains("no price"), "{mode:?}: {open}");
-            // With a cap, nothing is spent yet but the cap itself stays.
-            let capped = footer_segments(
-                10,
-                20,
-                1_000,
-                1_000,
-                3_762,
-                None,
-                &p,
-                Some(20.0),
-                200,
-                false,
-            );
-            assert!(capped.contains(label), "{mode:?}: {capped}");
-            assert!(capped.contains("$0.00 / $20.00"), "{mode:?}: {capped}");
-            assert!(!capped.contains("no price"), "{mode:?}: {capped}");
-        }
-    }
-
-    /// #2609 review: a fallback onto a subscription model must not hide the
-    /// metered spend earlier turns already made — the figure and the cap stay,
-    /// and the label says the current model adds nothing.
-    #[test]
-    fn metered_spend_stays_visible_on_an_unbilled_turn() {
-        use mur_common::model::BillingMode;
-        let p = Pricing {
-            in_per_1k: Some(3.0),
-            out_per_1k: Some(15.0),
-            window: None,
-            billing: Some(BillingMode::Subscription),
-        };
-        let capped = footer_segments(
-            0,
-            0,
-            2_000,
-            2_000,
-            0,
-            Some(18.0),
-            &p,
-            Some(20.0),
-            200,
-            false,
-        );
-        assert!(capped.contains("$18.00 / $20.00"), "{capped}");
-        assert!(capped.contains("subscription"), "{capped}");
-        let open = footer_segments(0, 0, 2_000, 2_000, 0, Some(18.0), &p, None, 200, false);
-        assert!(open.contains("$18.000 est"), "{open}");
-        assert!(open.contains("subscription"), "{open}");
     }
 }
 
@@ -790,3 +668,7 @@ mod monitor_badge_tests {
 #[cfg(test)]
 #[path = "status_cost_table_tests.rs"]
 mod status_cost_table_tests;
+
+#[cfg(test)]
+#[path = "status_footer_cost_tests.rs"]
+mod footer_cost_tests;

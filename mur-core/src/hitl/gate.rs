@@ -281,7 +281,12 @@ pub async fn gate(
                     action_hash: hash.clone(),
                     allow: true,
                     reason: why.clone(),
-                    surface: if policy.yes { "auto" } else { "policy" }.into(),
+                    surface: if policy.yes {
+                        mur_common::hitl::surface::AUTO_SURFACE
+                    } else {
+                        "policy"
+                    }
+                    .into(),
                     issued_at: Some(chrono::Utc::now()),
                     label: None,
                 };

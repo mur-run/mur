@@ -131,7 +131,7 @@ pub(crate) fn approve_in(
         action_hash: request.action_hash,
         allow: !deny,
         reason: reason.unwrap_or_default(),
-        surface: "cli".into(),
+        surface: mur_common::hitl::surface::CLI_SURFACE.into(),
         issued_at: Some(chrono::Utc::now()),
         label: None,
     };

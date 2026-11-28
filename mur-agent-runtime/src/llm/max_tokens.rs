@@ -155,6 +155,11 @@ mod wire_tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
+    /// How long one loopback round trip may take before the test fails
+    /// instead of waiting forever (#2634). A healthy run finishes in
+    /// milliseconds; this only has to outlast a loaded CI box.
+    const WIRE_TEST_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
     /// Serve one request, return its JSON body, answer 400 so the client
     /// gives up at once instead of parsing a reply this test does not build.
     async fn capture_body(listener: TcpListener) -> serde_json::Value {
@@ -205,16 +210,35 @@ mod wire_tests {
         let client = build_client_from_entry(&entry, &profile, std::path::Path::new("/tmp"))
             .expect("loopback subscription entry builds");
         let server = tokio::spawn(capture_body(listener));
-        let _ = client
-            .generate(LlmRequest {
+        // The server answers 400 on purpose, so the client's result is not
+        // asserted — but it is kept: when the server never sees a request,
+        // the client error is the only clue as to why.
+        let sent = tokio::time::timeout(
+            WIRE_TEST_DEADLINE,
+            client.generate(LlmRequest {
                 messages: vec![RichMessage::Text {
                     role: "user".into(),
                     content: "hi".into(),
                 }],
                 ..Default::default()
-            })
-            .await;
-        let body = server.await.unwrap();
+            }),
+        )
+        .await;
+        let abort = server.abort_handle();
+        let body = match tokio::time::timeout(WIRE_TEST_DEADLINE, server).await {
+            Ok(joined) => joined.unwrap(),
+            Err(_) => {
+                abort.abort();
+                let client = match sent {
+                    Ok(result) => format!("{result:?}"),
+                    Err(_) => format!("no result within {WIRE_TEST_DEADLINE:?}"),
+                };
+                panic!(
+                    "loopback server at {addr} got no complete request within \
+                     {WIRE_TEST_DEADLINE:?} (is loopback blocked?); client: {client}"
+                );
+            }
+        };
         body.get("max_tokens").and_then(|v| v.as_u64())
     }
 

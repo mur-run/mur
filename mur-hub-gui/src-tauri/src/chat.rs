@@ -314,7 +314,13 @@ fn on_hitl(app: &AppHandle, agent: &str, channel: Option<&str>, params: &Value) 
                 // while the answer goes out on a connection of its own.
                 let agent = agent.to_string();
                 std::thread::spawn(move || {
-                    if let Err(e) = crate::hitl::respond(&agent, &c.hitl_id, true, None) {
+                    if let Err(e) = crate::hitl::respond(
+                        &agent,
+                        &c.hitl_id,
+                        true,
+                        None,
+                        mur_common::hitl::surface::AUTO_SURFACE,
+                    ) {
                         tracing::warn!(error = %e, hitl_id = %c.hitl_id, "session auto-allow failed");
                     }
                 });

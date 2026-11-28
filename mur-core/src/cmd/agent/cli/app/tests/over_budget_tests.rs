@@ -287,3 +287,57 @@ fn a_fallback_priced_turn_is_flagged_once_on_either_runtime() {
         assert!(last.text.contains("mystery-model ") && last.text.contains("$3/1k in, $15/1k out"));
     }
 }
+
+/// The TUI resets the run on a model the registry cannot resolve, as
+/// `--plain` does: sub → unknown → sub announces the fallback twice, and the
+/// unknown turn drops the pricing rather than keep the previous model's rates.
+#[test]
+fn an_unknown_answering_model_resets_the_fallback_run() {
+    let notices = |a: &App| {
+        a.messages
+            .iter()
+            .filter(|m| m.text.contains("the runtime fell back"))
+            .count()
+    };
+    let mut a = mixed_book_app();
+    a.apply_usage(&answered("sub-model", 1, 1));
+    a.apply_usage(&answered("sub-model", 1, 1));
+    assert_eq!(notices(&a), 1, "a repeated fallback is announced once");
+    a.apply_usage(&answered("mystery-model", 1, 1));
+    assert_eq!(a.answered_key, None);
+    assert!(
+        a.pricing.in_per_1k.is_none()
+            && a.pricing.out_per_1k.is_none()
+            && a.pricing.billing.is_none(),
+        "an unknown model is not priced at the previous model's rates"
+    );
+    a.apply_usage(&answered("sub-model", 1, 1));
+    assert_eq!(
+        notices(&a),
+        2,
+        "a return after an unknown model is announced"
+    );
+}
+
+/// qa nit 3 on #2623: a notice naming several models reads "their tokens".
+#[test]
+fn a_notice_naming_several_models_uses_the_plural() {
+    let mut a = mixed_book_app();
+    a.apply_usage(&turn_with_shares(
+        "metered-model",
+        serde_json::json!([
+            { "model": "mystery-a", "input_tokens": 1000, "output_tokens": 1000 },
+            { "model": "mystery-b", "input_tokens": 1000, "output_tokens": 1000 },
+        ]),
+    ));
+    let notice = a
+        .messages
+        .iter()
+        .find(|m| m.text.contains("no rate in models.yaml"))
+        .expect("a notice");
+    assert!(
+        notice.text.contains("mystery-a, mystery-b — their tokens"),
+        "{}",
+        notice.text
+    );
+}

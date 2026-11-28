@@ -231,7 +231,7 @@ pub(super) fn answer_hitl(
 }
 
 /// Audit attribution for an answer given at the review session's terminal.
-const HITL_SURFACE: &str = "cli";
+const HITL_SURFACE: &str = mur_common::hitl::surface::CLI_SURFACE;
 
 impl ReviewTransport for A2aTransport<'_> {
     fn send(&self, member: &str, params: &serde_json::Value) -> Result<String> {

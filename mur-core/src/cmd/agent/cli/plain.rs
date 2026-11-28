@@ -19,7 +19,8 @@ pub(super) fn run_plain(
     let mut context: Option<String> = None;
     let cwd = std::env::current_dir().ok();
     let (pricing, book) = load_pricing(home, agent);
-    // Registry key the last fallback notice named, as `App::answered_key`.
+    // Registry key of the model that answered the previous turn, as
+    // `App::answered_key` (`turn_price::fallback_notice_once`).
     let mut answered_key: Option<String> = None;
     // Tools the operator granted with `[a]` this session. Plain mode had no
     // such set, so `[a]lways` approved exactly one call — the prompt said one

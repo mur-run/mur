@@ -230,7 +230,11 @@ pub(super) fn decide_hitl_with_note(
         // A keypress is the only branch a human actually answered; `auto` covers
         // /auto, the read lane and session grants, which the audit trail must not
         // report as a person sitting there.
-        let surface = if auto { "auto" } else { "cli" };
+        let surface = if auto {
+            mur_common::hitl::surface::AUTO_SURFACE
+        } else {
+            mur_common::hitl::surface::CLI_SURFACE
+        };
         tokio::spawn(async move {
             if let Err(e) = respond_hitl(h, a, id, allow, surface).await {
                 let msg = format!("{e:#}");

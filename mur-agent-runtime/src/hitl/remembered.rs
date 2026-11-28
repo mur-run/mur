@@ -9,6 +9,7 @@
 //! - a revocation (`EventKind::Note` carrying `REVOCATION_PAYLOAD_KEY`) counts
 //!   if it verifies; it cancels every covered decision whose `issued_at` is
 //!   not after its own. A decision recorded later stands again;
+//! - only rows whose surface is human ([`mur_common::hitl::surface`]) count;
 //! - per hash, the newest surviving decision wins; a deny wins a tie.
 
 use std::collections::HashMap;
@@ -70,6 +71,9 @@ pub fn live_decisions(
         let Ok(r) = serde_json::from_value::<HitlResponse>(e.payload.clone()) else {
             continue;
         };
+        if !counts_as_human(&r.surface) {
+            continue;
+        }
         let Some(at) = r.issued_at else { continue };
         if check_fresh(at, now).is_err() || revoked(&r.action_hash, at) || !verified(e) {
             continue;
@@ -114,4 +118,12 @@ pub fn signed_allows(
                 .then_some((r.action_hash, at))
         })
         .collect()
+}
+
+/// Spec §7: only a human surface is ever replayed. `test` is accepted under
+/// this crate's own `cfg(test)`, so fixtures that write it keep working and a
+/// release build never accepts it.
+fn counts_as_human(surface: &str) -> bool {
+    mur_common::hitl::surface::is_human_surface(surface)
+        || (cfg!(test) && surface == mur_common::hitl::surface::TEST_SURFACE)
 }

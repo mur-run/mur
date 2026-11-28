@@ -304,7 +304,7 @@ async fn elicit(
         let mut bytes = serde_json::to_vec(&json!({
             "jsonrpc": "2.0", "id": format!("hitl-{next_id}"),
             "method": "tool/hitl_respond",
-            "params": { "hitl_id": hitl_id, "allow": allow },
+            "params": respond_params(&hitl_id, allow),
         }))
         .unwrap_or_default();
         bytes.push(b'\n');
@@ -312,9 +312,24 @@ async fn elicit(
     }
 }
 
+/// Params for `tool/hitl_respond`. The shim relays an MCP client's elicitation
+/// answer, so it names the `mcp` human surface (spec §7, D1); a missing
+/// surface would be recorded as `unknown` and never replayed.
+fn respond_params(hitl_id: &str, allow: bool) -> Value {
+    json!({ "hitl_id": hitl_id, "allow": allow, "surface": mur_common::hitl::surface::MCP_SURFACE })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_relayed_answer_names_the_mcp_surface() {
+        let bytes = serde_json::to_vec(&respond_params("h-1", true)).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains(r#""surface":"mcp""#), "{text}");
+        assert_eq!(respond_params("h-1", false)["allow"], json!(false));
+    }
 
     #[test]
     fn a_numeric_and_a_string_id_key_the_same_map() {
