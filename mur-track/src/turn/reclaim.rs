@@ -80,8 +80,9 @@ pub struct StaleTrack {
 ///
 /// A directory counts as a turn track only when git has it registered as a
 /// worktree of `project` and its git dir holds the turn base file — or, for a
-/// half-created track, its name carries [`TRACK_PREFIX`] and it has neither
-/// base nor owner file. Fleet worktrees and stray dirs are never candidates. The git dir is located
+/// half-created track, its name carries [`TRACK_PREFIX`], it has neither
+/// base nor owner file, and it holds no commits of its own. Fleet worktrees
+/// and stray dirs are never candidates. The git dir is located
 /// through the project, not through the track's `.git` pointer: a gutted
 /// track may have lost that pointer, and git run inside it would then answer
 /// for the project repo.
@@ -155,10 +156,37 @@ fn judge(git_dir: &Path, now: SystemTime, grace: Duration) -> Option<StaleReason
 /// owner file that [`super::TurnTrack::create`] writes last. The name gate
 /// keeps hand-made worktrees under `.worktrees/` (`fix-1234`, fleet
 /// worktrees) out of reach.
+///
+/// The name alone is not proof: a fleet or hand-made worktree may be called
+/// `turn-…` too, and may carry commits. The patch only salvages uncommitted
+/// changes, so a track whose HEAD is not on any branch, tag or remote ref is
+/// never incomplete — removing it would orphan those commits.
 fn is_incomplete(name: &str, git_dir: &Path) -> bool {
     name.starts_with(TRACK_PREFIX)
         && !git_dir.join(BASE_FILE).exists()
         && !git_dir.join(OWNER_FILE).exists()
+        && head_is_reachable(git_dir)
+}
+
+/// Is the HEAD of the worktree behind `git_dir` reachable from a branch, tag
+/// or remote ref? Not `--all`: that includes every worktree's HEAD, this one
+/// among them, and would always answer yes. Any git failure answers no, so
+/// the track is kept.
+fn head_is_reachable(git_dir: &Path) -> bool {
+    Command::new("git")
+        .arg("--git-dir")
+        .arg(git_dir)
+        .args([
+            "rev-list",
+            "-n1",
+            "HEAD",
+            "--not",
+            "--branches",
+            "--tags",
+            "--remotes",
+        ])
+        .output()
+        .is_ok_and(|o| o.status.success() && o.stdout.trim_ascii().is_empty())
 }
 
 /// Age an incomplete track by its `gitdir` file — written once by
@@ -255,7 +283,10 @@ fn save_patch(track: &StaleTrack, patch: &Path) -> Result<PathBuf> {
             .output()
     };
     let src = track.git_dir.join("index");
-    if src.is_file() {
+    // A track that failed before its index was copied never had a checkout:
+    // every tracked path reads as deleted, which is noise, not a salvage.
+    let checked_out = src.is_file();
+    if checked_out {
         std::fs::copy(&src, &index).context("copy track index")?;
     }
     let result = (|| -> Result<(Vec<u8>, Vec<u8>)> {
@@ -277,7 +308,11 @@ fn save_patch(track: &StaleTrack, patch: &Path) -> Result<PathBuf> {
             Ok(out.stdout)
         };
         let changes = diff(&["diff", "--cached", "--binary", "--diff-filter=d", "HEAD"])?;
-        let deleted = diff(&["diff", "--cached", "--name-only", "--diff-filter=D", "HEAD"])?;
+        let deleted = if checked_out {
+            diff(&["diff", "--cached", "--name-only", "--diff-filter=D", "HEAD"])?
+        } else {
+            Vec::new()
+        };
         Ok((changes, deleted))
     })();
     let _ = std::fs::remove_file(&index);

@@ -12,11 +12,8 @@
 //! glob such as `turn-*` is a description of the rule, not a handover, and
 //! does not match.
 
-use mur_track::turn::WORKTREES_DIR;
 use mur_track::turn::target::PROJECT_TARGET_DIR;
-
-/// The name prefix every turn track and turn target dir carries.
-const TURN_PREFIX: &str = "turn-";
+use mur_track::turn::{TRACK_PREFIX, WORKTREES_DIR};
 
 /// Characters that end a path token in prose or Markdown.
 fn is_delimiter(c: char) -> bool {
@@ -30,7 +27,7 @@ fn is_delimiter(c: char) -> bool {
 /// `seg` is `turn-<id>` with a concrete id: not a glob, and carrying a digit,
 /// as every task id does — so `target/debug/turn-ish` is a binary, not a turn.
 fn is_turn_segment(seg: &str) -> bool {
-    seg.strip_prefix(TURN_PREFIX).is_some_and(|id| {
+    seg.strip_prefix(TRACK_PREFIX).is_some_and(|id| {
         id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
             && id.chars().any(|c| c.is_ascii_digit())
     })

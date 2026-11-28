@@ -289,3 +289,43 @@ fn non_turn_worktree_is_never_incomplete() {
     age_gitdir(&p, "fix-1234", LEGACY_GRACE * 10);
     assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
 }
+
+/// A `turn-…` worktree that holds commits of its own (a fleet track, a
+/// hand-made one) is never incomplete: the patch would not carry those
+/// commits, so removing it would lose them.
+#[test]
+fn turn_named_worktree_with_commits_is_never_incomplete() {
+    let (_td, p) = repo();
+    let path = half_created(&p, "turn-foo");
+    std::fs::write(path.join("a.txt"), "committed").unwrap();
+    git(&path, &["commit", "-q", "-am", "wip"]);
+    age_gitdir(&p, "turn-foo", LEGACY_GRACE * 10);
+    assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
+}
+
+/// A track that failed before its index was copied never had a checkout;
+/// its salvage must not list every tracked path as deleted.
+#[test]
+fn track_without_index_writes_no_deleted_list() {
+    let (_td, p) = repo();
+    let path = p.join(WORKTREES_DIR).join("turn-bare");
+    git(
+        &p,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            "--no-checkout",
+            "-q",
+            path.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(path.join("new.txt"), "fresh").unwrap();
+    age_gitdir(&p, "turn-bare", LEGACY_GRACE + Duration::from_secs(60));
+    let stale = stale_tracks(&p, Duration::ZERO).unwrap();
+    assert_eq!(stale.len(), 1);
+    let td = tempfile::tempdir().unwrap();
+    let saved = reclaim(&p, &stale[0], &td.path().join("bare.patch")).unwrap();
+    assert!(std::fs::read_to_string(&saved).unwrap().contains("fresh"));
+    assert!(!deleted_list(&saved).exists());
+}
