@@ -179,6 +179,7 @@ impl App {
             // guessing at the configured model's rates is how the wrong number
             // got shown in the first place.
             self.pricing = super::super::footer::Pricing::default();
+            super::super::turn_price::forget_answering_model(&mut self.answered_key);
             return;
         };
         self.pricing = book.pricing_for_key(&key);

@@ -203,3 +203,35 @@ fn plain_mode_announces_a_fallback_once_per_change() {
         None
     );
 }
+
+/// #2625 review (Major): a profile that names no model has nothing to fall
+/// back *from*, so whichever model answers is not announced as a fallback.
+#[test]
+fn no_configured_model_never_announces_a_fallback() {
+    let mut b = book();
+    b.configured_key = None;
+    let turn =
+        |m: &str| serde_json::json!({ "input_tokens": 1, "output_tokens": 1, "model_ref": m });
+    let mut last = None;
+    for m in ["metered-model", "sub-model", "metered-model"] {
+        assert_eq!(plain_fallback_notice(&b, &turn(m), &mut last), None, "{m}");
+    }
+}
+
+/// #2625 review: every switch away from the configured model is announced —
+/// configured → fallback → configured → fallback says so twice, and an
+/// unresolvable model in between breaks the run (sub → unknown → sub).
+#[test]
+fn each_return_to_a_fallback_is_announced_again() {
+    let b = book();
+    let turn =
+        |m: &str| serde_json::json!({ "input_tokens": 1, "output_tokens": 1, "model_ref": m });
+    let mut last = None;
+    let mut says = |m: &str| plain_fallback_notice(&b, &turn(m), &mut last).is_some();
+    assert!(!says("metered-model"));
+    assert!(says("sub-model"));
+    assert!(!says("metered-model"));
+    assert!(says("sub-model"));
+    assert!(!says("mystery-model"));
+    assert!(says("sub-model"));
+}

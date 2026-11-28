@@ -97,23 +97,33 @@ pub(super) fn fallback_notice(key: &str, answered: &str, from: &str, pricing: &P
 }
 
 /// The fallback notice for `key` (the registry key that answered as
-/// `answered`), or `None` when it is the configured model or the same one the
-/// last notice named. Announces only on a CHANGE, so a long session
-/// substituted once does not repeat it every turn. Shared by the TUI and
-/// `--plain` so both say when the runtime fell back (#2609 review).
+/// `answered`), or `None` when it is the configured model, when it is the
+/// same model that answered the previous turn, or when the profile names no
+/// model at all — with nothing configured there is nothing to fall back
+/// *from*, so the first answer is not a fallback (#2625 review).
+///
+/// `last` records the model that answered the previous turn, whether or not
+/// that turn announced anything; [`forget_answering_model`] clears it when a
+/// turn's model cannot be resolved. Announces only on a CHANGE, so a long
+/// session substituted once does not repeat it every turn. Shared by the TUI
+/// and `--plain` so both say when the runtime fell back (#2609 review).
 pub(super) fn fallback_notice_once(
     book: &PricingBook,
     key: &str,
     answered: &str,
     last: &mut Option<String>,
 ) -> Option<String> {
-    let configured = book.configured_key.as_deref();
-    let notice = (Some(key) != configured && last.as_deref() != Some(key)).then(|| {
-        let from = configured.unwrap_or("the configured model");
-        fallback_notice(key, answered, from, &book.pricing_for_key(key))
-    });
-    *last = Some(key.to_string());
-    notice
+    let previous = last.replace(key.to_string());
+    let configured = book.configured_key.as_deref()?;
+    (key != configured && previous.as_deref() != Some(key))
+        .then(|| fallback_notice(key, answered, configured, &book.pricing_for_key(key)))
+}
+
+/// A turn answered by a model the registry cannot resolve: it still breaks
+/// the run, so the next resolvable fallback is announced again rather than
+/// being taken for the one before it (sub → unknown → sub says so twice).
+pub(super) fn forget_answering_model(last: &mut Option<String>) {
+    *last = None;
 }
 
 /// `--plain`'s fallback notice for one finished turn, from its
@@ -125,7 +135,10 @@ pub(super) fn plain_fallback_notice(
     last: &mut Option<String>,
 ) -> Option<String> {
     let answered = usage.get("model_ref").and_then(|v| v.as_str())?;
-    let key = book.key_for_model(answered)?.to_string();
+    let Some(key) = book.key_for_model(answered).map(str::to_string) else {
+        forget_answering_model(last);
+        return None;
+    };
     fallback_notice_once(book, &key, answered, last)
 }
 
