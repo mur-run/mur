@@ -155,9 +155,11 @@ mod wire_tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    /// How long one loopback round trip may take before the test fails
-    /// instead of waiting forever (#2634). A healthy run finishes in
-    /// milliseconds; this only has to outlast a loaded CI box.
+    /// Per-wait bound for the loopback wire tests, so they fail instead of
+    /// waiting forever (#2634). It is applied separately to the client call
+    /// and then to the server task, so a fully stuck test can take up to
+    /// twice this long before failing. A healthy run finishes in
+    /// milliseconds; each bound only has to outlast a loaded CI box.
     const WIRE_TEST_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 
     /// Serve one request, return its JSON body, answer 400 so the client
