@@ -157,15 +157,44 @@ impl App {
         // would count as $0 (qa review C1). Price each `by_model` share at its
         // own model; older runtimes without the split fall back to `model_ref`.
         // An unbilled turn adds nothing and erases nothing.
-        let cost = super::super::turn_price::turn_cost(
+        let priced = super::super::turn_price::price_turn(
             &self.pricing,
             self.pricing_book.as_ref(),
             usage,
             &u,
         );
-        if let Some(c) = cost {
+        if let Some(c) = priced.usd {
             *self.session_spent_usd.get_or_insert(0.0) += c;
         }
+        self.note_guessed_models(priced.guessed);
+    }
+
+    /// Remember which models were priced at the dearest-rate fallback so the
+    /// footer marks the session figure as an upper estimate, and say once per
+    /// model which one it was and how to give it a real rate — the footer has
+    /// no room for model names. Mirrors the fleet guard's `warn_unpriced`
+    /// (#2620).
+    fn note_guessed_models(&mut self, guessed: Vec<String>) {
+        let fresh: Vec<String> = guessed
+            .into_iter()
+            .filter(|m| !self.session_guessed.contains(m))
+            .collect();
+        if fresh.is_empty() {
+            return;
+        }
+        let rates = self
+            .pricing_book
+            .as_ref()
+            .and_then(|b| b.dearest_rates())
+            .map(|(i, o)| format!(" (${i}/1k in, ${o}/1k out)"))
+            .unwrap_or_default();
+        self.push_system(format!(
+            "⚠ no rate in models.yaml for {} — its tokens are counted at the dearest \
+             registered rates{rates}, so the cost shown is an upper estimate. \
+             `mur model add <key> … --input-cost --output-cost` records a real rate.",
+            fresh.join(", ")
+        ));
+        self.session_guessed.extend(fresh);
     }
 
     /// Re-price from the model that actually answered, and say so once when it

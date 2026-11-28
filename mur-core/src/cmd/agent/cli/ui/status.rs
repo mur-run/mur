@@ -197,6 +197,7 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         &app.pricing,
         app.budget_usd,
         usize::from(area.width).saturating_sub(reserved + FOOTER_SEP.chars().count()),
+        !app.session_guessed.is_empty(),
     );
     if !obs.is_empty() {
         spans.push(Span::raw(FOOTER_SEP));
@@ -353,6 +354,7 @@ pub(super) fn footer_segments(
     pricing: &crate::cmd::agent::cli::footer::Pricing,
     budget_usd: Option<f64>,
     budget: usize,
+    guessed: bool,
 ) -> String {
     use crate::cmd::agent::cli::footer::{CTX_BAR_WIDTH, context_pct, ctx_bar, unbilled_label};
 
@@ -362,7 +364,7 @@ pub(super) fn footer_segments(
         fmt_tok(sess_in + sess_out)
     );
 
-    let cost = match (unbilled_label(pricing), spent, budget_usd) {
+    let mut cost = match (unbilled_label(pricing), spent, budget_usd) {
         // Not charged per token and nothing metered yet: name who pays rather
         // than pricing it, and drop the cap — it has nothing to count.
         (Some(label), None, _) => label.to_string(),
@@ -380,6 +382,13 @@ pub(super) fn footer_segments(
         // (#940).
         (None, None, None) => "no price".to_string(),
     };
+    // Some tokens were counted at the dearest-rate fallback (#2620): the
+    // figure is a ceiling, not a price. Every money form starts with `$`, so
+    // the mark always lands on the number; a transcript notice names the
+    // model, which the footer has no room for.
+    if guessed && spent.is_some() {
+        cost.insert_str(0, crate::cmd::agent::cli::footer::UPPER_BOUND_MARK);
+    }
 
     let ctx = match pricing.window {
         Some(w) if w > 0 => {
@@ -410,8 +419,27 @@ pub(super) fn footer_segments(
 
 #[cfg(test)]
 mod footer_fmt_tests {
-    use super::footer_segments;
     use crate::cmd::agent::cli::footer::Pricing;
+
+    /// These cases predate the upper-bound mark (#2620): nothing in them was
+    /// priced at the fallback rates.
+    #[allow(clippy::too_many_arguments)]
+    fn footer_segments(
+        turn_in: u64,
+        turn_out: u64,
+        sess_in: u64,
+        sess_out: u64,
+        ctx_tokens: u64,
+        spent: Option<f64>,
+        pricing: &Pricing,
+        budget_usd: Option<f64>,
+        budget: usize,
+    ) -> String {
+        super::footer_segments(
+            turn_in, turn_out, sess_in, sess_out, ctx_tokens, spent, pricing, budget_usd, budget,
+            false,
+        )
+    }
 
     /// Enough room that these assertions test the formatting, not the trimming.
     const WIDE: usize = 200;
@@ -516,7 +544,7 @@ mod footer_cost_tests {
             window: Some(32_000),
             billing: None,
         };
-        let out = footer_segments(10, 20, 100, 200, 3_762, None, &unpriced, None, 200);
+        let out = footer_segments(10, 20, 100, 200, 3_762, None, &unpriced, None, 200, false);
         assert!(
             out.contains("no price"),
             "an unpriced model must name the reason, got: {out}"
@@ -537,7 +565,18 @@ mod footer_cost_tests {
             window: Some(32_000),
             billing: None,
         };
-        let out = footer_segments(10, 20, 1_000, 1_000, 3_762, Some(18.0), &priced, None, 200);
+        let out = footer_segments(
+            10,
+            20,
+            1_000,
+            1_000,
+            3_762,
+            Some(18.0),
+            &priced,
+            None,
+            200,
+            false,
+        );
         assert!(out.contains('$'), "priced model must show a cost: {out}");
         assert!(!out.contains("no price"), "got: {out}");
     }
@@ -559,7 +598,7 @@ mod footer_cost_tests {
                 billing: Some(mode),
             };
             for cap in [None, Some(20.0)] {
-                let out = footer_segments(10, 20, 1_000, 1_000, 3_762, None, &p, cap, 200);
+                let out = footer_segments(10, 20, 1_000, 1_000, 3_762, None, &p, cap, 200, false);
                 assert!(out.contains(label), "{mode:?} cap={cap:?}: {out}");
                 assert!(!out.contains('$'), "{mode:?} cap={cap:?} priced: {out}");
                 assert!(!out.contains("no price"), "{mode:?}: {out}");
@@ -579,10 +618,21 @@ mod footer_cost_tests {
             window: None,
             billing: Some(BillingMode::Subscription),
         };
-        let capped = footer_segments(0, 0, 2_000, 2_000, 0, Some(18.0), &p, Some(20.0), 200);
+        let capped = footer_segments(
+            0,
+            0,
+            2_000,
+            2_000,
+            0,
+            Some(18.0),
+            &p,
+            Some(20.0),
+            200,
+            false,
+        );
         assert!(capped.contains("$18.00 / $20.00"), "{capped}");
         assert!(capped.contains("subscription"), "{capped}");
-        let open = footer_segments(0, 0, 2_000, 2_000, 0, Some(18.0), &p, None, 200);
+        let open = footer_segments(0, 0, 2_000, 2_000, 0, Some(18.0), &p, None, 200, false);
         assert!(open.contains("$18.000 est"), "{open}");
         assert!(open.contains("subscription"), "{open}");
     }

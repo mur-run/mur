@@ -100,7 +100,7 @@ fn an_unknown_answering_model_without_shares_is_counted_at_the_dearest_rates() {
     // Before: "  2000 tok" — the turn silently added nothing to the cap.
     assert_eq!(
         plain_footer(&configured, &b, &usage),
-        "  2000 tok · $60.000"
+        "  2000 tok · ≤$60.000 upper estimate, no rate for mystery-model"
     );
 }
 
@@ -136,7 +136,7 @@ fn a_metered_answering_model_without_rates_is_counted_at_the_dearest_rates() {
     // Before: "  2000 tok" — a legacy runtime's turn added nothing to the cap.
     assert_eq!(
         plain_footer(&configured, &b, &legacy),
-        "  2000 tok · $18.000"
+        "  2000 tok · ≤$18.000 upper estimate, no rate for norate-model"
     );
     // The same turn from a runtime that reports `by_model` costs the same.
     let split = serde_json::json!({
@@ -145,6 +145,49 @@ fn a_metered_answering_model_without_rates_is_counted_at_the_dearest_rates() {
     });
     assert_eq!(
         plain_footer(&configured, &b, &split),
-        "  2000 tok · $18.000"
+        "  2000 tok · ≤$18.000 upper estimate, no rate for norate-model"
     );
+}
+
+/// #2620: a turn priced at the dearest-rate fallback is flagged as an upper
+/// estimate, the same on a legacy runtime (no `by_model`) and one that sends
+/// the split; a fully priced turn on either is not flagged.
+#[test]
+fn only_a_fallback_priced_turn_is_flagged_on_either_runtime() {
+    let b = book();
+    let legacy = serde_json::json!({
+        "input_tokens": 1000, "output_tokens": 1000, "model_ref": "mystery-model",
+    });
+    let split = serde_json::json!({
+        "input_tokens": 2000, "output_tokens": 2000, "model_ref": "metered-model",
+        "by_model": [
+            { "model": "mystery-model", "input_tokens": 1000, "output_tokens": 1000 },
+            { "model": "metered-model", "registry_key": "metered",
+              "input_tokens": 1000, "output_tokens": 1000 },
+        ],
+    });
+    let u = |v: &serde_json::Value| footer::parse_usage(v);
+    let configured = b.pricing_for_key("metered");
+    let p = price_turn(&configured, Some(&b), &legacy, &u(&legacy));
+    assert_eq!(
+        (p.usd, p.guessed),
+        (Some(18.0), vec!["mystery-model".to_string()])
+    );
+    let p = price_turn(&configured, Some(&b), &split, &u(&split));
+    assert_eq!(
+        (p.usd, p.guessed),
+        (Some(36.0), vec!["mystery-model".to_string()])
+    );
+
+    let priced_legacy = serde_json::json!({
+        "input_tokens": 1000, "output_tokens": 1000, "model_ref": "metered-model",
+    });
+    let priced_split = serde_json::json!({
+        "input_tokens": 1000, "output_tokens": 1000, "model_ref": "metered-model",
+        "by_model": [{ "model": "metered-model", "registry_key": "metered",
+                       "input_tokens": 1000, "output_tokens": 1000 }],
+    });
+    for usage in [&priced_legacy, &priced_split] {
+        assert_eq!(plain_footer(&configured, &b, usage), "  2000 tok · $18.000");
+    }
 }

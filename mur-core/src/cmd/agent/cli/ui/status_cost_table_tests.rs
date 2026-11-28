@@ -80,11 +80,45 @@ fn every_cost_row_renders_exactly() {
     ];
     for &(billing, rates, spent, cap, cost) in rows {
         let p = with(billing, rates);
-        let got = footer_segments(10, 20, 1_000, 1_000, 0, spent, &p, cap, WIDE);
+        let got = footer_segments(10, 20, 1_000, 1_000, 0, spent, &p, cap, WIDE, false);
         assert_eq!(
             got,
             format!("{TOKS} · {cost}"),
             "billing={billing:?} rates={rates} spent={spent:?} cap={cap:?}"
+        );
+    }
+}
+
+/// #2620: a session figure that counted fallback-priced tokens carries the
+/// upper-bound mark in every money form; with nothing spent there is no figure
+/// to mark.
+#[test]
+fn a_fallback_priced_figure_is_marked_as_an_upper_bound() {
+    use BillingMode::{Subscription, UsageBilled};
+    type Case = (Option<BillingMode>, Option<f64>, Option<f64>, &'static str);
+    let cases: &[Case] = &[
+        (Some(UsageBilled), Some(18.0), None, "≤$18.000 est"),
+        (
+            Some(UsageBilled),
+            Some(18.0),
+            Some(20.0),
+            "≤$18.00 / $20.00",
+        ),
+        (
+            Some(Subscription),
+            Some(18.0),
+            None,
+            "≤$18.000 est · subscription",
+        ),
+        (Some(UsageBilled), None, Some(20.0), "/ $20.00"),
+    ];
+    for &(billing, spent, cap, want) in cases {
+        let p = with(billing, true);
+        let got = footer_segments(10, 20, 1_000, 1_000, 0, spent, &p, cap, WIDE, true);
+        assert_eq!(
+            got,
+            format!("{TOKS} · {want}"),
+            "{billing:?} {spent:?} {cap:?}"
         );
     }
 }
