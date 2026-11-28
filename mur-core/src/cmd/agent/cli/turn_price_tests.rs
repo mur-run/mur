@@ -100,7 +100,7 @@ fn an_unknown_answering_model_without_shares_is_counted_at_the_dearest_rates() {
     // Before: "  2000 tok" — the turn silently added nothing to the cap.
     assert_eq!(
         plain_footer(&configured, &b, &usage),
-        "  2000 tok · ≤$60.000 upper estimate, no rate for mystery-model"
+        "  2000 tok · <=$60.000 upper estimate, no rate for mystery-model"
     );
 }
 
@@ -136,7 +136,7 @@ fn a_metered_answering_model_without_rates_is_counted_at_the_dearest_rates() {
     // Before: "  2000 tok" — a legacy runtime's turn added nothing to the cap.
     assert_eq!(
         plain_footer(&configured, &b, &legacy),
-        "  2000 tok · ≤$18.000 upper estimate, no rate for norate-model"
+        "  2000 tok · <=$18.000 upper estimate, no rate for norate-model (key norate)"
     );
     // The same turn from a runtime that reports `by_model` costs the same.
     let split = serde_json::json!({
@@ -145,7 +145,7 @@ fn a_metered_answering_model_without_rates_is_counted_at_the_dearest_rates() {
     });
     assert_eq!(
         plain_footer(&configured, &b, &split),
-        "  2000 tok · ≤$18.000 upper estimate, no rate for norate-model"
+        "  2000 tok · <=$18.000 upper estimate, no rate for norate-model (key norate)"
     );
 }
 
@@ -190,4 +190,87 @@ fn only_a_fallback_priced_turn_is_flagged_on_either_runtime() {
     for usage in [&priced_legacy, &priced_split] {
         assert_eq!(plain_footer(&configured, &b, usage), "  2000 tok · $18.000");
     }
+}
+
+/// `book()` plus `norate`: metered, known to the registry, no unit price.
+fn book_with_norate() -> PricingBook {
+    let mut b = book();
+    b.by_key.insert(
+        "norate".to_string(),
+        Pricing {
+            in_per_1k: None,
+            out_per_1k: None,
+            window: None,
+            billing: Some(BillingMode::UsageBilled),
+        },
+    );
+    b.key_of_model
+        .insert("norate-model".to_string(), "norate".to_string());
+    b
+}
+
+/// qa review on #2623: every arm that falls back to the dearest rates must
+/// also flag the turn, so flipping any one of them to "not guessed" fails here.
+#[test]
+fn every_dearest_rate_arm_flags_the_turn_and_names_the_model() {
+    let b = book_with_norate();
+    let u = |v: &serde_json::Value| footer::parse_usage(v);
+    let case = |pricing: &Pricing, usage: serde_json::Value| {
+        let p = price_turn(pricing, Some(&b), &usage, &u(&usage));
+        (p.usd, p.guessed)
+    };
+    let one = |s: &str| (Some(18.0), vec![s.to_string()]);
+
+    // Legacy runtime, no `model_ref`: the configured metered model has no rate.
+    let mut nb = book_with_norate();
+    nb.configured_key = Some("norate".to_string());
+    let usage = serde_json::json!({ "input_tokens": 1000, "output_tokens": 1000 });
+    let p = price_turn(&nb.pricing_for_key("norate"), Some(&nb), &usage, &u(&usage));
+    assert_eq!((p.usd, p.guessed), one("norate"));
+
+    // A share whose `registry_key` resolves to an unpriced entry: the notice
+    // names the provider id AND the key `mur model add` takes.
+    let configured = b.pricing_for_key("metered");
+    assert_eq!(
+        case(
+            &configured,
+            serde_json::json!({
+                "input_tokens": 1000, "output_tokens": 1000,
+                "by_model": [{ "model": "vendor/norate-v2", "registry_key": "norate",
+                               "input_tokens": 1000, "output_tokens": 1000 }],
+            })
+        ),
+        one("vendor/norate-v2 (key norate)")
+    );
+
+    // A share naming neither a model nor a registry key.
+    assert_eq!(
+        case(
+            &configured,
+            serde_json::json!({
+                "input_tokens": 1000, "output_tokens": 1000,
+                "by_model": [{ "input_tokens": 1000, "output_tokens": 1000 }],
+            })
+        ),
+        one(UNNAMED_MODEL)
+    );
+
+    // Several guessed shares: sorted, deduplicated, all counted.
+    assert_eq!(
+        case(
+            &configured,
+            serde_json::json!({
+                "input_tokens": 3000, "output_tokens": 3000,
+                "by_model": [
+                    { "model": "zeta-model", "input_tokens": 1000, "output_tokens": 1000 },
+                    { "model": "alpha-model", "input_tokens": 1000, "output_tokens": 1000 },
+                    { "model": "zeta-model", "input_tokens": 1000, "output_tokens": 1000 },
+                ],
+            })
+        ),
+        (
+            Some(54.0),
+            vec!["alpha-model".to_string(), "zeta-model".to_string()]
+        )
+    );
 }

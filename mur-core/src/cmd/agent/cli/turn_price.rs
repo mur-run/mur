@@ -52,12 +52,13 @@ pub(super) fn price_turn(
     u: &UsageCounts,
 ) -> TurnPrice {
     let answered = || {
-        usage
-            .get("model_ref")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .or_else(|| book.and_then(|b| b.configured_key.clone()))
-            .unwrap_or_else(|| UNNAMED_MODEL.to_string())
+        let model = usage.get("model_ref").and_then(|v| v.as_str());
+        let key = match (book, model) {
+            (Some(b), Some(m)) => b.key_for_model(m).map(str::to_string),
+            (Some(b), None) => b.configured_key.clone(),
+            (None, _) => None,
+        };
+        display_name(model, key.as_deref())
     };
     let guessed_if = |usd: Option<f64>| TurnPrice {
         guessed: if usd.is_some() && (u.input > 0 || u.output > 0) {
@@ -91,6 +92,18 @@ pub(super) fn price_turn(
 /// What a guessed-at model is called when neither the share, the turn nor the
 /// configuration names it.
 const UNNAMED_MODEL: &str = "an unnamed model";
+
+/// How a guessed-at model is named in the notice: the provider model id, plus
+/// the registry key `mur model add` takes when it is known and differs — the
+/// provider id alone is not always a valid key (qa review on #2623).
+fn display_name(model: Option<&str>, key: Option<&str>) -> String {
+    match (model, key) {
+        (Some(m), Some(k)) if m != k => format!("{m} (key {k})"),
+        (Some(m), _) => m.to_string(),
+        (None, Some(k)) => k.to_string(),
+        (None, None) => UNNAMED_MODEL.to_string(),
+    }
+}
 
 /// `model_ref` is present but names nothing in the registry.
 fn answered_is_unresolved(book: &PricingBook, usage: &serde_json::Value) -> bool {
@@ -162,7 +175,7 @@ fn cost_by_share(book: &PricingBook, shares: &[serde_json::Value]) -> TurnPrice 
             continue;
         };
         if guess {
-            guessed.push(share_name(share));
+            guessed.push(share_name(book, share));
         }
         *total.get_or_insert(0.0) += c;
     }
@@ -174,13 +187,14 @@ fn cost_by_share(book: &PricingBook, shares: &[serde_json::Value]) -> TurnPrice 
     }
 }
 
-/// The provider model a share names, else its registry key.
-fn share_name(share: &serde_json::Value) -> String {
-    ["model", "registry_key"]
-        .iter()
-        .find_map(|k| share.get(*k).and_then(|v| v.as_str()))
-        .unwrap_or(UNNAMED_MODEL)
-        .to_string()
+/// The provider model a share names, with the registry key it resolves to (or
+/// reports, when the registry does not know it).
+fn share_name(book: &PricingBook, share: &serde_json::Value) -> String {
+    let field = |k: &str| share.get(k).and_then(|v| v.as_str());
+    let key = book
+        .key_for_share(share)
+        .or_else(|| field("registry_key").map(str::to_string));
+    display_name(field("model"), key.as_deref())
 }
 
 #[cfg(test)]

@@ -20,7 +20,9 @@ pub const MONITOR_REFRESH_SECS: u64 = 30;
 
 /// Prefixed to a cost figure that counted some tokens at the dearest-rate
 /// fallback, because their model had no rate (#2620): the figure is a ceiling.
-pub const UPPER_BOUND_MARK: &str = "≤";
+/// ASCII on purpose: `≤` (U+2264) is East Asian Ambiguous width, so a CJK
+/// terminal draws it two columns wide and the footer overruns its budget.
+pub const UPPER_BOUND_MARK: &str = "<=";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UsageCounts {
