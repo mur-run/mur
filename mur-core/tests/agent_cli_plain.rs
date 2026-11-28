@@ -287,12 +287,39 @@ fn plain_announces_each_fallback_once_and_prices_the_answering_model() {
             "{n}"
         );
     }
-    // The configured metered model is priced; the subscription fallback is
-    // labelled, never priced at the configured model's rates.
-    assert!(stdout.contains("  2000 tok · $0.018"), "{stdout}");
-    assert!(stdout.contains("  2000 tok · subscription"), "{stdout}");
-    // The notice sits between turn 2's reply and its footer.
-    let r2 = stdout.find("reply 2").unwrap();
-    let n2 = stdout.find('⇄').unwrap();
-    assert!(r2 < n2 && !stdout[..r2].contains('⇄'), "{stdout}");
+    // Each turn's block — its reply up to the next turn's — must carry exactly
+    // its own notice and footer, so a footer that matches on one turn cannot
+    // cover for a wrong one on another (#2632 review).
+    let notice = "⇄ answered by 'sub' (sub-model), not 'metered' — the runtime fell back. \
+                  'sub' is subscription: it adds nothing per token.";
+    let expected: [(&str, &[&str]); 5] = [
+        // Configured metered model: priced at its own rates.
+        ("reply 1", &["  2000 tok · $0.018"]),
+        // Fallback to the subscription model: announced, labelled, not priced.
+        ("reply 2", &[notice, "  2000 tok · subscription"]),
+        // Same fallback again: no second notice.
+        ("reply 3", &["  2000 tok · subscription"]),
+        // Unknown model: fail-closed upper estimate at the configured rates (#2620).
+        (
+            "reply 4",
+            &["  2000 tok · ≤$0.018 upper estimate, no rate for mystery-model"],
+        ),
+        // Back to the fallback after the unknown model: announced again.
+        ("reply 5", &[notice, "  2000 tok · subscription"]),
+    ];
+    let starts: Vec<usize> = expected
+        .iter()
+        .map(|(reply, _)| stdout.find(reply).unwrap())
+        .collect();
+    for (i, (reply, lines)) in expected.iter().enumerate() {
+        let end = starts.get(i + 1).copied().unwrap_or(stdout.len());
+        assert!(starts[i] < end, "turns out of order: {stdout}");
+        let block: Vec<&str> = stdout[starts[i]..end]
+            .lines()
+            .skip(1)
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+        assert_eq!(&block, lines, "{reply} block: {stdout}");
+    }
+    assert!(!stdout[..starts[0]].contains('⇄'), "{stdout}");
 }
