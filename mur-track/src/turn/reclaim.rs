@@ -11,6 +11,8 @@
 //! only when its owner is dead or released it AND it has been quiet for the
 //! grace period. A track another live process still owns is never touched —
 //! that is how a concurrent session on the same project stays safe.
+//! Neither is a track some live process is standing in (its working
+//! directory is inside it), whatever the files say (#2639).
 //!
 //! Reclaiming saves the track's whole diff as a patch first and removes the
 //! worktree only when that write succeeded, so the only copy of a turn's
@@ -82,7 +84,8 @@ pub struct StaleTrack {
 /// worktree of `project` and its git dir holds the turn base file — or, for a
 /// half-created track, its name carries [`TRACK_PREFIX`], it has neither
 /// base nor owner file, and it holds no commits of its own. Fleet worktrees
-/// and stray dirs are never candidates. The git dir is located
+/// and stray dirs are never candidates, and neither is a track that is a
+/// live process's working directory. The git dir is located
 /// through the project, not through the track's `.git` pointer: a gutted
 /// track may have lost that pointer, and git run inside it would then answer
 /// for the project repo.
@@ -118,6 +121,10 @@ pub fn stale_tracks(project: &Path, grace: Duration) -> Result<Vec<StaleTrack>> 
                 reason,
             });
         }
+    }
+    if !out.is_empty() {
+        let cwds = super::occupied::process_cwds();
+        out.retain(|t| !super::occupied::is_occupied(&t.path, &cwds));
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)

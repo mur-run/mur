@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+mod occupied;
 pub mod reclaim;
 pub mod target;
 pub mod warm;

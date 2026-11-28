@@ -432,3 +432,69 @@ fn half_cloned_track_with_index_writes_no_deleted_list() {
     assert!(std::fs::read_to_string(&saved).unwrap().contains("fresh"));
     assert!(!deleted_list(&saved).exists());
 }
+
+/// A child process whose working directory is `dir`; killed on drop.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct Occupant(std::process::Child);
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Occupant {
+    fn spawn(dir: &Path) -> Self {
+        let child = Command::new("sleep")
+            .arg("600")
+            .current_dir(dir)
+            .spawn()
+            .unwrap();
+        // The child's cwd is set before exec, but give the OS a beat to
+        // report the new process.
+        std::thread::sleep(Duration::from_millis(200));
+        Self(child)
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Drop for Occupant {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// #2639: a track some live process is working in is never reclaimed, even
+/// when its owner file says it is up for grabs — at its root or deeper.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn occupied_track_is_never_stale() {
+    let (_td, p) = repo();
+    let t = TurnTrack::create(&p, "turn-busy", TreeClone::Copy).unwrap();
+    set_owner(&t, &format!("{{\"pid\":{DEAD_PID}}}"));
+    let sub = t.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    for dir in [t.path().to_path_buf(), sub] {
+        let occupant = Occupant::spawn(&dir);
+        assert!(
+            stale_tracks(&p, Duration::ZERO).unwrap().is_empty(),
+            "occupied at {}",
+            dir.display()
+        );
+        drop(occupant);
+    }
+    let stale = stale_tracks(&p, Duration::ZERO).unwrap();
+    assert_eq!(stale.len(), 1, "reclaimable once the occupant has gone");
+    assert_eq!(stale[0].reason, StaleReason::OwnerDead);
+}
+
+/// A process in a sibling whose name shares the track's prefix
+/// (`turn-a` vs `turn-ab`) does not shield it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn occupant_of_a_prefix_named_sibling_does_not_shield() {
+    let (_td, p) = repo();
+    let a = TurnTrack::create(&p, "turn-a", TreeClone::Copy).unwrap();
+    let ab = TurnTrack::create(&p, "turn-ab", TreeClone::Copy).unwrap();
+    set_owner(&a, &format!("{{\"pid\":{DEAD_PID}}}"));
+    let _occupant = Occupant::spawn(ab.path());
+    let stale = stale_tracks(&p, Duration::ZERO).unwrap();
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].name, "turn-a");
+}
