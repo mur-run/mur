@@ -33,11 +33,25 @@ type Row = (
 fn every_cost_row_renders_exactly() {
     use BillingMode::{Local, Subscription, UsageBilled};
     let rows: &[Row] = &[
-        // Unbilled, nothing metered yet: the label alone, cap dropped.
+        // Unbilled, nothing metered yet: the label alone without a cap; with
+        // one, the cap stays visible — a fallback to a metered model would
+        // still count against it.
         (Some(Subscription), true, None, None, "subscription"),
-        (Some(Subscription), true, None, Some(20.0), "subscription"),
+        (
+            Some(Subscription),
+            true,
+            None,
+            Some(20.0),
+            "$0.00 / $20.00 · subscription",
+        ),
         (Some(Local), false, None, None, "local"),
-        (Some(Local), false, None, Some(20.0), "local"),
+        (
+            Some(Local),
+            false,
+            None,
+            Some(20.0),
+            "$0.00 / $20.00 · local",
+        ),
         // Unbilled after metered spend: the spend stays, the label follows.
         (
             Some(Subscription),
