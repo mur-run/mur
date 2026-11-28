@@ -17,6 +17,8 @@ pub use ssh::ssh_action_hash;
 
 #[cfg(test)]
 mod store_integrity_tests;
+#[cfg(test)]
+mod surface_gate_tests;
 
 /// Decision returned by the Hub (or any HITL responder) for a pending approval.
 #[derive(Debug, Clone)]

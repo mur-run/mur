@@ -14,6 +14,7 @@ mod opaque_shell;
 pub mod pin;
 pub mod signed_time;
 pub mod startup_waiver;
+pub mod surface;
 pub mod tool_tier;
 
 pub use signed_time::{HITL_CLOCK_SKEW_SECS, TimeFault, check_answer_time, check_fresh};
@@ -247,7 +248,7 @@ pub struct HitlResponse {
     pub allow: bool,
     #[serde(default)]
     pub reason: String,
-    /// "cli" | "hub" | "ios" | "auto".
+    /// "cli" | "hub" | "ios" | "mcp" | "auto" | "policy" | "unknown"; see [`surface`].
     pub surface: String,
     /// When the answer was given; signed for the same reason as
     /// [`HitlRequest::issued_at`]. `None` (an older writer) settles nothing.
