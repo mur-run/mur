@@ -364,6 +364,7 @@ pub(super) fn footer_segments(
         fmt_tok(sess_in + sess_out)
     );
 
+    let priced = pricing.in_per_1k.is_some() && pricing.out_per_1k.is_some();
     let mut cost = match (unbilled_label(pricing), spent, budget_usd) {
         // Not charged per token and nothing metered yet: name who pays rather
         // than pricing it. A set cap still shows: a later fallback onto a
@@ -377,7 +378,11 @@ pub(super) fn footer_segments(
         (Some(label), Some(c), None) => format!("${c:.3} est · {label}"),
         (None, Some(c), Some(cap)) => format!("${c:.2} / ${cap:.2}"),
         (None, Some(c), None) => format!("${c:.3} est"),
-        (None, None, Some(cap)) => format!("/ ${cap:.2}"),
+        // Cap set, nothing spent: the same `$spent / $cap` form as every other
+        // capped row. An unpriced model gets "no price" in the spent slot, not
+        // "$0.00" — that would read as free (#940).
+        (None, None, Some(cap)) if priced => format!("$0.00 / ${cap:.2}"),
+        (None, None, Some(cap)) => format!("no price / ${cap:.2}"),
         // No per-token price for this model (local runtimes, and any registry
         // entry added without `--input-cost`). An em dash in the same slot as
         // "$0.125 est" read as "this turn was free" rather than "we cannot
@@ -493,7 +498,7 @@ mod footer_fmt_tests {
             Some(20.0),
             WIDE,
         );
-        assert!(s2.contains("/ $20.00"), "got: {s2}");
+        assert!(s2.contains("no price / $20.00"), "got: {s2}");
         assert!(!s2.contains("$18.00"));
     }
 
