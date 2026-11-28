@@ -229,7 +229,7 @@ fn a_legacy_turn_from_an_unregistered_model_is_counted_conservatively() {
 /// that is never charged per token.
 #[test]
 fn the_fallback_notice_says_what_the_switch_does_to_cost() {
-    use super::super::usage::fallback_notice;
+    use crate::cmd::agent::cli::turn_price::fallback_notice;
     let a = mixed_book_app();
     let book = a.pricing_book.as_ref().unwrap();
     assert_eq!(

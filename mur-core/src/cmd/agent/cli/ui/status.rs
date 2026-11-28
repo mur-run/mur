@@ -364,8 +364,11 @@ pub(super) fn footer_segments(
 
     let cost = match (unbilled_label(pricing), spent, budget_usd) {
         // Not charged per token and nothing metered yet: name who pays rather
-        // than pricing it, and drop the cap — it has nothing to count.
-        (Some(label), None, _) => label.to_string(),
+        // than pricing it. A set cap still shows: a later fallback onto a
+        // metered model counts against it, and hiding it read as "no cap"
+        // (#2609 review).
+        (Some(label), None, Some(cap)) => format!("$0.00 / ${cap:.2} · {label}"),
+        (Some(label), None, None) => label.to_string(),
         // Metered spend from earlier turns still counts against the cap; the
         // label says the current model adds nothing to it.
         (Some(label), Some(c), Some(cap)) => format!("${c:.2} / ${cap:.2} · {label}"),
@@ -558,12 +561,15 @@ mod footer_cost_tests {
                 window: Some(32_000),
                 billing: Some(mode),
             };
-            for cap in [None, Some(20.0)] {
-                let out = footer_segments(10, 20, 1_000, 1_000, 3_762, None, &p, cap, 200);
-                assert!(out.contains(label), "{mode:?} cap={cap:?}: {out}");
-                assert!(!out.contains('$'), "{mode:?} cap={cap:?} priced: {out}");
-                assert!(!out.contains("no price"), "{mode:?}: {out}");
-            }
+            let open = footer_segments(10, 20, 1_000, 1_000, 3_762, None, &p, None, 200);
+            assert!(open.contains(label), "{mode:?}: {open}");
+            assert!(!open.contains('$'), "{mode:?} priced: {open}");
+            assert!(!open.contains("no price"), "{mode:?}: {open}");
+            // With a cap, nothing is spent yet but the cap itself stays.
+            let capped = footer_segments(10, 20, 1_000, 1_000, 3_762, None, &p, Some(20.0), 200);
+            assert!(capped.contains(label), "{mode:?}: {capped}");
+            assert!(capped.contains("$0.00 / $20.00"), "{mode:?}: {capped}");
+            assert!(!capped.contains("no price"), "{mode:?}: {capped}");
         }
     }
 

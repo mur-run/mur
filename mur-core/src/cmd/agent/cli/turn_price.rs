@@ -85,6 +85,50 @@ pub(super) fn plain_footer(
     }
 }
 
+/// The one-time notice when a fallback model answered. Its last sentence says
+/// what the switch does to the cost: a subscription or local model adds
+/// nothing per token, so "now priced for" would be untrue for it.
+pub(super) fn fallback_notice(key: &str, answered: &str, from: &str, pricing: &Pricing) -> String {
+    let cost = match unbilled_label(pricing) {
+        Some(label) => format!("'{key}' is {label}: it adds nothing per token."),
+        None => format!("Cost below is now priced for '{key}'."),
+    };
+    format!("⇄ answered by '{key}' ({answered}), not '{from}' — the runtime fell back. {cost}")
+}
+
+/// The fallback notice for `key` (the registry key that answered as
+/// `answered`), or `None` when it is the configured model or the same one the
+/// last notice named. Announces only on a CHANGE, so a long session
+/// substituted once does not repeat it every turn. Shared by the TUI and
+/// `--plain` so both say when the runtime fell back (#2609 review).
+pub(super) fn fallback_notice_once(
+    book: &PricingBook,
+    key: &str,
+    answered: &str,
+    last: &mut Option<String>,
+) -> Option<String> {
+    let configured = book.configured_key.as_deref();
+    let notice = (Some(key) != configured && last.as_deref() != Some(key)).then(|| {
+        let from = configured.unwrap_or("the configured model");
+        fallback_notice(key, answered, from, &book.pricing_for_key(key))
+    });
+    *last = Some(key.to_string());
+    notice
+}
+
+/// `--plain`'s fallback notice for one finished turn, from its
+/// `usage.model_ref`. `None` when the runtime did not say, the registry does
+/// not know the model, or [`fallback_notice_once`] has nothing new to say.
+pub(super) fn plain_fallback_notice(
+    book: &PricingBook,
+    usage: &serde_json::Value,
+    last: &mut Option<String>,
+) -> Option<String> {
+    let answered = usage.get("model_ref").and_then(|v| v.as_str())?;
+    let key = book.key_for_model(answered)?.to_string();
+    fallback_notice_once(book, &key, answered, last)
+}
+
 /// USD for one turn priced share by share. `None` when no share is billed per
 /// token (an all-subscription or all-local turn has no money figure). A share
 /// whose model the registry cannot resolve or price is counted at the book's
