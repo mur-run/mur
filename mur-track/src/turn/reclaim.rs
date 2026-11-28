@@ -62,7 +62,7 @@ pub enum StaleReason {
     /// No owner file: written by an older runtime, older than [`LEGACY_GRACE`].
     Legacy,
     /// A `turn-*` worktree with neither base nor owner file: its creation
-    /// failed after `git worktree add` (#2618). Older than [`LEGACY_GRACE`].
+    /// failed after `git worktree add` (#2618). Idle longer than [`LEGACY_GRACE`].
     Incomplete,
 }
 
@@ -213,16 +213,29 @@ fn creation_commit(git_dir: &Path) -> Option<String> {
     created.then(|| new.to_owned())
 }
 
-/// Age an incomplete track by its `gitdir` file — written once by
-/// `git worktree add` and never touched again, unlike the admin dir itself.
+/// Files in a worktree's admin dir that git rewrites as the track is used:
+/// staging or checkout rewrites `index`, a commit, switch or reset moves
+/// `HEAD` and appends to `logs/HEAD`.
+pub(super) const ACTIVITY_FILES: &[&str] = &["index", "HEAD", "logs/HEAD"];
+
+/// Age an incomplete track by its last activity: the newest mtime among its
+/// `gitdir` file (written once by `git worktree add`, so it stands for the
+/// creation time) and [`ACTIVITY_FILES`]. Creation time alone would reclaim
+/// an old track that is still being worked in (#2639). Missing activity
+/// files are skipped — a track that failed before its index was copied has
+/// no `index` — but a missing `gitdir` keeps the track.
+///
 /// Waits at least [`LEGACY_GRACE`]: a create still in progress looks exactly
 /// like this, and no clone runs anywhere near that long.
 fn judge_incomplete(git_dir: &Path, now: SystemTime, grace: Duration) -> Option<StaleReason> {
-    let modified = std::fs::metadata(git_dir.join("gitdir"))
-        .and_then(|m| m.modified())
-        .ok()?;
-    let age = now.duration_since(modified).unwrap_or_default();
-    (age >= grace.max(LEGACY_GRACE)).then_some(StaleReason::Incomplete)
+    let mtime = |f: &str| std::fs::metadata(git_dir.join(f)).and_then(|m| m.modified());
+    let created = mtime("gitdir").ok()?;
+    let last = ACTIVITY_FILES
+        .iter()
+        .filter_map(|f| mtime(f).ok())
+        .fold(created, SystemTime::max);
+    let idle = now.duration_since(last).unwrap_or_default();
+    (idle >= grace.max(LEGACY_GRACE)).then_some(StaleReason::Incomplete)
 }
 
 /// Save `track`'s diff against its HEAD, then remove the worktree and its
