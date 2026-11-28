@@ -188,8 +188,9 @@ impl App {
             .and_then(|b| b.dearest_rates())
             .map(|(i, o)| format!(" (${i}/1k in, ${o}/1k out)"))
             .unwrap_or_default();
+        let their = if fresh.len() == 1 { "its" } else { "their" };
         self.push_system(format!(
-            "⚠ no rate in models.yaml for {} — its tokens are counted at the dearest \
+            "⚠ no rate in models.yaml for {} — {their} tokens are counted at the dearest \
              registered rates{rates}, so the cost shown is an upper estimate. \
              `mur model add <key> … --input-cost --output-cost` records a real rate.",
             fresh.join(", ")

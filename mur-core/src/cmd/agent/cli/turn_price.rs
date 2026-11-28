@@ -51,13 +51,9 @@ pub(super) fn price_turn(
     usage: &serde_json::Value,
     u: &UsageCounts,
 ) -> TurnPrice {
-    let answered = || {
-        usage
-            .get("model_ref")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .or_else(|| book.and_then(|b| b.configured_key.clone()))
-            .unwrap_or_else(|| UNNAMED_MODEL.to_string())
+    let answered = || match usage.get("model_ref").and_then(|v| v.as_str()) {
+        Some(m) => model_and_key(Some(m), book.and_then(|b| b.key_for_model(m))),
+        None => model_and_key(None, book.and_then(|b| b.configured_key.as_deref())),
     };
     let guessed_if = |usd: Option<f64>| TurnPrice {
         guessed: if usd.is_some() && (u.input > 0 || u.output > 0) {
@@ -149,7 +145,8 @@ fn cost_by_share(book: &PricingBook, shares: &[serde_json::Value]) -> TurnPrice 
         if u.input == 0 && u.output == 0 {
             continue;
         }
-        let (rates, guess) = match book.key_for_share(share).map(|k| book.pricing_for_key(&k)) {
+        let key = book.key_for_share(share);
+        let (rates, guess) = match key.as_deref().map(|k| book.pricing_for_key(k)) {
             Some(p) if unbilled_label(&p).is_some() => continue,
             Some(p) => match own_rates(&p) {
                 Some(r) => (Some(r), false),
@@ -162,7 +159,9 @@ fn cost_by_share(book: &PricingBook, shares: &[serde_json::Value]) -> TurnPrice 
             continue;
         };
         if guess {
-            guessed.push(share_name(share));
+            let named = |k: &str| share.get(k).and_then(|v| v.as_str());
+            let key = key.as_deref().or_else(|| named("registry_key"));
+            guessed.push(model_and_key(named("model"), key));
         }
         *total.get_or_insert(0.0) += c;
     }
@@ -174,13 +173,16 @@ fn cost_by_share(book: &PricingBook, shares: &[serde_json::Value]) -> TurnPrice 
     }
 }
 
-/// The provider model a share names, else its registry key.
-fn share_name(share: &serde_json::Value) -> String {
-    ["model", "registry_key"]
-        .iter()
-        .find_map(|k| share.get(*k).and_then(|v| v.as_str()))
-        .unwrap_or(UNNAMED_MODEL)
-        .to_string()
+/// How a guessed-at model is named in the notice. The provider model id is
+/// what the user recognises, but `mur model add` takes the registry key, so
+/// both are given when they differ (qa nit on #2623).
+fn model_and_key(model: Option<&str>, key: Option<&str>) -> String {
+    match (model, key) {
+        (Some(m), Some(k)) if m != k => format!("{m} (key `{k}`)"),
+        (Some(m), _) => m.to_string(),
+        (None, Some(k)) => k.to_string(),
+        (None, None) => UNNAMED_MODEL.to_string(),
+    }
 }
 
 #[cfg(test)]
