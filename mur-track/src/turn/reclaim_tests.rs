@@ -247,18 +247,33 @@ fn half_created(p: &Path, name: &str) -> PathBuf {
     path
 }
 
-fn age_gitdir(p: &Path, name: &str, by: Duration) {
+/// Backdate every file the reclaimer reads a track's age from — `gitdir`
+/// and the activity files in [`ACTIVITY_FILES`] — by `by`.
+fn age_track(p: &Path, name: &str, by: Duration) {
+    let dir = super::common_git_dir(p)
+        .unwrap()
+        .join("worktrees")
+        .join(name);
+    let then = std::time::SystemTime::now() - by;
+    for f in std::iter::once("gitdir").chain(ACTIVITY_FILES.iter().copied()) {
+        if let Ok(file) = std::fs::File::options().write(true).open(dir.join(f)) {
+            file.set_modified(then).unwrap();
+        }
+    }
+}
+
+/// Mark one activity file of a track as touched just now.
+fn touch_now(p: &Path, name: &str, file: &str) {
     let f = super::common_git_dir(p)
         .unwrap()
         .join("worktrees")
         .join(name)
-        .join("gitdir");
-    let then = std::time::SystemTime::now() - by;
+        .join(file);
     std::fs::File::options()
         .write(true)
         .open(f)
         .unwrap()
-        .set_modified(then)
+        .set_modified(std::time::SystemTime::now())
         .unwrap();
 }
 
@@ -270,7 +285,7 @@ fn incomplete_turn_track_is_stale_after_legacy_grace() {
     let path = half_created(&p, "turn-orphan");
     std::fs::write(path.join("a.txt"), "edited").unwrap();
     assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
-    age_gitdir(&p, "turn-orphan", LEGACY_GRACE + Duration::from_secs(60));
+    age_track(&p, "turn-orphan", LEGACY_GRACE + Duration::from_secs(60));
     let stale = stale_tracks(&p, Duration::ZERO).unwrap();
     assert_eq!(stale.len(), 1);
     assert_eq!(stale[0].reason, StaleReason::Incomplete);
@@ -286,7 +301,7 @@ fn incomplete_turn_track_is_stale_after_legacy_grace() {
 fn non_turn_worktree_is_never_incomplete() {
     let (_td, p) = repo();
     half_created(&p, "fix-1234");
-    age_gitdir(&p, "fix-1234", LEGACY_GRACE * 10);
+    age_track(&p, "fix-1234", LEGACY_GRACE * 10);
     assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
 }
 
@@ -299,7 +314,7 @@ fn turn_named_worktree_with_commits_is_never_incomplete() {
     let path = half_created(&p, "turn-foo");
     std::fs::write(path.join("a.txt"), "committed").unwrap();
     git(&path, &["commit", "-q", "-am", "wip"]);
-    age_gitdir(&p, "turn-foo", LEGACY_GRACE * 10);
+    age_track(&p, "turn-foo", LEGACY_GRACE * 10);
     assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
 }
 
@@ -321,7 +336,7 @@ fn track_without_index_writes_no_deleted_list() {
         ],
     );
     std::fs::write(path.join("new.txt"), "fresh").unwrap();
-    age_gitdir(&p, "turn-bare", LEGACY_GRACE + Duration::from_secs(60));
+    age_track(&p, "turn-bare", LEGACY_GRACE + Duration::from_secs(60));
     let stale = stale_tracks(&p, Duration::ZERO).unwrap();
     assert_eq!(stale.len(), 1);
     let td = tempfile::tempdir().unwrap();
@@ -340,7 +355,7 @@ fn half_created_from_deleted_branch_is_incomplete() {
     half_created(&p, "turn-gone");
     git(&p, &["switch", "-q", "--detach", "HEAD~1"]);
     git(&p, &["branch", "-q", "-D", "feat"]);
-    age_gitdir(&p, "turn-gone", LEGACY_GRACE * 10);
+    age_track(&p, "turn-gone", LEGACY_GRACE * 10);
     let stale = stale_tracks(&p, Duration::ZERO).unwrap();
     assert_eq!(stale.len(), 1);
     assert_eq!(stale[0].reason, StaleReason::Incomplete);
@@ -354,7 +369,7 @@ fn half_created_on_detached_unreachable_head_is_incomplete() {
     git(&p, &["switch", "-q", "--detach"]);
     git(&p, &["commit", "-q", "--allow-empty", "-m", "loose"]);
     half_created(&p, "turn-loose");
-    age_gitdir(&p, "turn-loose", LEGACY_GRACE * 10);
+    age_track(&p, "turn-loose", LEGACY_GRACE * 10);
     let stale = stale_tracks(&p, Duration::ZERO).unwrap();
     assert_eq!(stale.len(), 1);
     assert_eq!(stale[0].reason, StaleReason::Incomplete);
@@ -371,7 +386,7 @@ fn git_failure_keeps_turn_named_worktree() {
         .join("turn-broken");
     std::fs::write(git_dir.join("HEAD"), "not a ref\n").unwrap();
     std::fs::remove_dir_all(git_dir.join("logs")).unwrap();
-    age_gitdir(&p, "turn-broken", LEGACY_GRACE * 10);
+    age_track(&p, "turn-broken", LEGACY_GRACE * 10);
     assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
 }
 
@@ -388,7 +403,7 @@ fn missing_reflog_keeps_detached_turn_worktree() {
         .join("worktrees")
         .join("turn-noreflog");
     std::fs::remove_dir_all(git_dir.join("logs")).unwrap();
-    age_gitdir(&p, "turn-noreflog", LEGACY_GRACE * 10);
+    age_track(&p, "turn-noreflog", LEGACY_GRACE * 10);
     assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
 }
 
@@ -412,7 +427,7 @@ fn pruned_reflog_keeps_turn_worktree_with_own_commits() {
     let newest = log.lines().last().unwrap();
     assert!(!newest.starts_with("0000000"));
     std::fs::write(&log_path, format!("{newest}\n")).unwrap();
-    age_gitdir(&p, "turn-pruned", LEGACY_GRACE * 10);
+    age_track(&p, "turn-pruned", LEGACY_GRACE * 10);
     assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
 }
 
@@ -424,11 +439,29 @@ fn half_cloned_track_with_index_writes_no_deleted_list() {
     let path = half_created(&p, "turn-half");
     std::fs::remove_file(path.join("b.txt")).unwrap();
     std::fs::write(path.join("new.txt"), "fresh").unwrap();
-    age_gitdir(&p, "turn-half", LEGACY_GRACE * 10);
+    age_track(&p, "turn-half", LEGACY_GRACE * 10);
     let stale = stale_tracks(&p, Duration::ZERO).unwrap();
     assert_eq!(stale.len(), 1);
     let td = tempfile::tempdir().unwrap();
     let saved = reclaim(&p, &stale[0], &td.path().join("half.patch")).unwrap();
     assert!(std::fs::read_to_string(&saved).unwrap().contains("fresh"));
     assert!(!deleted_list(&saved).exists());
+}
+
+/// #2639: age is measured from the last activity, not from creation. An
+/// old track whose index, HEAD or HEAD reflog changed within the grace is
+/// in use and must be kept, whatever its `gitdir` says.
+#[test]
+fn incomplete_track_with_recent_activity_is_kept() {
+    for file in ACTIVITY_FILES {
+        let (_td, p) = repo();
+        half_created(&p, "turn-busy");
+        age_track(&p, "turn-busy", LEGACY_GRACE * 2);
+        assert_eq!(stale_tracks(&p, Duration::ZERO).unwrap().len(), 1, "{file}");
+        touch_now(&p, "turn-busy", file);
+        assert!(
+            stale_tracks(&p, Duration::ZERO).unwrap().is_empty(),
+            "recent {file} must keep the track"
+        );
+    }
 }
