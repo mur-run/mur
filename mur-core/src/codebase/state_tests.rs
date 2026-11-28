@@ -93,7 +93,9 @@ fn concurrent_reader_never_sees_a_partial_meta() {
         std::thread::spawn(move || {
             let mut reads = 0u32;
             while !stop.load(Ordering::Relaxed) {
-                let m = idx.load_meta().expect("torn or missing meta observed");
+                let m = idx
+                    .read_meta()
+                    .unwrap_or_else(|e| panic!("torn or missing meta observed: {e}"));
                 assert!(matches!(m.last_indexed.as_str(), "a" | "b"));
                 reads += 1;
             }
@@ -106,4 +108,36 @@ fn concurrent_reader_never_sees_a_partial_meta() {
     }
     stop.store(true, Ordering::Relaxed);
     assert!(reader.join().unwrap() > 0);
+}
+
+/// Sharing and lock violations reach std as `Uncategorized`; they must still
+/// be retried like `PermissionDenied` (#2481). A real not-found must not be.
+#[cfg(windows)]
+#[test]
+fn sharing_and_lock_violations_are_transient() {
+    use std::io::{Error, ErrorKind};
+    assert!(super::is_transient_read_error(&Error::from_raw_os_error(
+        32
+    )));
+    assert!(super::is_transient_read_error(&Error::from_raw_os_error(
+        33
+    )));
+    assert!(super::is_transient_read_error(&Error::from(
+        ErrorKind::PermissionDenied
+    )));
+    assert!(!super::is_transient_read_error(&Error::from_raw_os_error(
+        2
+    )));
+}
+
+/// A missing file surfaces its I/O reason rather than a bare `None`.
+#[test]
+fn read_meta_reports_the_underlying_error() {
+    let t = tempfile::tempdir().unwrap();
+    let (_env, idx) = index_in(t.path());
+    let err = idx.read_meta().unwrap_err();
+    assert!(err.contains("kind=NotFound"), "{err}");
+    std::fs::create_dir_all(idx.meta_path().parent().unwrap()).unwrap();
+    std::fs::write(idx.meta_path(), "{").unwrap();
+    assert!(idx.read_meta().unwrap_err().starts_with("parse failed"));
 }

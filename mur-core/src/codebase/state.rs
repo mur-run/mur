@@ -93,8 +93,21 @@ impl CodebaseIndex {
     }
 
     pub(super) fn load_meta(&self) -> Option<IndexMetadata> {
-        let data = read_meta_file(&self.meta_path())?;
-        serde_json::from_str(&data).ok()
+        self.read_meta().ok()
+    }
+
+    /// `load_meta` with the reason kept: an I/O failure carries its
+    /// `ErrorKind` and raw OS code, a parse failure its serde message. Lets a
+    /// test report *why* a read failed instead of a bare `None` (#2481).
+    pub(super) fn read_meta(&self) -> Result<IndexMetadata, String> {
+        let data = read_meta_file(&self.meta_path()).map_err(|e| {
+            format!(
+                "read failed: kind={:?} os_error={:?}: {e}",
+                e.kind(),
+                e.raw_os_error()
+            )
+        })?;
+        serde_json::from_str(&data).map_err(|e| format!("parse failed: {e}"))
     }
 
     /// Vector width recorded at build time (`None` for legacy indexes). Used
@@ -230,20 +243,41 @@ const META_READ_RETRIES: u32 = 20;
 /// Pause between those retries.
 #[cfg(windows)]
 const META_READ_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
+/// `ERROR_SHARING_VIOLATION`: another handle (an antivirus scan, the indexer)
+/// holds the file without the share mode we need.
+#[cfg(windows)]
+const ERROR_SHARING_VIOLATION: i32 = 32;
+/// `ERROR_LOCK_VIOLATION`: a byte-range lock on the file is held elsewhere.
+#[cfg(windows)]
+const ERROR_LOCK_VIOLATION: i32 = 33;
+
+/// Whether a failed meta read is a transient Windows contention error worth
+/// retrying. `PermissionDenied` covers `ERROR_ACCESS_DENIED` (the old file is
+/// delete-pending while `save_meta`'s `rename` replaces it). std maps sharing
+/// and lock violations to `Uncategorized`, so those are matched by raw code —
+/// without that they skipped the retry entirely (#2481).
+#[cfg(windows)]
+fn is_transient_read_error(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::PermissionDenied
+        || matches!(
+            e.raw_os_error(),
+            Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+        )
+}
 
 /// Read the meta file. On Windows, opening a file at the instant `save_meta`'s
-/// `rename` replaces it fails with `PermissionDenied` (the old file is
-/// delete-pending), so that error is retried briefly before giving up; the
-/// next attempt sees the complete new document.
-fn read_meta_file(path: &Path) -> Option<String> {
+/// `rename` replaces it, or while another process briefly holds it, fails
+/// transiently, so those errors are retried before giving up; the next
+/// attempt sees the complete new document.
+fn read_meta_file(path: &Path) -> std::io::Result<String> {
     #[cfg(windows)]
     for _ in 0..META_READ_RETRIES {
         match std::fs::read_to_string(path) {
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            Err(e) if is_transient_read_error(&e) => {
                 std::thread::sleep(META_READ_RETRY_DELAY);
             }
-            other => return other.ok(),
+            other => return other,
         }
     }
-    std::fs::read_to_string(path).ok()
+    std::fs::read_to_string(path)
 }
