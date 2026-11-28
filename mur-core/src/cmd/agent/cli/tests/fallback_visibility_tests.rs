@@ -22,6 +22,7 @@ fn app_with_book() -> App {
             in_per_1k: Some(0.001),
             out_per_1k: Some(0.005),
             window: Some(200_000),
+            billing: None,
         },
     );
     key_of_model.insert("claude-haiku-4-5".to_string(), "claude_haiku".to_string());
@@ -97,6 +98,7 @@ fn an_unpriceable_answer_does_not_inherit_the_configured_rates() {
         in_per_1k: Some(9.99),
         out_per_1k: Some(9.99),
         window: Some(1),
+        billing: None,
     };
     a.apply_usage(&usage("some-model-nobody-registered"));
     assert!(

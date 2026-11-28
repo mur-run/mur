@@ -17,6 +17,7 @@ mod monitor_shortcut_tests;
 mod notify_tests;
 mod paste_newline_tests;
 mod persist_skin_tests;
+mod pricing_book_registry_tests;
 mod pricing_book_tests;
 mod resize_resilience_tests;
 mod shell_menu_tests;

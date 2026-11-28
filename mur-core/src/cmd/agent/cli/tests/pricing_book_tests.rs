@@ -19,6 +19,7 @@ fn book() -> PricingBook {
             in_per_1k: None,
             out_per_1k: None,
             window: Some(32_000),
+            billing: None,
         },
     );
     key_of_model.insert("Qwen3.5-4B-MLX-4bit".to_string(), "omlx".to_string());
@@ -28,6 +29,7 @@ fn book() -> PricingBook {
             in_per_1k: Some(0.001),
             out_per_1k: Some(0.005),
             window: Some(200_000),
+            billing: None,
         },
     );
     key_of_model.insert("claude-haiku-4-5".to_string(), "claude_haiku".to_string());
@@ -38,6 +40,7 @@ fn book() -> PricingBook {
             in_per_1k: Some(0.002),
             out_per_1k: Some(0.01),
             window: Some(400_000),
+            billing: None,
         },
     );
     key_of_model.insert(

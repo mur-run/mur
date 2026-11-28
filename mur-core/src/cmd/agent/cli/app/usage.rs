@@ -1,20 +1,19 @@
-//! Cost, budget and usage accounting on `App`, moved out of `app/mod.rs` for CLAUDE.md §4's 800-line rule.
-//! Pure movement: every item below is verbatim.
+//! Cost, budget and usage accounting on `App`, moved out of `app/mod.rs` for
+//! CLAUDE.md §4's 800-line rule.
 
 use super::*;
 
 impl App {
-    /// Estimated cumulative session cost in USD, or `None` if the model's
-    /// pricing is unknown. Used by Task 2 to gate new turns against
-    /// `budget_usd`. Fail-open: `None` means "can't price it, allow the turn".
+    /// Estimated metered spend this session in USD, or `None` when no turn so
+    /// far was both billed per token and priced. Gates new turns against
+    /// `budget_usd`. Fail-open: `None` means "nothing to count, allow the turn".
+    ///
+    /// Accrued per turn rather than derived from the session's token totals:
+    /// the answering model can change turn to turn (fallback), and pricing the
+    /// whole session at the latest model's rates let one subscription turn
+    /// erase every metered dollar already spent from the cap (#2609 review).
     pub fn session_cost(&self) -> Option<f64> {
-        super::super::footer::turn_cost(
-            &self.pricing,
-            &super::super::footer::UsageCounts {
-                input: self.session_in,
-                output: self.session_out,
-            },
-        )
+        self.session_spent_usd
     }
 
     /// True when a USD cap is set and the estimated session spend has reached
@@ -152,6 +151,21 @@ impl App {
         if let Some(answered) = usage.get("model_ref").and_then(|v| v.as_str()) {
             self.apply_answering_model(answered);
         }
+        // A turn is many calls and routing or fallback can answer each with a
+        // different model, so `model_ref` (the LAST call's model) cannot price
+        // the turn's totals: a metered run ending on a subscription fallback
+        // would count as $0 (qa review C1). Price each `by_model` share at its
+        // own model; older runtimes without the split fall back to `model_ref`.
+        // An unbilled turn adds nothing and erases nothing.
+        let cost = super::super::turn_price::turn_cost(
+            &self.pricing,
+            self.pricing_book.as_ref(),
+            usage,
+            &u,
+        );
+        if let Some(c) = cost {
+            *self.session_spent_usd.get_or_insert(0.0) += c;
+        }
     }
 
     /// Re-price from the model that actually answered, and say so once when it
@@ -173,10 +187,7 @@ impl App {
         // not repeat the notice every turn.
         if Some(&key) != configured.as_ref() && self.answered_key.as_ref() != Some(&key) {
             let from = configured.as_deref().unwrap_or("the configured model");
-            self.push_system(format!(
-                "⇄ answered by '{key}' ({answered}), not '{from}' — the runtime fell back. \
-                 Cost below is now priced for '{key}'."
-            ));
+            self.push_system(fallback_notice(&key, answered, from, &self.pricing));
         }
         self.answered_key = Some(key);
     }
@@ -328,4 +339,20 @@ impl App {
             self.cwd.as_deref(),
         )
     }
+}
+
+/// The one-time notice when a fallback model answered. Its last sentence says
+/// what the switch does to the cost: a subscription or local model adds
+/// nothing per token, so "now priced for" would be untrue for it.
+pub(super) fn fallback_notice(
+    key: &str,
+    answered: &str,
+    from: &str,
+    pricing: &super::super::footer::Pricing,
+) -> String {
+    let cost = match super::super::footer::unbilled_label(pricing) {
+        Some(label) => format!("'{key}' is {label}: it adds nothing per token."),
+        None => format!("Cost below is now priced for '{key}'."),
+    };
+    format!("⇄ answered by '{key}' ({answered}), not '{from}' — the runtime fell back. {cost}")
 }

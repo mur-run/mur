@@ -18,7 +18,7 @@ pub(super) fn run_plain(
     let out2 = RefCell::new(io::stdout());
     let mut context: Option<String> = None;
     let cwd = std::env::current_dir().ok();
-    let (pricing, _book) = load_pricing(home, agent);
+    let (pricing, book) = load_pricing(home, agent);
     // Tools the operator granted with `[a]` this session. Plain mode had no
     // such set, so `[a]lways` approved exactly one call — the prompt said one
     // thing and the code did another.
@@ -287,19 +287,8 @@ pub(super) fn run_plain(
                     writeln!(out2.borrow_mut())?;
                     // Usage footer: total tokens + cost (reuse footer helpers).
                     if let Some(usage) = task.get("usage") {
-                        let u = footer::parse_usage(usage);
-                        match footer::turn_cost(&pricing, &u) {
-                            Some(c) => {
-                                let _ = writeln!(
-                                    out2.borrow_mut(),
-                                    "  {} tok · ${c:.3}",
-                                    u.input + u.output
-                                );
-                            }
-                            None => {
-                                let _ = writeln!(out2.borrow_mut(), "  {} tok", u.input + u.output);
-                            }
-                        }
+                        let line = super::turn_price::plain_footer(&pricing, &book, usage);
+                        let _ = writeln!(out2.borrow_mut(), "{line}");
                     }
                     out2.borrow_mut().flush()?;
                     context = tid;
