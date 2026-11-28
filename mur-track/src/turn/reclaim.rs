@@ -159,34 +159,49 @@ fn judge(git_dir: &Path, now: SystemTime, grace: Duration) -> Option<StaleReason
 ///
 /// The name alone is not proof: a fleet or hand-made worktree may be called
 /// `turn-…` too, and may carry commits. The patch only salvages uncommitted
-/// changes, so a track whose HEAD is not on any branch, tag or remote ref is
-/// never incomplete — removing it would orphan those commits.
+/// changes, so a track is incomplete only once it provably has no commits of
+/// its own — see [`has_no_own_commits`].
 fn is_incomplete(name: &str, git_dir: &Path) -> bool {
     name.starts_with(TRACK_PREFIX)
         && !git_dir.join(BASE_FILE).exists()
         && !git_dir.join(OWNER_FILE).exists()
-        && head_is_reachable(git_dir)
+        && has_no_own_commits(git_dir)
 }
 
-/// Is the HEAD of the worktree behind `git_dir` reachable from a branch, tag
-/// or remote ref? Not `--all`: that includes every worktree's HEAD, this one
-/// among them, and would always answer yes. Any git failure answers no, so
-/// the track is kept.
-fn head_is_reachable(git_dir: &Path) -> bool {
-    Command::new("git")
-        .arg("--git-dir")
-        .arg(git_dir)
-        .args([
-            "rev-list",
-            "-n1",
-            "HEAD",
-            "--not",
-            "--branches",
-            "--tags",
-            "--remotes",
-        ])
-        .output()
-        .is_ok_and(|o| o.status.success() && o.stdout.trim_ascii().is_empty())
+/// Does the worktree behind `git_dir` hold no commits that removing it would
+/// orphan? Yes when either check finds nothing beyond a known commit:
+///
+/// - its HEAD is reachable from a branch, tag or remote ref (not `--all`:
+///   that includes every worktree's HEAD, this one among them, and would
+///   always answer yes);
+/// - its HEAD adds nothing to the commit it was created at, read from the
+///   first entry of its own HEAD reflog. This covers a track created while
+///   the project sat on a detached HEAD (rebase, bisect), or from a branch
+///   deleted since (squash-merged) — both unreachable, yet commit-free.
+///
+/// Any git failure, or a missing or unreadable reflog, answers no, so the
+/// track is kept.
+fn has_no_own_commits(git_dir: &Path) -> bool {
+    let head_beyond = |exclude: &[&str]| {
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(git_dir)
+            .args(["rev-list", "-n1", "HEAD", "--not"])
+            .args(exclude)
+            .output()
+            .is_ok_and(|o| o.status.success() && o.stdout.trim_ascii().is_empty())
+    };
+    head_beyond(&["--branches", "--tags", "--remotes"])
+        || creation_commit(git_dir).is_some_and(|oid| head_beyond(&[&oid]))
+}
+
+/// The commit `git worktree add` checked out: the new-oid field of the first
+/// line of the worktree's own `logs/HEAD`. `None` unless it is a full hex oid.
+fn creation_commit(git_dir: &Path) -> Option<String> {
+    let log = std::fs::read_to_string(git_dir.join("logs").join("HEAD")).ok()?;
+    let oid = log.lines().next()?.split(' ').nth(1)?;
+    let valid = matches!(oid.len(), 40 | 64) && oid.bytes().all(|b| b.is_ascii_hexdigit());
+    valid.then(|| oid.to_owned())
 }
 
 /// Age an incomplete track by its `gitdir` file — written once by
@@ -283,12 +298,14 @@ fn save_patch(track: &StaleTrack, patch: &Path) -> Result<PathBuf> {
             .output()
     };
     let src = track.git_dir.join("index");
-    // A track that failed before its index was copied never had a checkout:
-    // every tracked path reads as deleted, which is noise, not a salvage.
-    let checked_out = src.is_file();
-    if checked_out {
+    let has_index = src.is_file();
+    if has_index {
         std::fs::copy(&src, &index).context("copy track index")?;
     }
+    // A half-created track never finished its checkout — with no index, or
+    // with one copied before a clone that died midway (ENOSPC). Its missing
+    // paths were never cloned, not deleted, so it gets no deleted-list.
+    let checked_out = has_index && track.reason != StaleReason::Incomplete;
     let result = (|| -> Result<(Vec<u8>, Vec<u8>)> {
         let added = git(&["add", "-A", "--", "."]).context("spawn git add")?;
         if !added.status.success() {

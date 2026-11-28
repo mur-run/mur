@@ -185,13 +185,12 @@ impl TurnTrack {
         if let Err(e) = populated {
             return Err(match remove_worktree(&project, &path) {
                 Ok(()) => e,
-                // One flat message, cause first: callers log `%e`, which shows
-                // only the outermost layer — the original failure (ENOSPC, …)
-                // must not hide behind the cleanup error.
-                Err(cleanup) => anyhow::anyhow!(
-                    "{e:#}; and removing the half-created track {} failed too: {cleanup:#}",
+                // Callers log with `{e:#}`, so the whole chain — the original
+                // failure (ENOSPC, …) included — reaches the log either way.
+                Err(cleanup) => e.context(format!(
+                    "and removing the half-created track {} failed too: {cleanup:#}",
                     path.display()
-                ),
+                )),
             });
         }
         Ok(Self {

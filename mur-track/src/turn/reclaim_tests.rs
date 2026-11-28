@@ -329,3 +329,65 @@ fn track_without_index_writes_no_deleted_list() {
     assert!(std::fs::read_to_string(&saved).unwrap().contains("fresh"));
     assert!(!deleted_list(&saved).exists());
 }
+
+/// Created from a feature branch that was deleted afterwards (squash-merge):
+/// HEAD is on no ref, but adds nothing to its creation commit — incomplete.
+#[test]
+fn half_created_from_deleted_branch_is_incomplete() {
+    let (_td, p) = repo();
+    git(&p, &["switch", "-q", "-c", "feat"]);
+    git(&p, &["commit", "-q", "--allow-empty", "-m", "feat"]);
+    half_created(&p, "turn-gone");
+    git(&p, &["switch", "-q", "--detach", "HEAD~1"]);
+    git(&p, &["branch", "-q", "-D", "feat"]);
+    age_gitdir(&p, "turn-gone", LEGACY_GRACE * 10);
+    let stale = stale_tracks(&p, Duration::ZERO).unwrap();
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].reason, StaleReason::Incomplete);
+}
+
+/// Created while the project sat on a detached, unreachable HEAD (mid
+/// rebase): still commit-free, so still incomplete.
+#[test]
+fn half_created_on_detached_unreachable_head_is_incomplete() {
+    let (_td, p) = repo();
+    git(&p, &["switch", "-q", "--detach"]);
+    git(&p, &["commit", "-q", "--allow-empty", "-m", "loose"]);
+    half_created(&p, "turn-loose");
+    age_gitdir(&p, "turn-loose", LEGACY_GRACE * 10);
+    let stale = stale_tracks(&p, Duration::ZERO).unwrap();
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].reason, StaleReason::Incomplete);
+}
+
+/// When git cannot answer (HEAD unreadable, no reflog), the track is kept.
+#[test]
+fn git_failure_keeps_turn_named_worktree() {
+    let (_td, p) = repo();
+    half_created(&p, "turn-broken");
+    let git_dir = super::common_git_dir(&p)
+        .unwrap()
+        .join("worktrees")
+        .join("turn-broken");
+    std::fs::write(git_dir.join("HEAD"), "not a ref\n").unwrap();
+    std::fs::remove_dir_all(git_dir.join("logs")).unwrap();
+    age_gitdir(&p, "turn-broken", LEGACY_GRACE * 10);
+    assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
+}
+
+/// A clone that died midway leaves an index but missing files. Those paths
+/// were never cloned, not deleted: no deleted-list.
+#[test]
+fn half_cloned_track_with_index_writes_no_deleted_list() {
+    let (_td, p) = repo();
+    let path = half_created(&p, "turn-half");
+    std::fs::remove_file(path.join("b.txt")).unwrap();
+    std::fs::write(path.join("new.txt"), "fresh").unwrap();
+    age_gitdir(&p, "turn-half", LEGACY_GRACE * 10);
+    let stale = stale_tracks(&p, Duration::ZERO).unwrap();
+    assert_eq!(stale.len(), 1);
+    let td = tempfile::tempdir().unwrap();
+    let saved = reclaim(&p, &stale[0], &td.path().join("half.patch")).unwrap();
+    assert!(std::fs::read_to_string(&saved).unwrap().contains("fresh"));
+    assert!(!deleted_list(&saved).exists());
+}
