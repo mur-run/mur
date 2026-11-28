@@ -236,6 +236,28 @@ fn each_return_to_a_fallback_is_announced_again() {
     assert!(says("sub-model"));
 }
 
+/// #2625 review I2: the notice follows the turn's last call (`model_ref`),
+/// as the TUI does. A fallback that answered only mid-turn is not announced,
+/// while its share is still priced at its own rates from `by_model`.
+#[test]
+fn a_mid_turn_fallback_is_not_announced_when_the_last_call_is_configured() {
+    let b = book();
+    let usage = serde_json::json!({
+        "input_tokens": 2000, "output_tokens": 2000, "model_ref": "metered-model",
+        "by_model": [
+            { "model": "sub-model", "registry_key": "sub", "input_tokens": 1000, "output_tokens": 1000 },
+            { "model": "metered-model", "registry_key": "metered", "input_tokens": 1000, "output_tokens": 1000 }
+        ]
+    });
+    let mut last = None;
+    assert_eq!(plain_fallback_notice(&b, &usage, &mut last), None);
+    assert_eq!(last.as_deref(), Some("metered"));
+    // The next turn ending on the fallback is still announced.
+    let next =
+        serde_json::json!({ "input_tokens": 1, "output_tokens": 1, "model_ref": "sub-model" });
+    assert!(plain_fallback_notice(&b, &next, &mut last).is_some());
+}
+
 /// #2620: a turn priced at the dearest-rate fallback is flagged as an upper
 /// estimate, the same on a legacy runtime (no `by_model`) and one that sends
 /// the split; a fully priced turn on either is not flagged.

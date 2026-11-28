@@ -177,6 +177,12 @@ pub(super) fn forget_answering_model(last: &mut Option<String>) {
 /// `--plain`'s fallback notice for one finished turn, from its
 /// `usage.model_ref`. `None` when the runtime did not say, the registry does
 /// not know the model, or [`fallback_notice_once`] has nothing new to say.
+///
+/// Only the turn's LAST call is consulted, deliberately and the same as the
+/// TUI (`apply_answering_model`): `model_ref` names the model the reply came
+/// from. A fallback that answered only an earlier call of the turn, before the
+/// configured model took over again, is not announced — its cost is still
+/// priced per model from `by_model` (#2625 review I2).
 pub(super) fn plain_fallback_notice(
     book: &PricingBook,
     usage: &serde_json::Value,
