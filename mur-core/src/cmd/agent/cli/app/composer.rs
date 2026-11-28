@@ -1,7 +1,8 @@
 //! Composer chrome — the Enter/newline hints, the input border and padding,
 //! and the input widget's construction — moved out of `app/mod.rs` for
-//! CLAUDE.md §4's 800-line rule. Pure movement: items are verbatim apart
-//! from the visibility needed to re-export them from `app`.
+//! CLAUDE.md's 800-line-per-file rule. Pure movement: items are verbatim
+//! apart from the visibility needed to re-export them from `app`, and the
+//! `super::super::` path to `keyboard_enhancement_active` one level deeper.
 
 use super::*;
 
