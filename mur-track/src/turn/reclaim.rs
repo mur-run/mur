@@ -80,8 +80,9 @@ pub struct StaleTrack {
 ///
 /// A directory counts as a turn track only when git has it registered as a
 /// worktree of `project` and its git dir holds the turn base file — or, for a
-/// half-created track, its name carries [`TRACK_PREFIX`] and it has neither
-/// base nor owner file. Fleet worktrees and stray dirs are never candidates. The git dir is located
+/// half-created track, its name carries [`TRACK_PREFIX`], it has neither
+/// base nor owner file, and it holds no commits of its own. Fleet worktrees
+/// and stray dirs are never candidates. The git dir is located
 /// through the project, not through the track's `.git` pointer: a gutted
 /// track may have lost that pointer, and git run inside it would then answer
 /// for the project repo.
@@ -155,10 +156,61 @@ fn judge(git_dir: &Path, now: SystemTime, grace: Duration) -> Option<StaleReason
 /// owner file that [`super::TurnTrack::create`] writes last. The name gate
 /// keeps hand-made worktrees under `.worktrees/` (`fix-1234`, fleet
 /// worktrees) out of reach.
+///
+/// The name alone is not proof: a fleet or hand-made worktree may be called
+/// `turn-…` too, and may carry commits. The patch only salvages uncommitted
+/// changes, so a track is incomplete only once it provably has no commits of
+/// its own — see [`has_no_own_commits`].
 fn is_incomplete(name: &str, git_dir: &Path) -> bool {
     name.starts_with(TRACK_PREFIX)
         && !git_dir.join(BASE_FILE).exists()
         && !git_dir.join(OWNER_FILE).exists()
+        && has_no_own_commits(git_dir)
+}
+
+/// Does the worktree behind `git_dir` hold no commits that removing it would
+/// orphan? Yes when either check finds nothing beyond a known commit:
+///
+/// - its HEAD is reachable from a branch, tag or remote ref (not `--all`:
+///   that includes every worktree's HEAD, this one among them, and would
+///   always answer yes);
+/// - its HEAD adds nothing to the commit it was created at, read from the
+///   first entry of its own HEAD reflog. This covers a track created while
+///   the project sat on a detached HEAD (rebase, bisect), or from a branch
+///   deleted since (squash-merged) — both unreachable, yet commit-free.
+///
+/// Any git failure, or a missing or unreadable reflog, answers no, so the
+/// track is kept.
+fn has_no_own_commits(git_dir: &Path) -> bool {
+    let head_beyond = |exclude: &[&str]| {
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(git_dir)
+            .args(["rev-list", "-n1", "HEAD", "--not"])
+            .args(exclude)
+            .output()
+            .is_ok_and(|o| o.status.success() && o.stdout.trim_ascii().is_empty())
+    };
+    head_beyond(&["--branches", "--tags", "--remotes"])
+        || creation_commit(git_dir).is_some_and(|oid| head_beyond(&[&oid]))
+}
+
+/// The commit `git worktree add` checked out: the new-oid field of the first
+/// line of the worktree's own `logs/HEAD`.
+///
+/// That line is only the creation entry while its old-oid field is all
+/// zeros. Once `git gc` / `git reflog expire` prunes the head of the log, the
+/// first surviving line is merely the oldest one left — trusting it could
+/// call a track's own commits "nothing beyond creation". So `None` unless
+/// the old oid is the null oid and both oids are full hex: unknown history
+/// keeps the track.
+fn creation_commit(git_dir: &Path) -> Option<String> {
+    let log = std::fs::read_to_string(git_dir.join("logs").join("HEAD")).ok()?;
+    let mut fields = log.lines().next()?.split(' ');
+    let (old, new) = (fields.next()?, fields.next()?);
+    let is_oid = |s: &str| matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit());
+    let created = is_oid(old) && old.bytes().all(|b| b == b'0') && is_oid(new);
+    created.then(|| new.to_owned())
 }
 
 /// Age an incomplete track by its `gitdir` file — written once by
@@ -255,9 +307,14 @@ fn save_patch(track: &StaleTrack, patch: &Path) -> Result<PathBuf> {
             .output()
     };
     let src = track.git_dir.join("index");
-    if src.is_file() {
+    let has_index = src.is_file();
+    if has_index {
         std::fs::copy(&src, &index).context("copy track index")?;
     }
+    // A half-created track never finished its checkout — with no index, or
+    // with one copied before a clone that died midway (ENOSPC). Its missing
+    // paths were never cloned, not deleted, so it gets no deleted-list.
+    let checked_out = has_index && track.reason != StaleReason::Incomplete;
     let result = (|| -> Result<(Vec<u8>, Vec<u8>)> {
         let added = git(&["add", "-A", "--", "."]).context("spawn git add")?;
         if !added.status.success() {
@@ -277,7 +334,11 @@ fn save_patch(track: &StaleTrack, patch: &Path) -> Result<PathBuf> {
             Ok(out.stdout)
         };
         let changes = diff(&["diff", "--cached", "--binary", "--diff-filter=d", "HEAD"])?;
-        let deleted = diff(&["diff", "--cached", "--name-only", "--diff-filter=D", "HEAD"])?;
+        let deleted = if checked_out {
+            diff(&["diff", "--cached", "--name-only", "--diff-filter=D", "HEAD"])?
+        } else {
+            Vec::new()
+        };
         Ok((changes, deleted))
     })();
     let _ = std::fs::remove_file(&index);
