@@ -93,6 +93,19 @@ pub fn turn_cost(p: &Pricing, u: &UsageCounts) -> Option<f64> {
     }
 }
 
+/// Whether a turn on `p` would get a figure from its own rates — the same
+/// rule the pricer applies (`turn_price::price_turn`): a usage-billed model
+/// is priced through [`own_rates`], so one recorded side is enough; any other
+/// billing goes through [`turn_cost`], which needs both. The footer uses this
+/// to choose between `$0.00 / cap` and `no price / cap` before the first
+/// turn, so it cannot say "no price" for a model it will price one turn later.
+pub fn has_price(p: &Pricing) -> bool {
+    match p.billing {
+        Some(BillingMode::UsageBilled) => own_rates(p).is_some(),
+        _ => p.in_per_1k.is_some() && p.out_per_1k.is_some(),
+    }
+}
+
 /// `p`'s own (input, output) rates, a missing side priced at the side it has.
 /// `None` when neither side is recorded.
 pub fn own_rates(p: &Pricing) -> Option<(f64, f64)> {

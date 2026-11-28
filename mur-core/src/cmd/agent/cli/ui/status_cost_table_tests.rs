@@ -145,3 +145,73 @@ fn a_fallback_priced_figure_is_marked_as_an_upper_bound() {
         );
     }
 }
+
+/// One recorded rate. A usage-billed model is priced through `own_rates`, so
+/// it reads `$0.00 / cap` before the first turn just as it reads `$X / cap`
+/// after it; unknown billing goes through `turn_cost`, which needs both rates
+/// (#2630 review).
+#[test]
+fn a_half_priced_model_follows_the_pricer() {
+    use BillingMode::UsageBilled;
+    type Case = (Option<BillingMode>, Option<f64>, Option<f64>, &'static str);
+    let cases: &[Case] = &[
+        (Some(UsageBilled), Some(3.0), None, "$0.00 / $20.00"),
+        (Some(UsageBilled), None, Some(15.0), "$0.00 / $20.00"),
+        (None, Some(3.0), None, "no price / $20.00"),
+        (None, None, Some(15.0), "no price / $20.00"),
+    ];
+    for &(billing, in_per_1k, out_per_1k, want) in cases {
+        let p = Pricing {
+            in_per_1k,
+            out_per_1k,
+            window: None,
+            billing,
+        };
+        let got = footer_segments(10, 20, 1_000, 1_000, 0, None, &p, Some(20.0), WIDE, false);
+        assert_eq!(
+            got,
+            format!("{TOKS} · {want}"),
+            "{billing:?} in={in_per_1k:?} out={out_per_1k:?}"
+        );
+    }
+}
+
+/// An unpriced model is the one #2620 prices at the fallback rates, so it is
+/// the realistic `guessed` case. With nothing spent there is no figure, so no
+/// mark either.
+#[test]
+fn an_unpriced_guessed_model_with_nothing_spent_carries_no_mark() {
+    for billing in [None, Some(BillingMode::UsageBilled)] {
+        let p = with(billing, false);
+        let got = footer_segments(10, 20, 1_000, 1_000, 0, None, &p, Some(20.0), WIDE, true);
+        assert_eq!(got, format!("{TOKS} · no price / $20.00"), "{billing:?}");
+    }
+}
+
+/// A capped row with nothing spent grew from `/ $20.00` (8 chars) to
+/// `$0.00 / $20.00` (14) or `no price / $20.00` (17), so it is trimmed at a
+/// wider bar than before. Pin the budgets where each segment drops.
+#[test]
+fn a_capped_unspent_row_trims_tokens_first_then_cost() {
+    type Case = (bool, &'static str, usize);
+    // (has rates, cost text, full width = TOKS + " · " + cost)
+    let cases: &[Case] = &[
+        (true, "$0.00 / $20.00", 29),
+        (false, "no price / $20.00", 32),
+    ];
+    for &(rates, cost, full_width) in cases {
+        let p = with(None, rates);
+        let at =
+            |budget| footer_segments(10, 20, 1_000, 1_000, 0, None, &p, Some(20.0), budget, false);
+        let full = format!("{TOKS} · {cost}");
+        assert_eq!(full.chars().count(), full_width);
+        assert_eq!(at(full_width), full);
+        assert_eq!(at(full_width - 1), cost, "tokens drop first");
+        assert_eq!(at(cost.chars().count()), cost);
+        assert_eq!(
+            at(cost.chars().count() - 1),
+            "",
+            "then the cost; no ctx to keep"
+        );
+    }
+}
