@@ -442,7 +442,11 @@ pub(super) fn track_name(turn: &str) -> String {
     } else {
         &cleaned
     };
-    format!("turn-{}", tail.trim_matches('-'))
+    format!(
+        "{}{}",
+        mur_track::turn::TRACK_PREFIX,
+        tail.trim_matches('-')
+    )
 }
 
 #[cfg(test)]

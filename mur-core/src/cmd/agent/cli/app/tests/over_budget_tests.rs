@@ -248,3 +248,42 @@ fn the_fallback_notice_says_what_the_switch_does_to_cost() {
          Cost below is now priced for 'metered'."
     );
 }
+
+/// #2620: a turn counted at the dearest-rate fallback marks the session as an
+/// upper estimate and names the model once in the transcript — on a legacy
+/// runtime and on one that sends `by_model` alike.
+#[test]
+fn a_fallback_priced_turn_is_flagged_once_on_either_runtime() {
+    let notices = |a: &App| {
+        a.messages
+            .iter()
+            .filter(|m| m.text.contains("no rate in models.yaml"))
+            .count()
+    };
+    let legacy = answered("mystery-model", 1000, 1000);
+    let split = turn_with_shares(
+        "metered-model",
+        serde_json::json!([
+            { "registry_key": null, "model": "mystery-model", "input_tokens": 1000, "output_tokens": 1000 },
+        ]),
+    );
+    for usage in [&legacy, &split] {
+        let mut a = mixed_book_app();
+        a.apply_usage(&answered("metered-model", 1000, 1000));
+        assert!(
+            a.session_guessed.is_empty(),
+            "a priced turn is not an estimate"
+        );
+        a.apply_usage(usage);
+        a.apply_usage(usage);
+        assert_eq!(a.session_guessed, vec!["mystery-model".to_string()]);
+        assert_eq!(notices(&a), 1, "named once, not every turn");
+        let last = a
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.text.contains("no rate"))
+            .unwrap();
+        assert!(last.text.contains("mystery-model ") && last.text.contains("$3/1k in, $15/1k out"));
+    }
+}

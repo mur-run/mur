@@ -274,6 +274,9 @@ pub struct App {
     /// Metered spend accrued turn by turn, each at the rates of the model that
     /// answered it. `None` until a billed, priced turn lands.
     pub session_spent_usd: Option<f64>,
+    /// Models whose tokens `session_spent_usd` counted at the dearest-rate
+    /// fallback; non-empty marks the footer figure as an upper estimate.
+    pub session_guessed: Vec<String>,
     /// Every registry entry's pricing, so a substitution can be re-priced
     /// without touching disk mid-turn. `None` in tests and in plain mode.
     pub pricing_book: Option<super::PricingBook>,
@@ -491,6 +494,7 @@ impl App {
             ctx_tokens: 0,
             pricing: super::footer::Pricing::default(),
             session_spent_usd: None,
+            session_guessed: Vec::new(),
             pricing_book: None,
             answered_key: None,
             saw_step_this_turn: false,

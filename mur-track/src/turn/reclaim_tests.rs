@@ -195,3 +195,97 @@ fn reclaim_never_overwrites_an_existing_patch() {
     );
     assert!(std::fs::read_to_string(&got).unwrap().contains("+edited"));
 }
+
+/// Make `TurnTrack::create` fail *after* `git worktree add`: an ignored file
+/// `git status` never reads, but the clone cannot. `None` when permissions
+/// are not enforced (running as root), so the caller skips.
+#[cfg(unix)]
+fn unreadable_ignored_file(p: &Path) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(p.join(".gitignore"), "secret\n").unwrap();
+    git(p, &["add", ".gitignore"]);
+    git(p, &["commit", "-q", "-m", "ignore"]);
+    let f = p.join("secret");
+    std::fs::write(&f, "s").unwrap();
+    std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o000)).unwrap();
+    std::fs::read(&f).is_err().then_some(f)
+}
+
+#[cfg(unix)]
+fn restore(f: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o644)).unwrap();
+}
+
+/// #2618: a create that fails mid-clone must not leave a registered worktree
+/// behind (it would have no base and no owner file).
+#[cfg(unix)]
+#[test]
+fn failed_create_leaves_no_worktree() {
+    let (_td, p) = repo();
+    let Some(f) = unreadable_ignored_file(&p) else {
+        return;
+    };
+    let err = TurnTrack::create(&p, "turn-broken", TreeClone::Copy);
+    restore(&f);
+    assert!(err.is_err(), "create should fail on the unreadable file");
+    assert!(!p.join(WORKTREES_DIR).join("turn-broken").exists());
+    let admin = super::common_git_dir(&p).unwrap().join("worktrees");
+    assert!(!admin.join("turn-broken").exists());
+    // The name is free again.
+    TurnTrack::create(&p, "turn-broken", TreeClone::Copy).unwrap();
+}
+
+/// Register a worktree the way a crashed create would leave it: added, but
+/// no base file and no owner file.
+fn half_created(p: &Path, name: &str) -> PathBuf {
+    let path = p.join(WORKTREES_DIR).join(name);
+    git(
+        p,
+        &["worktree", "add", "--detach", "-q", path.to_str().unwrap()],
+    );
+    path
+}
+
+fn age_gitdir(p: &Path, name: &str, by: Duration) {
+    let f = super::common_git_dir(p)
+        .unwrap()
+        .join("worktrees")
+        .join(name)
+        .join("gitdir");
+    let then = std::time::SystemTime::now() - by;
+    std::fs::File::options()
+        .write(true)
+        .open(f)
+        .unwrap()
+        .set_modified(then)
+        .unwrap();
+}
+
+/// #2618: a half-created turn track is reclaimable once past LEGACY_GRACE,
+/// and its changes are still salvaged into the patch.
+#[test]
+fn incomplete_turn_track_is_stale_after_legacy_grace() {
+    let (_td, p) = repo();
+    let path = half_created(&p, "turn-orphan");
+    std::fs::write(path.join("a.txt"), "edited").unwrap();
+    assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
+    age_gitdir(&p, "turn-orphan", LEGACY_GRACE + Duration::from_secs(60));
+    let stale = stale_tracks(&p, Duration::ZERO).unwrap();
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].reason, StaleReason::Incomplete);
+    let td = tempfile::tempdir().unwrap();
+    let saved = reclaim(&p, &stale[0], &td.path().join("orphan.patch")).unwrap();
+    assert!(std::fs::read_to_string(saved).unwrap().contains("edited"));
+    assert!(!path.exists());
+}
+
+/// A hand-made worktree under `.worktrees/` is never an incomplete track,
+/// however old.
+#[test]
+fn non_turn_worktree_is_never_incomplete() {
+    let (_td, p) = repo();
+    half_created(&p, "fix-1234");
+    age_gitdir(&p, "fix-1234", LEGACY_GRACE * 10);
+    assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
+}
