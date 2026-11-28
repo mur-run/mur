@@ -287,3 +287,29 @@ fn a_fallback_priced_turn_is_flagged_once_on_either_runtime() {
         assert!(last.text.contains("mystery-model ") && last.text.contains("$3/1k in, $15/1k out"));
     }
 }
+
+/// Two models named in one notice take "their tokens", one takes "its".
+#[test]
+fn the_fallback_notice_agrees_in_number() {
+    let notice = |a: &App| {
+        a.messages
+            .iter()
+            .rev()
+            .find(|m| m.text.contains("no rate in models.yaml"))
+            .map(|m| m.text.clone())
+            .unwrap()
+    };
+    let mut a = mixed_book_app();
+    a.apply_usage(&answered("mystery-model", 1000, 1000));
+    assert!(notice(&a).contains("for mystery-model — its tokens"));
+
+    let mut a = mixed_book_app();
+    a.apply_usage(&turn_with_shares(
+        "metered-model",
+        serde_json::json!([
+            { "model": "alpha-model", "input_tokens": 1000, "output_tokens": 1000 },
+            { "model": "beta-model", "input_tokens": 1000, "output_tokens": 1000 },
+        ]),
+    ));
+    assert!(notice(&a).contains("for alpha-model, beta-model — their tokens"));
+}
