@@ -14,6 +14,14 @@ pub const HUMAN_SURFACES: &[&str] = &["cli", "hub", "ios", "mcp"];
 /// tests only, never to a dependent crate's.
 pub const TEST_SURFACE: &str = "test";
 
+/// The surface for an answer no person gave at the moment of asking: a
+/// session lane / "don't ask again" grant replaying an earlier answer. Never
+/// human, so it is never replayed again in its own right.
+pub const AUTO_SURFACE: &str = "auto";
+
+/// The Hub desktop app, when a person pressed Allow / Deny on a card.
+pub const HUB_SURFACE: &str = "hub";
+
 pub fn is_human_surface(surface: &str) -> bool {
     HUMAN_SURFACES.contains(&surface)
 }
@@ -32,5 +40,7 @@ mod tests {
         ] {
             assert!(!is_human_surface(s), "{s}");
         }
+        assert!(!is_human_surface(AUTO_SURFACE));
+        assert!(is_human_surface(HUB_SURFACE));
     }
 }

@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// `tool/hitl_respond`: deliver a decision to a pending in-chat tool gate.
+///
+/// Trust boundary: `surface` is asserted by the caller and is NOT verified
+/// here. What authenticates an allow is the home's approval token (or a
+/// trusted shim connection), checked by `authority.check_from`. Anything that
+/// holds that token can therefore claim a human surface (`cli`, `hub`, ...)
+/// and have its decision replayed (spec §7). The reviewer / shadow code paths
+/// must never read the approval token nor dial this method; they record
+/// their verdicts through their own channel, under their own surface.
 pub(super) struct HitlRespondHandler {
     pub(super) pending_approvals:
         Arc<Mutex<HashMap<String, oneshot::Sender<crate::hitl::HitlDecision>>>>,

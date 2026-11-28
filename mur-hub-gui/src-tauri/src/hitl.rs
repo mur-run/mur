@@ -1,3 +1,4 @@
+use mur_common::hitl::surface::HUB_SURFACE;
 use mur_core::a2a_dial::{DialMode, dial_method};
 use serde::Serialize;
 use serde_json::json;
@@ -9,19 +10,25 @@ pub fn agent_hitl_respond(
     allow: bool,
     reason: Option<String>,
 ) -> Result<(), String> {
-    respond(&name, &hitl_id, allow, reason)
+    respond(&name, &hitl_id, allow, reason, HUB_SURFACE)
 }
 
 /// Answer one in-chat tool gate. Shared by the card's buttons and the
 /// session auto-allow in `chat.rs`, so both carry the same approval token.
+///
+/// `surface` is what the runtime records: `HUB_SURFACE` only when a person
+/// pressed the button, `AUTO_SURFACE` for a session auto-allow. A
+/// remembered decision is replayed only from a human surface (spec §7), so
+/// labelling an auto-allow `hub` would let it replay for days.
 pub fn respond(
     name: &str,
     hitl_id: &str,
     allow: bool,
     reason: Option<String>,
+    surface: &str,
 ) -> Result<(), String> {
     let home = crate::mur_home_path();
-    let mut payload = json!({ "hitl_id": hitl_id, "allow": allow, "surface": "hub" });
+    let mut payload = json!({ "hitl_id": hitl_id, "allow": allow, "surface": surface });
     if let Some(r) = reason {
         payload["reason"] = json!(r);
     }
