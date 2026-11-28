@@ -318,3 +318,26 @@ fn an_unknown_answering_model_resets_the_fallback_run() {
         "a return after an unknown model is announced"
     );
 }
+
+/// qa nit 3 on #2623: a notice naming several models reads "their tokens".
+#[test]
+fn a_notice_naming_several_models_uses_the_plural() {
+    let mut a = mixed_book_app();
+    a.apply_usage(&turn_with_shares(
+        "metered-model",
+        serde_json::json!([
+            { "model": "mystery-a", "input_tokens": 1000, "output_tokens": 1000 },
+            { "model": "mystery-b", "input_tokens": 1000, "output_tokens": 1000 },
+        ]),
+    ));
+    let notice = a
+        .messages
+        .iter()
+        .find(|m| m.text.contains("no rate in models.yaml"))
+        .expect("a notice");
+    assert!(
+        notice.text.contains("mystery-a, mystery-b — their tokens"),
+        "{}",
+        notice.text
+    );
+}

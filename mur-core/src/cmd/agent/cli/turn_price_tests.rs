@@ -100,7 +100,7 @@ fn an_unknown_answering_model_without_shares_is_counted_at_the_dearest_rates() {
     // Before: "  2000 tok" — the turn silently added nothing to the cap.
     assert_eq!(
         plain_footer(&configured, &b, &usage),
-        "  2000 tok · ≤$60.000 upper estimate, no rate for mystery-model"
+        "  2000 tok · <=$60.000 upper estimate, no rate for mystery-model"
     );
 }
 
@@ -136,7 +136,7 @@ fn a_metered_answering_model_without_rates_is_counted_at_the_dearest_rates() {
     // Before: "  2000 tok" — a legacy runtime's turn added nothing to the cap.
     assert_eq!(
         plain_footer(&configured, &b, &legacy),
-        "  2000 tok · ≤$18.000 upper estimate, no rate for norate-model"
+        "  2000 tok · <=$18.000 upper estimate, no rate for norate-model (key `norate`)"
     );
     // The same turn from a runtime that reports `by_model` costs the same.
     let split = serde_json::json!({
@@ -145,7 +145,7 @@ fn a_metered_answering_model_without_rates_is_counted_at_the_dearest_rates() {
     });
     assert_eq!(
         plain_footer(&configured, &b, &split),
-        "  2000 tok · ≤$18.000 upper estimate, no rate for norate-model"
+        "  2000 tok · <=$18.000 upper estimate, no rate for norate-model (key `norate`)"
     );
 }
 
@@ -315,4 +315,62 @@ fn a_turn_without_model_ref_neither_announces_nor_resets() {
     assert_eq!(plain_fallback_notice(&b, &bare, &mut last), None);
     assert_eq!(last.as_deref(), Some("sub"));
     assert_eq!(plain_fallback_notice(&b, &sub, &mut last), None);
+}
+
+/// qa nit 1 on #2623: every dearest-rate branch must report what it guessed
+/// at, so flipping any one of them to "not guessed" fails a test. Names carry
+/// the registry key when it differs from the provider model id.
+#[test]
+fn every_dearest_rate_branch_reports_the_guess() {
+    let mut b = book();
+    b.by_key.insert(
+        "norate".to_string(),
+        Pricing {
+            in_per_1k: None,
+            out_per_1k: None,
+            window: None,
+            billing: Some(BillingMode::UsageBilled),
+        },
+    );
+    b.key_of_model
+        .insert("norate-model".to_string(), "norate".to_string());
+    let configured = b.pricing_for_key("metered");
+    let guess = |usage: serde_json::Value| {
+        let u = footer::parse_usage(&usage);
+        let pricing = answered_pricing(Some(&b), &usage).unwrap_or(configured);
+        let p = price_turn(&pricing, Some(&b), &usage, &u);
+        (p.usd, p.guessed)
+    };
+    let one = |s: &str| (Some(18.0), vec![s.to_string()]);
+    // Legacy runtime: a metered answering model with no rate of its own.
+    assert_eq!(
+        guess(serde_json::json!({
+            "input_tokens": 1000, "output_tokens": 1000, "model_ref": "norate-model",
+        })),
+        one("norate-model (key `norate`)")
+    );
+    // A share that resolves to a key carrying no rate.
+    assert_eq!(
+        guess(serde_json::json!({
+            "input_tokens": 1000, "output_tokens": 1000,
+            "by_model": [{ "registry_key": "norate", "input_tokens": 1000, "output_tokens": 1000 }],
+        })),
+        one("norate")
+    );
+    // A share that names neither a model nor a key.
+    assert_eq!(
+        guess(serde_json::json!({
+            "input_tokens": 1000, "output_tokens": 1000,
+            "by_model": [{ "input_tokens": 1000, "output_tokens": 1000 }],
+        })),
+        one(UNNAMED_MODEL)
+    );
+    // A share whose provider id resolves to a differently named key.
+    assert_eq!(
+        guess(serde_json::json!({
+            "input_tokens": 1000, "output_tokens": 1000,
+            "by_model": [{ "model": "norate-model", "input_tokens": 1000, "output_tokens": 1000 }],
+        })),
+        one("norate-model (key `norate`)")
+    );
 }

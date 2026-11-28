@@ -427,7 +427,7 @@ mod footer_fmt_tests {
     /// These cases predate the upper-bound mark (#2620): nothing in them was
     /// priced at the fallback rates.
     #[allow(clippy::too_many_arguments)]
-    fn footer_segments(
+    fn footer_segments_unguessed(
         turn_in: u64,
         turn_out: u64,
         sess_in: u64,
@@ -449,7 +449,8 @@ mod footer_fmt_tests {
 
     #[test]
     fn shows_tokens_and_names_the_reason_when_unpriced() {
-        let s = footer_segments(1240, 0, 1240, 0, 0, None, &Pricing::default(), None, WIDE);
+        let s =
+            footer_segments_unguessed(1240, 0, 1240, 0, 0, None, &Pricing::default(), None, WIDE);
         assert!(s.contains("1,240 tok") || s.contains("1240 tok"));
         // Was an em dash, which sat in the same slot as "$0.125 est" and so
         // read as a cost of zero rather than an absent price (#940).
@@ -464,7 +465,8 @@ mod footer_fmt_tests {
             window: Some(100_000),
             billing: None,
         };
-        let s = footer_segments(1000, 1000, 1000, 1000, 32_000, Some(0.018), &p, None, WIDE);
+        let s =
+            footer_segments_unguessed(1000, 1000, 1000, 1000, 32_000, Some(0.018), &p, None, WIDE);
         assert!(s.contains("$0.018"));
         assert!(s.contains("32%"));
         assert!(!s.contains(" / $")); // no budget suffix when budget is None
@@ -479,10 +481,11 @@ mod footer_fmt_tests {
             billing: None,
         };
         // session 1000/1000 → $18.00 spent, cap $20.00
-        let s = footer_segments(1000, 1000, 1000, 1000, 0, Some(18.0), &p, Some(20.0), WIDE);
+        let s =
+            footer_segments_unguessed(1000, 1000, 1000, 1000, 0, Some(18.0), &p, Some(20.0), WIDE);
         assert!(s.contains("$18.00 / $20.00"), "got: {s}");
         // unpriced model → spent omitted, cap still shown
-        let s2 = footer_segments(
+        let s2 = footer_segments_unguessed(
             1000,
             1000,
             1000,
@@ -507,7 +510,7 @@ mod footer_fmt_tests {
         };
         // Mid-stream: the turn's usage hasn't been reported yet. The bar used
         // to price the turn, so it read "$0.000 est" beside a session total.
-        let s = footer_segments(0, 0, 1000, 1000, 0, Some(18.0), &p, None, WIDE);
+        let s = footer_segments_unguessed(0, 0, 1000, 1000, 0, Some(18.0), &p, None, WIDE);
         assert!(s.contains("$18.000 est"), "got: {s}");
     }
 
@@ -519,8 +522,10 @@ mod footer_fmt_tests {
             window: Some(100_000),
             billing: None,
         };
-        let full = footer_segments(1000, 1000, 1000, 1000, 91_000, Some(0.018), &p, None, WIDE);
-        let tight = footer_segments(1000, 1000, 1000, 1000, 91_000, Some(0.018), &p, None, 20);
+        let full =
+            footer_segments_unguessed(1000, 1000, 1000, 1000, 91_000, Some(0.018), &p, None, WIDE);
+        let tight =
+            footer_segments_unguessed(1000, 1000, 1000, 1000, 91_000, Some(0.018), &p, None, 20);
         assert!(full.len() > tight.len());
         assert!(tight.contains("91%"), "got: {tight}");
         assert!(!tight.contains("tok"), "got: {tight}");

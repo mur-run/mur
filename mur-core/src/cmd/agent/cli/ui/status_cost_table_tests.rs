@@ -111,18 +111,18 @@ fn a_fallback_priced_figure_is_marked_as_an_upper_bound() {
     use BillingMode::{Subscription, UsageBilled};
     type Case = (Option<BillingMode>, Option<f64>, Option<f64>, &'static str);
     let cases: &[Case] = &[
-        (Some(UsageBilled), Some(18.0), None, "≤$18.000 est"),
+        (Some(UsageBilled), Some(18.0), None, "<=$18.000 est"),
         (
             Some(UsageBilled),
             Some(18.0),
             Some(20.0),
-            "≤$18.00 / $20.00",
+            "<=$18.00 / $20.00",
         ),
         (
             Some(Subscription),
             Some(18.0),
             None,
-            "≤$18.000 est · subscription",
+            "<=$18.000 est · subscription",
         ),
         (Some(UsageBilled), None, Some(20.0), "/ $20.00"),
     ];
