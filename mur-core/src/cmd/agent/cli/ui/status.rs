@@ -605,7 +605,18 @@ mod footer_cost_tests {
             assert!(!open.contains('$'), "{mode:?} priced: {open}");
             assert!(!open.contains("no price"), "{mode:?}: {open}");
             // With a cap, nothing is spent yet but the cap itself stays.
-            let capped = footer_segments(10, 20, 1_000, 1_000, 3_762, None, &p, Some(20.0), 200, false);
+            let capped = footer_segments(
+                10,
+                20,
+                1_000,
+                1_000,
+                3_762,
+                None,
+                &p,
+                Some(20.0),
+                200,
+                false,
+            );
             assert!(capped.contains(label), "{mode:?}: {capped}");
             assert!(capped.contains("$0.00 / $20.00"), "{mode:?}: {capped}");
             assert!(!capped.contains("no price"), "{mode:?}: {capped}");
