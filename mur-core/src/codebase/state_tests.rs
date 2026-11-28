@@ -115,18 +115,22 @@ fn concurrent_reader_never_sees_a_partial_meta() {
 #[cfg(windows)]
 #[test]
 fn sharing_and_lock_violations_are_transient() {
+    use super::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION, is_transient_read_error};
     use std::io::{Error, ErrorKind};
-    assert!(super::is_transient_read_error(&Error::from_raw_os_error(
-        32
+    /// `ERROR_FILE_NOT_FOUND`: the production code never names it, so it
+    /// lives here rather than as a dead constant in `state.rs`.
+    const ERROR_FILE_NOT_FOUND: i32 = 2;
+    assert!(is_transient_read_error(&Error::from_raw_os_error(
+        ERROR_SHARING_VIOLATION
     )));
-    assert!(super::is_transient_read_error(&Error::from_raw_os_error(
-        33
+    assert!(is_transient_read_error(&Error::from_raw_os_error(
+        ERROR_LOCK_VIOLATION
     )));
-    assert!(super::is_transient_read_error(&Error::from(
+    assert!(is_transient_read_error(&Error::from(
         ErrorKind::PermissionDenied
     )));
-    assert!(!super::is_transient_read_error(&Error::from_raw_os_error(
-        2
+    assert!(!is_transient_read_error(&Error::from_raw_os_error(
+        ERROR_FILE_NOT_FOUND
     )));
 }
 
