@@ -20,10 +20,30 @@ const AGENT: &str = "agent_x";
 const EXIT_DEADLINE: Duration = Duration::from_secs(120);
 const POLL: Duration = Duration::from_millis(50);
 
-fn mur_create(mur_home: &Path, bin_dir: &Path) {
-    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
-        .env("MUR_HOME", mur_home)
+/// Variables the child may inherit from the developer's shell: enough to
+/// find tools and scratch space, nothing that steers MUR (`MUR_*`, `RUST_LOG`,
+/// `NO_COLOR`, `TERM`…), so a run behaves the same on every machine.
+const INHERITED_ENV: &[&str] = &["PATH", "TMPDIR"];
+
+/// The real `mur` binary with a cleared environment, pointed at the test's
+/// own home, MUR home and agent bin dir.
+fn mur(mur_home: &Path, home: &Path, bin_dir: &Path) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mur"));
+    cmd.env_clear();
+    for key in INHERITED_ENV {
+        if let Some(v) = std::env::var_os(key) {
+            cmd.env(key, v);
+        }
+    }
+    cmd.env("MUR_HOME", mur_home)
+        .env("HOME", home)
         .env("MUR_AGENT_BIN_DIR", bin_dir)
+        .current_dir(home);
+    cmd
+}
+
+fn mur_create(mur_home: &Path, home: &Path, bin_dir: &Path) {
+    let out = mur(mur_home, home, bin_dir)
         .env("MUR_AGENT_RUNTIME_BIN", "/nonexistent/runtime-stub")
         .args(["agent", "create", AGENT, "--no-interactive"])
         .output()
@@ -98,16 +118,12 @@ fn piped_slash_commands_and_quit_never_reach_the_agent() {
     let tmp = TempDir::new().unwrap();
     let mur_home = tmp.path().join(".mur");
     let bin_dir = TempDir::new().unwrap();
-    mur_create(&mur_home, bin_dir.path());
+    mur_create(&mur_home, tmp.path(), bin_dir.path());
     let sock = tmp.path().join("agent.sock");
     write_running_lock(&mur_home, &sock);
     let seen = spawn_recorder(sock);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mur"))
-        .env("MUR_HOME", &mur_home)
-        .env("HOME", tmp.path())
-        .env("MUR_AGENT_BIN_DIR", bin_dir.path())
-        .current_dir(tmp.path())
+    let mut child = mur(&mur_home, tmp.path(), bin_dir.path())
         .args(["agent", "cli", AGENT, "--plain"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -164,10 +180,16 @@ models:
     billing: subscription
 "#;
 
+/// A turn's `usage` as a runtime that predates `by_model` reports it: all
+/// 2000 tokens attributed to the one answering model.
+fn usage_of(model: &str) -> serde_json::Value {
+    serde_json::json!({ "input_tokens": 1000, "output_tokens": 1000, "model_ref": model })
+}
+
 /// An agent socket that answers each `message/send` with a finished task
-/// whose `usage.model_ref` is the next entry of `models`, as a runtime that
-/// fell back would. Anything else gets an error, as in [`spawn_recorder`].
-fn spawn_scripted(sock: PathBuf, models: &'static [&'static str]) {
+/// carrying the next entry of `usages`, as a runtime that fell back would.
+/// Anything else gets an error, as in [`spawn_recorder`].
+fn spawn_scripted(sock: PathBuf, usages: Vec<serde_json::Value>) {
     let listener = UnixListener::bind(&sock).expect("bind");
     std::thread::spawn(move || {
         let mut turn = 0usize;
@@ -177,7 +199,7 @@ fn spawn_scripted(sock: PathBuf, models: &'static [&'static str]) {
             for line in reader.lines() {
                 let Ok(line) = line else { break };
                 let req: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
-                let resp = if req["method"] == "message/send" && turn < models.len() {
+                let resp = if req["method"] == "message/send" && turn < usages.len() {
                     turn += 1;
                     serde_json::json!({
                         "jsonrpc": "2.0",
@@ -186,11 +208,7 @@ fn spawn_scripted(sock: PathBuf, models: &'static [&'static str]) {
                             "id": format!("task-{turn}"),
                             "state": "completed",
                             "messages": [{ "role": "agent", "parts": [{ "text": format!("reply {turn}") }] }],
-                            "usage": {
-                                "input_tokens": 1000,
-                                "output_tokens": 1000,
-                                "model_ref": models[turn - 1],
-                            },
+                            "usage": usages[turn - 1],
                         },
                     })
                 } else {
@@ -217,31 +235,42 @@ fn plain_announces_each_fallback_once_and_prices_the_answering_model() {
     let tmp = TempDir::new().unwrap();
     let mur_home = tmp.path().join(".mur");
     let bin_dir = TempDir::new().unwrap();
-    mur_create(&mur_home, bin_dir.path());
+    mur_create(&mur_home, tmp.path(), bin_dir.path());
     std::fs::write(mur_home.join("models.yaml"), REGISTRY).unwrap();
     let profile = mur_home.join("agents").join(AGENT).join("profile.yaml");
-    let mut yaml = std::fs::read_to_string(&profile).unwrap();
-    yaml.push_str("model_ref: metered\n");
-    std::fs::write(&profile, yaml).unwrap();
+    let mut yaml: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&profile).unwrap()).unwrap();
+    yaml.as_mapping_mut()
+        .expect("profile.yaml is a mapping")
+        .insert("model_ref".into(), "metered".into());
+    std::fs::write(&profile, serde_yaml::to_string(&yaml).unwrap()).unwrap();
     let sock = tmp.path().join("agent.sock");
     write_running_lock(&mur_home, &sock);
-    // configured → fallback → same fallback → unknown → fallback again.
+    // configured → fallback → same fallback → unknown → fallback again →
+    // a mixed turn a current runtime splits by answering model.
     spawn_scripted(
         sock,
-        &[
-            "metered-model",
-            "sub-model",
-            "sub-model",
-            "mystery-model",
-            "sub-model",
+        vec![
+            usage_of("metered-model"),
+            usage_of("sub-model"),
+            usage_of("sub-model"),
+            usage_of("mystery-model"),
+            usage_of("sub-model"),
+            serde_json::json!({
+                "input_tokens": 2000,
+                "output_tokens": 2000,
+                "model_ref": "sub-model",
+                "by_model": [
+                    { "registry_key": "metered", "model": "metered-model",
+                      "input_tokens": 1000, "output_tokens": 1000 },
+                    { "registry_key": "sub", "model": "sub-model",
+                      "input_tokens": 1000, "output_tokens": 1000 },
+                ],
+            }),
         ],
     );
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mur"))
-        .env("MUR_HOME", &mur_home)
-        .env("HOME", tmp.path())
-        .env("MUR_AGENT_BIN_DIR", bin_dir.path())
-        .current_dir(tmp.path())
+    let mut child = mur(&mur_home, tmp.path(), bin_dir.path())
         .args(["agent", "cli", AGENT, "--plain"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -253,7 +282,7 @@ fn plain_announces_each_fallback_once_and_prices_the_answering_model() {
         .stdin
         .take()
         .unwrap()
-        .write_all(b"one\ntwo\nthree\nfour\nfive\n")
+        .write_all(b"one\ntwo\nthree\nfour\nfive\nsix\n")
         .unwrap();
 
     let deadline = Instant::now() + EXIT_DEADLINE;
@@ -269,30 +298,12 @@ fn plain_announces_each_fallback_once_and_prices_the_answering_model() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "stderr: {stderr}");
 
-    for n in 1..=5 {
-        assert!(
-            stdout.contains(&format!("reply {n}")),
-            "turn {n} missing: {stdout}"
-        );
-    }
-    let notices: Vec<&str> = stdout.lines().filter(|l| l.starts_with('⇄')).collect();
-    assert_eq!(
-        notices.len(),
-        2,
-        "announced on turn 2 and again on turn 5, after the unknown model: {stdout}"
-    );
-    for n in &notices {
-        assert!(
-            n.starts_with("⇄ answered by 'sub' (sub-model), not 'metered'"),
-            "{n}"
-        );
-    }
     // Each turn's block — its reply up to the next turn's — must carry exactly
     // its own notice and footer, so a footer that matches on one turn cannot
     // cover for a wrong one on another (#2632 review).
     let notice = "⇄ answered by 'sub' (sub-model), not 'metered' — the runtime fell back. \
                   'sub' is subscription: it adds nothing per token.";
-    let expected: [(&str, &[&str]); 5] = [
+    let expected: [(&str, &[&str]); 6] = [
         // Configured metered model: priced at its own rates.
         ("reply 1", &["  2000 tok · $0.018"]),
         // Fallback to the subscription model: announced, labelled, not priced.
@@ -306,10 +317,17 @@ fn plain_announces_each_fallback_once_and_prices_the_answering_model() {
         ),
         // Back to the fallback after the unknown model: announced again.
         ("reply 5", &[notice, "  2000 tok · subscription"]),
+        // Mixed turn reported under the subscription model: its metered share
+        // is still billed, priced at its own rates (C1, `cost_by_share`).
+        ("reply 6", &["  4000 tok · $0.018"]),
     ];
     let starts: Vec<usize> = expected
         .iter()
-        .map(|(reply, _)| stdout.find(reply).unwrap())
+        .map(|(reply, _)| {
+            stdout
+                .find(reply)
+                .unwrap_or_else(|| panic!("{reply} missing: {stdout}"))
+        })
         .collect();
     for (i, (reply, lines)) in expected.iter().enumerate() {
         let end = starts.get(i + 1).copied().unwrap_or(stdout.len());
