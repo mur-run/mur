@@ -149,6 +149,93 @@ fn a_metered_answering_model_without_rates_is_counted_at_the_dearest_rates() {
     );
 }
 
+/// #2609 review: every `by_model` share answered by a subscription model while
+/// the agent is configured on a metered one. Nothing was billed per token, so
+/// the line names the billing mode — not `$0.000`, not the configured rates.
+#[test]
+fn an_all_subscription_turn_on_a_metered_config_is_labelled_subscription() {
+    let b = book();
+    let configured = b.pricing_for_key("metered");
+    let usage = serde_json::json!({
+        "input_tokens": 2000, "output_tokens": 2000, "model_ref": "sub-model",
+        "by_model": [
+            { "model": "sub-model", "registry_key": "sub",
+              "input_tokens": 1000, "output_tokens": 1000 },
+            { "model": "sub-model", "registry_key": "sub",
+              "input_tokens": 1000, "output_tokens": 1000 },
+        ],
+    });
+    assert_eq!(
+        plain_footer(&configured, &b, &usage),
+        "  4000 tok · subscription"
+    );
+}
+
+/// #2609 review: `--plain` said nothing when the runtime fell back, while the
+/// TUI printed `⇄ answered by '…'`. Both now share one once-per-change rule.
+#[test]
+fn plain_mode_announces_a_fallback_once_per_change() {
+    let b = book();
+    let turn =
+        |m: &str| serde_json::json!({ "input_tokens": 1, "output_tokens": 1, "model_ref": m });
+    let mut last = None;
+    // The configured model answering is not a fallback.
+    assert_eq!(
+        plain_fallback_notice(&b, &turn("metered-model"), &mut last),
+        None
+    );
+    let first = plain_fallback_notice(&b, &turn("sub-model"), &mut last).expect("notice");
+    assert!(
+        first.starts_with("⇄ answered by 'sub' (sub-model), not 'metered'"),
+        "{first}"
+    );
+    assert!(first.contains("subscription"), "{first}");
+    // Same substitute again: said once already.
+    assert_eq!(
+        plain_fallback_notice(&b, &turn("sub-model"), &mut last),
+        None
+    );
+    // No model_ref, or one the registry does not know: nothing to name.
+    let bare = serde_json::json!({ "input_tokens": 1, "output_tokens": 1 });
+    assert_eq!(plain_fallback_notice(&b, &bare, &mut last), None);
+    assert_eq!(
+        plain_fallback_notice(&b, &turn("mystery-model"), &mut last),
+        None
+    );
+}
+
+/// #2625 review (Major): a profile that names no model has nothing to fall
+/// back *from*, so whichever model answers is not announced as a fallback.
+#[test]
+fn no_configured_model_never_announces_a_fallback() {
+    let mut b = book();
+    b.configured_key = None;
+    let turn =
+        |m: &str| serde_json::json!({ "input_tokens": 1, "output_tokens": 1, "model_ref": m });
+    let mut last = None;
+    for m in ["metered-model", "sub-model", "metered-model"] {
+        assert_eq!(plain_fallback_notice(&b, &turn(m), &mut last), None, "{m}");
+    }
+}
+
+/// #2625 review: every switch away from the configured model is announced —
+/// configured → fallback → configured → fallback says so twice, and an
+/// unresolvable model in between breaks the run (sub → unknown → sub).
+#[test]
+fn each_return_to_a_fallback_is_announced_again() {
+    let b = book();
+    let turn =
+        |m: &str| serde_json::json!({ "input_tokens": 1, "output_tokens": 1, "model_ref": m });
+    let mut last = None;
+    let mut says = |m: &str| plain_fallback_notice(&b, &turn(m), &mut last).is_some();
+    assert!(!says("metered-model"));
+    assert!(says("sub-model"));
+    assert!(!says("metered-model"));
+    assert!(says("sub-model"));
+    assert!(!says("mystery-model"));
+    assert!(says("sub-model"));
+}
+
 /// #2620: a turn priced at the dearest-rate fallback is flagged as an upper
 /// estimate, the same on a legacy runtime (no `by_model`) and one that sends
 /// the split; a fully priced turn on either is not flagged.

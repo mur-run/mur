@@ -208,17 +208,19 @@ impl App {
             // guessing at the configured model's rates is how the wrong number
             // got shown in the first place.
             self.pricing = super::super::footer::Pricing::default();
+            super::super::turn_price::forget_answering_model(&mut self.answered_key);
             return;
         };
         self.pricing = book.pricing_for_key(&key);
-        let configured = book.configured_key.clone();
-        // Announce only on a CHANGE, so a long session substituted once does
-        // not repeat the notice every turn.
-        if Some(&key) != configured.as_ref() && self.answered_key.as_ref() != Some(&key) {
-            let from = configured.as_deref().unwrap_or("the configured model");
-            self.push_system(fallback_notice(&key, answered, from, &self.pricing));
+        let notice = super::super::turn_price::fallback_notice_once(
+            book,
+            &key,
+            answered,
+            &mut self.answered_key,
+        );
+        if let Some(n) = notice {
+            self.push_system(n);
         }
-        self.answered_key = Some(key);
     }
 
     /// Reveal suggestions captured this turn: one → ghost placeholder, many →
@@ -368,20 +370,4 @@ impl App {
             self.cwd.as_deref(),
         )
     }
-}
-
-/// The one-time notice when a fallback model answered. Its last sentence says
-/// what the switch does to the cost: a subscription or local model adds
-/// nothing per token, so "now priced for" would be untrue for it.
-pub(super) fn fallback_notice(
-    key: &str,
-    answered: &str,
-    from: &str,
-    pricing: &super::super::footer::Pricing,
-) -> String {
-    let cost = match super::super::footer::unbilled_label(pricing) {
-        Some(label) => format!("'{key}' is {label}: it adds nothing per token."),
-        None => format!("Cost below is now priced for '{key}'."),
-    };
-    format!("⇄ answered by '{key}' ({answered}), not '{from}' — the runtime fell back. {cost}")
 }

@@ -19,6 +19,8 @@ pub(super) fn run_plain(
     let mut context: Option<String> = None;
     let cwd = std::env::current_dir().ok();
     let (pricing, book) = load_pricing(home, agent);
+    // Registry key the last fallback notice named, as `App::answered_key`.
+    let mut answered_key: Option<String> = None;
     // Tools the operator granted with `[a]` this session. Plain mode had no
     // such set, so `[a]lways` approved exactly one call — the prompt said one
     // thing and the code did another.
@@ -287,6 +289,14 @@ pub(super) fn run_plain(
                     writeln!(out2.borrow_mut())?;
                     // Usage footer: total tokens + cost (reuse footer helpers).
                     if let Some(usage) = task.get("usage") {
+                        // Say when the runtime fell back, as the TUI does.
+                        if let Some(n) = super::turn_price::plain_fallback_notice(
+                            &book,
+                            usage,
+                            &mut answered_key,
+                        ) {
+                            let _ = writeln!(out2.borrow_mut(), "{n}");
+                        }
                         let line = super::turn_price::plain_footer(&pricing, &book, usage);
                         let _ = writeln!(out2.borrow_mut(), "{line}");
                     }

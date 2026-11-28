@@ -133,6 +133,63 @@ pub(super) fn plain_footer(
     }
 }
 
+/// The one-time notice when a fallback model answered. Its last sentence says
+/// what the switch does to the cost: a subscription or local model adds
+/// nothing per token, so "now priced for" would be untrue for it.
+pub(super) fn fallback_notice(key: &str, answered: &str, from: &str, pricing: &Pricing) -> String {
+    let cost = match unbilled_label(pricing) {
+        Some(label) => format!("'{key}' is {label}: it adds nothing per token."),
+        None => format!("Cost below is now priced for '{key}'."),
+    };
+    format!("⇄ answered by '{key}' ({answered}), not '{from}' — the runtime fell back. {cost}")
+}
+
+/// The fallback notice for `key` (the registry key that answered as
+/// `answered`), or `None` when it is the configured model, when it is the
+/// same model that answered the previous turn, or when the profile names no
+/// model at all — with nothing configured there is nothing to fall back
+/// *from*, so the first answer is not a fallback (#2625 review).
+///
+/// `last` records the model that answered the previous turn, whether or not
+/// that turn announced anything; [`forget_answering_model`] clears it when a
+/// turn's model cannot be resolved. Announces only on a CHANGE, so a long
+/// session substituted once does not repeat it every turn. Shared by the TUI
+/// and `--plain` so both say when the runtime fell back (#2609 review).
+pub(super) fn fallback_notice_once(
+    book: &PricingBook,
+    key: &str,
+    answered: &str,
+    last: &mut Option<String>,
+) -> Option<String> {
+    let previous = last.replace(key.to_string());
+    let configured = book.configured_key.as_deref()?;
+    (key != configured && previous.as_deref() != Some(key))
+        .then(|| fallback_notice(key, answered, configured, &book.pricing_for_key(key)))
+}
+
+/// A turn answered by a model the registry cannot resolve: it still breaks
+/// the run, so the next resolvable fallback is announced again rather than
+/// being taken for the one before it (sub → unknown → sub says so twice).
+pub(super) fn forget_answering_model(last: &mut Option<String>) {
+    *last = None;
+}
+
+/// `--plain`'s fallback notice for one finished turn, from its
+/// `usage.model_ref`. `None` when the runtime did not say, the registry does
+/// not know the model, or [`fallback_notice_once`] has nothing new to say.
+pub(super) fn plain_fallback_notice(
+    book: &PricingBook,
+    usage: &serde_json::Value,
+    last: &mut Option<String>,
+) -> Option<String> {
+    let answered = usage.get("model_ref").and_then(|v| v.as_str())?;
+    let Some(key) = book.key_for_model(answered).map(str::to_string) else {
+        forget_answering_model(last);
+        return None;
+    };
+    fallback_notice_once(book, &key, answered, last)
+}
+
 /// USD for one turn priced share by share. `None` when no share is billed per
 /// token (an all-subscription or all-local turn has no money figure). A share
 /// whose model the registry cannot resolve or price is counted at the book's
