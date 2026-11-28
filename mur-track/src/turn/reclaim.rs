@@ -16,7 +16,7 @@
 //! worktree only when that write succeeded, so the only copy of a turn's
 //! edits is never the thing deleted.
 
-use super::{BASE_FILE, WORKTREES_DIR, common_git_dir, run_git};
+use super::{BASE_FILE, TRACK_PREFIX, WORKTREES_DIR, common_git_dir, run_git};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -61,6 +61,9 @@ pub enum StaleReason {
     OwnerDead,
     /// No owner file: written by an older runtime, older than [`LEGACY_GRACE`].
     Legacy,
+    /// A `turn-*` worktree with neither base nor owner file: its creation
+    /// failed after `git worktree add` (#2618). Older than [`LEGACY_GRACE`].
+    Incomplete,
 }
 
 /// A turn track nobody owns any more.
@@ -76,8 +79,9 @@ pub struct StaleTrack {
 /// Every turn track under `<project>/.worktrees/` that is safe to reclaim.
 ///
 /// A directory counts as a turn track only when git has it registered as a
-/// worktree of `project` and its git dir holds the turn base file — fleet
-/// worktrees and stray dirs are never candidates. The git dir is located
+/// worktree of `project` and its git dir holds the turn base file — or, for a
+/// half-created track, its name carries [`TRACK_PREFIX`] and it has neither
+/// base nor owner file. Fleet worktrees and stray dirs are never candidates. The git dir is located
 /// through the project, not through the track's `.git` pointer: a gutted
 /// track may have lost that pointer, and git run inside it would then answer
 /// for the project repo.
@@ -95,10 +99,17 @@ pub fn stale_tracks(project: &Path, grace: Duration) -> Result<Vec<StaleTrack>> 
         };
         let path = entry.path();
         let git_dir = admin.join(&name);
-        if !registered_at(&git_dir, &path) || !git_dir.join(BASE_FILE).is_file() {
+        if !registered_at(&git_dir, &path) {
             continue;
         }
-        if let Some(reason) = judge(&git_dir, now, grace) {
+        let verdict = if git_dir.join(BASE_FILE).is_file() {
+            judge(&git_dir, now, grace)
+        } else if is_incomplete(&name, &git_dir) {
+            judge_incomplete(&git_dir, now, grace)
+        } else {
+            None
+        };
+        if let Some(reason) = verdict {
             out.push(StaleTrack {
                 name,
                 path,
@@ -138,6 +149,28 @@ fn judge(git_dir: &Path, now: SystemTime, grace: Duration) -> Option<StaleReason
     // A clock that went backwards reads as "just now": wait, don't delete.
     let age = now.duration_since(modified).unwrap_or_default();
     (age >= wait).then_some(reason)
+}
+
+/// A half-created turn track: turn-track name, but neither the base nor the
+/// owner file that [`super::TurnTrack::create`] writes last. The name gate
+/// keeps hand-made worktrees under `.worktrees/` (`fix-1234`, fleet
+/// worktrees) out of reach.
+fn is_incomplete(name: &str, git_dir: &Path) -> bool {
+    name.starts_with(TRACK_PREFIX)
+        && !git_dir.join(BASE_FILE).exists()
+        && !git_dir.join(OWNER_FILE).exists()
+}
+
+/// Age an incomplete track by its `gitdir` file — written once by
+/// `git worktree add` and never touched again, unlike the admin dir itself.
+/// Waits at least [`LEGACY_GRACE`]: a create still in progress looks exactly
+/// like this, and no clone runs anywhere near that long.
+fn judge_incomplete(git_dir: &Path, now: SystemTime, grace: Duration) -> Option<StaleReason> {
+    let modified = std::fs::metadata(git_dir.join("gitdir"))
+        .and_then(|m| m.modified())
+        .ok()?;
+    let age = now.duration_since(modified).unwrap_or_default();
+    (age >= grace.max(LEGACY_GRACE)).then_some(StaleReason::Incomplete)
 }
 
 /// Save `track`'s diff against its HEAD, then remove the worktree and its
