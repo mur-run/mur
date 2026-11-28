@@ -86,9 +86,18 @@ fn every_cost_row_renders_exactly() {
         (Some(UsageBilled), true, Some(18.0), None, "$18.000 est"),
         (None, true, Some(0.018), None, "$0.018 est"),
         (None, true, Some(18.0), Some(20.0), "$18.00 / $20.00"),
-        // Nothing priced yet: the cap alone, or an explicit "no price".
-        (Some(UsageBilled), true, None, Some(20.0), "/ $20.00"),
-        (None, false, None, Some(20.0), "/ $20.00"),
+        // Nothing spent yet: priced reads "$0.00 / cap"; unpriced keeps
+        // "no price" in the spent slot rather than claiming "$0.00".
+        (Some(UsageBilled), true, None, Some(20.0), "$0.00 / $20.00"),
+        (None, true, None, Some(20.0), "$0.00 / $20.00"),
+        (
+            Some(UsageBilled),
+            false,
+            None,
+            Some(20.0),
+            "no price / $20.00",
+        ),
+        (None, false, None, Some(20.0), "no price / $20.00"),
         (Some(UsageBilled), false, None, None, "no price"),
         (None, false, None, None, "no price"),
     ];
@@ -124,7 +133,7 @@ fn a_fallback_priced_figure_is_marked_as_an_upper_bound() {
             None,
             "≤$18.000 est · subscription",
         ),
-        (Some(UsageBilled), None, Some(20.0), "/ $20.00"),
+        (Some(UsageBilled), None, Some(20.0), "$0.00 / $20.00"),
     ];
     for &(billing, spent, cap, want) in cases {
         let p = with(billing, true);
