@@ -218,23 +218,18 @@ pub fn audit(
 
     // 0c. A per-token rate on an entry that is not billed per token.
     //
-    //    The murmur footer and the per-turn session cap go by `billing`, so a
-    //    subscription or local entry is never priced there. Everything else
-    //    still reads the rate: the fleet budget guards take the dearest rate
-    //    in the whole registry regardless of `billing`
-    //    (`fleet::loop_run::dearest_output_rate`,
-    //    `fleet::oneshot_budget::dearest_rates`), so a stray rate here can
-    //    stop a fleet early; the `/model` list and cost reports price it too.
-    //    One of the two settings is wrong and doctor cannot tell which, so it
-    //    names both edits. Only an exact zero is consistent — it is what
-    //    `mur model add` writes for a local tier; a negative or NaN rate is
-    //    just as contradictory and is flagged.
+    //    The murmur footer and the budget gates go by `billing`, so a
+    //    subscription or local entry is never priced there. Anything that
+    //    reads the rate directly still does: the `/model` list, cost reports
+    //    and router estimates. One of the two settings is wrong and doctor
+    //    cannot tell which, so it names both edits. Only an exact zero is
+    //    consistent — it is what `mur model add` writes for a local tier; a
+    //    negative or NaN rate is just as contradictory and is flagged.
     //
-    //    The fleet-guard sentence is only claimed when it is true: both
-    //    guards read the effective input/output pair and drop any rate that
-    //    is not `> 0.0`, and neither reads the cache rates. A negative, NaN
-    //    or cache-only rate is still a contradiction, but it cannot trip a
-    //    fleet, so the warning does not say it can.
+    //    The warning deliberately names only the readers that skip the rate by
+    //    design (the footer) and the ones that read it directly. It does not
+    //    describe the fleet budget guards: their billing filter changed in
+    //    #2605, and a claim tied to their internals goes stale with them.
     for (key, e) in &reg.models {
         let label = match e.billing_or_inferred() {
             BillingMode::Subscription => "subscription",
@@ -263,21 +258,11 @@ pub fn audit(
         } else {
             format!("{label}, inferred from `provider: {}`", e.provider)
         };
-        let (input, output) = e.effective_costs();
-        let trips_fleet_guard = [input, output].into_iter().flatten().any(|r| r > 0.0);
-        let reach = if trips_fleet_guard {
-            "The murmur footer skips it, but the fleet budget guards take the dearest rate \
-             in the registry whatever its billing, so it can stop a fleet early; the `/model` \
-             list and cost reports price it too."
-        } else {
-            "The murmur footer and the fleet budget guards ignore it (they only count a \
-             positive input or output rate), but the `/model` list and cost reports still \
-             read it."
-        };
         out.push(Finding::warn(
             key.clone(),
             format!(
-                "billing is {source}, yet the entry carries a per-1k rate ({}). {reach} If this \
+                "billing is {source}, yet the entry carries a per-1k rate ({}). The murmur footer skips it, but the \
+                 `/model` list, cost reports and router estimates still read it. If this \
                  model really is metered, set `billing: usage_billed`; otherwise delete those \
                  fields or set them to 0.",
                 priced.join(", ")

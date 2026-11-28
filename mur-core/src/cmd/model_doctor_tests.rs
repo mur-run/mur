@@ -295,8 +295,8 @@ fn subscription_entries_are_checked_against_the_loopback_contract() {
 }
 
 /// A rate on a subscription or local entry is a contradiction: the
-/// murmur footer skips it (the bill is flat or nil), while the fleet
-/// budget guards and anything else that reads the rate still price it.
+/// murmur footer skips it (the bill is flat or nil), while anything that
+/// reads the rate directly still prices it.
 /// A zero rate is what `mur model add` writes for local tiers, so it is
 /// not flagged; an explicit `billing:` wins over the provider default.
 #[test]
@@ -446,53 +446,32 @@ fn negative_and_nan_rates_are_reported_zero_is_not() {
     assert_eq!(flagged, vec!["nan", "negative"]);
 }
 
-/// The warning must tell the truth about the fleet guard (qa review I1 on
-/// #2616): it does not skip the rate, it can stop a fleet early on it. And
-/// the fix names "set them to 0", the usual shape of a local entry.
+/// The warning names the direct readers and the zero fix, and makes no
+/// claim about the fleet budget guards: their billing filter changed in
+/// #2605, so any sentence about them goes stale (qa review on #2616). Holds
+/// for every rate shape, including negative, NaN, cache-only and legacy.
 #[test]
-fn the_warning_names_the_fleet_guard_and_the_zero_fix() {
-    let mut reg = reg_with(&[("codex_priced", "codex", "gpt-5.5", None)]);
-    reg.models
-        .get_mut("codex_priced")
-        .unwrap()
-        .output_cost_per_1k = Some(0.01);
-    let d = rate_findings(&reg).remove(0).detail;
-    assert!(!d.contains("Cost gates"), "{d}");
-    assert!(d.contains("fleet budget guards"), "{d}");
-    assert!(d.contains("stop a fleet early"), "{d}");
-    assert!(d.contains("set them to 0"), "{d}");
-}
-
-/// A rate the fleet guards cannot see must not be blamed for stopping a fleet
-/// (qa re-review on #2616): both guards drop anything not `> 0.0` and never
-/// read the cache rates. A positive input or output rate keeps the claim.
-#[test]
-fn fleet_guard_claim_only_for_a_positive_input_or_output_rate() {
+fn the_warning_names_direct_readers_and_never_the_fleet_guards() {
     let mut reg = reg_with(&[
         ("negative", "ollama", "qwen3", None),
         ("nan", "ollama", "qwen3", None),
         ("cache_only", "ollama", "qwen3", None),
         ("legacy_positive", "ollama", "qwen3", None),
-        ("input_positive", "ollama", "qwen3", None),
+        ("output_positive", "codex", "gpt-5.5", None),
     ]);
     let m = &mut reg.models;
     m.get_mut("negative").unwrap().output_cost_per_1k = Some(-0.01);
     m.get_mut("nan").unwrap().input_cost_per_1k = Some(f64::NAN);
     m.get_mut("cache_only").unwrap().cache_read_cost_per_1k = Some(0.001);
     m.get_mut("legacy_positive").unwrap().cost_per_1k_tokens = Some(0.01);
-    m.get_mut("input_positive").unwrap().input_cost_per_1k = Some(0.01);
-    for f in rate_findings(&reg) {
+    m.get_mut("output_positive").unwrap().output_cost_per_1k = Some(0.01);
+    let findings = rate_findings(&reg);
+    assert_eq!(findings.len(), 5);
+    for f in findings {
         let d = &f.detail;
-        let positive = matches!(f.subject.as_str(), "legacy_positive" | "input_positive");
-        assert_eq!(
-            d.contains("stop a fleet early"),
-            positive,
-            "{}: {d}",
-            f.subject
-        );
+        assert!(!d.contains("fleet"), "{}: {d}", f.subject);
+        assert!(d.contains("murmur footer skips it"), "{d}");
+        assert!(d.contains("cost reports and router estimates"), "{d}");
         assert!(d.contains("set them to 0"), "{d}");
-        if !positive {
-            assert!(d.contains("fleet budget guards ignore it"), "{d}");
-        }
     }
 }
