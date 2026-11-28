@@ -375,6 +375,47 @@ fn git_failure_keeps_turn_named_worktree() {
     assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
 }
 
+/// HEAD is fine but the reflog is gone: the creation commit is unknown, and
+/// a detached track off every ref must be kept, not guessed incomplete.
+#[test]
+fn missing_reflog_keeps_detached_turn_worktree() {
+    let (_td, p) = repo();
+    git(&p, &["switch", "-q", "--detach"]);
+    git(&p, &["commit", "-q", "--allow-empty", "-m", "loose"]);
+    half_created(&p, "turn-noreflog");
+    let git_dir = super::common_git_dir(&p)
+        .unwrap()
+        .join("worktrees")
+        .join("turn-noreflog");
+    std::fs::remove_dir_all(git_dir.join("logs")).unwrap();
+    age_gitdir(&p, "turn-noreflog", LEGACY_GRACE * 10);
+    assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
+}
+
+/// After `git reflog expire` prunes the creation entry, the first surviving
+/// line is just the oldest one left. A detached track whose own commits sit
+/// past that line must be kept: the patch would not carry them.
+#[test]
+fn pruned_reflog_keeps_turn_worktree_with_own_commits() {
+    let (_td, p) = repo();
+    let path = half_created(&p, "turn-pruned");
+    git(&path, &["commit", "-q", "--allow-empty", "-m", "own-1"]);
+    git(&path, &["commit", "-q", "--allow-empty", "-m", "own-2"]);
+    let git_dir = super::common_git_dir(&p)
+        .unwrap()
+        .join("worktrees")
+        .join("turn-pruned");
+    let log_path = git_dir.join("logs").join("HEAD");
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    // Keep only the newest entry: its new oid is HEAD itself, so trusting it
+    // as the creation commit would report "no own commits".
+    let newest = log.lines().last().unwrap();
+    assert!(!newest.starts_with("0000000"));
+    std::fs::write(&log_path, format!("{newest}\n")).unwrap();
+    age_gitdir(&p, "turn-pruned", LEGACY_GRACE * 10);
+    assert!(stale_tracks(&p, Duration::ZERO).unwrap().is_empty());
+}
+
 /// A clone that died midway leaves an index but missing files. Those paths
 /// were never cloned, not deleted: no deleted-list.
 #[test]

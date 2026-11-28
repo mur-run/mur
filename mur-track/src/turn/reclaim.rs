@@ -196,12 +196,21 @@ fn has_no_own_commits(git_dir: &Path) -> bool {
 }
 
 /// The commit `git worktree add` checked out: the new-oid field of the first
-/// line of the worktree's own `logs/HEAD`. `None` unless it is a full hex oid.
+/// line of the worktree's own `logs/HEAD`.
+///
+/// That line is only the creation entry while its old-oid field is all
+/// zeros. Once `git gc` / `git reflog expire` prunes the head of the log, the
+/// first surviving line is merely the oldest one left — trusting it could
+/// call a track's own commits "nothing beyond creation". So `None` unless
+/// the old oid is the null oid and both oids are full hex: unknown history
+/// keeps the track.
 fn creation_commit(git_dir: &Path) -> Option<String> {
     let log = std::fs::read_to_string(git_dir.join("logs").join("HEAD")).ok()?;
-    let oid = log.lines().next()?.split(' ').nth(1)?;
-    let valid = matches!(oid.len(), 40 | 64) && oid.bytes().all(|b| b.is_ascii_hexdigit());
-    valid.then(|| oid.to_owned())
+    let mut fields = log.lines().next()?.split(' ');
+    let (old, new) = (fields.next()?, fields.next()?);
+    let is_oid = |s: &str| matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit());
+    let created = is_oid(old) && old.bytes().all(|b| b == b'0') && is_oid(new);
+    created.then(|| new.to_owned())
 }
 
 /// Age an incomplete track by its `gitdir` file — written once by
