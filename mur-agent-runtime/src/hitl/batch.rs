@@ -209,7 +209,10 @@ impl BatchGate<'_> {
                     action_hash: c.action_hash.clone(),
                     allow: decision.allow,
                     reason: decision.reason.clone().unwrap_or_default(),
-                    surface: decision.surface.clone().unwrap_or_else(|| "unknown".into()),
+                    surface: decision
+                        .surface
+                        .clone()
+                        .unwrap_or_else(|| mur_common::hitl::surface::UNKNOWN_SURFACE.into()),
                     issued_at: Some(chrono::Utc::now()),
                     label: Some(mur_common::hitl::label::decision_label(
                         &c.tool_name,

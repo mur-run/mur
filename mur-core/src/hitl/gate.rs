@@ -284,7 +284,7 @@ pub async fn gate(
                     surface: if policy.yes {
                         mur_common::hitl::surface::AUTO_SURFACE
                     } else {
-                        "policy"
+                        mur_common::hitl::surface::POLICY_SURFACE
                     }
                     .into(),
                     issued_at: Some(chrono::Utc::now()),
