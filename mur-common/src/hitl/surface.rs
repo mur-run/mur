@@ -7,7 +7,7 @@
 
 /// Surfaces where a person pressed the key. `mcp` = an MCP client's
 /// elicitation answer relayed by the shim.
-pub const HUMAN_SURFACES: &[&str] = &["cli", "hub", "ios", "mcp"];
+pub const HUMAN_SURFACES: &[&str] = &[CLI_SURFACE, HUB_SURFACE, "ios", MCP_SURFACE];
 
 /// The surface tests write. Accepted only where the caller opts in under
 /// its own `#[cfg(test)]`: `cfg(test)` here would apply to this crate's
@@ -21,6 +21,12 @@ pub const AUTO_SURFACE: &str = "auto";
 
 /// The Hub desktop app, when a person pressed Allow / Deny on a card.
 pub const HUB_SURFACE: &str = "hub";
+
+/// A terminal: murmur, `mur agent hitl`, `mur channel`, a review session.
+pub const CLI_SURFACE: &str = "cli";
+
+/// An MCP client's elicitation answer, relayed by the runtime's shim.
+pub const MCP_SURFACE: &str = "mcp";
 
 pub fn is_human_surface(surface: &str) -> bool {
     HUMAN_SURFACES.contains(&surface)
@@ -42,5 +48,7 @@ mod tests {
         }
         assert!(!is_human_surface(AUTO_SURFACE));
         assert!(is_human_surface(HUB_SURFACE));
+        assert!(is_human_surface(CLI_SURFACE));
+        assert!(is_human_surface(MCP_SURFACE));
     }
 }

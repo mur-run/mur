@@ -233,7 +233,7 @@ pub(super) fn decide_hitl_with_note(
         let surface = if auto {
             mur_common::hitl::surface::AUTO_SURFACE
         } else {
-            "cli"
+            mur_common::hitl::surface::CLI_SURFACE
         };
         tokio::spawn(async move {
             if let Err(e) = respond_hitl(h, a, id, allow, surface).await {

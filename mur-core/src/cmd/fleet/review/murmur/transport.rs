@@ -23,7 +23,7 @@ use crate::a2a_dial::DialPoll;
 use crate::cmd::agent::cli::stream::HitlRequest;
 
 /// Audit attribution for an answer given in the MURMUR UI.
-const HITL_SURFACE: &str = "cli";
+const HITL_SURFACE: &str = mur_common::hitl::surface::CLI_SURFACE;
 
 /// `dial_message_streaming`, injectable: `(home, member, params, on_delta,
 /// on_hitl, poll) -> task`. `on_delta` takes `(text, thinking, task_id)`.

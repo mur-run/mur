@@ -316,7 +316,7 @@ async fn elicit(
 /// answer, so it names the `mcp` human surface (spec §7, D1); a missing
 /// surface would be recorded as `unknown` and never replayed.
 fn respond_params(hitl_id: &str, allow: bool) -> Value {
-    json!({ "hitl_id": hitl_id, "allow": allow, "surface": "mcp" })
+    json!({ "hitl_id": hitl_id, "allow": allow, "surface": mur_common::hitl::surface::MCP_SURFACE })
 }
 
 #[cfg(test)]

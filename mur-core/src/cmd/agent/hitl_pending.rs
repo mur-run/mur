@@ -16,7 +16,7 @@ use crate::cmd::agent::cli::stream::hitl_respond_params;
 use super::resolve_mur_home;
 
 /// Recorded as the answering surface in the signed decision log.
-const SURFACE: &str = "cli";
+const SURFACE: &str = mur_common::hitl::surface::CLI_SURFACE;
 /// Minimum leading characters of a `hitl_id` shown in the table; any unique
 /// prefix is accepted back by `approve` / `deny`. The table widens past this
 /// when needed: UUIDv7's first 12 hex digits are the millisecond, so calls
