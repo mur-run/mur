@@ -300,3 +300,19 @@ fn only_a_fallback_priced_turn_is_flagged_on_either_runtime() {
         assert_eq!(plain_footer(&configured, &b, usage), "  2000 tok · $18.000");
     }
 }
+
+/// A turn whose runtime sent no `model_ref` says nothing and leaves the run
+/// as it was: it neither announces nor resets, so the same fallback after it
+/// is not announced a second time.
+#[test]
+fn a_turn_without_model_ref_neither_announces_nor_resets() {
+    let b = book();
+    let mut last = None;
+    let sub =
+        serde_json::json!({ "input_tokens": 1, "output_tokens": 1, "model_ref": "sub-model" });
+    let bare = serde_json::json!({ "input_tokens": 1, "output_tokens": 1 });
+    assert!(plain_fallback_notice(&b, &sub, &mut last).is_some());
+    assert_eq!(plain_fallback_notice(&b, &bare, &mut last), None);
+    assert_eq!(last.as_deref(), Some("sub"));
+    assert_eq!(plain_fallback_notice(&b, &sub, &mut last), None);
+}

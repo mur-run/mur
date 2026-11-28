@@ -280,10 +280,11 @@ pub struct App {
     /// Every registry entry's pricing, so a substitution can be re-priced
     /// without touching disk mid-turn. `None` in tests and in plain mode.
     pub pricing_book: Option<super::PricingBook>,
-    /// Registry key of the model that answered most recently, once it has
-    /// differed from the configured one. Drives the substitution notice, and
-    /// remembers what we already told the user so a long session does not
-    /// repeat itself every turn.
+    /// Registry key of the model that answered the previous turn, configured
+    /// or not; cleared when a turn's model cannot be resolved. Drives the
+    /// substitution notice: it is announced only when the answering model
+    /// changes, so a long session does not repeat itself every turn
+    /// (`turn_price::fallback_notice_once`).
     pub answered_key: Option<String>,
     /// Set to `true` when `StepStarted` fires this turn; used by the footer
     /// to distinguish "pure chat" from "agentic" turns.
